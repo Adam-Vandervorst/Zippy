@@ -10,8 +10,8 @@ sealed trait Const[I <: Int & Singleton] extends Poly
 sealed trait Var[X] extends Poly
 
 // In comparison, + and * should me commutative, slows down proof search of course
-given [X <: Poly, Y <: Poly, Z](using Z =:= (X + Y)): (Z =:= (Y + X)) = <:<.asInstanceOf
-given [X <: Poly, Y <: Poly, Z](using Z =:= (X * Y)): (Z =:= (Y * X)) = <:<.asInstanceOf
+//given [X <: Poly, Y <: Poly, Z](using Z =:= (X + Y)): (Z =:= (Y + X)) = <:<.asInstanceOf
+//given [X <: Poly, Y <: Poly, Z](using Z =:= (X * Y)): (Z =:= (Y * X)) = <:<.asInstanceOf
 
 
 type Hinze[X <: Poly] <: Poly = X match
@@ -63,20 +63,20 @@ trait Lambda[V <: Poly]:
   type App[X <: Poly] = X * X
   type L[X <: Poly] = V + Abs[X] + App[X]
 
-// I wasn't brave enough to add a least fixed point yet, substitute this by the theory
-type Rec = Var[Nothing]
 // The value type of the ExprMap, for Unit this is a set, for Int this is a multiset
 type Value = Var[Unit]
 // Type of variable in a theory like Lambda, may  as well be Int
 type Name = Var[String]
 
+trait Fix[F[_]]:
+  type unfix = F[Fix[F]]
+
 object Proofs:
   summon[Hinze[(Name + Name) --> Value] =:=
     ((Name --> Value) * (Name --> Value))]
-  type ltheory = Lambda[Name]#L[Rec]
-  summon[Hinze[ltheory --> Value] =:=
-    (Name --> Value) * (Name --> (Rec --> Value)) * (Rec --> (Rec --> Value))]
-  // Read `Rec --> Value` as ExprMap[Value]
+  type ltheory = Fix[[x] =>> Lambda[Name]#L[Var[x]]]
+  summon[Hinze[ltheory#unfix --> Value] =:=
+    (Name --> Value) * (Name --> (Var[ltheory] --> Value)) * (Var[ltheory] --> (Var[ltheory] --> Value))]
 
   summon[∂["X", Var["X"]] =:= Const[1]]
   summon[∂["Y", Var["X"]] =:= Const[0]]
