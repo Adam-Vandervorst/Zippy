@@ -63,18 +63,20 @@ trait Lambda[V <: Poly]:
   type App[X <: Poly] = X * X
   type L[X <: Poly] = V + Abs[X] + App[X]
 
-// I wasn't brave enough to add a least fixed point yet
-type EM = Var[Nothing]
+// I wasn't brave enough to add a least fixed point yet, substitute this by the theory
+type Rec = Var[Nothing]
 // The value type of the ExprMap, for Unit this is a set, for Int this is a multiset
 type Value = Var[Unit]
 // Type of variable in a theory like Lambda, may  as well be Int
-type V = Var[String]
+type Name = Var[String]
 
 object Proofs:
-  summon[Hinze[(V + V) --> Value] =:=
-    ((V --> Value) * (V --> Value))]
-  summon[Hinze[Lambda[V]#L[EM] --> Value] =:=
-    (V --> Value) * (V --> (EM --> Value)) * (EM --> (EM --> Value))]
+  summon[Hinze[(Name + Name) --> Value] =:=
+    ((Name --> Value) * (Name --> Value))]
+  type ltheory = Lambda[Name]#L[Rec]
+  summon[Hinze[ltheory --> Value] =:=
+    (Name --> Value) * (Name --> (Rec --> Value)) * (Rec --> (Rec --> Value))]
+  // Read `Rec --> Value` as ExprMap[Value]
 
   summon[∂["X", Var["X"]] =:= Const[1]]
   summon[∂["Y", Var["X"]] =:= Const[0]]
