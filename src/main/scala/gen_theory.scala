@@ -1,4 +1,4 @@
-package gen
+package gent
 
 trait EM[A]
 trait Path[A]
