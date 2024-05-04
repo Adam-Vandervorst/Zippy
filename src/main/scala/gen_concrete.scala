@@ -35,7 +35,7 @@ object Example:
   opaque type AccessCount = Int
 
   object ACZRAM extends RZAM[AccessCount]:
-    case class CEMR(m: Map[ACZRAM.Term, ACZRAM.Term]) extends EM[ACZRAM.Term]
+    case class CEMR(m: Map[EMPath, ACZRAM.Term]) extends EM[ACZRAM.Term]
     enum EMPathWord:
       case G, R, V, A, P // TODO
     case class EMPath(p: List[EMPathWord]) extends Path[CEMR]
