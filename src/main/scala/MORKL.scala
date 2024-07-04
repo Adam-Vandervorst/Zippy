@@ -17,7 +17,8 @@ enum Space:
   case Subtraction(x: Space, y: Space)
   case Restriction(x: Space, y: Space)
   case Composition(x: Space, y: Space)
-  case Transformation(src: Space, pattern: Path, template: Path)
+  case Transformation(src: Space, pattern: Path, templates: Path)
+//  case TransformationS(src: Space, pattern: Path, templates: Space)
   case Subspace(src: Space, p: Path)
   case DropHead(src: Space)
   case LeftResidual(x: Space, y: Space) // likely not to be included
@@ -38,6 +39,9 @@ object Syntax:
   import scala.Conversion
   import scala.language.implicitConversions
 
+  extension (x: Path)
+    infix def x (y: Space) = Composition(Singleton(x), y)
+
   extension (x: Space)
     // assignment of operators WIP
     def \/ (y: Space) = Union(x, y)
@@ -48,11 +52,13 @@ object Syntax:
     def apply(p: Path) = Subspace(x, p)
     def tail = DropHead(x)
     infix def transform (lhs_rhs: (Path, Path)): Space = Transformation(x, lhs_rhs._1, lhs_rhs._2)
+//    infix def transformS (lhs_rhs: (Path, Space)): Space = TransformationS(x, lhs_rhs._1, lhs_rhs._2)
 
   extension (st: Space.type)
     def apply(ps: Path*): Space = ps.map(Singleton.apply).reduce(Union.apply)
 
   given parse: Conversion[String, Path] = _.split('.').map(name => if name.startsWith("$") then Variable(name.tail) else Symbol(name)).reduce(Concat.apply)
+  given lift2[A, B](using c: Conversion[A, B]): Conversion[(A, A), (B, B)] = (l, r) => (c(l), c(r))
 
 def prefixes(s: String): Seq[String] =
   // e.g. Test.Foo.Bar.2 |-> Vector(Test, Test.Foo, Test.Foo.Bar, Test.Foo.Bar.2)
@@ -89,6 +95,7 @@ def eval(e: Space): Set[String] = e match
   case Space.Restriction(x, y) => val ys = eval(y); eval(x).filter(e => ys.exists(e.startsWith))
   case Space.Composition(x, y) => val ys = eval(y); for e1 <- eval(x); e2 <- ys yield e1 + "." + e2
   case Space.Transformation(src, pattern, template) => eval(src).collect(make_transform(pattern, template).unlift)
+//  case Space.TransformationS(src, pattern, templates) => eval(src).flatMap(s => templates.flatMap(t => make_transform(pattern, Syntax.parse(t))(s)))
   case Space.Subspace(src, p) => val ep = eval(p); eval(src).collect{ case e if e.startsWith(ep) && e != ep => e.stripPrefix(ep + ".") }
   case Space.DropHead(src) => eval(src).collect{ case e if e.contains('.') => e.dropWhile(_ != '.').stripPrefix(".") }
   case Space.LeftResidual(x, y) => val ys = eval(y); val xs = eval(x); for e <- xs; r <- prefixes(e); if ys.forall(g => xs.contains(r + "." + g)) yield r
@@ -181,45 +188,77 @@ object Examples:
       assert(eval(lhs) == eval(rhs))
 
   object AuntQuery:
-    ???
-//  val add_index = 2($"family") ! { 3("parent", $"x", $"y") -> Singleton(3("child", $"y", $"x")) }
+    /*
+    Tom x Pam
+     |   \
+    Liz  Bob
+         / \
+      Ann   Pat
+             |
+            Jim
+     */
+    val ifamily = Space(
+      "parent.Tom.Bob",
+      "parent.Pam.Bob",
+      "parent.Tom.Liz",
+      "parent.Bob.Ann",
+      "parent.Bob.Pat",
+      "parent.Pat.Jim",
+      "female.Pam", "female.Liz", "female.Pat", "female.Ann",
+      "male.Tom", "male.Bob", "male.Jim",
+    )
 
-//  val parent_query = 2("family", 2("parents", $"people")) ! {
-//    $"people" transform $"person" -> Subspace(2("family", 3("child")), $"person")
-//  }
-//
-//  val mother_query = 2("family", 2("mothers", $"people")) ! {
-//    $"people" transform $"person" -> Intersection(Subspace(2("family", 3("child")), $"person"), 2("family", 2("female")))
-//  }
-//
-//  val sister_query = 2("family", 2("sisters", $"people")) ! {
-//    $"people" transform $"person" -> {
-//      Concat($"_", $"siblings") ! Intersection(2("family", 3("child")), Subspace(2("family", 3("parent")), $"person"))
-//      Intersection($"siblings", 2("family", 2("female")))
-//    }
-//  }
-//
-//  val aunt_query = 2("family", 2("aunts", $"people")) ! {
-//    $"people" transform $"person" -> {
-//      $"person_parents" ! Subspace(2("family", 3("child")), $"person")
-//      Concat($"_1", $"person_grandparents") ! Restriction(2("family", 3("child")), $"person_parents")
-//      Concat($"_2", $"person_parent_siblings_incl") ! Restriction(2("family", 3("parent")), $"person_grandparents")
-//      $"person_parent_siblings" ! Subtraction($"person_parent_siblings_incl", $"person_parents")
-//      Intersection($"person_parent_siblings", 2("family", 2("female")))
-//    }
-//  }
-//
-//  val predecessor: Path ?=> Expr = ⚓ + 2("family", 2("predecessors")) ! {
-//    $"people" transform $"person" -> {
-//      $"pred" ! Subspace(2("family", 3("child")), $"person")
-//      $"oldest" ! $"pred"
-//      while $"oldest".nonEmpty do // TODO write with recursion
-//        $"pred" ! Union($"pred", $"oldest")
-//        Concat($"_", $"oldest") ! Restriction(2("family", 3("child")), $"oldest")
-//      Composition(Singleton($"person"), $"pred")
-//    }
-//  }
+    val family = Space(
+      "parent.Tom.Bob", "child.Bob.Tom",
+      "parent.Pam.Bob", "child.Bob.Pam",
+      "parent.Tom.Liz", "child.Liz.Tom",
+      "parent.Bob.Ann", "child.Ann.Bob",
+      "parent.Bob.Pat", "child.Pat.Bob",
+      "parent.Pat.Jim", "child.Jim.Pat",
+      "female.Pam", "female.Liz", "female.Pat", "female.Ann",
+      "male.Tom", "male.Bob", "male.Jim",
+      "person.Tom", "person.Bob", "person.Jim", "person.Pam", "person.Liz", "person.Pat", "person.Ann"
+    )
 
+    val people = Space("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")
+//    val people = Space("Pat")
+
+    def add_index() =
+      val rhs = ifamily \/ (ifamily transform "parent.$x.$y" -> "child.$y.$x")
+                        \/ ("person" x ifamily("female"))
+                        \/ ("person" x ifamily("male"))
+      assert(eval(family) == eval(rhs))
+
+    def parent_query() =
+      val lhs = "Parent" x (family("child") <| people)
+      val rhs = Space("Parent.Bob.Tom", "Parent.Pat.Bob", "Parent.Bob.Pam", "Parent.Liz.Tom", "Parent.Ann.Bob", "Parent.Jim.Pat")
+      assert(eval(lhs) == eval(rhs))
+
+    def mother_query() =
+      val lhs = "Mother" x ((family("child") <| family("female")) <| people)
+      assert(eval(lhs) == eval(Space("Mother.Pat.Bob", "Mother.Ann.Bob", "Mother.Liz.Tom")))
+
+    def sister_query() =
+      for person <- eval(people) do
+        val r = ((family("parent") <| family(Concat("child", person))).tail /\ family("female")) \ Singleton(person)
+        println(s"$person : ${eval(r)}")
+
+    def aunt_query() =
+      for person <- eval(people) do
+        val parents = family(Concat("child", person))
+        val grandparents = (family("child") <| parents).tail
+        val parent_siblings = (family("parent") <| grandparents).tail \ parents
+        val aunts = parent_siblings /\ family("female")
+        println(s"$person : ${eval(aunts)}")
+
+    def predecessors() =
+      for person <- eval(people) do
+        var pred = family(Concat("child", person))
+        var oldest = pred
+        while eval(oldest).nonEmpty do
+          pred = pred \/ oldest
+          oldest = (family("child") <| oldest).tail
+        println(s"$person : ${eval(pred)}")
 
 @main def example =
   Examples.Basic.composition()
@@ -232,3 +271,9 @@ object Examples:
   Examples.Basic.drophead()
   Examples.Basic.left_residual()
   Examples.Basic.right_residual()
+  Examples.AuntQuery.add_index()
+  Examples.AuntQuery.parent_query()
+  Examples.AuntQuery.mother_query()
+//  Examples.AuntQuery.sister_query()
+//  Examples.AuntQuery.aunt_query()
+//  Examples.AuntQuery.predecessors()
