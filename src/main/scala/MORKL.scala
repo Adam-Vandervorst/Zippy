@@ -60,6 +60,14 @@ object Syntax:
   given parse: Conversion[String, Path] = _.split('.').map(name => if name.startsWith("$") then Variable(name.tail) else Symbol(name)).reduce(Concat.apply)
   given lift2[A, B](using c: Conversion[A, B]): Conversion[(A, A), (B, B)] = (l, r) => (c(l), c(r))
 
+def factor(xs: Set[String]): Space =
+  import Syntax.parse
+  def rec(xs: Set[String]): Space =
+    val l = xs.groupMapReduce(_.takeWhile(_ != '.'))(s => Set(s.dropWhile(_ != '.').tail))(_ union _)
+    l.map((pre, space) => if space == Set("") then Space.Singleton(pre) else Space.Composition(Space.Singleton(pre), rec(space)))
+      .reduce(Space.Union)
+  rec(xs)
+
 def prefixes(s: String): Seq[String] =
   // e.g. Test.Foo.Bar.2 |-> Vector(Test, Test.Foo, Test.Foo.Bar, Test.Foo.Bar.2)
   val cs = s.split('.')
@@ -187,6 +195,12 @@ object Examples:
       val rhs = Space("1", "2", "3")
       assert(eval(lhs) == eval(rhs))
 
+    def factor_set() =
+      val rhs = Composition(Singleton("Foo"), Union(
+        Composition(Singleton("Bar"), Space("1", "2", "3")),
+        Composition(Singleton("Baz"), Space("A", "B", "C"))))
+      assert(factor(eval(rhs)) == rhs)
+
   object AuntQuery:
     /*
     Tom x Pam
@@ -271,6 +285,7 @@ object Examples:
   Examples.Basic.drophead()
   Examples.Basic.left_residual()
   Examples.Basic.right_residual()
+  Examples.Basic.factor_set()
   Examples.AuntQuery.add_index()
   Examples.AuntQuery.parent_query()
   Examples.AuntQuery.mother_query()
