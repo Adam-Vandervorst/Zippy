@@ -23,6 +23,10 @@ enum Space:
   case DropHead(src: Space)
   case LeftResidual(x: Space, y: Space) // likely not to be included
   case RightResidual(y: Space, x: Space) // likely not to be included
+  case Sharing(y: Space, x: Space) // likely not to be included
+  case GCD(y: Space, x: Space) // likely not to be included
+  case Subsumption(x: Space) // likely not to be included
+  case Instantiation(x: Space) // likely not to be included
 
 enum Expr:
   case Read(postfix: Path)
@@ -52,7 +56,16 @@ object Syntax:
     def apply(p: Path) = Subspace(x, p)
     def tail = DropHead(x)
     infix def transform (lhs_rhs: (Path, Path)): Space = Transformation(x, lhs_rhs._1, lhs_rhs._2)
+    def </(y: Space) = LeftResidual(x, y)
+    def />(y: Space) = RightResidual(x, y)
+    def <>(y: Space) = GCD(x, y)
 //    infix def transformS (lhs_rhs: (Path, Space)): Space = TransformationS(x, lhs_rhs._1, lhs_rhs._2)
+
+  object ^ :
+    def apply(x: Space) = Subsumption(x)
+  object v :
+    def apply(x: Space) = Instantiation(x)
+
 
   extension (st: Space.type)
     def apply(ps: Path*): Space = ps.map(Singleton.apply).reduce(Union.apply)
@@ -77,6 +90,10 @@ def postfixes(s: String): Seq[String] =
   // e.g. Test.Foo.Bar.2 |-> Vector(Test.Foo.Bar.2, Foo.Bar.2, Bar.2, 2)
   val cs = s.split('.')
   cs.indices.map(cs.slice(_, cs.length).mkString("", ".", ""))
+
+def shared(x: String, y: String): Option[String] =
+  if x.takeWhile(_ != '.') != y.takeWhile(_ != '.') then None
+  else Some(x.concat(".").zip(y.concat(".")).takeWhile((l, r) => l == r).map(_._1).reverse.dropWhile(_ != '.').tail.reverse.mkString)
 
 def make_transform(pattern: Path, template: Path): String => Option[String] = // not using bidirectional matching or unification yet
   val pattern_parse: String => Option[Seq[String]] = pattern.foldMap(identity, _ => "(\\w+)", _ + "[.]" + _).r.unapplySeq
@@ -108,6 +125,13 @@ def eval(e: Space): Set[String] = e match
   case Space.DropHead(src) => eval(src).collect{ case e if e.contains('.') => e.dropWhile(_ != '.').stripPrefix(".") }
   case Space.LeftResidual(x, y) => val ys = eval(y); val xs = eval(x); for e <- xs; r <- prefixes(e); if ys.forall(g => xs.contains(r + "." + g)) yield r
   case Space.RightResidual(y, x) => val ys = eval(y); val xs = eval(x); for e <- xs; r <- postfixes(e); if ys.forall(g => xs.contains(g + "." + r)) yield r
+  case Space.Sharing(y, x) => val ys = eval(y); val xs = eval(x); for e <- xs; p <- ys; s <- shared(e, p) yield s
+  case Space.GCD(y, x) =>
+    val ys = eval(y); val xs = eval(x);
+    val all = for e <- xs; p <- ys; s <- shared(e, p) yield s
+    all.filter(e => all.excl(e).exists(e.startsWith))
+  case Space.Subsumption(x) => val xs = eval(x); xs.filter(e => !xs.excl(e).exists(e.startsWith))
+  case Space.Instantiation(x) => val xs = eval(x); xs.filter(e => xs.excl(e).exists(e.startsWith))
 
 object Examples:
   import Syntax.{*, given}
@@ -193,6 +217,32 @@ object Examples:
       val y = Space("Test.Foo.Bar", "Test.Foo.Baz")
       val lhs = RightResidual(y, x)
       val rhs = Space("1", "2", "3")
+      assert(eval(lhs) == eval(rhs))
+
+    def gcd() =
+      assert(shared("Test.Foo.Bar", "Test.Foo") == Some("Test.Foo"))
+      assert(shared("Test.Foo.Bar", "Test.Foo.Baz") == Some("Test.Foo"))
+      val x = Space("Test.Cux", "Test.Foo")
+      val y = Space("Test.Foo.Bar", "Test.Foo.Baz")
+      val lhs = GCD(x, y)
+      val rhs = Space("Test.Foo")
+      assert(eval(lhs) == eval(rhs))
+
+    def sharing() =
+      val x = Space("Test.Cux", "Test.Foo")
+      val y = Space("Test.Foo.Bar", "Test.Foo.Baz")
+      val lhs = Instantiation(Sharing(x, y))
+      val rhs = Space("Test.Foo")
+      println(eval(lhs))
+
+    def subsumption() =
+      val lhs = Subsumption(Space("Test.Foo.Bar", "Test.Foo.Baz", "Test.Foo", "Test.Cux"))
+      val rhs = Space("Test.Foo", "Test.Cux")
+      assert(eval(lhs) == eval(rhs))
+
+    def instantiation() =
+      val lhs = Instantiation(Space("Test.Foo.Bar", "Test.Foo.Baz", "Test.Foo", "Test.Cux"))
+      val rhs = Space("Test.Foo.Bar", "Test.Foo.Baz")
       assert(eval(lhs) == eval(rhs))
 
     def factor_set() =
@@ -286,9 +336,13 @@ object Examples:
   Examples.Basic.left_residual()
   Examples.Basic.right_residual()
   Examples.Basic.factor_set()
-  Examples.AuntQuery.add_index()
-  Examples.AuntQuery.parent_query()
-  Examples.AuntQuery.mother_query()
+  Examples.Basic.gcd()
+  Examples.Basic.sharing()
+  Examples.Basic.subsumption()
+  Examples.Basic.instantiation()
+//  Examples.AuntQuery.add_index()
+//  Examples.AuntQuery.parent_query()
+//  Examples.AuntQuery.mother_query()
 //  Examples.AuntQuery.sister_query()
 //  Examples.AuntQuery.aunt_query()
 //  Examples.AuntQuery.predecessors()
