@@ -233,7 +233,7 @@ object Examples:
       val y = Space("Test.Foo.Bar", "Test.Foo.Baz")
       val lhs = Instantiation(Sharing(x, y))
       val rhs = Space("Test.Foo")
-      println(eval(lhs))
+      assert(eval(lhs) == eval(rhs))
 
     def subsumption() =
       val lhs = Subsumption(Space("Test.Foo.Bar", "Test.Foo.Baz", "Test.Foo", "Test.Cux"))
@@ -285,7 +285,7 @@ object Examples:
     )
 
     val people = Space("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")
-//    val people = Space("Pat")
+//    val people = Space("Bob")
 
     def add_index() =
       val rhs = ifamily \/ (ifamily transform "parent.$x.$y" -> "child.$y.$x")
@@ -299,8 +299,9 @@ object Examples:
       assert(eval(lhs) == eval(rhs))
 
     def mother_query() =
-      val lhs = "Mother" x ((family("child") <| family("female")) <| people)
-      assert(eval(lhs) == eval(Space("Mother.Pat.Bob", "Mother.Ann.Bob", "Mother.Liz.Tom")))
+      for person <- eval(people) do
+        val r = (family(Concat("child", person)) /\ family("female"))
+        println(s"$person : ${eval(r)}")
 
     def sister_query() =
       for person <- eval(people) do
@@ -342,7 +343,7 @@ object Examples:
   Examples.Basic.instantiation()
 //  Examples.AuntQuery.add_index()
 //  Examples.AuntQuery.parent_query()
-//  Examples.AuntQuery.mother_query()
+  Examples.AuntQuery.mother_query()
 //  Examples.AuntQuery.sister_query()
 //  Examples.AuntQuery.aunt_query()
 //  Examples.AuntQuery.predecessors()
