@@ -20,7 +20,8 @@ enum Space:
   case Transformation(src: Space, pattern: Path, templates: Path)
 //  case TransformationS(src: Space, pattern: Path, templates: Space)
   case Subspace(src: Space, p: Path)
-  case DropHead(src: Space)
+  case DropUnion(src: Space)
+  case DropIntersection(src: Space)
   case LeftResidual(x: Space, y: Space) // likely not to be included
   case RightResidual(y: Space, x: Space) // likely not to be included
   case Sharing(y: Space, x: Space) // likely not to be included
@@ -54,7 +55,8 @@ object Syntax:
     def <| (y: Space) = Restriction(x, y)
     infix def x (y: Space) = Composition(x, y)
     def apply(p: Path) = Subspace(x, p)
-    def tail = DropHead(x)
+    def tail = DropUnion(x)
+    def common = DropIntersection(x)
     infix def transform (lhs_rhs: (Path, Path)): Space = Transformation(x, lhs_rhs._1, lhs_rhs._2)
     def </(y: Space) = LeftResidual(x, y)
     def />(y: Space) = RightResidual(x, y)
@@ -122,7 +124,8 @@ def eval(e: Space): Set[String] = e match
   case Space.Transformation(src, pattern, template) => eval(src).collect(make_transform(pattern, template).unlift)
 //  case Space.TransformationS(src, pattern, templates) => eval(src).flatMap(s => templates.flatMap(t => make_transform(pattern, Syntax.parse(t))(s)))
   case Space.Subspace(src, p) => val ep = eval(p); eval(src).collect{ case e if e.startsWith(ep) && e != ep => e.stripPrefix(ep + ".") }
-  case Space.DropHead(src) => eval(src).collect{ case e if e.contains('.') => e.dropWhile(_ != '.').stripPrefix(".") }
+  case Space.DropUnion(src) => eval(src).collect{ case e if e.contains('.') => e.dropWhile(_ != '.').stripPrefix(".") }
+  case Space.DropIntersection(src) => eval(src).filter(_.contains('.')).groupMapReduce(_.takeWhile(_ != '.'))(x => Set(x.dropWhile(_ != '.').stripPrefix(".")))(_ union _).values.reduce(_ intersect _)
   case Space.LeftResidual(x, y) => val ys = eval(y); val xs = eval(x); for e <- xs; r <- prefixes(e); if ys.forall(g => xs.contains(r + "." + g)) yield r
   case Space.RightResidual(y, x) => val ys = eval(y); val xs = eval(x); for e <- xs; r <- postfixes(e); if ys.forall(g => xs.contains(g + "." + r)) yield r
   case Space.Sharing(y, x) => val ys = eval(y); val xs = eval(x); for e <- xs; p <- ys; s <- shared(e, p) yield s
@@ -188,13 +191,21 @@ object Examples:
       val rhs = Space("A", "B", "C")
       assert(eval(lhs) == eval(rhs))
 
-    def drophead() =
-      val lhs = DropHead(Composition(Singleton("Foo"), Union(
+    def dropunion() =
+      val lhs = DropUnion(Composition(Singleton("Foo"), Union(
         Composition(Singleton("Bar"), Space("1", "2", "3")),
         Composition(Singleton("Baz"), Space("A", "B", "C")))))
       val rhs = Union(
         Composition(Singleton("Bar"), Space("1", "2", "3")),
         Composition(Singleton("Baz"), Space("A", "B", "C")))
+      assert(eval(lhs) == eval(rhs))
+
+    def dropintersection() =
+      val lhs = DropIntersection(Union(Union(
+        Composition(Singleton("Foo"), Space("A", "2", "C", "4", "5")),
+        Composition(Singleton("Bar"), Space("1", "2", "C", "4"))),
+        Composition(Singleton("Baz"), Space("A", "2", "3", "4"))))
+      val rhs = Space("2", "4")
       assert(eval(lhs) == eval(rhs))
 
     def left_residual() =
@@ -285,7 +296,7 @@ object Examples:
     )
 
     val people = Space("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")
-//    val people = Space("Bob")
+//    val people = Space("Bob", "Tom")
 
     def add_index() =
       val rhs = ifamily \/ (ifamily transform "parent.$x.$y" -> "child.$y.$x")
@@ -333,7 +344,8 @@ object Examples:
   Examples.Basic.restriction()
   Examples.Basic.transformation()
   Examples.Basic.subspace()
-  Examples.Basic.drophead()
+  Examples.Basic.dropunion()
+  Examples.Basic.dropintersection()
   Examples.Basic.left_residual()
   Examples.Basic.right_residual()
   Examples.Basic.factor_set()
@@ -344,6 +356,6 @@ object Examples:
 //  Examples.AuntQuery.add_index()
 //  Examples.AuntQuery.parent_query()
   Examples.AuntQuery.mother_query()
-//  Examples.AuntQuery.sister_query()
+  Examples.AuntQuery.sister_query()
 //  Examples.AuntQuery.aunt_query()
 //  Examples.AuntQuery.predecessors()
