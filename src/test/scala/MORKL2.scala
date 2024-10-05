@@ -1,0 +1,251 @@
+package morkl
+
+import munit.FunSuite
+import morkl.Syntax.{x, *, given}
+
+
+class MORKL2Path extends FunSuite:
+  import Path.*
+  test("basic path ref") {
+      assert(eval(Concat("family.child", Deref("person")))(using PathContext.mixed()).show == "family.child.person_YLQg")
+  }
+end MORKL2Path
+
+class MORKL2Space extends FunSuite:
+  import Path.*
+  import Space.*
+
+  test("union") {
+    given PathContext()
+    given SpaceContext()
+    val separate = Union(Union(Literal(SpaceValue("a")), Literal(SpaceValue("b"))), Literal(SpaceValue("c")))
+    assert(eval(separate) == SpaceValue("a", "b", "c"))
+  }
+
+  test("intersection context") {
+    given PathContext()
+    given SpaceContext = SpaceContext.constant(Map("lhs" -> SpaceValue("a", "b", "c"),
+                                                   "rhs" -> SpaceValue("a", "c", "e")))
+    val abc_ace = Intersection(Read("lhs"), Read("rhs"))
+    val ac = Union(Literal(SpaceValue("a")), Literal(SpaceValue("c")))
+    assert(eval(abc_ace) == eval(ac))
+  }
+
+//  test("subtraction") {
+//    given PathContext()
+//    given SpaceContext()
+//    val abc_ce = Subtraction(Space("a", "b", "c"), Space("c", "e"))
+//    val ab = Space("a", "b")
+//    assert(eval(abc_ce) == eval(ab))
+//  }
+//
+//  test("restriction") {
+//    given PathContext()
+//    given SpaceContext()
+//    val lhs = Restriction(Composition(Singleton("Foo"), Union(Union(
+//      Composition(Singleton("Bar"), Space("1", "2", "3")),
+//      Composition(Singleton("Baz"), Space("A", "B", "C"))),
+//      Composition(Singleton("Cux"), Space("Red", "Blue")))), Space("Foo.Bar", "Foo.Baz"))
+//    val rhs = Composition(Singleton("Foo"), Union(
+//      Composition(Singleton("Bar"), Space("1", "2", "3")),
+//      Composition(Singleton("Baz"), Space("A", "B", "C"))))
+//    assert(eval(lhs) == eval(rhs))
+//  }
+//
+//  test("composition") {
+//    given PathContext()
+//    given SpaceContext()
+//    val prefixed = Composition(Singleton("Foo"), Space("bar", "baz", "cux"))
+//    val separated = Space("Foo.bar", "Foo.baz", "Foo.cux")
+//    assert(eval(prefixed) == eval(separated))
+//    val xyz_ab = Composition(Space("x", "y", "z"), Space("a", "b"))
+//    val composed = Space("x.a", "y.a", "z.a", "x.b", "y.b", "z.b")
+//    assert(eval(xyz_ab) == eval(composed))
+//    val structure = Composition(Space("Foo.Bar", "Foo.Baz"), Space("A.1", "A.2"))
+//    val composed_structure = Space("Foo.Bar.A.1", "Foo.Bar.A.2", "Foo.Baz.A.1", "Foo.Baz.A.2")
+//    assert(eval(structure) == eval(composed_structure))
+//  }
+//
+//  test("subspace") {
+//    given PathContext()
+//    given SpaceContext()
+//    val lhs = Subspace(Composition(Singleton("Foo"), Union(
+//      Composition(Singleton("Bar"), Space("1", "2", "3")),
+//      Composition(Singleton("Baz"), Space("A", "B", "C")))), "Foo.Baz")
+//    val rhs = Space("A", "B", "C")
+//    assert(eval(lhs) == eval(rhs))
+//  }
+//
+//  test("drophead") {
+//    given PathContext()
+//    given SpaceContext()
+//    val lhs = DropHead(Composition(Singleton("Foo"), Union(
+//      Composition(Singleton("Bar"), Space("1", "2", "3")),
+//      Composition(Singleton("Baz"), Space("A", "B", "C")))))
+//    val rhs = Union(
+//      Composition(Singleton("Bar"), Space("1", "2", "3")),
+//      Composition(Singleton("Baz"), Space("A", "B", "C")))
+//    assert(eval(lhs) == eval(rhs))
+//  }
+//
+//  test("transformation") {
+//    given PathContext()
+//    given SpaceContext()
+//    val lhs = Transformation(Composition(Singleton("Foo"), Union(Union(
+//      Composition(Singleton("Bar"), Space("1", "2", "3")),
+//      Composition(Singleton("Baz"), Space("A", "B", "C"))),
+//      Composition(Singleton("Cux"), Space("Red", "Blue")))), "$_.Cux.$c", "Result.Color.$c")
+//    val rhs = Space("Result.Color.Red", "Result.Color.Blue")
+//    assert(eval(lhs) == eval(rhs))
+//  }
+//
+//  test("left_residual") {
+//    given PathContext()
+//    given SpaceContext()
+//    // all prefixes we can add to y such prefix.y <= x
+//    val x = Composition(Singleton("Test.Foo"), Union(Union(
+//      Composition(Singleton("Bar"), Space("1", "2", "3", "4", "5", "6")),
+//      Composition(Singleton("Baz"), Space("1", "2", "3", "A", "B", "C"))),
+//      Composition(Singleton("Cux"), Space("Red", "Blue"))))
+//    val y = Space("1", "2", "3")
+//    val lhs = LeftResidual(x, y)
+//    val rhs = Space("Test.Foo.Bar", "Test.Foo.Baz")
+//    assert(eval(lhs) == eval(rhs))
+//  }
+//
+//  test("right_residual") {
+//    given PathContext()
+//    given SpaceContext()
+//    // all postfixes we can add to y such y.postfix <= x
+//    val x = Composition(Singleton("Test.Foo"), Union(Union(
+//      Composition(Singleton("Bar"), Space("1", "2", "3", "4", "5", "6")),
+//      Composition(Singleton("Baz"), Space("1", "2", "3", "A", "B", "C"))),
+//      Composition(Singleton("Cux"), Space("Red", "Blue"))))
+//    val y = Space("Test.Foo.Bar", "Test.Foo.Baz")
+//    val lhs = RightResidual(y, x)
+//    val rhs = Space("1", "2", "3")
+//    assert(eval(lhs) == eval(rhs))
+//  }
+end MORKL2Space
+
+class AuntQuery extends FunSuite:
+  import Space.*
+  /*
+  Tom x Pam
+   |   \
+  Liz  Bob
+       / \
+    Ann   Pat
+           |
+          Jim
+   */
+
+  val initial_context = SpaceContext.space(eval(Wrap(Literal(SpaceValue(
+      "parent.Tom.Bob",
+      "parent.Pam.Bob",
+      "parent.Tom.Liz",
+      "parent.Bob.Ann",
+      "parent.Bob.Pat",
+      "parent.Pat.Jim",
+      "female.Pam", "female.Liz", "female.Pat", "female.Ann",
+      "male.Tom", "male.Bob", "male.Jim")), "ifamily"))(using SpaceContext(), PathContext()))
+
+  val context = SpaceContext.space(eval(Union(Wrap(Literal(SpaceValue(
+    "parent.Tom.Bob", "child.Bob.Tom",
+    "parent.Pam.Bob", "child.Bob.Pam",
+    "parent.Tom.Liz", "child.Liz.Tom",
+    "parent.Bob.Ann", "child.Ann.Bob",
+    "parent.Bob.Pat", "child.Pat.Bob",
+    "parent.Pat.Jim", "child.Jim.Pat",
+    "female.Pam", "female.Liz", "female.Pat", "female.Ann",
+    "male.Tom", "male.Bob", "male.Jim",
+    "person.Tom", "person.Bob", "person.Jim", "person.Pam", "person.Liz", "person.Pat", "person.Ann")), "family"),
+    Wrap(Literal(SpaceValue("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")), "people")))(using SpaceContext(), PathContext()))
+
+  test("add_index") {
+    given PathContext()
+    val rhs = Read("ifamily") \/ (Read("ifamily").transform("parent.$x.$y", "child.$y.$x"))
+      \/ ("person" x Read("ifamily.female"))
+      \/ ("person" x Read("ifamily.male"))
+    assert(eval(rhs)(using initial_context) == eval(Read("family"))(using context))
+  }
+
+  test("parent_query") {
+    given PathContext()
+    given SpaceContext = context
+    val lhs = "Parent" x (Read("family.child") <| Read("people"))
+    val rhs = SpaceValue("Parent.Bob.Tom", "Parent.Pat.Bob", "Parent.Bob.Pam", "Parent.Liz.Tom", "Parent.Ann.Bob", "Parent.Jim.Pat")
+    assert(eval(lhs) == rhs)
+  }
+
+  test("mother_query") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    val res = "Mother" x R"people".iter($"person",
+      $"person" x (R"family.child"($"person") /\ R"family.female")
+    )
+
+    assert(eval(res) == SpaceValue("Mother.Jim.Pat", "Mother.Bob.Pam"))
+  }
+
+  test("sister_query") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    val res = "Sister" x R"people".iter($"person",
+      $"person" x ((DropHead(R"family.parent" <| R"family.child"($"person")) /\ R"family.female") \ Singleton($"person"))
+    )
+
+    assert(eval(res) == SpaceValue("Sister.Ann.Pat", "Sister.Pat.Ann", "Sister.Bob.Liz"))
+  }
+
+  test("aunt_query") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    val res = "Aunt" x R"people".iter($"person",
+      $"person" x ((DropHead(R"family.parent" <| DropHead(R"family.child" <| R"family.child"($"person"))) \ R"family.child"($"person")) /\ R"family.female")
+    )
+
+    assert(eval(res) == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
+  }
+
+/*  test("predecessors_query") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+
+    val res = "Predecessor" x R"people".iter($"person",
+      {
+        val pred0 = R"family.child"($"person")
+        var oldest0 = pred0
+
+        pred1 = pred0 \/ oldest0
+        oldest1 = DropHead(R"family.child" <| oldest0)
+
+        pred2 = pred1 \/ oldest1
+        oldest2 = DropHead(R"family.child" <| oldest1)
+
+        Space.Literal(SpaceValue("1", "2")).fix($"i",
+          ("pred" x $"i" x Read("pred" x Call($"decr", $"i")) \/ Read("oldest" x Call($"decr", $"i"))) \/
+          ("oldest" x $"i" x DropHead(R"family.child" <| Read("oldest" x Call($"decr", $"i"))))
+        )
+
+
+        val pred = R"family.child"($"person")
+        var oldest = pred
+        while eval(oldest).nonEmpty do
+          pred = pred \/ oldest
+          oldest = DropHead(family("child") <| oldest)
+      }
+
+      $"person" x ((DropHead(R"family.parent" <| DropHead(R"family.child" <| R"family.child"($"person"))) \ R"family.child"($"person")) /\ R"family.female")
+    )
+
+      for person <- eval(people) do
+        var pred = family(Concat("child", person))
+        var oldest = pred
+        while eval(oldest).nonEmpty do
+          pred = pred \/ oldest
+          oldest = DropHead(family("child") <| oldest)
+        println(s"$person : ${eval(pred)}")
+  }*/
+end AuntQuery
+

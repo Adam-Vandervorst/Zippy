@@ -1,16 +1,22 @@
-package morkl
+/*package morkl
+
+import scala.io.AnsiColor.*
+
 
 enum Path:
+  case Deref(p: PathRef)
   case Symbol(n: String)
   case Variable(n: String)
   case Concat(l: Path, r: Path)
   def foldMap[A](fs: String => A, fv: String => A, fc: (A, A) => A): A = this match
+    case Path.Deref(_) => throw RuntimeException("not implemented")
     case Path.Symbol(n) => fs(n)
     case Path.Variable(n) => fv(n)
     case Path.Concat(l, r) => fc(l.foldMap(fs, fv, fc), r.foldMap(fs, fv, fc))
 
 enum Space:
   case Empty
+  case Read(postfix: Path)
   case Singleton(p: Path)
   case Union(x: Space, y: Space)
   case Intersection(x: Space, y: Space)
@@ -24,22 +30,32 @@ enum Space:
   case LeftResidual(x: Space, y: Space) // likely not to be included
   case RightResidual(y: Space, x: Space) // likely not to be included
 
-enum Expr:
-  case Read(postfix: Path)
-  case Write(postfix: Path, result: Space)
+sealed trait Statement
 
-case class Subroutine(read: Path, write: Space, body: Expr)
+case class Write(postfix: Path, result: Space) extends Statement
+
+case class Iter(read: Path, vp: PathRef, body: List[Statement]) extends Statement
+
+case class PathRef(path: Path)
+
+case class Subroutine(read: Path, vp: PathRef, body: List[Statement])
 
 case class Program(s: List[Subroutine])
 
+class Ctx(val pr: PathRef):
+  val registrations = collection.mutable.ListBuffer.empty[Statement]
+
+  def register(w: Statement): Unit = registrations.addOne(w)
+
+
 object Syntax:
   export Path.*
-  export Expr.*
   export Space.*
   import scala.Conversion
   import scala.language.implicitConversions
 
   extension (x: Path)
+    def + (y: Path) = Concat(x, y)
     infix def x (y: Space) = Composition(Singleton(x), y)
 
   extension (x: Space)
@@ -50,7 +66,6 @@ object Syntax:
     def <| (y: Space) = Restriction(x, y)
     infix def x (y: Space) = Composition(x, y)
     def apply(p: Path) = Subspace(x, p)
-    def tail = DropHead(x)
     infix def transform (lhs_rhs: (Path, Path)): Space = Transformation(x, lhs_rhs._1, lhs_rhs._2)
 //    infix def transformS (lhs_rhs: (Path, Space)): Space = TransformationS(x, lhs_rhs._1, lhs_rhs._2)
 
@@ -58,14 +73,34 @@ object Syntax:
     def apply(ps: Path*): Space = ps.map(Singleton.apply).reduce(Union.apply)
 
   given parse: Conversion[String, Path] = _.split('.').map(name => if name.startsWith("$") then Variable(name.tail) else Symbol(name)).reduce(Concat.apply)
+//  given deref: Conversion[PathRef, Path] = Path.Deref.apply
   given lift2[A, B](using c: Conversion[A, B]): Conversion[(A, A), (B, B)] = (l, r) => (c(l), c(r))
+
+  def subroutine(read: Path)(body: Ctx ?=> Unit): Subroutine =
+    val vp = PathRef(Path.Variable("root"))
+    val ctx = Ctx(vp)
+    body(using ctx)
+    Subroutine(read, vp, ctx.registrations.toList)
+
+  def iter(p: Path)(using parent: Ctx)(body: Ctx ?=> Unit) =
+    val i = parent.registrations.length
+    val vp = PathRef(Path.Variable(i.toString))
+    val ictx = Ctx(vp)
+    body(using ictx)
+    parent.register(Iter(p, vp, ictx.registrations.toList))
+
+  def write(postfix: Path, e: Space)(using parent: Ctx): Unit =
+    parent.register(Write(postfix, e))
+
+  def read(p: Path)(using Ctx): Space = Read(p)
+
 
 def factor(xs: Set[String]): Space =
   import Syntax.parse
   def rec(xs: Set[String]): Space =
     val l = xs.groupMapReduce(_.takeWhile(_ != '.'))(s => Set(s.dropWhile(_ != '.').tail))(_ union _)
     l.map((pre, space) => if space == Set("") then Space.Singleton(pre) else Space.Composition(Space.Singleton(pre), rec(space)))
-      .reduce(Space.Union)
+      .reduce(Space.Union.apply)
   rec(xs)
 
 def prefixes(s: String): Seq[String] =
@@ -90,12 +125,14 @@ def make_transform(pattern: Path, template: Path): String => Option[String] = //
   pattern_parse(_).map(args_mapping andThen template_format)
 
 def eval(e: Path): String = e match
+  case Path.Deref(PathRef(p)) => eval(p)
   case Path.Symbol(n) => n
   case Path.Variable(n) => "$" concat n
   case Path.Concat(l, r) => eval(l) concat "." concat eval(r)
 
-def eval(e: Space): Set[String] = e match
+def eval(e: Space)(using s: Set[String]): Set[String] = e match
   case Space.Empty => Set()
+  case Space.Read(p) =>
   case Space.Singleton(p) => Set(eval(p))
   case Space.Union(x, y) => eval(x) union eval(y)
   case Space.Intersection(x, y) => eval(x) intersect eval(y)
@@ -108,6 +145,38 @@ def eval(e: Space): Set[String] = e match
   case Space.DropHead(src) => eval(src).collect{ case e if e.contains('.') => e.dropWhile(_ != '.').stripPrefix(".") }
   case Space.LeftResidual(x, y) => val ys = eval(y); val xs = eval(x); for e <- xs; r <- prefixes(e); if ys.forall(g => xs.contains(r + "." + g)) yield r
   case Space.RightResidual(y, x) => val ys = eval(y); val xs = eval(x); for e <- xs; r <- postfixes(e); if ys.forall(g => xs.contains(g + "." + r)) yield r
+
+def show(s: Space): String = s match
+  case Space.Empty => "Empty"
+  case Space.Read(postfix) => s"read(${eval(postfix)})"
+//  case Space.Read(postfix) => s"${UNDERLINED}${eval(postfix)}${RESET}"
+  case Space.Singleton(p) => s"Singleton(${eval(p)})"
+  case Space.Union(x, y) => s"${show(x)} \\/ ${show(y)}"
+  case Space.Intersection(x, y) => s"${show(x)} /\\ ${show(y)}"
+  case Space.Subtraction(x, y) => s"${show(x)} \\ ${show(y)}"
+  case Space.Restriction(x, y) => s"${show(x)} <| ${show(y)}"
+  case Space.Composition(x, y) => s"${show(x)} x ${show(y)}"
+  case Space.Transformation(src, pattern, templates) => ???
+  case Space.Subspace(src, p) => s"${show(src)}(${eval(p)})"
+  case Space.DropHead(src) => s"DropHead(${show(src)})"
+  case Space.LeftResidual(x, y) => ???
+  case Space.RightResidual(y, x) => ???
+
+def pprint(s: Subroutine): Unit =
+  val Subroutine(read, PathRef(vp), body) = s
+  println(s"subroutine(${eval(read)}) { ${eval(vp)} =>")
+  for stmt <- body do pprint(stmt, 2)
+  println("}")
+
+def pprint(s: Statement, indent: Int): Unit = s match
+  case Write(postfix, result) =>
+//    println(" ".repeat(indent) + s"write(${eval(postfix)}, ${show(result)})")
+    println(" ".repeat(indent) + s"${eval(postfix)} <- ${show(result)}")
+  case Iter(read, PathRef(vp), body) =>
+    println(" ".repeat(indent) + s"iter(${eval(read)}) { ${eval(vp)} =>")
+    for stmt <- body do pprint(stmt, indent + 2)
+    println(" ".repeat(indent) + "}")
+
 
 object Examples:
   import Syntax.{*, given}
@@ -196,10 +265,12 @@ object Examples:
       assert(eval(lhs) == eval(rhs))
 
     def factor_set() =
-      val rhs = Composition(Singleton("Foo"), Union(
+      val rhs_1 = Composition(Singleton("Foo"), Union(
         Composition(Singleton("Bar"), Space("1", "2", "3")),
         Composition(Singleton("Baz"), Space("A", "B", "C"))))
-      assert(factor(eval(rhs)) == rhs)
+      assert(factor(eval(rhs_1)) == rhs_1)
+      val lhs = Set("x.a", "y.a")
+      assert(lhs == eval(factor(lhs)))
 
   object AuntQuery:
     /*
@@ -248,20 +319,30 @@ object Examples:
       val rhs = Space("Parent.Bob.Tom", "Parent.Pat.Bob", "Parent.Bob.Pam", "Parent.Liz.Tom", "Parent.Ann.Bob", "Parent.Jim.Pat")
       assert(eval(lhs) == eval(rhs))
 
-    def mother_query() =
-      val lhs = "Mother" x ((family("child") <| family("female")) <| people)
-      assert(eval(lhs) == eval(Space("Mother.Pat.Bob", "Mother.Ann.Bob", "Mother.Liz.Tom")))
-
+//    def mother_query() =
+//      val res = for person <- eval(people)
+//        lhs = "Mother" x (person x (family(Concat("child", person)) /\ family("female")))
+//        r <- eval(lhs) yield r
+//      assert(res == eval(Space("Mother.Jim.Pat", "Mother.Bob.Pam")))
+//
     def sister_query() =
-      for person <- eval(people) do
-        val r = ((family("parent") <| family(Concat("child", person))).tail /\ family("female")) \ Singleton(person)
-        println(s"$person : ${eval(r)}")
+      given proj: Conversion[Ctx, Path] = x => Deref(x.pr)
+
+      val sq = subroutine("sister") { $ ?=>
+        iter("family.person") { person ?=>
+          siblings := DropHead($("family.parent") <| $("family.child" + person))
+          ($(person + "siblings") /\ $("family.female")) \ Singleton(person)
+        }
+      }
+
+      pprint(sq)
+//        println(s"$person : ${eval(r)}")
 
     def aunt_query() =
       for person <- eval(people) do
         val parents = family(Concat("child", person))
-        val grandparents = (family("child") <| parents).tail
-        val parent_siblings = (family("parent") <| grandparents).tail \ parents
+        val grandparents = DropHead(family("child") <| parents)
+        val parent_siblings = DropHead(family("parent") <| grandparents) \ parents
         val aunts = parent_siblings /\ family("female")
         println(s"$person : ${eval(aunts)}")
 
@@ -271,8 +352,17 @@ object Examples:
         var oldest = pred
         while eval(oldest).nonEmpty do
           pred = pred \/ oldest
-          oldest = (family("child") <| oldest).tail
+          oldest = DropHead(family("child") <| oldest)
         println(s"$person : ${eval(pred)}")
+
+  object FizzBuzz:
+    def call_range() =
+      subroutine("range.Int.$start.Int.$stop.Int.$step") { $ ?=>
+
+      }
+      subroutine("cr.$n") { $ ?=>
+
+      }
 
 @main def example =
   Examples.Basic.composition()
@@ -288,7 +378,8 @@ object Examples:
   Examples.Basic.factor_set()
   Examples.AuntQuery.add_index()
   Examples.AuntQuery.parent_query()
-  Examples.AuntQuery.mother_query()
-//  Examples.AuntQuery.sister_query()
+//  Examples.AuntQuery.mother_query()
+  Examples.AuntQuery.sister_query()
 //  Examples.AuntQuery.aunt_query()
 //  Examples.AuntQuery.predecessors()
+*/

@@ -6,5 +6,6 @@ ThisBuild / scalacOptions += "-source:3.3"
 
 lazy val root = (project in file("."))
   .settings(
-    name := "Zippy"
+    name := "Zippy",
+    libraryDependencies += "org.scalameta" %% "munit" % "1.0.0" % Test
   )
