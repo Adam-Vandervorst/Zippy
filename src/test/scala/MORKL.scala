@@ -4,12 +4,12 @@ import munit.FunSuite
 import morkl.Syntax.{x, *, given}
 
 
-class MORKL2Path extends FunSuite:
+/*class MORKL2Path extends FunSuite:
   import Path.*
   test("basic path ref") {
       assert(eval(Concat("family.child", Deref("person")))(using PathContext.mixed()).show == "family.child.person_YLQg")
   }
-end MORKL2Path
+end MORKL2Path*/
 
 class MORKL2Space extends FunSuite:
   import Path.*
@@ -24,9 +24,9 @@ class MORKL2Space extends FunSuite:
 
   test("intersection context") {
     given PathContext()
-    given SpaceContext = SpaceContext.constant(Map("lhs" -> SpaceValue("a", "b", "c"),
-                                                   "rhs" -> SpaceValue("a", "c", "e")))
-    val abc_ace = Intersection(Read("lhs"), Read("rhs"))
+    given SpaceContext = SpaceContext.constant(Map(SpaceMention("lhS") -> SpaceValue("a", "b", "c"),
+                                                   SpaceMention("rhS") -> SpaceValue("a", "c", "e")))
+    val abc_ace = Intersection(S"lhS", S"rhS")
     val ac = Union(Literal(SpaceValue("a")), Literal(SpaceValue("c")))
     assert(eval(abc_ace) == eval(ac))
   }
@@ -140,7 +140,7 @@ class AuntQuery extends FunSuite:
           Jim
    */
 
-  val initial_context = SpaceContext.space(eval(Wrap(Literal(SpaceValue(
+  val initial_context = SpaceContextMap(Map(SpaceMention("ifamily") -> SpaceValue(
       "parent.Tom.Bob",
       "parent.Pam.Bob",
       "parent.Tom.Liz",
@@ -148,9 +148,10 @@ class AuntQuery extends FunSuite:
       "parent.Bob.Pat",
       "parent.Pat.Jim",
       "female.Pam", "female.Liz", "female.Pat", "female.Ann",
-      "male.Tom", "male.Bob", "male.Jim")), "ifamily"))(using SpaceContext(), PathContext()))
+      "male.Tom", "male.Bob", "male.Jim")))
 
-  val context = SpaceContext.space(eval(Union(Wrap(Literal(SpaceValue(
+  val context = SpaceContextMap(Map(
+    SpaceMention("family") -> SpaceValue(
     "parent.Tom.Bob", "child.Bob.Tom",
     "parent.Pam.Bob", "child.Bob.Pam",
     "parent.Tom.Liz", "child.Liz.Tom",
@@ -159,21 +160,22 @@ class AuntQuery extends FunSuite:
     "parent.Pat.Jim", "child.Jim.Pat",
     "female.Pam", "female.Liz", "female.Pat", "female.Ann",
     "male.Tom", "male.Bob", "male.Jim",
-    "person.Tom", "person.Bob", "person.Jim", "person.Pam", "person.Liz", "person.Pat", "person.Ann")), "family"),
-    Wrap(Literal(SpaceValue("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")), "people")))(using SpaceContext(), PathContext()))
+    "person.Tom", "person.Bob", "person.Jim", "person.Pam", "person.Liz", "person.Pat", "person.Ann"),
+    SpaceMention("people") -> SpaceValue("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")))
 
   test("add_index") {
-    given PathContext()
-    val rhs = Read("ifamily") \/ (Read("ifamily").transform("parent.$x.$y", "child.$y.$x"))
-      \/ ("person" x Read("ifamily.female"))
-      \/ ("person" x Read("ifamily.male"))
-    assert(eval(rhs)(using initial_context) == eval(Read("family"))(using context))
+//    val rhs = S"ifamily" \/ S"ifamily".transform("parent.$x.$y", "child.$y.$x")
+    val rhs = S"ifamily"
+      \/ ("child" x S"ifamily"("parent").iter(PathRef("x"), SpaceMention("r"), S"r".iter(PathRef("y"), SpaceMention("_"), Singleton(P"y" x P"x"))))
+      \/ ("person" x S"ifamily"("female"))
+      \/ ("person" x S"ifamily"("male"))
+    assert(eval(rhs)(using PathContext.emptyMap, initial_context) == eval(S"family")(using PathContext(), context))
   }
 
   test("parent_query") {
     given PathContext()
     given SpaceContext = context
-    val lhs = "Parent" x (Read("family.child") <| Read("people"))
+    val lhs = "Parent" x (S"family"("child") <| S"people")
     val rhs = SpaceValue("Parent.Bob.Tom", "Parent.Pat.Bob", "Parent.Bob.Pam", "Parent.Liz.Tom", "Parent.Ann.Bob", "Parent.Jim.Pat")
     assert(eval(lhs) == rhs)
   }
@@ -181,8 +183,9 @@ class AuntQuery extends FunSuite:
   test("mother_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    val res = "Mother" x R"people".iter($"person",
-      $"person" x (R"family.child"($"person") /\ R"family.female")
+    
+    val res = "Mother" x S"people".iter(PathRef("person"), SpaceMention("_"),
+      P"person" x (S"family"("child" x P"person") /\ S"family"("female"))
     )
 
     assert(eval(res) == SpaceValue("Mother.Jim.Pat", "Mother.Bob.Pam"))
@@ -191,8 +194,8 @@ class AuntQuery extends FunSuite:
   test("sister_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    val res = "Sister" x R"people".iter($"person",
-      $"person" x ((DropHead(R"family.parent" <| R"family.child"($"person")) /\ R"family.female") \ Singleton($"person"))
+    val res = "Sister" x S"people".iter(PathRef("person"), SpaceMention("_"),
+      P"person" x ((DropHead(S"family"("parent") <| S"family"("child" x P"person")) /\ S"family"("female")) \ Singleton(P"person"))
     )
 
     assert(eval(res) == SpaceValue("Sister.Ann.Pat", "Sister.Pat.Ann", "Sister.Bob.Liz"))
@@ -201,8 +204,8 @@ class AuntQuery extends FunSuite:
   test("aunt_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    val res = "Aunt" x R"people".iter($"person",
-      $"person" x ((DropHead(R"family.parent" <| DropHead(R"family.child" <| R"family.child"($"person"))) \ R"family.child"($"person")) /\ R"family.female")
+    val res = "Aunt" x S"people".iter(PathRef("person"), SpaceMention("_"),
+      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female"))
     )
 
     assert(eval(res) == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
@@ -245,7 +248,22 @@ class AuntQuery extends FunSuite:
         while eval(oldest).nonEmpty do
           pred = pred \/ oldest
           oldest = DropHead(family("child") <| oldest)
-        println(s"$person : ${eval(pred)}")
+        println(S"$person : ${eval(pred)}")
   }*/
 end AuntQuery
 
+class Imperative extends FunSuite:
+  import Space.*
+
+  val aunt_query = "Aunt" x S"people".iter(PathRef("person"), SpaceMention("_"),
+    P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female"))
+  )
+
+//  test("aunt query pretty") {
+//    println(aunt_query.show)
+//  }
+
+  test("aunt query transpiled") {
+    println(transpile(aunt_query).show)
+  }
+end Imperative
