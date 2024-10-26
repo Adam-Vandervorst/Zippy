@@ -26,7 +26,7 @@ enum Path:
   case Concat(l: Path, r: Path)
 
   def show: String = this match
-    case Path.Deref(pr) => s"$$\"${pr.s}\""
+    case Path.Deref(pr) => s"P\"${pr.s}\""
     case Path.Constant(pi) => s"\"${pi.show}\""
     case Path.Concat(l, r) => s"${l.show} x ${r.show}"
 
@@ -157,6 +157,7 @@ case class SpaceMention(s: String)
 
 enum Space:
   case Empty
+  case Call(r: RoutinePtr, refs: Vector[Path], mentions: Vector[Space])
   case Mention(variable: SpaceMention)
   case Singleton(p: Path)
   case Literal(p: SpaceValue)
@@ -175,7 +176,8 @@ enum Space:
 
   def show(using indent: Int = 0): String = this match
     case Space.Empty => "Empty"
-    case Space.Mention(variable) => variable.s
+    case Space.Call(r, refs, mentions) => s"${r.s}(${refs.mkString(", ")}; ${mentions.mkString(", ")})"
+    case Space.Mention(variable) => s"S\"${variable.s}\""
     case Space.Singleton(p) => s"Singleton(${p.show})"
     case Space.Literal(p) => s"Literal(${p.show})"
     case Space.Union(x, y) => s"(${x.show} \\/ ${y.show})"
@@ -184,7 +186,7 @@ enum Space:
     case Space.Restriction(x, y) => s"(${x.show} <| ${y.show})"
     case Space.Composition(x, y) => s"(${x.show} x ${y.show})"
     case Space.Transformation(src, pattern, template) => s"${src.show}.transform(${pattern.show}, ${template.show})"
-    case Space.Iteration(src, symbol, rest, templates) => s"${src.show}.iter(${symbol.s}, ${rest.s}, \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
+    case Space.Iteration(src, symbol, rest, templates) => s"${src.show}.iter(\"${symbol.s}\", \"${rest.s}\", \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
     case Space.Wrap(src, p) => s"(${p.show} x ${src.show})"
     case Space.Unwrap(src, p) => s"${src.show}(${p.show})"
     case Space.DropHead(src) => s"DropHead(${src.show})"
@@ -198,9 +200,18 @@ case class SpaceValue(paths: Set[PathValue]):
   def prettyLines: String = paths.map(_.show).toSeq.sorted.mkString("", "\n", "")
 
 
-def eval(s: Space)(using pc: PathContext, sc: SpaceContext): SpaceValue =
+case class RoutinePtr(s: String)
+case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[SpaceMention], body: Space):
+  def show = s"routine(\"${name.s}\", Vector(${refs.map("\"" ++ _.s ++ "\"").mkString(", ")}), Vector(${mentions.map("\"" ++ _.s ++ "\"").mkString(", ")}), ${body.show})"
+
+def eval(s: Space)(using pc: PathContext, sc: SpaceContext, rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
   def rec(x: Space): Set[PathValue] = x match
     case Space.Empty => Set()
+    case Space.Call(rp, refs, mentions) =>
+      val refvs = refs.map(p => eval(p))
+      val mentionvs = mentions.map(s => eval(s))
+      val Routine(_, refns, mentionns, body) = rc(rp)
+      eval(body)(using PathContextMap(Map.from(refns zip refvs)), SpaceContextMap(Map.from(mentionns zip mentionvs))).paths
     case Space.Mention(p) => sc.resolve(p).paths
     case Space.Singleton(p) => Set(eval(p))
     case Space.Literal(SpaceValue(ps)) => ps
@@ -230,10 +241,14 @@ class OpGraph(val nodes: ArrayBuffer[Node[Int]]):
   def load(ref: Int): Node[Int] = nodes(ref)
   def update(ref: Int, f: Node[Int] => Node[Int]): Unit = nodes(ref) = f(nodes(ref))
 
-def transpile(s: Space): OpGraph =
+def transpile(r: Routine): OpGraph =
   val g = OpGraph()
-  val path_vars: ArrayBuffer[(Int, PathRef, Path)] = ArrayBuffer.empty
-  val space_vars: ArrayBuffer[(Int, SpaceMention, Path)] = ArrayBuffer.empty
+  val path_vars: ArrayBuffer[(Int, PathRef, Path)] = ArrayBuffer.from(r.refs.zipWithIndex.map((pr, i) =>
+    (g.store(Node(Path.Deref(PathRef("^")), s"ExtractPathRef(${pr.s})", "path", Vector())),
+      pr, Path.Deref(PathRef("^")))))
+  val space_vars: ArrayBuffer[(Int, SpaceMention, Path)] = ArrayBuffer.from(r.mentions.zipWithIndex.map((sm, i) =>
+    (g.store(Node(Path.Deref(PathRef("^")), s"ExtractSpaceMention(${sm.s})", "space", Vector())),
+      sm, Path.Deref(PathRef("^")))))
 
   def recp(x: Path, scope: Path): Int = x match
     case Path.Deref(pr) =>
@@ -247,12 +262,15 @@ def transpile(s: Space): OpGraph =
     x match
       case Space.Empty =>
         g.store(Node(scope, "Empty", "space", Vector()))
+      case Space.Call(r, refs, mentions) =>
+        val refvs = refs.map(p => recp(p, scope))
+        val mentionvs = mentions.map(s => recs(s, scope))
+        g.store(Node(scope, r.s, "space", refvs ++ mentionvs))
       case Space.Mention(sm) =>
         space_vars.find((v, name, scp) => sm == name).map(_._1).getOrElse(sm.hashCode())
       case Space.Singleton(p) =>
         val v = recp(p, scope)
-        val r = g.store(Node(scope, "Singleton", "space", Vector(v)))
-        r
+        g.store(Node(scope, "Singleton", "space", Vector(v)))
       case Space.Literal(sv) =>
         g.store(Node(scope, s"Literal(${sv.show})", "space", Vector()))
       case Space.Union(x, y) =>
@@ -291,7 +309,7 @@ def transpile(s: Space): OpGraph =
       case Space.RightResidual(y, x) =>
         g.store(Node(scope, "RightResidual", "space", Vector(recs(y, scope), recs(x, scope))))
 
-  recs(s, Path.Deref(PathRef("^")))
+  recs(r.body, Path.Deref(PathRef("^")))
   g
 
 
@@ -314,12 +332,15 @@ object Syntax:
     infix def x(y: Space) = Space.Composition(x, y)
     def apply(p: Path) = Space.Unwrap(x, p)
     infix def transform(lhs: Path, rhs: Path): Space = Space.Transformation(x, lhs, rhs)
-    infix def iter(symbol: PathRef, rest: SpaceMention, rhs: Space): Space = Space.Iteration(x, symbol, rest, rhs)
+    infix def iter(symbol: String, rest: String, rhs: Space): Space = Space.Iteration(x, PathRef(symbol), SpaceMention(rest), rhs)
     def :\(y: Space) = Space.RightResidual(x, y)
     def /:(y: Space) = Space.LeftResidual(x, y)
 
   extension (st: SpaceValue.type)
     def apply(ps: PathValue*): SpaceValue = SpaceValue(ps.toSet)
+
+  extension (rp: RoutinePtr)
+    def apply(refs: Vector[Path], mentions: Vector[Space]) = Space.Call(rp, refs, mentions)
 
   extension (inline sc: StringContext)
     inline def S(inline args: Any*): Space =
@@ -330,3 +351,10 @@ object Syntax:
     inline def P(inline args: Any*): Path =
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Path.Deref(PathRef(k))
+
+  extension (inline sc: StringContext)
+    inline def R(inline args: Any*): RoutinePtr =
+      val k = StringContext.standardInterpolator(identity, args, sc.parts)
+      RoutinePtr(k)
+
+  def routine(name: String, refs: Vector[String], mentions: Vector[String], space: Space) = Routine(RoutinePtr(name), refs.map(PathRef(_)), mentions.map(SpaceMention(_)), space)

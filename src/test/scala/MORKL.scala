@@ -166,7 +166,7 @@ class AuntQuery extends FunSuite:
   test("add_index") {
 //    val rhs = S"ifamily" \/ S"ifamily".transform("parent.$x.$y", "child.$y.$x")
     val rhs = S"ifamily"
-      \/ ("child" x S"ifamily"("parent").iter(PathRef("x"), SpaceMention("r"), S"r".iter(PathRef("y"), SpaceMention("_"), Singleton(P"y" x P"x"))))
+      \/ ("child" x S"ifamily"("parent").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x"))))
       \/ ("person" x S"ifamily"("female"))
       \/ ("person" x S"ifamily"("male"))
     assert(eval(rhs)(using PathContext.emptyMap, initial_context) == eval(S"family")(using PathContext(), context))
@@ -184,7 +184,7 @@ class AuntQuery extends FunSuite:
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
     
-    val res = "Mother" x S"people".iter(PathRef("person"), SpaceMention("_"),
+    val res = "Mother" x S"people".iter("person", "_",
       P"person" x (S"family"("child" x P"person") /\ S"family"("female"))
     )
 
@@ -194,7 +194,7 @@ class AuntQuery extends FunSuite:
   test("sister_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    val res = "Sister" x S"people".iter(PathRef("person"), SpaceMention("_"),
+    val res = "Sister" x S"people".iter("person", "_",
       P"person" x ((DropHead(S"family"("parent") <| S"family"("child" x P"person")) /\ S"family"("female")) \ Singleton(P"person"))
     )
 
@@ -204,7 +204,7 @@ class AuntQuery extends FunSuite:
   test("aunt_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    val res = "Aunt" x S"people".iter(PathRef("person"), SpaceMention("_"),
+    val res = "Aunt" x S"people".iter("person", "_",
       P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female"))
     )
 
@@ -255,15 +255,45 @@ end AuntQuery
 class Imperative extends FunSuite:
   import Space.*
 
-  val aunt_query = "Aunt" x S"people".iter(PathRef("person"), SpaceMention("_"),
-    P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female"))
+  val aunt_query_routine = routine("aunts", Vector(), Vector("family", "people"),
+    "Aunt" x S"people".iter("person", "_",
+      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
   )
 
-//  test("aunt query pretty") {
-//    println(aunt_query.show)
-//  }
+  test("aunt query pretty") {
+    println(aunt_query_routine.show)
+  }
 
   test("aunt query transpiled") {
-    println(transpile(aunt_query).show)
+    println(transpile(aunt_query_routine).show)
   }
 end Imperative
+
+class Routines extends FunSuite:
+  import Space.*
+
+  val context = SpaceContextMap(Map(
+    SpaceMention("family") -> SpaceValue(
+      "parent.Tom.Bob", "child.Bob.Tom",
+      "parent.Pam.Bob", "child.Bob.Pam",
+      "parent.Tom.Liz", "child.Liz.Tom",
+      "parent.Bob.Ann", "child.Ann.Bob",
+      "parent.Bob.Pat", "child.Pat.Bob",
+      "parent.Pat.Jim", "child.Jim.Pat",
+      "female.Pam", "female.Liz", "female.Pat", "female.Ann",
+      "male.Tom", "male.Bob", "male.Jim",
+      "person.Tom", "person.Bob", "person.Jim", "person.Pam", "person.Liz", "person.Pat", "person.Ann"),
+    SpaceMention("people") -> SpaceValue("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")))
+
+  val aunt_query_routine = routine("aunts", Vector(), Vector("family", "people"),
+    "Aunt" x S"people".iter("person", "_",
+      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
+  )
+
+  test("eval routine") {
+    val lpeople = Literal(SpaceValue("Tom", "Bob", "Jim"))
+    val e = R"aunts"(Vector(), Vector(S"family", lpeople))
+    val result = SpaceValue("Aunt.Jim.Ann")
+    assert(eval(e)(using PathContext.emptyMap, context, Map(RoutinePtr("aunts") -> aunt_query_routine)) == result)
+  }
+end Routines
