@@ -331,6 +331,12 @@ class Grounded extends FunSuite:
   def trace(path: Path)(using ab: collection.mutable.ArrayBuffer[PathValue]): Path =
     Path.GroundedPP(path, pv => { ab.addOne(pv); pv })
 
+  def spacesize(space: Space): Path =
+    Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol(sv.paths.size.toString))))
+
+  def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path =
+    Path.GroundedSP(space, sv => { ab.addOne(sv); PathValue(List(PathItem.Symbol("unit")))  })
+
   test("PP hash") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
@@ -348,5 +354,25 @@ class Grounded extends FunSuite:
 
     eval(e)
     assert(ps.map(_.show).mkString("; ") == "Tom.Liz; Tom.Bob; Pat.Jim; Bob.Ann; Bob.Pat; Pam.Bob")
+  }
+
+  test("SP spacesize") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+
+    val e = S"family"("parent").iter("x", "r", Singleton(P"x" x "has" x spacesize(S"r") x "children"))
+
+    assert(eval(e) == SpaceValue("Bob.has.2.children", "Pam.has.1.children", "Pat.has.1.children", "Tom.has.2.children"))
+  }
+
+  test("SP spaceout") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+
+    val e = S"family"("parent").iter("x", "r", Singleton(spaceout(S"r")))
+
+    assert(eval(e) == SpaceValue("unit"))
+    assert(ps.toList == List(SpaceValue("Bob", "Liz"), SpaceValue("Jim"), SpaceValue("Ann", "Pat"), SpaceValue("Bob")))
   }
 end Grounded

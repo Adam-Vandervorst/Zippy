@@ -25,18 +25,21 @@ enum Path:
   case Constant(pi: PathValue)
   case Concat(l: Path, r: Path)
   case GroundedPP(p: Path, f: PathValue => PathValue)
+  case GroundedSP(p: Space, f: SpaceValue => PathValue)
 
   def show: String = this match
     case Path.Deref(pr) => s"P\"${pr.s}\""
     case Path.Constant(pi) => s"\"${pi.show}\""
     case Path.Concat(l, r) => s"${l.show} x ${r.show}"
-    case Path.GroundedPP(p, f) => s"${f.hashCode()}(${p})"
+    case Path.GroundedPP(p, f) => s"${f.hashCode()}PP(${p.show})"
+    case Path.GroundedSP(s, f) => s"${f.hashCode()}SP(${s.show})"
 
   def pretty: String = this match
     case Path.Deref(pr) => pr.s
     case Path.Constant(pi) => pi.show
     case Path.Concat(l, r) => s"${l.pretty}.${r.pretty}"
-    case Path.GroundedPP(p, f) => s"${f.hashCode()}(${p})"
+    case Path.GroundedPP(p, f) => s"${f.hashCode()}PP(${p})"
+    case Path.GroundedPP(s, f) => s"${f.hashCode()}SP(${s.show})"
 
 case class PathValue(items: List[PathItem]):
   def show: String = items.map(_.show).mkString(".")
@@ -115,14 +118,6 @@ def make_transform(pattern: PathValue, template: PathValue): PathValue => Option
     Some(mb.result())
   catch
     case e: SymbolConflict => None*/
-
-def eval(p: Path)(using pc: PathContext): PathValue =
-  def rec(x: Path): List[PathItem] = x match
-    case Path.Deref(pr) => pc.resolve(pr).items
-    case Path.Constant(pi) => pi.items
-    case Path.Concat(l, r) => rec(l) ++ rec(r)
-    case Path.GroundedPP(p, f) => f(PathValue(rec(p))).items
-  PathValue(rec(p))
 
 class SpaceContext:
   def resolve(pv: SpaceMention): SpaceValue = throw RuntimeException(s"$pv space mention not resolved")
@@ -208,32 +203,38 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
   def show = s"routine(\"${name.s}\", Vector(${refs.map("\"" ++ _.s ++ "\"").mkString(", ")}), Vector(${mentions.map("\"" ++ _.s ++ "\"").mkString(", ")}), ${body.show})"
 
 def eval(s: Space)(using pc: PathContext, sc: SpaceContext, rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
-  def rec(x: Space): Set[PathValue] = x match
+  def recp(x: Path): List[PathItem] = x match
+    case Path.Deref(pr) => pc.resolve(pr).items
+    case Path.Constant(pi) => pi.items
+    case Path.Concat(l, r) => recp(l) ++ recp(r)
+    case Path.GroundedPP(p, f) => f(PathValue(recp(p))).items
+    case Path.GroundedSP(s, f) => f(SpaceValue(recs(s))).items
+  def recs(x: Space): Set[PathValue] = x match
     case Space.Empty => Set()
     case Space.Call(rp, refs, mentions) =>
-      val refvs = refs.map(p => eval(p))
-      val mentionvs = mentions.map(s => eval(s))
+      val refvs = refs.map(p => PathValue(recp(p)))
+      val mentionvs = mentions.map(s => SpaceValue(recs(s)))
       val Routine(_, refns, mentionns, body) = rc(rp)
       eval(body)(using PathContextMap(Map.from(refns zip refvs)), SpaceContextMap(Map.from(mentionns zip mentionvs))).paths
     case Space.Mention(p) => sc.resolve(p).paths
-    case Space.Singleton(p) => Set(eval(p))
+    case Space.Singleton(p) => Set(PathValue(recp(p)))
     case Space.Literal(SpaceValue(ps)) => ps
-    case Space.Union(x, y) => rec(x) union rec(y)
-    case Space.Intersection(x, y) => rec(x) intersect rec(y)
-    case Space.Subtraction(x, y) => rec(x) removedAll rec(y)
-    case Space.Restriction(x_e, prefixes_e) => val prefixes = rec(prefixes_e); rec(x_e).filter(x => prefixes.exists(p => x.items.startsWith(p.items)))
-    case Space.Composition(x, y) => val ys = rec(y); for e1 <- rec(x); e2 <- ys yield PathValue(e1.items ++ e2.items)
-    case Space.Wrap(src_e, p_e) => val p = eval(p_e); rec(src_e).map( sp => PathValue(p.items ++ sp.items))
-    case Space.Unwrap(src_e, p_e) => val p = eval(p_e); rec(src_e).collect { case e if e.items.startsWith(p.items) => PathValue(e.items.drop(p.items.length)) }
-    case Space.DropHead(src_e) => rec(src_e).collect { case PathValue(_::r) => PathValue(r) }
-    case Space.Transformation(src_e, pattern, template) => val transformer = make_transform(eval(pattern), eval(template)).unlift; eval(src_e).paths.collect(transformer)
+    case Space.Union(x, y) => recs(x) union recs(y)
+    case Space.Intersection(x, y) => recs(x) intersect recs(y)
+    case Space.Subtraction(x, y) => recs(x) removedAll recs(y)
+    case Space.Restriction(x_e, prefixes_e) => val prefixes = recs(prefixes_e); recs(x_e).filter(x => prefixes.exists(p => x.items.startsWith(p.items)))
+    case Space.Composition(x, y) => val ys = recs(y); for e1 <- recs(x); e2 <- ys yield PathValue(e1.items ++ e2.items)
+    case Space.Wrap(src_e, p_e) => val p = recp(p_e); recs(src_e).map( sp => PathValue(p ++ sp.items))
+    case Space.Unwrap(src_e, p_e) => val p = recp(p_e); recs(src_e).collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
+    case Space.DropHead(src_e) => recs(src_e).collect { case PathValue(_::r) => PathValue(r) }
+    case Space.Transformation(src_e, pattern, template) => val transformer = make_transform(PathValue(recp(pattern)), PathValue(recp(template))).unlift; recs(src_e).collect(transformer)
     case Space.Iteration(src_e, symbol, rest, templates) =>
-      (for (h, r) <- eval(src_e).paths.groupMap(x => PathValue(x.items.head::Nil))(x => PathValue(x.items.tail));
+      (for (h, r) <- recs(src_e).groupMap(x => PathValue(x.items.head::Nil))(x => PathValue(x.items.tail));
           p <- eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(r)))).paths
       yield p).toSet
-    case Space.LeftResidual(x_e, y_e) => val ys = eval(y_e); val xs = eval(x_e); for e <- xs.paths; r <- e.prefixes; if ys.paths.forall(g => xs.paths.contains(PathValue(r.items ++ g.items))) yield r
-    case Space.RightResidual(y_e, x_e) => val ys = eval(y_e); val xs = eval(x_e); for e <- xs.paths; r <- e.postfixes; if ys.paths.forall(g => xs.paths.contains(PathValue(g.items ++ r.items))) yield r
-  SpaceValue(rec(s))
+    case Space.LeftResidual(x_e, y_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.prefixes; if ys.forall(g => xs.contains(PathValue(r.items ++ g.items))) yield r
+    case Space.RightResidual(y_e, x_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.postfixes; if ys.forall(g => xs.contains(PathValue(g.items ++ r.items))) yield r
+  SpaceValue(recs(s))
 
 case class Node[R](scope: Path, operation: String, kind: "path" | "space", inputs: Vector[R]):
   def show: String = s"${scope.pretty} $operation(${inputs.mkString(", ")}): $kind"
@@ -261,6 +262,8 @@ def transpile(r: Routine): OpGraph =
     case Path.Concat(l, r) =>
       g.store(Node(scope, s"Concat", "path", Vector(recp(l, scope), recp(r, scope))))
     case Path.GroundedPP(p, f) =>
+      throw NotImplementedError("grounded functions WIP")
+    case Path.GroundedPP(s, f) =>
       throw NotImplementedError("grounded functions WIP")
 
   def recs(x: Space, scope: Path): Int =
