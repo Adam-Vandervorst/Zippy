@@ -2,10 +2,6 @@ package morkl
 
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
-import org.apache.jena.sparql.algebra.OpVisitorBase
-import org.apache.jena.sparql.algebra.op.{Op0, Op1, Op2, OpN}
-import org.apache.jena.sparql.algebra.walker.WalkerVisitor
-import org.apache.jena.sparql.expr.ExprVisitorBase
 
 
 /*class MORKL2Path extends FunSuite:
@@ -328,6 +324,9 @@ class Grounded extends FunSuite:
   def hash(path: Path): Path =
     Path.GroundedPP(path, pv => PathValue(List(PathItem.Symbol("R" + pv.hashCode().toHexString))))
 
+  def hash(space: Space): Path =
+    Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol("R" + sv.hashCode().toHexString))))
+
   def trace(path: Path)(using ab: collection.mutable.ArrayBuffer[PathValue]): Path =
     Path.GroundedPP(path, pv => { ab.addOne(pv); pv })
 
@@ -336,6 +335,21 @@ class Grounded extends FunSuite:
 
   def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path =
     Path.GroundedSP(space, sv => { ab.addOne(sv); PathValue(List(PathItem.Symbol("unit")))  })
+
+  def range(path: Path): Space =
+    Space.GroundedPS(path, x => x.items.map{ case PathItem.Symbol(s) => s.toIntOption } match
+      case Seq(Some(stop)) => SpaceValue((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet)
+      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet))
+
+  def transitive(space: Space): Space =
+    Space.GroundedSS(space, sv => {
+      var otsv = sv
+      var tsv = eval(Literal(sv) \/ Literal(sv).iter("x", "r", P"x" x DropHead(Literal(sv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
+      while otsv != tsv do
+        otsv = tsv
+        tsv = eval(Literal(otsv) \/ Literal(otsv).iter("x", "r", P"x" x DropHead(Literal(otsv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
+      tsv
+    })
 
   test("PP hash") {
     given PathContext = PathContext.emptyMap
@@ -375,4 +389,31 @@ class Grounded extends FunSuite:
     assert(eval(e) == SpaceValue("unit"))
     assert(ps.toList == List(SpaceValue("Bob", "Liz"), SpaceValue("Jim"), SpaceValue("Ann", "Pat"), SpaceValue("Bob")))
   }
+
+  test("PS range") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+
+    val e = range("0.10.2").iter("x", "_1", range("1" x P"x" x "1").iter("y", "_2", Singleton("pair" x P"x" x P"y")))
+
+    assert(eval(e) == SpaceValue("pair.2.1", "pair.4.1", "pair.4.2", "pair.4.3", "pair.6.1", "pair.6.2", "pair.6.3", "pair.6.4", "pair.6.5", "pair.8.1", "pair.8.2", "pair.8.3", "pair.8.4", "pair.8.5", "pair.8.6", "pair.8.7"))
+  }
+
+  test("SS transitive") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    /*
+    a  ->  b   x  <->  y
+      \           \    ^
+        ◢           ◢  |
+    c  <-  d           z
+     */
+    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y"))
+    val lhs = "edge" x transitive(graph("edge"))
+    val rhs = "edge" x (("a" x Literal(SpaceValue("b", "d", "c"))) \/
+                        ("d" x Literal(SpaceValue("c"))) \/
+                        (Literal(SpaceValue("x", "y", "z")) x Literal(SpaceValue("x", "y", "z"))))
+    assert(eval(lhs) == eval(rhs))
+  }
+
 end Grounded

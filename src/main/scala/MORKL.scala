@@ -171,6 +171,8 @@ enum Space:
   case DropHead(src: Space)
   case LeftResidual(x: Space, y: Space) // likely not to be included
   case RightResidual(y: Space, x: Space) // likely not to be included
+  case GroundedPS(p: Path, f: PathValue => SpaceValue)
+  case GroundedSS(p: Space, f: SpaceValue => SpaceValue)
 
   def show(using indent: Int = 0): String = this match
     case Space.Empty => "Empty"
@@ -190,6 +192,8 @@ enum Space:
     case Space.DropHead(src) => s"DropHead(${src.show})"
     case Space.LeftResidual(x, y) => s"(${y.show} /: ${x.show})"
     case Space.RightResidual(y, x) => s"(${y.show} :\\ ${x.show})"
+    case Space.GroundedPS(p, f) => s"${f.hashCode()}PS(${p.show})"
+    case Space.GroundedSS(s, f) => s"${f.hashCode()}SS(${s.show})"
 
 
 case class SpaceValue(paths: Set[PathValue]):
@@ -234,6 +238,8 @@ def eval(s: Space)(using pc: PathContext, sc: SpaceContext, rc: PartialFunction[
       yield p).toSet
     case Space.LeftResidual(x_e, y_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.prefixes; if ys.forall(g => xs.contains(PathValue(r.items ++ g.items))) yield r
     case Space.RightResidual(y_e, x_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.postfixes; if ys.forall(g => xs.contains(PathValue(g.items ++ r.items))) yield r
+    case Space.GroundedPS(p, f) => f(PathValue(recp(p))).paths
+    case Space.GroundedSS(s, f) => f(SpaceValue(recs(s))).paths
   SpaceValue(recs(s))
 
 case class Node[R](scope: Path, operation: String, kind: "path" | "space", inputs: Vector[R]):
@@ -316,6 +322,10 @@ def transpile(r: Routine): OpGraph =
         g.store(Node(scope, "LeftResidual", "space", Vector(recs(x, scope), recs(y, scope))))
       case Space.RightResidual(y, x) =>
         g.store(Node(scope, "RightResidual", "space", Vector(recs(y, scope), recs(x, scope))))
+      case Space.GroundedPS(p, f) =>
+        throw NotImplementedError("grounded functions WIP")
+      case Space.GroundedPS(s, f) =>
+        throw NotImplementedError("grounded functions WIP")
 
   recs(r.body, Path.Deref(PathRef("^")))
   g
