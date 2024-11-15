@@ -252,6 +252,155 @@ class AuntQuery extends FunSuite:
   }*/
 end AuntQuery
 
+class SPARQL extends FunSuite:
+  import org.apache.jena.query.ParameterizedSparqlString
+  import org.apache.jena.query.Query
+  import org.apache.jena.sparql.expr.ExprVisitorBase
+  import org.apache.jena.sparql.algebra.Algebra
+  import org.apache.jena.sparql.algebra.OpVisitorBase
+  import org.apache.jena.sparql.algebra.walker.WalkerVisitor
+  import org.apache.jena.sparql.algebra.{OpVisitor, op, Op, OpVisitorByTypeBase, OpVisitorByType}
+  import org.apache.jena.sparql.algebra.op.{Op0, Op1, Op2, OpN, OpAssign, OpBGP, OpConditional, OpDatasetNames, OpDiff, OpDisjunction, OpDistinct, OpExtend, OpFilter, OpGroup, OpJoin, OpLabel, OpLateral, OpLeftJoin, OpList, OpMinus, OpNull, OpOrder, OpPath, OpProcedure, OpProject, OpPropFunc, OpQuad, OpQuadBlock, OpQuadPattern, OpReduced, OpSequence, OpService, OpSlice, OpTable, OpTopN, OpTriple, OpUnion}
+  import Space.*
+
+  extension [K, V](m1: Map[K, V])
+    def unionWith(op: (V, V) => V)(m2: Map[K, V]): Map[K, V] =
+      val n = collection.mutable.Map.from(m1)
+      m2.foreachEntry((k, v) =>
+        var required = true
+        val v_ = n.getOrElseUpdate(k, {
+          required = false;
+          v
+        })
+        if required then n.update(k, op(v, v_))
+      )
+      n.toMap
+
+  test("query parsed") {
+    val q = new ParameterizedSparqlString(
+      """PREFIX ex: <http://example.org/ns#>
+        |
+        |SELECT ?price ?title
+        |WHERE {
+        |  ?book ex:price ?price .
+        |  FILTER (?price < 15) .
+        |  OPTIONAL { ?book ex:title ?title } .
+        |  {
+        |    ?book ex:author ex:Shakespeare
+        |  } UNION {
+        |    ?book ex:author ex:Marlowe
+        |  }
+        |}""".stripMargin).asQuery()
+    println(q)
+    val aq = Algebra.compile(q)
+    println(aq)
+    println(Algebra.optimize(aq))
+    case class Frame[A](func: collection.mutable.ArrayBuffer[A] => A, args: collection.mutable.ArrayBuffer[A])
+    val stack = collection.mutable.Stack[Frame[(Map[String, Boolean], String)]](Frame(args => {
+      assert(args.size == 1); args.last
+    }, collection.mutable.ArrayBuffer.empty))
+    val before_op = new OpVisitorBase {
+      override def visit(opTriple: OpTriple): Unit =
+        assert(false)
+        stack.push(Frame(cs => {
+          Map() -> s"PathOf(${opTriple.getTriple})()"
+        }, collection.mutable.ArrayBuffer.empty))
+
+      override def visit(opBGP: OpBGP): Unit =
+        stack.push(Frame(cs => {
+          assert(opBGP.getPattern.size() == 1)
+          val triple = opBGP.getPattern.get(0)
+          val (s, p, o) = (triple.getSubject, triple.getPredicate, triple.getObject)
+          //          println(s"pattern variables ${Set(s, p, o).filter(_.isVariable).map(_.getName)} ")
+          Set(s, p, o).filter(_.isVariable).map(_.getName -> true).toMap -> s"LoopOver(${opBGP.getPattern})()"
+        }, collection.mutable.ArrayBuffer.empty))
+
+      override def visit(opProject: OpProject): Unit =
+        stack.push(Frame(cs => {
+          assert(cs.size == 1)
+          val allowed = collection.mutable.Set.empty[String]
+          opProject.getVars.iterator().forEachRemaining(x => allowed.addOne(x.getVarName))
+          cs.head._1.filter((s, g) => allowed.contains(s)) -> s"Project(${opProject.getVars.toArray.mkString(", ")})(${cs.mkString(", ")})"
+        }, collection.mutable.ArrayBuffer.empty))
+
+      override def visit(opUnion: OpUnion): Unit =
+        stack.push(Frame(cs => {
+          // union is left biased!
+          assert(cs.size == 2 && cs(0)._1 == cs(1)._1)
+          cs(0)._1 -> s"Union()(${cs.mkString(", ")})"
+        }, collection.mutable.ArrayBuffer.empty))
+
+      override def visit(opJoin: OpJoin): Unit =
+        stack.push(Frame(cs => {
+          assert(cs.size == 2)
+          cs(0)._1.unionWith(_ || _)(cs(1)._1) -> s"Join()(${cs.mkString(", ")})"
+        }, collection.mutable.ArrayBuffer.empty))
+
+      override def visit(opLeftJoin: OpLeftJoin): Unit =
+        stack.push(Frame(cs => {
+          cs(0)._1.unionWith((l, r) => l)(cs(1)._1.map((s, g) => (s, false))) -> s"LeftJoin(${opLeftJoin.getExprs})(${cs.mkString(", ")})"
+        }, collection.mutable.ArrayBuffer.empty))
+
+      override def visit(opFilter: OpFilter): Unit =
+        stack.push(Frame(cs => {
+          assert(cs.size == 1)
+          cs.head._1 -> s"Filter(${opFilter.getExprs})(${cs.mkString(", ")})"
+        }, collection.mutable.ArrayBuffer.empty))
+    }
+    val on_op = new OpVisitorBase {
+    }
+    val after_op = new OpVisitorByType {
+      def shift(): Unit =
+        val Frame(f, args) = stack.pop()
+        val v = f(args)
+        stack.top.args.addOne(v)
+
+      override def visitN(op: OpN): Unit = shift()
+
+      override def visit2(op: Op2): Unit = shift()
+
+      override def visit1(op: Op1): Unit = shift()
+
+      override def visit0(op: Op0): Unit = shift()
+
+      override def visitFilter(op: OpFilter): Unit = shift()
+
+      override def visitLeftJoin(op: OpLeftJoin): Unit = shift()
+    }
+    val walker = new WalkerVisitor(on_op, ExprVisitorBase(), before_op, after_op)
+    aq.visit(walker)
+    val Frame(f, args) = stack.pop()
+    println(f(args))
+
+/*    (Map(title -> false, price -> true), Project(? book, ? price, ? title)(
+      (Map(title -> false, price -> true, book -> true), Filter([(< ? price
+    15
+    )] ) (
+      (Map(title -> false, price -> true, book -> true), Join()(
+        (Map(title -> false, price -> true, book -> false), LeftJoin(null)(
+          (Map(book -> true, price -> true), LoopOver((? book ns: price ? price))()),
+          (Map(book -> true, title -> true), LoopOver((? book ns: title ? title))()))),
+        (Map(book -> true), Union()(
+          (Map(book -> true), LoopOver((? book ns: author ns: Shakespeare))()),
+          (Map(book -> true), LoopOver((? book ns: author ns: Marlowe))()))))
+    ) ) ) ) )*/
+
+    // ($output $o)
+    // $o = (superpose ((book 394803), (title "The Night of Seven"), (author ns:Marlowe)))
+
+
+    // good(book) \b:r OUTPUT(Singleton(book x b) \/ r) where
+    //   good = book x content(book) \b:r => demand r(price) > 15 of b x r where
+    //     content = book x info(book) \b:r => b x (r \/ relevant(book)(b) where
+    //       info = book x prices(book) \b:r => b x (r \/ titles(book)(b)) where
+    //         prices = book x (spo \b:r => b x price x r(ns:price))
+    //         titles = book x (spo \b:r => b x title x r(ns:title))
+    //       relevant = book x (ops(ns:Shakespeare)(ns:author)) \/ ops(ns:Marlowe)(ns:author))
+
+    //   spo <| ((ops(ns:Shakespeare)(ns:author) \/ ops(ns:Marlowe)(ns:author)) x {ns:price x range(15, INT:MAX, 1), ns:title}) \b:r => OUTPUT({book x b, title x r(ns:title), price x r(ns:price)})
+  }
+end SPARQL
+
 class Imperative extends FunSuite:
   import Space.*
 
