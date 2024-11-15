@@ -2,6 +2,10 @@ package morkl
 
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
+import org.apache.jena.sparql.algebra.OpVisitorBase
+import org.apache.jena.sparql.algebra.op.{Op0, Op1, Op2, OpN}
+import org.apache.jena.sparql.algebra.walker.WalkerVisitor
+import org.apache.jena.sparql.expr.ExprVisitorBase
 
 
 /*class MORKL2Path extends FunSuite:
@@ -261,11 +265,11 @@ class Imperative extends FunSuite:
   )
 
   test("aunt query pretty") {
-    println(aunt_query_routine.show)
+//    println(aunt_query_routine.show)
   }
 
   test("aunt query transpiled") {
-    println(transpile(aunt_query_routine).show)
+//    println(transpile(aunt_query_routine).show)
   }
 end Imperative
 
@@ -296,4 +300,53 @@ class Routines extends FunSuite:
     val result = SpaceValue("Aunt.Jim.Ann")
     assert(eval(e)(using PathContext.emptyMap, context, Map(RoutinePtr("aunts") -> aunt_query_routine)) == result)
   }
+//
+//  test("eval factorial") {
+//    function("fact", Vector("n"),
+//      F"mul"(P"n", F"fact"(Vector(F"decr"(P"n")), Vector())
+//    )
+//  }
 end Routines
+
+
+class Grounded extends FunSuite:
+  import Space.*
+
+  val context = SpaceContextMap(Map(
+    SpaceMention("family") -> SpaceValue(
+      "parent.Tom.Bob", "child.Bob.Tom",
+      "parent.Pam.Bob", "child.Bob.Pam",
+      "parent.Tom.Liz", "child.Liz.Tom",
+      "parent.Bob.Ann", "child.Ann.Bob",
+      "parent.Bob.Pat", "child.Pat.Bob",
+      "parent.Pat.Jim", "child.Jim.Pat",
+      "female.Pam", "female.Liz", "female.Pat", "female.Ann",
+      "male.Tom", "male.Bob", "male.Jim",
+      "person.Tom", "person.Bob", "person.Jim", "person.Pam", "person.Liz", "person.Pat", "person.Ann"),
+    SpaceMention("people") -> SpaceValue("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")))
+
+  def hash(path: Path): Path =
+    Path.GroundedPP(path, pv => PathValue(List(PathItem.Symbol("R" + pv.hashCode().toHexString))))
+
+  def trace(path: Path)(using ab: collection.mutable.ArrayBuffer[PathValue]): Path =
+    Path.GroundedPP(path, pv => { ab.addOne(pv); pv })
+
+  test("PP hash") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    val e = S"family"("parent").iter("x", "r", S"r".iter("y", "_", Singleton(hash(P"x" x P"y"))))
+
+    assert(eval(e) == SpaceValue("R2606dfba", "R86aea026", "Rc50d6b68", "Re4c8532", "Re59e471", "Re7a6b6e1"))
+  }
+
+  test("PP trace") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    given ps: collection.mutable.ArrayBuffer[PathValue] = collection.mutable.ArrayBuffer.empty
+
+    val e = S"family"("parent").iter("x", "r", S"r".iter("y", "_", Singleton(trace(P"x" x P"y"))))
+
+    eval(e)
+    assert(ps.map(_.show).mkString("; ") == "Tom.Liz; Tom.Bob; Pat.Jim; Bob.Ann; Bob.Pat; Pam.Bob")
+  }
+end Grounded

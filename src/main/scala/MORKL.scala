@@ -24,17 +24,19 @@ enum Path:
   case Deref(pr: PathRef)
   case Constant(pi: PathValue)
   case Concat(l: Path, r: Path)
+  case GroundedPP(p: Path, f: PathValue => PathValue)
 
   def show: String = this match
     case Path.Deref(pr) => s"P\"${pr.s}\""
     case Path.Constant(pi) => s"\"${pi.show}\""
     case Path.Concat(l, r) => s"${l.show} x ${r.show}"
+    case Path.GroundedPP(p, f) => s"${f.hashCode()}(${p})"
 
   def pretty: String = this match
     case Path.Deref(pr) => pr.s
     case Path.Constant(pi) => pi.show
     case Path.Concat(l, r) => s"${l.pretty}.${r.pretty}"
-
+    case Path.GroundedPP(p, f) => s"${f.hashCode()}(${p})"
 
 case class PathValue(items: List[PathItem]):
   def show: String = items.map(_.show).mkString(".")
@@ -119,6 +121,7 @@ def eval(p: Path)(using pc: PathContext): PathValue =
     case Path.Deref(pr) => pc.resolve(pr).items
     case Path.Constant(pi) => pi.items
     case Path.Concat(l, r) => rec(l) ++ rec(r)
+    case Path.GroundedPP(p, f) => f(PathValue(rec(p))).items
   PathValue(rec(p))
 
 class SpaceContext:
@@ -257,6 +260,8 @@ def transpile(r: Routine): OpGraph =
       g.store(Node(scope, s"Constant(${pi.show})", "path", Vector()))
     case Path.Concat(l, r) =>
       g.store(Node(scope, s"Concat", "path", Vector(recp(l, scope), recp(r, scope))))
+    case Path.GroundedPP(p, f) =>
+      throw NotImplementedError("grounded functions WIP")
 
   def recs(x: Space, scope: Path): Int =
     x match
@@ -297,7 +302,7 @@ def transpile(r: Routine): OpGraph =
         val s = recs(src, scope)
         val pv = recp(pattern, scope)
         val tv = recp(template, scope)
-        g.store(Node(scope, "Unwrap", "space", Vector(s, pv, tv)))
+        g.store(Node(scope, "Transformation", "space", Vector(s, pv, tv)))
       case Space.Iteration(src, symbol, rest, templates) =>
         val s = recs(src, scope)
         val new_scope = Path.Concat(scope, Path.Deref(symbol))
