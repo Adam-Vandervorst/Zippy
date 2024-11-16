@@ -298,7 +298,12 @@ class Routines extends FunSuite:
   }
 
   val transitive_routine = routine("transitive", Vector(), Vector("edges"),
-    S"edges" \/ R"transitive"(Vector(), Vector(S"edges".iter("x", "r", P"x" x DropHead(S"edges" <| S"r"))))
+    S"edges" \/ R"transitive"(Vector(), Vector(S"edges" \/ S"edges".iter("n", "nbs", P"n" x DropHead(S"edges" <| S"nbs"))))
+  )
+
+  val reachable_routine = routine("reachable", Vector(), Vector("edges", "nodemask", "reach"),
+    S"reach" \/ R"reachable"(Vector(), Vector(S"edges", S"nodemask",
+      S"reach" \/ DropHead(S"edges" <| (S"reach" /\ S"nodemask")) /\ S"nodemask"))
   )
 
   test("transitive") {
@@ -316,6 +321,29 @@ class Routines extends FunSuite:
       ("d" x Literal(SpaceValue("c"))) \/
       (Literal(SpaceValue("x", "y", "z")) x Literal(SpaceValue("x", "y", "z"))))
     assert(eval(lhs)(using rc = Map(RoutinePtr("transitive") -> transitive_routine)) == eval(rhs))
+  }
+
+  test("reachable") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    /*
+    a  ->  b   x  <->  y  s -> t -> u -> v -> w
+      \           \    ^
+        ◢           ◢  |
+    c  <-  d           z
+     */
+    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y",
+                                   "edge.s.t", "edge.t.u", "edge.u.v", "edge.v.w"))
+    val transpose = graph("edge").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x")))
+    val nodes = graph("edge").iter("fwd", "_1", Singleton(P"fwd")) \/ transpose.iter("bwd", "_2", Singleton(P"bwd"))
+    val fwd_t = R"reachable"(Vector(), Vector(graph("edge"), nodes, Singleton("t")))
+    assert(eval(fwd_t)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("t", "u", "v", "w"))
+    val fwd_s_no_v = R"reachable"(Vector(), Vector(graph("edge"), nodes \ Singleton("v"), Singleton("s")))
+    assert(eval(fwd_s_no_v)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("s", "t", "u"))
+    val bwd_c = R"reachable"(Vector(), Vector(transpose, nodes, Singleton("c")))
+    assert(eval(bwd_c)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("c", "d", "a"))
+    val fwd_a_no_ad = R"reachable"(Vector(), Vector(graph("edge") \ Singleton("a.d"), nodes, Singleton("a")))
+    assert(eval(fwd_a_no_ad)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("a", "b"))
   }
 end Routines
 
