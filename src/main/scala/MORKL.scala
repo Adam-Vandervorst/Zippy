@@ -219,7 +219,15 @@ def eval(s: Space)(using pc: PathContext, sc: SpaceContext, rc: PartialFunction[
       val refvs = refs.map(p => PathValue(recp(p)))
       val mentionvs = mentions.map(s => SpaceValue(recs(s)))
       val Routine(_, refns, mentionns, body) = rc(rp)
-      eval(body)(using PathContextMap(Map.from(refns zip refvs)), SpaceContextMap(Map.from(mentionns zip mentionvs))).paths
+      val pctx = PathContextMap(Map.from(refns zip refvs))
+      val sctx = SpaceContextMap(Map.from(mentionns zip mentionvs))
+      body match
+        case Space.Union(l, Space.Call(`rp`, `refs`, `mentions`)) =>
+          if (refs zip refvs).forall((p, pv) => pv == eval(Space.Singleton(p))(using pctx, sctx, rc).paths.head) &&
+             (mentions zip mentionvs).forall((s, sv) => sv == eval(s)(using pctx, sctx, rc))
+          then eval(l)(using pctx, sctx, rc).paths
+          else eval(body)(using pctx, sctx, rc).paths
+        case _ => eval(body)(using pctx, sctx, rc).paths
     case Space.Mention(p) => sc.resolve(p).paths
     case Space.Singleton(p) => Set(PathValue(recp(p)))
     case Space.Literal(SpaceValue(ps)) => ps

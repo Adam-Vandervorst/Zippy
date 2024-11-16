@@ -296,12 +296,27 @@ class Routines extends FunSuite:
     val result = SpaceValue("Aunt.Jim.Ann")
     assert(eval(e)(using PathContext.emptyMap, context, Map(RoutinePtr("aunts") -> aunt_query_routine)) == result)
   }
-//
-//  test("eval factorial") {
-//    function("fact", Vector("n"),
-//      F"mul"(P"n", F"fact"(Vector(F"decr"(P"n")), Vector())
-//    )
-//  }
+
+  val transitive_routine = routine("transitive", Vector(), Vector("edges"),
+    S"edges" \/ R"transitive"(Vector(), Vector(S"edges".iter("x", "r", P"x" x DropHead(S"edges" <| S"r"))))
+  )
+
+  test("transitive") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+    /*
+    a  ->  b   x  <->  y
+      \           \    ^
+        ◢           ◢  |
+    c  <-  d           z
+     */
+    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y"))
+    val lhs = "edge" x R"transitive"(Vector(), Vector(graph("edge")))
+    val rhs = "edge" x (("a" x Literal(SpaceValue("b", "d", "c"))) \/
+      ("d" x Literal(SpaceValue("c"))) \/
+      (Literal(SpaceValue("x", "y", "z")) x Literal(SpaceValue("x", "y", "z"))))
+    assert(eval(lhs)(using rc = Map(RoutinePtr("transitive") -> transitive_routine)) == eval(rhs))
+  }
 end Routines
 
 
