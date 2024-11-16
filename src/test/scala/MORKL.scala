@@ -272,6 +272,15 @@ end Imperative
 class Routines extends FunSuite:
   import Space.*
 
+  def sample(space: Space): Space =
+    Space.GroundedSS(space, sv => {
+      val seed = eval(Literal(sv)("seed")).paths.head.show.hashCode
+      val count = eval(Literal(sv)("count")).paths.head.show.toInt
+      val space = eval(Literal(sv)("space")).paths
+      val r = util.Random(seed)
+      SpaceValue(r.shuffle(space.toSeq).take(count).toSet)
+    })
+
   val context = SpaceContextMap(Map(
     SpaceMention("family") -> SpaceValue(
       "parent.Tom.Bob", "child.Bob.Tom",
@@ -304,6 +313,17 @@ class Routines extends FunSuite:
   val reachable_routine = routine("reachable", Vector(), Vector("edges", "nodemask", "reach"),
     S"reach" \/ R"reachable"(Vector(), Vector(S"edges", S"nodemask",
       S"reach" \/ DropHead(S"edges" <| (S"reach" /\ S"nodemask")) /\ S"nodemask"))
+  )
+
+  val scc_routine = routine("scc", Vector("seed"), Vector("fwd", "bwd", "nodes"),
+    sample(Singleton("seed" x P"seed") \/ Singleton("count.1") \/ ("space" x S"nodes")).iter("v", "_",  {
+      val pred: Space = R"reachable"(Vector(), Vector(S"fwd", S"nodes", Singleton(P"v")))
+      val desc: Space = R"reachable"(Vector(), Vector(S"bwd", S"nodes", Singleton(P"v")))
+      (P"v" x ((pred /\ desc) \ Singleton(P"v"))) \/
+      R"scc"(Vector(P"seed" x "0"), Vector(S"fwd", S"bwd", pred \ desc)) \/
+      R"scc"(Vector(P"seed" x "1"), Vector(S"fwd", S"bwd", desc \ pred)) \/
+      R"scc"(Vector(P"seed" x "2"), Vector(S"fwd", S"bwd", (S"nodes" \ pred) \ desc))
+    })
   )
 
   test("transitive") {
@@ -344,6 +364,25 @@ class Routines extends FunSuite:
     assert(eval(bwd_c)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("c", "d", "a"))
     val fwd_a_no_ad = R"reachable"(Vector(), Vector(graph("edge") \ Singleton("a.d"), nodes, Singleton("a")))
     assert(eval(fwd_a_no_ad)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("a", "b"))
+  }
+
+  test("scc") {
+    given PathContext = PathContext.emptyMap
+
+    given SpaceContext = context
+
+    /*
+    a  ->  b   x  <->  y  s -> t -> u -> v -> w
+      \           \    ^
+        ◢           ◢  |
+    c  <-  d           z
+     */
+    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y",
+      "edge.s.t", "edge.t.u", "edge.u.v", "edge.v.w", "edge.w.s"))
+    val transpose = graph("edge").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x")))
+    val nodes = graph("edge").iter("fwd", "_1", Singleton(P"fwd")) \/ transpose.iter("bwd", "_2", Singleton(P"bwd"))
+    val e = R"scc"(Vector("42"), Vector(graph("edge"), transpose, nodes))
+    println(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine)).prettyLines)
   }
 end Routines
 

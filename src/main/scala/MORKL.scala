@@ -204,9 +204,9 @@ case class SpaceValue(paths: Set[PathValue]):
 
 case class RoutinePtr(s: String)
 case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[SpaceMention], body: Space):
-  def show = s"routine(\"${name.s}\", Vector(${refs.map("\"" ++ _.s ++ "\"").mkString(", ")}), Vector(${mentions.map("\"" ++ _.s ++ "\"").mkString(", ")}), ${body.show})"
+  def show = s"routine(\"${name.s}\", Vector(${refs.map("\"" ++ _.s ++ "\"").mkString(", ")}), Vector(${mentions.map("\"" ++ _.s ++ "\"").mkString(", ")}), \n${body.show.split('\n').map("  " + _).mkString("\n")}\n)"
 
-def eval(s: Space)(using pc: PathContext, sc: SpaceContext, rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
+def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
   def recp(x: Path): List[PathItem] = x match
     case Path.Deref(pr) => pc.resolve(pr).items
     case Path.Constant(pi) => pi.items
@@ -242,7 +242,7 @@ def eval(s: Space)(using pc: PathContext, sc: SpaceContext, rc: PartialFunction[
     case Space.Transformation(src_e, pattern, template) => val transformer = make_transform(PathValue(recp(pattern)), PathValue(recp(template))).unlift; recs(src_e).collect(transformer)
     case Space.Iteration(src_e, symbol, rest, templates) =>
       (for (h, r) <- recs(src_e).groupMap(x => PathValue(x.items.head::Nil))(x => PathValue(x.items.tail));
-          p <- eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(r)))).paths
+          p <- eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(r))), rc).paths
       yield p).toSet
     case Space.LeftResidual(x_e, y_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.prefixes; if ys.forall(g => xs.contains(PathValue(r.items ++ g.items))) yield r
     case Space.RightResidual(y_e, x_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.postfixes; if ys.forall(g => xs.contains(PathValue(g.items ++ r.items))) yield r
