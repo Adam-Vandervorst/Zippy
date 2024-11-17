@@ -260,12 +260,29 @@ class Imperative extends FunSuite:
       P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
   )
 
+  val scc_routine = routine("scc", Vector(), Vector("fwd", "bwd", "nodes"),
+    Limit(1, S"nodes").iter("v", "_",  {
+      val pred: Space = R"reachable"(Vector(), Vector(S"fwd", S"nodes", Singleton(P"v")))
+      val desc: Space = R"reachable"(Vector(), Vector(S"bwd", S"nodes", Singleton(P"v")))
+      (P"v" x ((pred /\ desc) \ Singleton(P"v"))) \/
+        R"scc"(Vector(), Vector(S"fwd", S"bwd", pred \ desc)) \/
+        R"scc"(Vector(), Vector(S"fwd", S"bwd", desc \ pred)) \/
+        R"scc"(Vector(), Vector(S"fwd", S"bwd", (S"nodes" \ pred) \ desc))
+    })
+  )
+
   test("aunt query pretty") {
 //    println(aunt_query_routine.show)
   }
 
   test("aunt query transpiled") {
 //    println(transpile(aunt_query_routine).show)
+  }
+
+  test("scc transpiled") {
+    println(transpile(scc_routine).show)
+    println("optimized")
+    println(optimize_sharing(transpile(scc_routine)).show)
   }
 end Imperative
 
@@ -382,7 +399,7 @@ class Routines extends FunSuite:
     val transpose = graph("edge").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x")))
     val nodes = graph("edge").iter("fwd", "_1", Singleton(P"fwd")) \/ transpose.iter("bwd", "_2", Singleton(P"bwd"))
     val e = R"scc"(Vector("42"), Vector(graph("edge"), transpose, nodes))
-    println(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine)).prettyLines)
+    assert(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine)) == SpaceValue("w.s", "w.t", "w.u", "w.v", "z.x", "z.y"))
   }
 end Routines
 

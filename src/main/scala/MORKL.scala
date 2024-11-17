@@ -173,6 +173,7 @@ enum Space:
   case RightResidual(y: Space, x: Space) // likely not to be included
   case GroundedPS(p: Path, f: PathValue => SpaceValue)
   case GroundedSS(p: Space, f: SpaceValue => SpaceValue)
+  case Limit(i: Int, x: Space)
 
   def show(using indent: Int = 0): String = this match
     case Space.Empty => "Empty"
@@ -194,6 +195,7 @@ enum Space:
     case Space.RightResidual(y, x) => s"(${y.show} :\\ ${x.show})"
     case Space.GroundedPS(p, f) => s"${f.hashCode()}PS(${p.show})"
     case Space.GroundedSS(s, f) => s"${f.hashCode()}SS(${s.show})"
+    case Space.Limit(i, z) => s"Limit($i, ${z.show})"
 
 
 case class SpaceValue(paths: Set[PathValue]):
@@ -248,10 +250,12 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.RightResidual(y_e, x_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.postfixes; if ys.forall(g => xs.contains(PathValue(g.items ++ r.items))) yield r
     case Space.GroundedPS(p, f) => f(PathValue(recp(p))).paths
     case Space.GroundedSS(s, f) => f(SpaceValue(recs(s))).paths
+    case Space.Limit(i, x) => recs(x).take(i)
   SpaceValue(recs(s))
 
 case class Node[R](scope: Path, operation: String, kind: "path" | "space", inputs: Vector[R]):
   def show: String = s"${scope.pretty} $operation(${inputs.mkString(", ")}): $kind"
+  def map[S](f: R => S): Node[S] = copy(inputs=inputs.map(f))
 class OpGraph(val nodes: ArrayBuffer[Node[Int]]):
   def this() = this(ArrayBuffer.empty)
   def show: String = nodes.zipWithIndex.map((n, i) => s"$i ${n.show}").mkString("\n")
@@ -270,7 +274,7 @@ def transpile(r: Routine): OpGraph =
 
   def recp(x: Path, scope: Path): Int = x match
     case Path.Deref(pr) =>
-      path_vars.find((v, name, scp) => pr == name).get._1
+      path_vars.find((v, name, scp) => pr == name).getOrElse(throw RuntimeException(s"$pr not found in $path_vars"))._1
     case Path.Constant(pi) =>
       g.store(Node(scope, s"Constant(${pi.show})", "path", Vector()))
     case Path.Concat(l, r) =>
@@ -287,7 +291,7 @@ def transpile(r: Routine): OpGraph =
       case Space.Call(r, refs, mentions) =>
         val refvs = refs.map(p => recp(p, scope))
         val mentionvs = mentions.map(s => recs(s, scope))
-        g.store(Node(scope, r.s, "space", refvs ++ mentionvs))
+        g.store(Node(scope, s"Call(${r.s})", "space", refvs ++ mentionvs))
       case Space.Mention(sm) =>
         space_vars.find((v, name, scp) => sm == name).map(_._1).getOrElse(sm.hashCode())
       case Space.Singleton(p) =>
@@ -334,10 +338,26 @@ def transpile(r: Routine): OpGraph =
         throw NotImplementedError("grounded functions WIP")
       case Space.GroundedPS(s, f) =>
         throw NotImplementedError("grounded functions WIP")
+      case Space.Limit(i, x) =>
+        g.store(Node(scope, s"Limit($i)", "space", Vector(recs(x, scope))))
 
   recs(r.body, Path.Deref(PathRef("^")))
   g
 
+def optimize_sharing(g: OpGraph): OpGraph =
+  val r = OpGraph()
+  val sharing = collection.mutable.LongMap.withDefault[Int](_.toInt)
+  val condensing = collection.mutable.LongMap.withDefault[Int](_.toInt)
+  var c = 0
+  for (n, j) <- g.nodes.zipWithIndex
+      i <- g.nodes.zipWithIndex.collectFirst { case (m, i) if m.map(sharing(_)) == n.map(sharing(_)) => i } do
+    if i == j then
+      r.store(n.map(x => condensing(sharing(x))))
+      condensing.update(i, c)
+      c += 1
+    else
+      sharing.update(j, i)
+  r
 
 object Syntax:
   import PathItem.*
