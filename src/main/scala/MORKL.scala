@@ -359,6 +359,19 @@ def optimize_sharing(g: OpGraph): OpGraph =
       sharing.update(j, i)
   r
 
+def prune_redundant(g: OpGraph): OpGraph =
+  val r = OpGraph()
+  val condensing = collection.mutable.LongMap.withDefault[Int](_.toInt)
+  var c = 0
+  for (n, i) <- g.nodes.init.zipWithIndex do
+    if g.nodes.exists(_.inputs.contains(i)) then
+      r.store(n.map(x => condensing(x)))
+      condensing.update(i, c)
+      c += 1
+  r.store(g.nodes.last)
+  r
+
+
 object Syntax:
   import PathItem.*
   import Path.*

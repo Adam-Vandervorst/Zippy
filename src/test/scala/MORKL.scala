@@ -283,6 +283,7 @@ class Imperative extends FunSuite:
     println(transpile(scc_routine).show)
     println("optimized")
     println(optimize_sharing(transpile(scc_routine)).show)
+    println(prune_redundant(optimize_sharing(transpile(scc_routine))).show)
   }
 end Imperative
 
