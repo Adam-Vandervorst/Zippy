@@ -389,7 +389,7 @@ class Routines extends FunSuite:
     given SpaceContext = context
 
     /*
-    a  ->  b   x  <->  y  s -> t -> u -> v -> w
+    a  ->  b   x  <->  y  s -> t -> u -> v -> w -> s
       \           \    ^
         ◢           ◢  |
     c  <-  d           z
