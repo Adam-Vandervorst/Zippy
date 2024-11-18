@@ -271,6 +271,11 @@ class Imperative extends FunSuite:
     })
   )
 
+  val union_iter_routine = routine("union_iter", Vector(), Vector("xs", "ys"),
+    S"xs".iter("x", "rx", P"x" x "Left" x S"rx") \/
+    S"ys".iter("y", "ry", P"y" x "Right" x S"ry")
+  )
+
   test("aunt query pretty") {
 //    println(aunt_query_routine.show)
   }
@@ -284,6 +289,10 @@ class Imperative extends FunSuite:
     println("optimized")
     println(optimize_sharing(transpile(scc_routine)).show)
     println(prune_redundant(optimize_sharing(transpile(scc_routine))).show)
+  }
+
+  test("transpile union iter") {
+    println(transpile(union_iter_routine).show)
   }
 end Imperative
 

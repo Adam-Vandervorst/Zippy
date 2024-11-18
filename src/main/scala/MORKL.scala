@@ -52,6 +52,12 @@ case class PathValue(items: List[PathItem]):
     // e.g. Test.Foo.Bar.2 |-> Vector(Test.Foo.Bar.2, Foo.Bar.2, Bar.2, 2)
     items.indices.map(i => PathValue(items.slice(i, items.length)))
 
+  infix def mostSpecific(other: PathValue): Option[PathValue] =
+    // Foo.Bar mostSpecific Foo.Bar.Baz
+    if this.prefixes.contains(other) then Some(this)
+    else if other.prefixes.contains(this) then Some(other)
+    else None
+
 
 class PathContext:
   def resolve(pr: PathRef): PathValue = throw RuntimeException(s"$pr path ref not resolved")
@@ -360,16 +366,28 @@ def optimize_sharing(g: OpGraph): OpGraph =
   r
 
 def prune_redundant(g: OpGraph): OpGraph =
-  val r = OpGraph()
-  val condensing = collection.mutable.LongMap.withDefault[Int](_.toInt)
-  var c = 0
-  for (n, i) <- g.nodes.init.zipWithIndex do
-    if g.nodes.exists(_.inputs.contains(i)) then
-      r.store(n.map(x => condensing(x)))
-      condensing.update(i, c)
-      c += 1
-  r.store(g.nodes.last)
-  r
+  var old = g
+  var cur = g
+  while
+    old = cur
+    cur = OpGraph()
+    val condensing = collection.mutable.LongMap.withDefault[Int](_.toInt)
+    var c = 0
+    for (n, i) <- old.nodes.init.zipWithIndex do
+      if old.nodes.exists(_.inputs.contains(i)) then
+        cur.store(n.map(condensing(_)))
+        condensing.update(i, c)
+        c += 1
+    cur.store(old.nodes.last.map(condensing(_)))
+    old.nodes != cur.nodes
+  do ()
+  cur
+
+//def push_out(g: OpGraph): OpGraph =
+//  g.nodes.zipWithIndex.collectFirst { case (Node(scope, op, kind, inputs), i) =>
+//    val dest = inputs.map(i => g.nodes(i).scope).reduce(_ mostSpecific)
+//    if dest != scope then move n from i to last(dest)
+//  }
 
 
 object Syntax:
