@@ -276,6 +276,12 @@ class Imperative extends FunSuite:
     S"ys".iter("y", "ry", P"y" x "Right" x S"ry")
   )
 
+  val child_routine = routine("child", Vector(), Vector("family"),
+    "child" x S"family"("parent").iter("x", "r",
+      S"r".iter("y", "_",
+        Singleton(P"y" x P"x")))
+  )
+
   test("aunt query pretty") {
 //    println(aunt_query_routine.show)
   }
@@ -294,6 +300,69 @@ class Imperative extends FunSuite:
   test("transpile union iter") {
     println(transpile(union_iter_routine).show)
   }
+
+//  test("IM") {
+//    register.update(0, arg("family")) // 0 ^ ExtractSpaceMention(family)(): space
+//    register.update(1, "parent".toBytes()) // 1 ^ Constant(parent)(): path
+//    register.update(2, register.get(0).at(register.get(1)))  // 2 ^ Unwrap(0, 1): space
+//    register.update(3, SymbolIter(register.get(2)))  // 3 ^ IterSymbol(): iter
+//    while let Some(i) = register.get(3).advance() {
+//      register.update(4 x i, register.get(3).path()) // 4 ^ NextPath(3): path
+//      register.update(5 x i, register.get(3).clone()) // 5 NextSubspace(3): space
+//      register.update(6 x i, SymbolIter(register.get(5 x i))) // 6 ^ IterSymbol(5): iter
+//      while let Some(j) = register.get(6 x i).advance() {
+//        register.update(7 x i x j, register.get(5 x i).path()) // 7 ^.x.y NextPath(6): path
+//        register.update(8 x i x j, register.get(7 x i x j).concat(register.get(4 x i)))  // 8 ^.x.y Concat(7, 4): path
+//        register.update(9 x i x j, space.from(register.get(8 x i x j))) // 9 Singleton(8)
+//      }
+//    }
+//    register.update(10, register.get(3).flattened()) // 10 Flattened(3): space
+//    register.update(11, "child".toBytes()) // 10 ^ Constant(child)(): path
+//    register.update(12, space.wrap(register.get(3), register.get(10)))// 11 ^ Wrap(10, 11): space
+//  }
+
+//  test("mutability") {
+//    register.update(0, arg("family")) // 0 ^ ExtractSpaceMention(family)(): space
+//    register.update(1, "parent".toBytes()) // 1 ^ Constant(parent)(): path
+//    register.update(2, register.get(0).at(register.get(1)))  // 2 ^ Unwrap(0, 1): space
+//    register.update(3, NewSpace())  // 3 ^ NewSpace(): space
+//    register.update(4, register.get(2).descend_to_first()) // 4 ^ FirstSymbol(2): path
+//    while true {
+//      register.update(5, register.get(2).at(register.get(4))) // 5 Unwrap(2, 4): space
+//      register.update(6, NewSpace()) // 3 ^ NewSpace(): space
+//      while true {
+//        register.update(7, register.get(5).descend_to_first()) // 7 ^.x.y FirstSymbol(5): path
+//        register.update(8, register.get(7).concat(register.get(4)))  // 8 ^.x.y Concat(7, 4): path
+//        register.update(9, space.from(register.get(8))) // 9 Singleton(8)
+//        register.update(6, register.get(9).join(register.get(6)))
+//        register.update(7, register.get(6).next_after(register.get(7)).or_else(break))
+//      }
+//      register.update(3, register.get(6).join(register.get(3)))
+//      register.update(4, register.get(2).next_after(register.get(4)).or_else(break)) // NextSymbol(2, 4)
+//    }
+//    register.update(10, "child".toBytes())
+//    register.update(11, space.wrap(register.get(3), register.get(10)))
+//  }
+
+//  test("tree") {
+//    {family} -> wrap.src.iter.src.unwrap.src: space
+//    "parent" -> wrap.src.iter.src.unwrap.prefix: path
+//    wrap.src.iter.subspace -> wrap.src.iter.body.iter.src: space
+//    wrap.src.iter.body.iter.path -> wrap.src.iter.body.iter.body.concat.left: path
+//    wrap.src.iter.path -> wrap.src.iter.body.iter.body.concat.right: path
+//    "child" -> wrap.prefix: path
+
+
+//    union_iter -> routine.ptr
+//    routine.arg0 -> routine.body.union.x.iter.src
+//    routine.body.union.x.iter.subspace -> routine.body.union.x.iter.body.wrap.src
+//    routine.body.union.x.iter.path -> routine.body.union.x.iter.body.wrap.prefix.concat.left
+//    Left -> routine.body.union.x.iter.body.wrap.prefix.concat.right
+//    routine.arg1 -> routine.body.union.y.iter.src
+//    routine.body.union.y.iter.subspace -> routine.body.union.y.iter.body.wrap.src
+//    routine.body.union.y.iter.path -> routine.body.union.y.iter.body.wrap.prefix.concat.left
+//    Right -> routine.body.union.y.iter.body.wrap.prefix.concat.right
+//  }
 end Imperative
 
 class Routines extends FunSuite:
