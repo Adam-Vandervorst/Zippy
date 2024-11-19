@@ -285,14 +285,14 @@ class Imperative extends FunSuite:
   }
 
   test("scc transpiled") {
-    println(transpile(scc_routine).show)
-    println("optimized")
-    println(optimize_sharing(transpile(scc_routine)).show)
-    println(prune_redundant(optimize_sharing(transpile(scc_routine))).show)
+//    println(transpile(scc_routine).show)
+//    println("optimized")
+//    println(optimize_sharing(transpile(scc_routine)).show)
+//    println(prune_redundant(optimize_sharing(transpile(scc_routine))).show)
   }
 
   test("transpile union iter") {
-    println(transpile(union_iter_routine).show)
+//    println(transpile(union_iter_routine).show)
   }
 end Imperative
 
@@ -565,51 +565,84 @@ class SPARQL extends FunSuite:
       "loves.Harry.Taylor",
       "loves.Macbeth.Harry",
       "loves.Macbeth.Taylor"
-    )))
+  )))
+
+  val name_fn: SpaceContextMap =  SpaceContextMap(Map(
+    SpaceMention("SPO") -> SpaceValue(
+      "A.a.Person",
+      "B.a.Person",
+      "A.name.Alice_Eve",
+      "B.name.Bob_Morley",
+      "A.FN.Alice",
+      "B.FN.Bob"),
+    SpaceMention("OPS") -> SpaceValue(
+      "Person.a.A",
+      "Person.a.B",
+      "Alice_Eve.name.A",
+      "Bob_Morley.name.B",
+      "Alice.FN.A",
+      "Bob.FN.B",
+  )))
+
 
   test("loves example") {
     given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
 
     //val l = S"PSO"("loves").iter("s", "os", S"os".iter("o", "_", Singleton("person1" x P"s") \/ Singleton("person2" x P"o") ))
     val l2 = S"PSO"("loves").iter("s", "o", S"o".iter("o", "_", Singleton(spaceout(Singleton( P"s" x P"o" )))))
-    assert(eval(l2)(using PathContext.emptyMap, loves) == SpaceValue("unit"))
+    assert(eval(l2)(using sc = loves) == SpaceValue("unit"))
     assert(ps.toList == List(SpaceValue("Harry.Taylor"), SpaceValue("Harry.Macbeth"), SpaceValue("Macbeth.Taylor"), SpaceValue("Macbeth.Harry")))
   }
 
+  test("if nonEmpty") {
+    //  ?x a Person
+    //  OPTIONAL {?x name ?name}
+    //  OPTIONAL {?x FN ?name}
+    val e = S"OPS"("Person.a").iter("x", "-", {
+      val some = "Some" x S"SPO"(P"x" x "name")
+      val other = "Other" x S"SPO"(P"x" x "FN")
+      some("Some") \/
+      (Singleton("Some") \ some.iter("s", "_", Singleton(P"s"))).iter("_1", "_2", other("Other"))
+    })
+
+    println(eval(e)(using sc = name_fn).prettyLines)
+  }
 
 
   // (x.X, name.NAME)
   test("basic pattern") {
+    given SpaceContext = context
+
     // SPO -> PSO
     val spo_to_pso = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p" x P"s") x S"o"))
-    assert(eval(spo_to_pso)(using PathContext.emptyMap, context) == eval(S"PSO")(using PathContext(), context))
+    assert(eval(spo_to_pso) == eval(S"PSO"))
 
     // SPO -> POS
     val spo_to_pos = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p") x S"o" x Singleton(P"s")))
-    assert(eval(spo_to_pos)(using PathContext.emptyMap, context) == eval(S"POS")(using PathContext(), context))
+    assert(eval(spo_to_pos) == eval(S"POS"))
 
     val basic_pattern_person = "person" x S"POS"("isa" x "Person")
-    assert(eval(basic_pattern_person)(using PathContext.emptyMap, context) == SpaceValue("person.A", "person.B"))
+    assert(eval(basic_pattern_person) == SpaceValue("person.A", "person.B"))
 
     val basic_pattern_name = "name" x S"POS"("isa" x "Person").iter("x", "_", S"PSO"("name" x P"x"))
-    assert(eval(basic_pattern_name)(using PathContext.emptyMap, context) == SpaceValue("name.Alice", "name.Bob"))
+    assert(eval(basic_pattern_name) == SpaceValue("name.Alice", "name.Bob"))
 
     val basic_pattern = S"POS"("isa" x "Person").iter("x", "_", ("name" x S"PSO"("name" x P"x")) \/ ("person" x Singleton(P"x")))
-    assert(eval(basic_pattern)(using PathContext.emptyMap, context) == SpaceValue("person.A", "name.Alice", "person.B", "name.Bob"))
+    assert(eval(basic_pattern) == SpaceValue("person.A", "name.Alice", "person.B", "name.Bob"))
 
 
     given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
     val basic_pattern_ = S"POS"("isa" x "Person").iter("x", "_", Singleton(spaceout(("name" x S"PSO"("name" x P"x")) \/ ("person" x Singleton(P"x")))))
-    assert(eval(basic_pattern_)(using PathContext.emptyMap, context) == SpaceValue("unit"))
+    assert(eval(basic_pattern_) == SpaceValue("unit"))
     assert(ps.toList == List(SpaceValue("person.A", "name.Alice"), SpaceValue("person.B", "name.Bob")))
 
 
     val basic_blank_nodes = S"POS"("family" x "Smith").iter("y", "_", Singleton("y" x P"y") \/ ("given" x S"SPO"(P"y" x "given")))
-    assert(eval(basic_blank_nodes)(using PathContext.emptyMap, context) == SpaceValue("given.Lis", "y.Alice"))
+    assert(eval(basic_blank_nodes) == SpaceValue("given.Lis", "y.Alice"))
 
     ps.clear()
     val basic_blank_nodes_ = S"POS"("family" x "Smith").iter("y", "_", Singleton(spaceout(Singleton("y" x P"y") \/ ("given" x S"SPO"(P"y" x "given")))))
-    assert(eval(basic_blank_nodes_)(using PathContext.emptyMap, context) == SpaceValue("unit"))
+    assert(eval(basic_blank_nodes_) == SpaceValue("unit"))
     assert(ps.toList == List(SpaceValue("y.Alice", "given.Lis")))
 
     // val filter_values = S"POS"("age").iter("a", "r", (ifa (P"a" < 25) then "resource" x S"r" else Singleton(P"a")))
@@ -618,7 +651,7 @@ class SPARQL extends FunSuite:
     // val optionals =
 
 
-    println(eval(basic_pattern_)(using PathContext.emptyMap, context).show)
+    println(eval(basic_pattern_).show)
     println(ps.toList)
 
   }
