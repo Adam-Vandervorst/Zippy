@@ -31,11 +31,12 @@ enum Path:
 
 case class PathValue(items: Array[Byte]):
   def show: String =
-    val it = items.iterator
-    var sb = List.empty[String]
-    while it.hasNext do
-      sb = it.take(it.next().toInt).map(b => if b.toChar.isLetter || b.toChar.isDigit then b.toChar.toString else "b" ++ b.toInt.toString).mkString::sb
-    sb.reverse.mkString(".")
+    items.map(_.toString).mkString(".")
+//    val it = items.iterator
+//    var sb = List.empty[String]
+//    while it.hasNext do
+//      sb = it.take(it.next().toInt).map(b => if b.toChar.isLetter || b.toChar.isDigit then b.toChar.toString else "b" ++ b.toInt.toString).mkString::sb
+//    sb.reverse.mkString(".")
 
   def prefixes: Seq[PathValue] =
     // e.g. Test.Foo.Bar.2 |-> Vector(Test, Test.Foo, Test.Foo.Bar, Test.Foo.Bar.2)
@@ -300,8 +301,10 @@ def transpile(r: Routine): OpGraph =
         val s = recs(src, scope)
         val v = recp(p, scope)
         g.store(Node(scope, "Unwrap", "space", Vector(s, v)))
-//      case Space.DropHead(src) =>
-//        g.store(Node(scope, "DropHead", "space", Vector(recs(src, scope))))
+      case Space.Drop(i, src) =>
+        g.store(Node(scope, s"Drop($i)", "space", Vector(recs(src, scope))))
+      case Space.Take(i, src) =>
+        g.store(Node(scope, s"Take($i)", "space", Vector(recs(src, scope))))
       case Space.Transformation(src, pattern, template) =>
         val s = recs(src, scope)
         val pv = recp(pattern, scope)
@@ -310,10 +313,14 @@ def transpile(r: Routine): OpGraph =
       case Space.Iteration(src, symbol, rest, templates) =>
         val s = recs(src, scope)
         val new_scope = Path.Concat(scope, Path.Deref(symbol))
-        path_vars.addOne((g.store(Node(new_scope, "NextPath", "path", Vector(s))), symbol, new_scope))
+        path_vars.addOne((g.store(Node(new_scope, "NextByte", "path", Vector(s))), symbol, new_scope))
         space_vars.addOne((g.store(Node(new_scope, "NextSubspace", "space", Vector(s))), rest, new_scope))
         recs(templates, new_scope)
-      case Space.PathIteration(src, symbol, templates) => ???
+      case Space.PathIteration(src, symbol, templates) =>
+        val s = recs(src, scope)
+        val new_scope = Path.Concat(scope, Path.Deref(symbol))
+        path_vars.addOne((g.store(Node(new_scope, "NextPath", "path", Vector(s))), symbol, new_scope))
+        recs(templates, new_scope)
       case Space.LeftResidual(x, y) =>
         g.store(Node(scope, "LeftResidual", "space", Vector(recs(x, scope), recs(y, scope))))
       case Space.RightResidual(y, x) =>

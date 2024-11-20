@@ -284,13 +284,25 @@ end Poly
 class Imperative extends FunSuite:
   import Space.*
 
-//  val aunt_query_routine = routine("aunts", Vector(), Vector("family", "people"),
-//    "Aunt" x S"people".iter("person", "_",
-//      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
-//  )
+  val drop_symbol_head = routine("drop_symbol_head", Vector(), Vector("xs"),
+    S"xs"(Path.Constant(PathValue(Array(0)))) \/
+      (1 to 255).map(i =>  Drop(i, S"xs"(Path.Constant(PathValue(Array(i.toByte)))))).reduce(_ \/ _)
+  )
+
+  val symbol_head = routine("symbol_head", Vector(), Vector("xs"),
+    (Path.Constant(PathValue(Array(0))) x S"xs"(Path.Constant(PathValue(Array(0))))) \/
+      (1 to 10).map(i => Path.Constant(PathValue(Array(i.toByte))) x Take(i, S"xs"(Path.Constant(PathValue(Array(i.toByte)))))).reduce(_ \/ _)
+  )
+
+  val aunt_query_routine = routine("aunts", Vector(), Vector("family", "people"),
+    "Aunt" x S"people".iter_paths("person",
+      P"person" x (({
+        val cr = R"drop_symbol_head"(Vector(), Vector(S"family"("child") <| S"family"("child" x P"person")))
+        R"drop_symbol_head"(Vector(), Vector(S"family"("parent") <| cr))} \ S"family"("child" x P"person")) /\ S"family"("female")))
+  )
 
   val scc_routine = routine("scc", Vector(), Vector("fwd", "bwd", "nodes"),
-    Limit(1, S"nodes").iter("v", "_",  {
+    Limit(1, S"nodes").iter_paths("v",  {
       val pred: Space = R"reachable"(Vector(), Vector(S"fwd", S"nodes", Singleton(P"v")))
       val desc: Space = R"reachable"(Vector(), Vector(S"bwd", S"nodes", Singleton(P"v")))
       (P"v" x ((pred /\ desc) \ Singleton(P"v"))) \/
@@ -305,12 +317,9 @@ class Imperative extends FunSuite:
     S"ys".iter("y", "ry", P"y" x "Right" x S"ry")
   )
 
-  test("aunt query pretty") {
-//    println(aunt_query_routine.show)
-  }
-
   test("aunt query transpiled") {
-//    println(transpile(aunt_query_routine).show)
+    println(transpile(drop_symbol_head).show)
+    println(optimize_sharing(transpile(aunt_query_routine)).show)
   }
 
   test("scc transpiled") {
