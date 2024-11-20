@@ -252,6 +252,35 @@ class AuntQuery extends FunSuite:
   }*/
 end AuntQuery
 
+
+class Poly extends FunSuite:
+  import Space.*
+
+  test("composition") {
+    val _1 = Literal(SpaceValue("0"))
+    val _2 = Literal(SpaceValue("0", "1"))
+    val _3 = Literal(SpaceValue("0", "1", "2"))
+    val _4 = Literal(SpaceValue("0", "1", "2", "3"))
+    val p1 = ("³" x _1 x S"y" x S"y" x S"y") \/ ("¹" x _1 x S"y")  // y^3 + y
+    val p2 = ("⁴" x _1 x S"y" x S"y" x S"y" x S"y") \/ ("²" x _1 x S"y" x S"y") \/ ("⁰" x _1 x Singleton("u"))  // y^4 + y^2 + 1
+    assert(eval(p1 \/ p2)(using sc=SpaceContextMap(Map(SpaceMention("y") -> SpaceValue("y")))) == SpaceValue("².0.y.y", "³.0.y.y.y", "¹.0.y", "⁰.0.u", "⁴.0.y.y.y.y"))
+    assert(eval(p1.iter("o1", "r1", S"r1".iter("f1", "ps1",
+                p2.iter("o2", "r2", S"r2".iter("f2", "ps2",
+                  P"o1" x P"o2" x P"f1" x P"f2" x S"ps1" x S"ps2")))))(using sc=SpaceContextMap(Map(SpaceMention("y") -> SpaceValue("$y")))) == SpaceValue("³.².0.0.$y.$y.$y.$y.$y", "³.⁰.0.0.$y.$y.$y.u", "³.⁴.0.0.$y.$y.$y.$y.$y.$y.$y", "¹.².0.0.$y.$y.$y", "¹.⁰.0.0.$y.u", "¹.⁴.0.0.$y.$y.$y.$y.$y"))
+    // x.y.z
+    // x.0.(y,z)
+    // y.1.(x,z)
+    // z.2.(x,y)
+
+    // x.y.z.w
+    // x.0.(y,z,w)
+    // y.1.(x,z,w)
+    // z.2.(x,y,w)
+    // w.3.(x,y,z)
+
+  }
+end Poly
+
 class Imperative extends FunSuite:
   import Space.*
 
@@ -285,14 +314,14 @@ class Imperative extends FunSuite:
   }
 
   test("scc transpiled") {
-    println(transpile(scc_routine).show)
-    println("optimized")
-    println(optimize_sharing(transpile(scc_routine)).show)
-    println(prune_redundant(optimize_sharing(transpile(scc_routine))).show)
+//    println(transpile(scc_routine).show)
+//    println("optimized")
+//    println(optimize_sharing(transpile(scc_routine)).show)
+//    println(prune_redundant(optimize_sharing(transpile(scc_routine))).show)
   }
 
   test("transpile union iter") {
-    println(transpile(union_iter_routine).show)
+//    println(transpile(union_iter_routine).show)
   }
 end Imperative
 
