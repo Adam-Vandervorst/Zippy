@@ -6,18 +6,6 @@ import scala.collection.mutable.ArrayBuffer
 import java.util.Base64
 
 
-enum PathItem:
-  case Symbol(n: String)
-  case Variable(n: String)
-  case Arity(k: Int)
-
-  def show: String = this match
-    case PathItem.Symbol(n) => n
-    case PathItem.Variable(n) => s"$$$n"
-    case PathItem.Arity(k) => s"[$k]"
-
-case class SymbolConflict(l: String, r: String) extends Exception(s"Symbol conflict $l $r")
-
 case class PathRef(s: String)
 
 enum Path:
@@ -41,8 +29,13 @@ enum Path:
     case Path.GroundedPP(p, f) => s"${f.hashCode()}PP(${p})"
     case Path.GroundedPP(s, f) => s"${f.hashCode()}SP(${s.show})"
 
-case class PathValue(items: List[PathItem]):
-  def show: String = items.map(_.show).mkString(".")
+case class PathValue(items: Array[Byte]):
+  def show: String =
+    val it = items.iterator
+    var sb = List.empty[String]
+    while it.hasNext do
+      sb = it.take(it.next().toInt).map(b => if b.toChar.isLetter || b.toChar.isDigit then b.toChar.toString else "b" ++ b.toInt.toString).mkString::sb
+    sb.reverse.mkString(".")
 
   def prefixes: Seq[PathValue] =
     // e.g. Test.Foo.Bar.2 |-> Vector(Test, Test.Foo, Test.Foo.Bar, Test.Foo.Bar.2)
@@ -58,6 +51,21 @@ case class PathValue(items: List[PathItem]):
     else if other.prefixes.contains(this) then Some(other)
     else None
 
+  override def equals(obj: Any): Boolean = obj.isInstanceOf[PathValue] && java.util.Arrays.equals(items, obj.asInstanceOf[PathValue].items)
+  override def hashCode(): Int = java.util.Arrays.hashCode(items)
+
+object PathValue:
+  val empty = PathValue(Array())
+  val unit = PathValue(Array(0))
+  def fromInt(data: Int): PathValue = {
+    val result = new Array[Byte](5)
+    result(0) = 4
+    result(1) = ((data & 0xFF000000) >> 24).toByte
+    result(2) = ((data & 0x00FF0000) >> 16).toByte
+    result(3) = ((data & 0x0000FF00) >> 8).toByte
+    result(4) = ((data & 0x000000FF) >> 0).toByte
+    PathValue(result)
+  }
 
 class PathContext:
   def resolve(pr: PathRef): PathValue = throw RuntimeException(s"$pr path ref not resolved")
@@ -84,46 +92,6 @@ case class PathContextMap(m: Map[PathRef, PathValue]) extends PathContext:
 object PathContext:
   val emptyMap: PathContextMap = PathContextMap(Map())
 
-  def mixed(seed: Long = 0): PathContext = new PathContext:
-    private val rng = Random(seed)
-    override def resolve(pr: PathRef): PathValue = PathValue(PathItem.Symbol(pr.s + "_" + Base64.getEncoder.encodeToString(rng.nextBytes(4)).take(4))::Nil)
-
-def make_transform(pattern: PathValue, template: PathValue): PathValue => Option[PathValue] = // not using bidirectional matching or unification yet
-  val pattern_parse: PathValue => Option[Seq[PathItem]] = pv => try Some((pv.items lazyZip pattern.items).collect{
-    case (PathItem.Symbol(lhs), PathItem.Symbol(rhs)) if lhs != rhs => throw SymbolConflict(lhs, rhs)
-    case (PathItem.Variable(_), rhs) => rhs
-    case (lhs, PathItem.Variable(_)) => lhs
-  }.toSeq) catch case e: SymbolConflict => None
-  val template_format: Seq[PathItem] => PathValue = pis => {
-    val pis_it = pis.iterator
-    PathValue(template.items.map{ case PathItem.Variable(_) => pis_it.next(); case x => x })
-  }
-  val args_mapping: Seq[PathItem] => Seq[PathItem] = {
-    val pl = pattern.items.collect{ case PathItem.Variable(s) => s }
-    val tl = template.items.collect{ case PathItem.Variable(s) => s }
-    val oc = tl.map(pv => pl.zipWithIndex.collectFirst{ case (`pv`, i) => i }.get)
-    s => oc.map(s.apply)
-  }
-  pattern_parse(_).map(args_mapping andThen template_format)
-
-/*def extract(pattern: Path, data: PathValue): Option[Map[String, PathValue]] =
-  val it = data.items.iterator
-  val mb = Map.newBuilder[String, PathValue]
-
-  def rec(p: Path): Unit = p match
-    case Path.Deref(v) => it.nextOption().foreach(o => mb.addOne(v -> PathValue(List(o))))
-    case Path.Constant(pi) => (pi.items zip it).foreach {
-      case (PathItem.Symbol(lhs), PathItem.Symbol(rhs)) if lhs != rhs => throw SymbolConflict(lhs, rhs)
-      case (PathItem.Arity(lhs), PathItem.Arity(rhs)) if lhs != rhs => throw SymbolConflict(lhs.toString, rhs.toString)
-      case (PathItem.Variable(v), rhs) => ()
-    }
-    case Path.Concat(l, r) => rec(l); rec(r)
-
-  try
-    rec(pattern)
-    Some(mb.result())
-  catch
-    case e: SymbolConflict => None*/
 
 class SpaceContext:
   def resolve(pv: SpaceMention): SpaceValue = throw RuntimeException(s"$pv space mention not resolved")
@@ -172,9 +140,11 @@ enum Space:
   case Composition(x: Space, y: Space)
   case Transformation(src: Space, pattern: Path, template: Path)
   case Iteration(src: Space, symbol: PathRef, rest: SpaceMention, templates: Space)
+  case PathIteration(src: Space, symbol: PathRef, templates: Space)
   case Wrap(src: Space, p: Path)
   case Unwrap(src: Space, p: Path)
-  case DropHead(src: Space)
+  case Take(n: Int, src: Space)
+  case Drop(n: Int, src: Space)
   case LeftResidual(x: Space, y: Space) // likely not to be included
   case RightResidual(y: Space, x: Space) // likely not to be included
   case GroundedPS(p: Path, f: PathValue => SpaceValue)
@@ -194,9 +164,11 @@ enum Space:
     case Space.Composition(x, y) => s"(${x.show} x ${y.show})"
     case Space.Transformation(src, pattern, template) => s"${src.show}.transform(${pattern.show}, ${template.show})"
     case Space.Iteration(src, symbol, rest, templates) => s"${src.show}.iter(\"${symbol.s}\", \"${rest.s}\", \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
+    case Space.PathIteration(src, symbol, templates) => s"${src.show}.iter_paths(\"${symbol.s}\", \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
     case Space.Wrap(src, p) => s"(${p.show} x ${src.show})"
     case Space.Unwrap(src, p) => s"${src.show}(${p.show})"
-    case Space.DropHead(src) => s"DropHead(${src.show})"
+    case Space.Take(n, src) => s"Take($n, ${src.show})"
+    case Space.Drop(n, src) => s"Drop($n, ${src.show})"
     case Space.LeftResidual(x, y) => s"(${y.show} /: ${x.show})"
     case Space.RightResidual(y, x) => s"(${y.show} :\\ ${x.show})"
     case Space.GroundedPS(p, f) => s"${f.hashCode()}PS(${p.show})"
@@ -215,7 +187,7 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
   def show = s"routine(\"${name.s}\", Vector(${refs.map("\"" ++ _.s ++ "\"").mkString(", ")}), Vector(${mentions.map("\"" ++ _.s ++ "\"").mkString(", ")}), \n${body.show.split('\n').map("  " + _).mkString("\n")}\n)"
 
 def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
-  def recp(x: Path): List[PathItem] = x match
+  def recp(x: Path): Array[Byte] = x match
     case Path.Deref(pr) => pc.resolve(pr).items
     case Path.Constant(pi) => pi.items
     case Path.Concat(l, r) => recp(l) ++ recp(r)
@@ -246,11 +218,16 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.Composition(x, y) => val ys = recs(y); for e1 <- recs(x); e2 <- ys yield PathValue(e1.items ++ e2.items)
     case Space.Wrap(src_e, p_e) => val p = recp(p_e); recs(src_e).map( sp => PathValue(p ++ sp.items))
     case Space.Unwrap(src_e, p_e) => val p = recp(p_e); recs(src_e).collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
-    case Space.DropHead(src_e) => recs(src_e).collect { case PathValue(_::r) => PathValue(r) }
-    case Space.Transformation(src_e, pattern, template) => val transformer = make_transform(PathValue(recp(pattern)), PathValue(recp(template))).unlift; recs(src_e).collect(transformer)
+    case Space.Take(n, src_e) => recs(src_e).collect { case PathValue(r) if r.length >= n => PathValue(r.take(n)) }
+    case Space.Drop(n, src_e) => recs(src_e).collect { case PathValue(r) if r.length > n => PathValue(r.drop(n)) }
+    case Space.Transformation(src_e, pattern, template) => ??? // val transformer = make_transform(PathValue(recp(pattern)), PathValue(recp(template))).unlift; recs(src_e).collect(transformer)
     case Space.Iteration(src_e, symbol, rest, templates) =>
-      (for (h, r) <- recs(src_e).groupMap(x => PathValue(x.items.head::Nil))(x => PathValue(x.items.tail));
+      (for (h, r) <- recs(src_e).groupMap(x => PathValue(x.items.slice(0, 1)))(x => PathValue(x.items.slice(1, x.items.length)));
           p <- eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(r))), rc).paths
+      yield p).toSet
+    case Space.PathIteration(src_e, symbol, templates) =>
+      (for x <- recs(src_e);
+           p <- eval(templates)(using pc.grown(Map(symbol -> x)), sc, rc).paths
       yield p).toSet
     case Space.LeftResidual(x_e, y_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.prefixes; if ys.forall(g => xs.contains(PathValue(r.items ++ g.items))) yield r
     case Space.RightResidual(y_e, x_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.postfixes; if ys.forall(g => xs.contains(PathValue(g.items ++ r.items))) yield r
@@ -323,8 +300,8 @@ def transpile(r: Routine): OpGraph =
         val s = recs(src, scope)
         val v = recp(p, scope)
         g.store(Node(scope, "Unwrap", "space", Vector(s, v)))
-      case Space.DropHead(src) =>
-        g.store(Node(scope, "DropHead", "space", Vector(recs(src, scope))))
+//      case Space.DropHead(src) =>
+//        g.store(Node(scope, "DropHead", "space", Vector(recs(src, scope))))
       case Space.Transformation(src, pattern, template) =>
         val s = recs(src, scope)
         val pv = recp(pattern, scope)
@@ -336,6 +313,7 @@ def transpile(r: Routine): OpGraph =
         path_vars.addOne((g.store(Node(new_scope, "NextPath", "path", Vector(s))), symbol, new_scope))
         space_vars.addOne((g.store(Node(new_scope, "NextSubspace", "space", Vector(s))), rest, new_scope))
         recs(templates, new_scope)
+      case Space.PathIteration(src, symbol, templates) => ???
       case Space.LeftResidual(x, y) =>
         g.store(Node(scope, "LeftResidual", "space", Vector(recs(x, scope), recs(y, scope))))
       case Space.RightResidual(y, x) =>
@@ -391,9 +369,8 @@ def prune_redundant(g: OpGraph): OpGraph =
 
 
 object Syntax:
-  import PathItem.*
   import Path.*
-  given parse: Conversion[String, PathValue] = s => PathValue(s.split('.').map(name => if name.startsWith("$") then PathItem.Variable(name.tail) else PathItem.Symbol(name)).toList)
+  given parse: Conversion[String, PathValue] = s => PathValue(s.split('.').flatMap(c => { val bs = c.getBytes("US-ASCII"); bs.prepended(bs.size.toByte) }))
   given constant: Conversion[String, Path] = (parse andThen Path.Constant.apply)(_)
   given parse2: Conversion[(String, String), (PathValue, PathValue)] = (x, y) => (parse(x), parse(y))
   given constant2: Conversion[(String, String), (Path, Path)] = (x, y) => (Path.Constant(parse(x)), Path.Constant(parse(y)))
@@ -410,6 +387,7 @@ object Syntax:
     def apply(p: Path) = Space.Unwrap(x, p)
     infix def transform(lhs: Path, rhs: Path): Space = Space.Transformation(x, lhs, rhs)
     infix def iter(symbol: String, rest: String, rhs: Space): Space = Space.Iteration(x, PathRef(symbol), SpaceMention(rest), rhs)
+    infix def iter_paths(symbol: String, rhs: Space): Space = Space.PathIteration(x, PathRef(symbol), rhs)
     def :\(y: Space) = Space.RightResidual(x, y)
     def /:(y: Space) = Space.LeftResidual(x, y)
 
