@@ -291,13 +291,14 @@ class Imperative extends FunSuite:
   }
 
   test("scc transpiled") {
-    println(transpile(scc_routine).show)
-    println("optimized")
-    println(optimize_sharing(transpile(scc_routine)).show)
-    println(prune_redundant(optimize_sharing(transpile(scc_routine))).show)
+//    println(transpile(scc_routine).show)
+//    println("optimized")
+//    println(optimize_sharing(transpile(scc_routine)).show)
+//    println(prune_redundant(optimize_sharing(transpile(scc_routine))).show)
   }
 
   test("transpile union iter") {
+    println("union_iter_routine")
     println(transpile(union_iter_routine).show)
   }
 
@@ -343,6 +344,10 @@ class Imperative extends FunSuite:
 //    register.update(10, "child".toBytes())
 //    register.update(11, space.wrap(register.get(3), register.get(10)))
 //  }
+  test("iter") {
+    println("child_routine")
+    println(transpile(child_routine).show)
+  }
 
 //  test("tree") {
 //    {family} -> wrap.src.iter.src.unwrap.src: space

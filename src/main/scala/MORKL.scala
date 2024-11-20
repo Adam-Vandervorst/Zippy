@@ -259,32 +259,36 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.Limit(i, x) => recs(x).take(i)
   SpaceValue(recs(s))
 
-case class Node[R](scope: Path, operation: String, kind: "path" | "space", inputs: Vector[R]):
-  def show: String = s"${scope.pretty} $operation(${inputs.mkString(", ")}): $kind"
-  def map[S](f: R => S): Node[S] = copy(inputs=inputs.map(f))
+case class Node[R](scope: Path, operation: String, kind: "path" | "space", inputs: Vector[R], output: R):
+  def show: String = s"$output\t<- $operation(${inputs.mkString(", ")}): $kind"
+  def map[S](f: R => S): Node[S] = copy(inputs=inputs.map(f), output=f(output))
 class OpGraph(val nodes: ArrayBuffer[Node[Int]]):
   def this() = this(ArrayBuffer.empty)
-  def show: String = nodes.zipWithIndex.map((n, i) => s"$i ${n.show}").mkString("\n")
+  def show: String = nodes.map(_.show).mkString("\n")
   def store(node: Node[Int]): Int = {val i = nodes.length; nodes.addOne(node); i}
+  def store(scope: Path, operation: String, kind: "path" | "space", inputs: Vector[Int], output: Option[Int] = None): Int =
+    val i = nodes.length
+    nodes.addOne(Node(scope, operation, kind, inputs, output.getOrElse(i)))
+    i
   def load(ref: Int): Node[Int] = nodes(ref)
   def update(ref: Int, f: Node[Int] => Node[Int]): Unit = nodes(ref) = f(nodes(ref))
 
 def transpile(r: Routine): OpGraph =
   val g = OpGraph()
   val path_vars: ArrayBuffer[(Int, PathRef, Path)] = ArrayBuffer.from(r.refs.zipWithIndex.map((pr, i) =>
-    (g.store(Node(Path.Deref(PathRef("^")), s"ExtractPathRef(${pr.s})", "path", Vector())),
+    (g.store(Path.Deref(PathRef("^")), s"ExtractPathRef(${pr.s})", "path", Vector()),
       pr, Path.Deref(PathRef("^")))))
   val space_vars: ArrayBuffer[(Int, SpaceMention, Path)] = ArrayBuffer.from(r.mentions.zipWithIndex.map((sm, i) =>
-    (g.store(Node(Path.Deref(PathRef("^")), s"ExtractSpaceMention(${sm.s})", "space", Vector())),
+    (g.store(Path.Deref(PathRef("^")), s"ExtractSpaceMention(${sm.s})", "space", Vector()),
       sm, Path.Deref(PathRef("^")))))
 
   def recp(x: Path, scope: Path): Int = x match
     case Path.Deref(pr) =>
       path_vars.find((v, name, scp) => pr == name).getOrElse(throw RuntimeException(s"$pr not found in $path_vars"))._1
     case Path.Constant(pi) =>
-      g.store(Node(scope, s"Constant(${pi.show})", "path", Vector()))
+      g.store(scope, s"Constant(${pi.show})", "path", Vector())
     case Path.Concat(l, r) =>
-      g.store(Node(scope, s"Concat", "path", Vector(recp(l, scope), recp(r, scope))))
+      g.store(scope, s"Concat", "path", Vector(recp(l, scope), recp(r, scope)))
     case Path.GroundedPP(p, f) =>
       throw NotImplementedError("grounded functions WIP")
     case Path.GroundedPP(s, f) =>
@@ -293,59 +297,64 @@ def transpile(r: Routine): OpGraph =
   def recs(x: Space, scope: Path): Int =
     x match
       case Space.Empty =>
-        g.store(Node(scope, "Empty", "space", Vector()))
+        g.store(scope, "Empty", "space", Vector())
       case Space.Call(r, refs, mentions) =>
         val refvs = refs.map(p => recp(p, scope))
         val mentionvs = mentions.map(s => recs(s, scope))
-        g.store(Node(scope, s"Call(${r.s})", "space", refvs ++ mentionvs))
+        g.store(scope, s"Call(${r.s})", "space", refvs ++ mentionvs)
       case Space.Mention(sm) =>
         space_vars.find((v, name, scp) => sm == name).map(_._1).getOrElse(sm.hashCode())
       case Space.Singleton(p) =>
         val v = recp(p, scope)
-        g.store(Node(scope, "Singleton", "space", Vector(v)))
+        g.store(scope, "Singleton", "space", Vector(v))
       case Space.Literal(sv) =>
-        g.store(Node(scope, s"Literal(${sv.show})", "space", Vector()))
+        g.store(scope, s"Literal(${sv.show})", "space", Vector())
       case Space.Union(x, y) =>
-        g.store(Node(scope, "Union", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(scope, "Union", "space", Vector(recs(x, scope), recs(y, scope)))
       case Space.Intersection(x, y) =>
-        g.store(Node(scope, "Intersection", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(scope, "Intersection", "space", Vector(recs(x, scope), recs(y, scope)))
       case Space.Subtraction(x, y) =>
-        g.store(Node(scope, "Subtraction", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(scope, "Subtraction", "space", Vector(recs(x, scope), recs(y, scope)))
       case Space.Restriction(x, prefixes) =>
-        g.store(Node(scope, "Restriction", "space", Vector(recs(x, scope), recs(prefixes, scope))))
+        g.store(scope, "Restriction", "space", Vector(recs(x, scope), recs(prefixes, scope)))
       case Space.Composition(x, y) =>
-        g.store(Node(scope, "Composition", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(scope, "Composition", "space", Vector(recs(x, scope), recs(y, scope)))
       case Space.Wrap(src, p) =>
         val s = recs(src, scope)
         val v = recp(p, scope)
-        g.store(Node(scope, "Wrap", "space", Vector(s, v)))
+        g.store(scope, "Wrap", "space", Vector(s, v))
       case Space.Unwrap(src, p) =>
         val s = recs(src, scope)
         val v = recp(p, scope)
-        g.store(Node(scope, "Unwrap", "space", Vector(s, v)))
+        g.store(scope, "Unwrap", "space", Vector(s, v))
       case Space.DropHead(src) =>
-        g.store(Node(scope, "DropHead", "space", Vector(recs(src, scope))))
+        g.store(scope, "DropHead", "space", Vector(recs(src, scope)))
       case Space.Transformation(src, pattern, template) =>
         val s = recs(src, scope)
         val pv = recp(pattern, scope)
         val tv = recp(template, scope)
-        g.store(Node(scope, "Transformation", "space", Vector(s, pv, tv)))
+        g.store(scope, "Transformation", "space", Vector(s, pv, tv))
       case Space.Iteration(src, symbol, rest, templates) =>
         val s = recs(src, scope)
+        val flat = g.store(scope, "Empty", "space", Vector())
+        val index = g.store(scope, "FirstSymbol", "path", Vector(s))
         val new_scope = Path.Concat(scope, Path.Deref(symbol))
-        path_vars.addOne((g.store(Node(new_scope, "NextPath", "path", Vector(s))), symbol, new_scope))
-        space_vars.addOne((g.store(Node(new_scope, "NextSubspace", "space", Vector(s))), rest, new_scope))
-        recs(templates, new_scope)
+        val ploc = g.store(new_scope, "NextSymbol", "path", Vector(s))
+        path_vars.addOne((ploc, symbol, new_scope))
+        space_vars.addOne((g.store(new_scope, "Unwrap", "space", Vector(s, ploc)), rest, new_scope))
+        val sub = recs(templates, new_scope)
+        g.store(new_scope, "Union", "space", Vector(flat, sub), Some(flat))
+        flat
       case Space.LeftResidual(x, y) =>
-        g.store(Node(scope, "LeftResidual", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(scope, "LeftResidual", "space", Vector(recs(x, scope), recs(y, scope)))
       case Space.RightResidual(y, x) =>
-        g.store(Node(scope, "RightResidual", "space", Vector(recs(y, scope), recs(x, scope))))
+        g.store(scope, "RightResidual", "space", Vector(recs(y, scope), recs(x, scope)))
       case Space.GroundedPS(p, f) =>
         throw NotImplementedError("grounded functions WIP")
       case Space.GroundedPS(s, f) =>
         throw NotImplementedError("grounded functions WIP")
       case Space.Limit(i, x) =>
-        g.store(Node(scope, s"Limit($i)", "space", Vector(recs(x, scope))))
+        g.store(scope, s"Limit($i)", "space", Vector(recs(x, scope)))
 
   recs(r.body, Path.Deref(PathRef("^")))
   g
