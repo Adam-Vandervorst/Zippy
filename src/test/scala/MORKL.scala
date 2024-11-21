@@ -597,14 +597,19 @@ class SPARQL extends FunSuite:
   }
 
   test("if nonEmpty") {
+    given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+
     //  ?x a Person
     //  OPTIONAL {?x name ?name}
     //  OPTIONAL {?x FN ?name}
+    def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
+    extension (s: Space)
+      def tee(run: Space): Space = s.iter("_1", "_2", run)
     val e = S"OPS"("Person.a").iter("x", "-", {
       val some = "Some" x S"SPO"(P"x" x "name")
       val other = "Other" x S"SPO"(P"x" x "FN")
-      some("Some") \/
-      (Singleton("Some") \ some.iter("s", "_", Singleton(P"s"))).iter("_1", "_2", other("Other"))
+      (some("Some") \/
+      (Singleton("Some") \ Head(some)).tee(other("Other"))).iter("head", "tail", Singleton(spaceout(P"head" x S"tail")))
     })
 
     println(eval(e)(using sc = name_fn).prettyLines)
@@ -731,19 +736,21 @@ class SPARQL extends FunSuite:
     //   OPTIONAL { ?x foaf:name ?name }
     //   OPTIONAL { ?x vCard:FN  ?name }
     // }
+    def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
+    extension (s: Space)
+      def tee(run: Space): Space = s.iter("_1", "_2", run)
 
     val e = S"OPS"("Person.a").iter("x", "-", {
       val some = "Some" x S"SPO"(P"x" x "name")
       val other = "Other" x S"SPO"(P"x" x "FN")
-      Singleton(spaceout("name" x some("Some") \/
-        (Singleton("Some") \ some.iter("s", "_", Singleton(P"s"))).iter("_1", "_2", other("Other"))))
+      (some("Some") \/
+        (Singleton("Some") \ Head(some)).tee(other("Other"))).iter("head", "tail", Singleton(spaceout("name" x P"head" x S"tail")))
     })
 
-    // TODO why the empty space?
     assert(eval(e) == SpaceValue("unit"))
-    assert(ps.toList == List(SpaceValue(), SpaceValue("name.Alice_Eve"), SpaceValue("name.Bob")))
+    assert(ps.toList == List(SpaceValue("name.Alice_Eve"), SpaceValue("name.Bob")))
 
-    println(ps.toList)
+    //println(ps.toList)
 
   }
 
