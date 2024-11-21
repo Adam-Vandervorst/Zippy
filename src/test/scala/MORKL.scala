@@ -305,12 +305,17 @@ class Imperative extends FunSuite:
     S"ys".iter("y", "ry", P"y" x "Right" x S"ry")
   )
 
+  val child_routine = routine("child", Vector(), Vector("family"),
+    ("child" x S"family"("parent").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x"))))
+  )
+
   test("aunt query pretty") {
 //    println(aunt_query_routine.show)
   }
 
   test("aunt query transpiled") {
 //    println(transpile(aunt_query_routine).show)
+    println(transpile(child_routine).show)
   }
 
   test("scc transpiled") {

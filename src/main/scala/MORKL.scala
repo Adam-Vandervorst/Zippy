@@ -2,7 +2,7 @@ package morkl
 
 import scala.io.AnsiColor.*
 import scala.util.Random
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.{ArrayBuffer, LongMap}
 import java.util.Base64
 
 
@@ -259,132 +259,152 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.Limit(i, x) => recs(x).take(i)
   SpaceValue(recs(s))
 
-case class Node[R](scope: Path, operation: String, kind: "path" | "space", inputs: Vector[R]):
-  def show: String = s"${scope.pretty} $operation(${inputs.mkString(", ")}): $kind"
+case class Node[R](operation: String, kind: "path" | "space", inputs: Vector[R]):
+  def show: String = s"$operation(${inputs.mkString(", ")}): $kind"
   def map[S](f: R => S): Node[S] = copy(inputs=inputs.map(f))
-class OpGraph(val nodes: ArrayBuffer[Node[Int]]):
-  def this() = this(ArrayBuffer.empty)
-  def show: String = nodes.zipWithIndex.map((n, i) => s"$i ${n.show}").mkString("\n")
-  def store(node: Node[Int]): Int = {val i = nodes.length; nodes.addOne(node); i}
-  def load(ref: Int): Node[Int] = nodes(ref)
-  def update(ref: Int, f: Node[Int] => Node[Int]): Unit = nodes(ref) = f(nodes(ref))
+class RecursiveOpGraph(val construct: String, val parent: Option[RecursiveOpGraph], val nodes: ArrayBuffer[Either[Node[(Int, Int)], RecursiveOpGraph]]):
+  def level: Int = parent.fold(0)(_.level + 1)
+  def show: String = s"$construct\n" + nodes.zipWithIndex.map((n_g, i) => n_g.fold(
+    n => s"$i ${n.show}",
+    g => s"$i ${g.show.split('\n').head}\n" ++ g.show.split('\n').tail.map(l => s"  $l").mkString("\n")
+  )).mkString("\n")
+  def store(node: Node[(Int, Int)]): (Int, Int) = {val i = nodes.length; nodes.addOne(Left(node)); level -> i}
+  def store(node: RecursiveOpGraph): (Int, Int) = {val i = nodes.length; nodes.addOne(Right(node)); level -> i}
+  def find(pred: Node[(Int, Int)] => Boolean): Option[(Int, Int)] =
+    nodes.zipWithIndex.collectFirst{ case (x, i) if x.left.exists(pred) => level -> i } match
+      case None => ()
+      case Some(p) => return Some(p)
+    var curr = this
+    while curr.parent.nonEmpty do
+      val n = curr.parent.get
+      n.nodes.iterator.takeWhile(x => !x.exists(_ eq curr)).zipWithIndex
+        .collectFirst{ case (x, i) if x.left.exists(pred) => n.level -> i } match
+        case None => curr = n
+        case Some(p) => return Some(p)
+    None
 
-def transpile(r: Routine): OpGraph =
-  val g = OpGraph()
-  val path_vars: ArrayBuffer[(Int, PathRef, Path)] = ArrayBuffer.from(r.refs.zipWithIndex.map((pr, i) =>
-    (g.store(Node(Path.Deref(PathRef("^")), s"ExtractPathRef(${pr.s})", "path", Vector())),
-      pr, Path.Deref(PathRef("^")))))
-  val space_vars: ArrayBuffer[(Int, SpaceMention, Path)] = ArrayBuffer.from(r.mentions.zipWithIndex.map((sm, i) =>
-    (g.store(Node(Path.Deref(PathRef("^")), s"ExtractSpaceMention(${sm.s})", "space", Vector())),
-      sm, Path.Deref(PathRef("^")))))
+def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpGraph =
+  val g = RecursiveOpGraph(s"Routine(${r.name.s})", caller, ArrayBuffer.empty)
+  for (pr, i) <- r.refs.zipWithIndex do
+    g.store(Node(s"ExtractPathRef(${pr.s})", "path", Vector()))
+  for (sm, i) <- r.mentions.zipWithIndex do
+    g.store(Node(s"ExtractSpaceMention(${sm.s})", "space", Vector()))
 
-  def recp(x: Path, scope: Path): Int = x match
+  def recp(x: Path): (Int, Int) = x match
     case Path.Deref(pr) =>
-      path_vars.find((v, name, scp) => pr == name).getOrElse(throw RuntimeException(s"$pr not found in $path_vars"))._1
+      g.find(_.operation == s"ExtractPathRef(${pr.s})").getOrElse(throw RuntimeException(s"$pr not found"))
     case Path.Constant(pi) =>
-      g.store(Node(scope, s"Constant(${pi.show})", "path", Vector()))
+      g.store(Node(s"Constant(${pi.show})", "path", Vector()))
     case Path.Concat(l, r) =>
-      g.store(Node(scope, s"Concat", "path", Vector(recp(l, scope), recp(r, scope))))
+      g.store(Node(s"Concat", "path", Vector(recp(l), recp(r))))
     case Path.GroundedPP(p, f) =>
       throw NotImplementedError("grounded functions WIP")
     case Path.GroundedPP(s, f) =>
       throw NotImplementedError("grounded functions WIP")
 
-  def recs(x: Space, scope: Path): Int =
+  def recs(x: Space): (Int, Int) =
     x match
       case Space.Empty =>
-        g.store(Node(scope, "Empty", "space", Vector()))
+        g.store(Node("Empty", "space", Vector()))
       case Space.Call(r, refs, mentions) =>
-        val refvs = refs.map(p => recp(p, scope))
-        val mentionvs = mentions.map(s => recs(s, scope))
-        g.store(Node(scope, s"Call(${r.s})", "space", refvs ++ mentionvs))
+        val refvs = refs.map(p => recp(p))
+        val mentionvs = mentions.map(s => recs(s))
+        g.store(Node(s"Call(${r.s})", "space", refvs ++ mentionvs))
       case Space.Mention(sm) =>
-        space_vars.find((v, name, scp) => sm == name).map(_._1).getOrElse(sm.hashCode())
+        g.find(_.operation == s"ExtractSpaceMention(${sm.s})").getOrElse(throw RuntimeException(s"$sm not found"))
       case Space.Singleton(p) =>
-        val v = recp(p, scope)
-        g.store(Node(scope, "Singleton", "space", Vector(v)))
+        val v = recp(p)
+        g.store(Node("Singleton", "space", Vector(v)))
       case Space.Literal(sv) =>
-        g.store(Node(scope, s"Literal(${sv.show})", "space", Vector()))
+        g.store(Node(s"Literal(${sv.show})", "space", Vector()))
       case Space.Union(x, y) =>
-        g.store(Node(scope, "Union", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(Node("Union", "space", Vector(recs(x), recs(y))))
       case Space.Intersection(x, y) =>
-        g.store(Node(scope, "Intersection", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(Node("Intersection", "space", Vector(recs(x), recs(y))))
       case Space.Subtraction(x, y) =>
-        g.store(Node(scope, "Subtraction", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(Node("Subtraction", "space", Vector(recs(x), recs(y))))
       case Space.Restriction(x, prefixes) =>
-        g.store(Node(scope, "Restriction", "space", Vector(recs(x, scope), recs(prefixes, scope))))
+        g.store(Node("Restriction", "space", Vector(recs(x), recs(prefixes))))
       case Space.Composition(x, y) =>
-        g.store(Node(scope, "Composition", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(Node("Composition", "space", Vector(recs(x), recs(y))))
       case Space.Wrap(src, p) =>
-        val s = recs(src, scope)
-        val v = recp(p, scope)
-        g.store(Node(scope, "Wrap", "space", Vector(s, v)))
+        val s = recs(src)
+        val v = recp(p)
+        g.store(Node("Wrap", "space", Vector(s, v)))
       case Space.Unwrap(src, p) =>
-        val s = recs(src, scope)
-        val v = recp(p, scope)
-        g.store(Node(scope, "Unwrap", "space", Vector(s, v)))
+        val s = recs(src)
+        val v = recp(p)
+        g.store(Node("Unwrap", "space", Vector(s, v)))
       case Space.DropHead(src) =>
-        g.store(Node(scope, "DropHead", "space", Vector(recs(src, scope))))
+        g.store(Node("DropHead", "space", Vector(recs(src))))
       case Space.Transformation(src, pattern, template) =>
-        val s = recs(src, scope)
-        val pv = recp(pattern, scope)
-        val tv = recp(template, scope)
-        g.store(Node(scope, "Transformation", "space", Vector(s, pv, tv)))
+        val s = recs(src)
+        val pv = recp(pattern)
+        val tv = recp(template)
+        g.store(Node("Transformation", "space", Vector(s, pv, tv)))
       case Space.Iteration(src, symbol, rest, templates) =>
-        val s = recs(src, scope)
-        val new_scope = Path.Concat(scope, Path.Deref(symbol))
-        path_vars.addOne((g.store(Node(new_scope, "NextPath", "path", Vector(s))), symbol, new_scope))
-        space_vars.addOne((g.store(Node(new_scope, "NextSubspace", "space", Vector(s))), rest, new_scope))
-        recs(templates, new_scope)
+        val s = recs(src)
+        val rog = transpile(Routine(
+          RoutinePtr(r.name.s + "_" + symbol.s),
+          Vector(symbol),
+          Vector(rest),
+          templates
+        ), Some(g))
+        g.store(rog)
       case Space.LeftResidual(x, y) =>
-        g.store(Node(scope, "LeftResidual", "space", Vector(recs(x, scope), recs(y, scope))))
+        g.store(Node("LeftResidual", "space", Vector(recs(x), recs(y))))
       case Space.RightResidual(y, x) =>
-        g.store(Node(scope, "RightResidual", "space", Vector(recs(y, scope), recs(x, scope))))
+        g.store(Node("RightResidual", "space", Vector(recs(y), recs(x))))
       case Space.GroundedPS(p, f) =>
         throw NotImplementedError("grounded functions WIP")
       case Space.GroundedPS(s, f) =>
         throw NotImplementedError("grounded functions WIP")
       case Space.Limit(i, x) =>
-        g.store(Node(scope, s"Limit($i)", "space", Vector(recs(x, scope))))
+        g.store(Node(s"Limit($i)", "space", Vector(recs(x))))
 
-  recs(r.body, Path.Deref(PathRef("^")))
+  recs(r.body)
   g
 
-def optimize_sharing(g: OpGraph): OpGraph =
-  val r = OpGraph()
-  val sharing = collection.mutable.LongMap.withDefault[Int](_.toInt)
-  val condensing = collection.mutable.LongMap.withDefault[Int](_.toInt)
+def optimize_sharing(g: RecursiveOpGraph, stack: ArrayBuffer[(LongMap[(Int, Int)], LongMap[(Int, Int)])] = ArrayBuffer.empty): RecursiveOpGraph =
+  val r = RecursiveOpGraph(g.construct, g.parent, ArrayBuffer.empty)
+  val l = g.level
+  stack.addOne(LongMap.withDefault[(Int, Int)](x => l -> x.toInt) -> LongMap.withDefault[(Int, Int)](x => l -> x.toInt))
   var c = 0
-  for (n, j) <- g.nodes.zipWithIndex
-      i <- g.nodes.zipWithIndex.collectFirst { case (m, i) if m.map(sharing(_)) == n.map(sharing(_)) => i } do
-    if i == j then
-      r.store(n.map(x => condensing(sharing(x))))
-      condensing.update(i, c)
+  for (n, j) <- g.nodes.zipWithIndex do n match
+    case Left(n) => g.find(m => m.map((lm, xm) => stack(lm)._1(xm)) == n.map((ln, xn) => stack(ln)._1(xn))) match
+      case Some((l2, i)) =>
+        if (l, i) == (l2, j) then
+          r.store(n.map((l, x) => { val (l_, x_) = stack(l)._1(x); stack(l_)._2(x_) }))
+          stack(l2)._2.update(i, l -> c)
+          c += 1
+        else
+          stack.last._1.update(j, l2 -> i)
+      case None => ()
+    case Right(sg) =>
+      r.store(optimize_sharing(sg, stack))
       c += 1
-    else
-      sharing.update(j, i)
   r
 
-def prune_redundant(g: OpGraph): OpGraph =
-  var old = g
-  var cur = g
-  while
-    old = cur
-    cur = OpGraph()
-    val condensing = collection.mutable.LongMap.withDefault[Int](_.toInt)
-    var c = 0
-    for (n, i) <- old.nodes.init.zipWithIndex do
-      if old.nodes.exists(_.inputs.contains(i)) then
-        cur.store(n.map(condensing(_)))
-        condensing.update(i, c)
-        c += 1
-    cur.store(old.nodes.last.map(condensing(_)))
-    old.nodes != cur.nodes
-  do ()
-  cur
+//def prune_redundant(g: OpGraph): OpGraph =
+//  var old = g
+//  var cur = g
+//  while
+//    old = cur
+//    cur = OpGraph()
+//    val condensing = collection.mutable.LongMap.withDefault[Int](_.toInt)
+//    var c = 0
+//    for (n, i) <- old.nodes.init.zipWithIndex do
+//      if old.nodes.exists(_.inputs.contains(i)) then
+//        cur.store(n.map(condensing(_)))
+//        condensing.update(i, c)
+//        c += 1
+//    cur.store(old.nodes.last.map(condensing(_)))
+//    old.nodes != cur.nodes
+//  do ()
+//  cur
 
 //def push_out(g: OpGraph): OpGraph =
-//  g.nodes.zipWithIndex.collectFirst { case (Node(scope, op, kind, inputs), i) =>
+//  g.nodes.zipWithIndex.collectFirst { case (Node(op, kind, inputs), i) =>
 //    val dest = inputs.map(i => g.nodes(i).scope).reduce(_ mostSpecific)
 //    if dest != scope then move n from i to last(dest)
 //  }
