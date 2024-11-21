@@ -571,15 +571,17 @@ class SPARQL extends FunSuite:
     SpaceMention("SPO") -> SpaceValue(
       "A.a.Person",
       "B.a.Person",
+      "C.a.Person",
       "A.name.Alice_Eve",
-      "B.name.Bob_Morley",
+      //"B.name.Bob_Morley",
       "A.FN.Alice",
       "B.FN.Bob"),
     SpaceMention("OPS") -> SpaceValue(
       "Person.a.A",
       "Person.a.B",
+      "Person.a.C",
       "Alice_Eve.name.A",
-      "Bob_Morley.name.B",
+      //"Bob_Morley.name.B",
       "Alice.FN.A",
       "Bob.FN.B",
   )))
@@ -632,26 +634,115 @@ class SPARQL extends FunSuite:
 
 
     given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+
     val basic_pattern_ = S"POS"("isa" x "Person").iter("x", "_", Singleton(spaceout(("name" x S"PSO"("name" x P"x")) \/ ("person" x Singleton(P"x")))))
     assert(eval(basic_pattern_) == SpaceValue("unit"))
     assert(ps.toList == List(SpaceValue("person.A", "name.Alice"), SpaceValue("person.B", "name.Bob")))
 
+  }
+
+  test("blank nodes") {
+    given SpaceContext = context
+
+    given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+
+    //PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
+    //
+    //SELECT ?y ?givenName
+    //WHERE
+    // { ?y vcard:Family "Smith" .
+    //   ?y vcard:Given  ?givenName .
+    // }
 
     val basic_blank_nodes = S"POS"("family" x "Smith").iter("y", "_", Singleton("y" x P"y") \/ ("given" x S"SPO"(P"y" x "given")))
     assert(eval(basic_blank_nodes) == SpaceValue("given.Lis", "y.Alice"))
 
-    ps.clear()
     val basic_blank_nodes_ = S"POS"("family" x "Smith").iter("y", "_", Singleton(spaceout(Singleton("y" x P"y") \/ ("given" x S"SPO"(P"y" x "given")))))
     assert(eval(basic_blank_nodes_) == SpaceValue("unit"))
     assert(ps.toList == List(SpaceValue("y.Alice", "given.Lis")))
 
-    // val filter_values = S"POS"("age").iter("a", "r", (ifa (P"a" < 25) then "resource" x S"r" else Singleton(P"a")))
-    // val filter_values = S"POS"("age").iter("age", "r", "resource" x Singleton(P"age") x S"r")
+  }
 
-    // val optionals =
+  test("filter") {
+    given SpaceContext = context
+    given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+
+    // PREFIX info: <http://somewhere/peopleInfo#>
+    //
+    // SELECT ?resource
+    // WHERE
+    //  {
+    //	?resource info:age ?age .
+    //	FILTER (?age >= 24)
+    //  }
 
 
-    println(eval(basic_pattern_).show)
+    def range(path: Path): Space =
+      Space.GroundedPS(path, x => x.items.map { case PathItem.Symbol(s) => s.toIntOption } match
+        case Seq(Some(stop)) => SpaceValue((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet)
+        case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet))
+
+    val filter_values = (S"POS"("age") <| range("24.200.1")).iter("age", "resource", Singleton(spaceout("resource" x S"resource")))
+    assert(eval(filter_values) == SpaceValue("unit"))
+    assert(ps.toList == List(SpaceValue("resource.A")))
+  }
+
+  test("optionals") {
+    given SpaceContext = context
+    given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+
+    // PREFIX info:	<http://somewhere/peopleInfo#>
+    // PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+    //
+    // SELECT ?name ?age
+    // WHERE
+    // {
+    // 	?person vcard:FN  ?name .
+    // 	OPTIONAL { ?person info:age ?age }
+    // }
+
+    val a = S"PSO"("name").iter("person", "names", {
+      val age = "names" x S"SPO"(P"person" x "age")
+      Singleton(spaceout(("name" x S"names") \/ ("age" x age("names"))))
+    }
+    )
+
+    val a_ = S"PSO"("name").iter("person", "names", {
+      Singleton(spaceout(("name" x S"names") \/ ("age" x S"SPO"(P"person" x "age"))))
+    }
+    )
+
+    assert(eval(a) == SpaceValue("unit"))
+    assert(ps.toList == List(SpaceValue("name.Charlie"), SpaceValue("name.Alice", "age.25"), SpaceValue("age.12", "name.Bob")))
+    ps.clear()
+    assert(eval(a_) == SpaceValue("unit"))
+    assert(ps.toList == List(SpaceValue("name.Charlie"), SpaceValue("name.Alice", "age.25"), SpaceValue("age.12", "name.Bob")))
+
+
+  }
+  test("dependent_optionals") {
+    given SpaceContext = name_fn
+    given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+
+    // SELECT ?name
+    // WHERE
+    // {
+    //   ?x a foaf:Person .
+    //   OPTIONAL { ?x foaf:name ?name }
+    //   OPTIONAL { ?x vCard:FN  ?name }
+    // }
+
+    val e = S"OPS"("Person.a").iter("x", "-", {
+      val some = "Some" x S"SPO"(P"x" x "name")
+      val other = "Other" x S"SPO"(P"x" x "FN")
+      Singleton(spaceout("name" x some("Some") \/
+        (Singleton("Some") \ some.iter("s", "_", Singleton(P"s"))).iter("_1", "_2", other("Other"))))
+    })
+
+    // TODO why the empty space?
+    assert(eval(e) == SpaceValue("unit"))
+    assert(ps.toList == List(SpaceValue(), SpaceValue("name.Alice_Eve"), SpaceValue("name.Bob")))
+
     println(ps.toList)
 
   }
