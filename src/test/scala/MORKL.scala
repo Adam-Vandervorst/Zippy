@@ -877,6 +877,13 @@ class SPARQL extends FunSuite:
       // assuming filter = True
       join(s1, s2) \/ difference(s1, s2)
 
+    def filterBiggerThen(s1: Space, v: String, i: Int): Space =
+      val max = 200
+      (s1(v) <| range(i.toString + "." + max.toString + "." + "1")).tee(s1)
+
+    def filterSmallerThen(s1: Space, v: String, i: Int): Space =
+      (s1(v) <| range("0." + i.toString + ".1")).tee(s1)
+
 
 
     // assert(eval(get_incompatible_) == eval(get_incompatible(S"lhs", S"rhs")))
@@ -896,6 +903,10 @@ class SPARQL extends FunSuite:
     println(eval(difference(S"lhs", S"rhs"))(using sc = incompatible).show)
     println(eval(leftJoin(S"lhs", S"rhs"))(using sc = sps).show)
     println(eval(leftJoin(S"lhs", S"rhs"))(using sc = incompatible).show)
+    println(eval(filterBiggerThen(S"rhs", "age", 10))(using sc = sps).show)
+    println(eval(filterBiggerThen(S"rhs", "age", 15))(using sc = sps).show)
+    println(eval(filterSmallerThen(S"rhs", "age", 10))(using sc = sps).show)
+    println(eval(filterSmallerThen(S"rhs", "age", 15))(using sc = sps).show)
 
   }
 
