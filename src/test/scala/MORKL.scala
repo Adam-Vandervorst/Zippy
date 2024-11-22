@@ -315,7 +315,7 @@ class Imperative extends FunSuite:
 
   test("aunt query transpiled") {
 //    println(transpile(aunt_query_routine).show)
-    println(transpile(child_routine).show)
+//    println(transpile(child_routine).show)
   }
 
   test("scc transpiled") {
@@ -327,6 +327,16 @@ class Imperative extends FunSuite:
 
   test("transpile union iter") {
 //    println(transpile(union_iter_routine).show)
+  }
+
+  test("exec") {
+    val code = transpile(aunt_query_routine, None)
+//    println(code.show)
+    val stack = collection.mutable.Stack(new Array[PathValue | SpaceValue | Null](code.nodes.length))
+    stack.top(0) = AuntQuery().context.resolve(SpaceMention("family"))
+    stack.top(1) = AuntQuery().context.resolve(SpaceMention("people"))
+    exec(code, stack)
+    assert(stack.top.last.asInstanceOf[SpaceValue] == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
   }
 end Imperative
 

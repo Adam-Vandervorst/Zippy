@@ -2,7 +2,7 @@ package morkl
 
 import scala.io.AnsiColor.*
 import scala.util.Random
-import scala.collection.mutable.{ArrayBuffer, LongMap}
+import scala.collection.mutable.{ArrayBuffer, LongMap, Stack}
 import java.util.Base64
 
 
@@ -259,12 +259,12 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.Limit(i, x) => recs(x).take(i)
   SpaceValue(recs(s))
 
-case class Node[R](operation: String, kind: "path" | "space", inputs: Vector[R]):
-  def show: String = s"$operation(${inputs.mkString(", ")}): $kind"
+case class Node[R](operation: String, constant: String, kind: "path" | "space", inputs: Vector[R]):
+  def show: String = s"$operation[${constant}](${inputs.mkString(", ")}): $kind"
   def map[S](f: R => S): Node[S] = copy(inputs=inputs.map(f))
-class RecursiveOpGraph(val construct: String, val parent: Option[RecursiveOpGraph], val nodes: ArrayBuffer[Either[Node[(Int, Int)], RecursiveOpGraph]]):
+class RecursiveOpGraph(var root: Node[(Int, Int)], val parent: Option[RecursiveOpGraph], val nodes: ArrayBuffer[Either[Node[(Int, Int)], RecursiveOpGraph]]):
   def level: Int = parent.fold(0)(_.level + 1)
-  def show: String = s"$construct\n" + nodes.zipWithIndex.map((n_g, i) => n_g.fold(
+  def show: String = s"${root.show}\n" + nodes.zipWithIndex.map((n_g, i) => n_g.fold(
     n => s"$i ${n.show}",
     g => s"$i ${g.show.split('\n').head}\n" ++ g.show.split('\n').tail.map(l => s"  $l").mkString("\n")
   )).mkString("\n")
@@ -284,19 +284,19 @@ class RecursiveOpGraph(val construct: String, val parent: Option[RecursiveOpGrap
     None
 
 def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpGraph =
-  val g = RecursiveOpGraph(s"Routine(${r.name.s})", caller, ArrayBuffer.empty)
+  val g = RecursiveOpGraph(Node("Routine", r.name.s, "space", Vector()), caller, ArrayBuffer.empty)
   for (pr, i) <- r.refs.zipWithIndex do
-    g.store(Node(s"ExtractPathRef(${pr.s})", "path", Vector()))
+    g.store(Node("ExtractPathRef", pr.s, "path", Vector()))
   for (sm, i) <- r.mentions.zipWithIndex do
-    g.store(Node(s"ExtractSpaceMention(${sm.s})", "space", Vector()))
+    g.store(Node("ExtractSpaceMention", sm.s, "space", Vector()))
 
   def recp(x: Path): (Int, Int) = x match
     case Path.Deref(pr) =>
-      g.find(_.operation == s"ExtractPathRef(${pr.s})").getOrElse(throw RuntimeException(s"$pr not found"))
+      g.find(n => n.operation == s"ExtractPathRef" && n.constant == pr.s).getOrElse(throw RuntimeException(s"$pr not found"))
     case Path.Constant(pi) =>
-      g.store(Node(s"Constant(${pi.show})", "path", Vector()))
+      g.store(Node("Constant", pi.show, "path", Vector()))
     case Path.Concat(l, r) =>
-      g.store(Node(s"Concat", "path", Vector(recp(l), recp(r))))
+      g.store(Node("Concat", "", "path", Vector(recp(l), recp(r))))
     case Path.GroundedPP(p, f) =>
       throw NotImplementedError("grounded functions WIP")
     case Path.GroundedPP(s, f) =>
@@ -305,43 +305,43 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
   def recs(x: Space): (Int, Int) =
     x match
       case Space.Empty =>
-        g.store(Node("Empty", "space", Vector()))
+        g.store(Node("Empty", "", "space", Vector()))
       case Space.Call(r, refs, mentions) =>
         val refvs = refs.map(p => recp(p))
         val mentionvs = mentions.map(s => recs(s))
-        g.store(Node(s"Call(${r.s})", "space", refvs ++ mentionvs))
+        g.store(Node("Call", r.s, "space", refvs ++ mentionvs))
       case Space.Mention(sm) =>
-        g.find(_.operation == s"ExtractSpaceMention(${sm.s})").getOrElse(throw RuntimeException(s"$sm not found"))
+        g.find(n => n.operation == "ExtractSpaceMention" && n.constant == sm.s).getOrElse(throw RuntimeException(s"$sm not found"))
       case Space.Singleton(p) =>
         val v = recp(p)
-        g.store(Node("Singleton", "space", Vector(v)))
+        g.store(Node("Singleton", "", "space", Vector(v)))
       case Space.Literal(sv) =>
-        g.store(Node(s"Literal(${sv.show})", "space", Vector()))
+        g.store(Node(s"Literal", sv.show, "space", Vector()))
       case Space.Union(x, y) =>
-        g.store(Node("Union", "space", Vector(recs(x), recs(y))))
+        g.store(Node("Union", "", "space", Vector(recs(x), recs(y))))
       case Space.Intersection(x, y) =>
-        g.store(Node("Intersection", "space", Vector(recs(x), recs(y))))
+        g.store(Node("Intersection", "", "space", Vector(recs(x), recs(y))))
       case Space.Subtraction(x, y) =>
-        g.store(Node("Subtraction", "space", Vector(recs(x), recs(y))))
+        g.store(Node("Subtraction", "", "space", Vector(recs(x), recs(y))))
       case Space.Restriction(x, prefixes) =>
-        g.store(Node("Restriction", "space", Vector(recs(x), recs(prefixes))))
+        g.store(Node("Restriction", "", "space", Vector(recs(x), recs(prefixes))))
       case Space.Composition(x, y) =>
-        g.store(Node("Composition", "space", Vector(recs(x), recs(y))))
+        g.store(Node("Composition", "", "space", Vector(recs(x), recs(y))))
       case Space.Wrap(src, p) =>
         val s = recs(src)
         val v = recp(p)
-        g.store(Node("Wrap", "space", Vector(s, v)))
+        g.store(Node("Wrap", "", "space", Vector(s, v)))
       case Space.Unwrap(src, p) =>
         val s = recs(src)
         val v = recp(p)
-        g.store(Node("Unwrap", "space", Vector(s, v)))
+        g.store(Node("Unwrap", "", "space", Vector(s, v)))
       case Space.DropHead(src) =>
-        g.store(Node("DropHead", "space", Vector(recs(src))))
+        g.store(Node("DropHead", "", "space", Vector(recs(src))))
       case Space.Transformation(src, pattern, template) =>
         val s = recs(src)
         val pv = recp(pattern)
         val tv = recp(template)
-        g.store(Node("Transformation", "space", Vector(s, pv, tv)))
+        g.store(Node("Transformation", "", "space", Vector(s, pv, tv)))
       case Space.Iteration(src, symbol, rest, templates) =>
         val s = recs(src)
         val rog = transpile(Routine(
@@ -350,23 +350,75 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
           Vector(rest),
           templates
         ), Some(g))
+        rog.root = Node("Iteration", "", "space", Vector(s))
         g.store(rog)
       case Space.LeftResidual(x, y) =>
-        g.store(Node("LeftResidual", "space", Vector(recs(x), recs(y))))
+        g.store(Node("LeftResidual", "", "space", Vector(recs(x), recs(y))))
       case Space.RightResidual(y, x) =>
-        g.store(Node("RightResidual", "space", Vector(recs(y), recs(x))))
+        g.store(Node("RightResidual", "", "space", Vector(recs(y), recs(x))))
       case Space.GroundedPS(p, f) =>
         throw NotImplementedError("grounded functions WIP")
       case Space.GroundedPS(s, f) =>
         throw NotImplementedError("grounded functions WIP")
       case Space.Limit(i, x) =>
-        g.store(Node(s"Limit($i)", "space", Vector(recs(x))))
+        g.store(Node(s"Limit", i.toString, "space", Vector(recs(x))))
 
   recs(r.body)
   g
 
+def exec(rog: RecursiveOpGraph,
+         stack: Stack[Array[PathValue | SpaceValue | Null]]): Unit =
+  val l = rog.level
+  var c = 0
+  val s = stack.top
+  inline def pos = (l, c)
+  extension (p : (Int, Int)) inline def sget = stack(stack.length - 1 - p._1)(p._2).asInstanceOf[SpaceValue]
+  extension (p : (Int, Int)) inline def pget = stack(stack.length - 1 - p._1)(p._2).asInstanceOf[PathValue]
+  while c < rog.nodes.length do
+    rog.nodes(c) match
+      case Left(Node(op, constant, kind, inputs)) => kind match
+        case "path" => s(c) = (op match
+          case "ExtractPathRef" => pos.pget // stack should already prepared
+          case "Constant" => Syntax.parse(constant) // stack should already be prepared
+          case "Concat" => PathValue(inputs(0).pget.items ++ inputs(1).pget.items))
+        case "space" => s(c) = (op match
+          case "Empty" => SpaceValue(Set.empty)
+          case "Call" => ??? // todo
+          case "ExtractSpaceMention" => pos.sget // stack should already prepared
+          case "Singleton" => SpaceValue(Set(inputs(0).pget))
+          case "Literal" => ??? // should likely be translated into a union of singletons of constant paths
+          case "Union" => eval(Space.Union(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
+          case "Intersection" => eval(Space.Intersection(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
+          case "Restriction" => eval(Space.Restriction(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
+          case "Subtraction" => eval(Space.Subtraction(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
+          case "Composition" => eval(Space.Composition(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
+          case "Wrap" => eval(Space.Wrap(Space.Literal(inputs(0).sget), Path.Constant(inputs(1).pget)))
+          case "Unwrap" => eval(Space.Unwrap(Space.Literal(inputs(0).sget), Path.Constant(inputs(1).pget)))
+          case "DropHead" => eval(Space.DropHead(Space.Literal(inputs(0).sget)))
+          case "Transformation" => ??? // we should likely eventually support this
+          case "Iteration" => ??? // should've been elided
+          case "LeftResidual" => ??? // not worth supporting
+          case "RightResidual" => ??? // not worth supporting
+          case "Limit" => ???) // todo, mainly should be optimized to be integrated in Iteration
+      case Right(sg: RecursiveOpGraph) =>
+        val Node(op, constant, kind, inputs) = sg.root
+        op match
+          case "Routine" => ???
+//            assert(l == 0)
+//            exec(sg, stack)
+          case "Iteration" =>
+            s(c) = SpaceValue(Set.empty)
+            for (h, r) <- inputs(0).sget.paths.groupMap(x => PathValue(x.items.head :: Nil))(x => PathValue(x.items.tail)) do
+              stack.push(new Array(sg.nodes.length))
+              stack.top(0) = h
+              stack.top(1) = SpaceValue(r)
+              exec(sg, stack)
+              s(c) = SpaceValue(pos.sget.paths union stack.pop().last.asInstanceOf[SpaceValue].paths)
+    c += 1
+  end while
+
 def optimize_sharing(g: RecursiveOpGraph, stack: ArrayBuffer[(LongMap[(Int, Int)], LongMap[(Int, Int)])] = ArrayBuffer.empty): RecursiveOpGraph =
-  val r = RecursiveOpGraph(g.construct, g.parent, ArrayBuffer.empty)
+  val r = RecursiveOpGraph(g.root, g.parent, ArrayBuffer.empty)
   val l = g.level
   stack.addOne(LongMap.withDefault[(Int, Int)](x => l -> x.toInt) -> LongMap.withDefault[(Int, Int)](x => l -> x.toInt))
   var c = 0
