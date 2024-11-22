@@ -520,6 +520,39 @@ class Fuzzy extends FunSuite:
   }
 end Fuzzy
 
+class Unification extends FunSuite:
+  import Space.*
+
+  val context = SpaceContextMap(Map(
+    SpaceMention("sequences") -> SpaceValue(
+      "b.a.a.b",
+      "b.e.e.b",
+      "b.e.e.b.b.e.e.b",
+      "b.e.e.p.b.o.o.p",
+      "b.a.b.a.b.a",
+      "a.c.a.c",
+    )))
+
+  def Q(src: Space, p: PathValue, bound: Map[String, PathRef] = Map.empty, d: Int = 0): Space = p.items match
+    case h::tail => h match
+      case PathItem.Symbol(s) => Path.Constant(PathValue(h::Nil)) x Q(Unwrap(src, Path.Constant(PathValue(h::Nil))), PathValue(tail), bound, d + 1)
+      case PathItem.Arity(a) => Path.Constant(PathValue(h::Nil)) x Q(Unwrap(src, Path.Constant(PathValue(h::Nil))), PathValue(tail), bound, d + 1)
+      case PathItem.Variable(n) =>
+        if bound.contains(n) then Path.Deref(bound(n)) x Q(Unwrap(src, Path.Deref(bound(n))), PathValue(tail), bound, d + 1)
+        else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
+          Path.Deref(PathRef(n)) x Q(Space.Mention(SpaceMention(n + "_")), PathValue(tail), bound + (n -> PathRef(n)), d + 1))
+    case Nil => src
+
+  test("query") {
+    given SpaceContext = context
+    assert(eval(Q(S"sequences", "$x.$y.$z")) == context.resolve(SpaceMention("sequences")))
+    assert(eval(Q(S"sequences", "$x.c.$x")) == SpaceValue("a.c.a.c"))
+    assert(eval(Q(S"sequences", "$x.$y.$x.$y")) == SpaceValue("a.c.a.c", "b.a.b.a.b.a"))
+    assert(eval(Q(S"sequences", "b.$x.$x.$y")) == SpaceValue("b.a.a.b", "b.e.e.b", "b.e.e.b.b.e.e.b", "b.e.e.p.b.o.o.p"))
+    assert(eval(Q(S"sequences", "b.$x.$x.$e1.b.$y.$y.$e2")) == SpaceValue("b.e.e.b.b.e.e.b", "b.e.e.p.b.o.o.p"))
+  }
+end Unification
+
 class Grounded extends FunSuite:
   import Space.*
 
