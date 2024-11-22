@@ -537,6 +537,17 @@ class SPARQL extends FunSuite:
       ab.addOne(sv); PathValue(List(PathItem.Symbol("unit")))
     })
 
+  def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
+
+  extension (s: Space)
+    def tee(run: Space): Space = s.iter("_1", "_2", run)
+
+  def range(path: Path): Space =
+    Space.GroundedPS(path, x => x.items.map { case PathItem.Symbol(s) => s.toIntOption } match
+      case Seq(Some(stop)) => SpaceValue((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet)
+      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet))
+
+
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
       "A.isa.Person", "A.name.Alice", "A.age.25", "Alice.family.Smith", "Alice.given.Lis",
@@ -602,9 +613,7 @@ class SPARQL extends FunSuite:
     //  ?x a Person
     //  OPTIONAL {?x name ?name}
     //  OPTIONAL {?x FN ?name}
-    def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
-    extension (s: Space)
-      def tee(run: Space): Space = s.iter("_1", "_2", run)
+
     val e = S"OPS"("Person.a").iter("x", "-", {
       val some = "Some" x S"SPO"(P"x" x "name")
       val other = "Other" x S"SPO"(P"x" x "FN")
@@ -628,6 +637,11 @@ class SPARQL extends FunSuite:
     val spo_to_pos = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p") x S"o" x Singleton(P"s")))
     assert(eval(spo_to_pos) == eval(S"POS"))
 
+    //SELECT ?x ?fname
+    //WHERE {
+    // ?x isa Person
+    // ?x <http://www.w3.org/2001/vcard-rdf/3.0#FN>  ?fname
+    // }
     val basic_pattern_person = "person" x S"POS"("isa" x "Person")
     assert(eval(basic_pattern_person) == SpaceValue("person.A", "person.B"))
 
@@ -682,11 +696,6 @@ class SPARQL extends FunSuite:
     //  }
 
 
-    def range(path: Path): Space =
-      Space.GroundedPS(path, x => x.items.map { case PathItem.Symbol(s) => s.toIntOption } match
-        case Seq(Some(stop)) => SpaceValue((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet)
-        case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet))
-
     val filter_values = (S"POS"("age") <| range("24.200.1")).iter("age", "resource", Singleton(spaceout("resource" x S"resource")))
     assert(eval(filter_values) == SpaceValue("unit"))
     assert(ps.toList == List(SpaceValue("resource.A")))
@@ -725,6 +734,27 @@ class SPARQL extends FunSuite:
 
 
   }
+
+  test("optional_with_filters") {
+    given SpaceContext = context
+    given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+    // SELECT ?name ?age
+    // WHERE
+    // {
+    //   ?person vcard:FN  ?name .
+    //   OPTIONAL { ?person info:age ?age . FILTER ( ?age > 24 ) }
+    // }
+
+    val e = S"PSO"("name").iter("person", "names", S"PSO"("name" x P"person").iter("name", "_", {
+      val age = S"SPO"(P"person" x "age") <| range("24.200.1")
+      Singleton(spaceout(Singleton("name" x P"name") \/ ("age" x age)))
+    }))
+
+    assert(eval(e) == SpaceValue("unit"))
+    assert(ps.toList == List(SpaceValue("name.Charlie"), SpaceValue("name.Alice", "age.25"), SpaceValue("name.Bob")))
+    ps.clear()
+
+  }
   test("dependent_optionals") {
     given SpaceContext = name_fn
     given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
@@ -736,9 +766,6 @@ class SPARQL extends FunSuite:
     //   OPTIONAL { ?x foaf:name ?name }
     //   OPTIONAL { ?x vCard:FN  ?name }
     // }
-    def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
-    extension (s: Space)
-      def tee(run: Space): Space = s.iter("_1", "_2", run)
 
     val e = S"OPS"("Person.a").iter("x", "-", {
       val some = "Some" x S"SPO"(P"x" x "name")
@@ -753,6 +780,125 @@ class SPARQL extends FunSuite:
     //println(ps.toList)
 
   }
+
+  test("dependent_optionals2") {
+
+    val books: SpaceContextMap =  SpaceContextMap(Map(
+      SpaceMention("SPO") -> SpaceValue(
+        "HP.a.Book",
+        "LOTR.a.Book",
+        "HP.author.R",
+        "LOTR.author.T",
+        "R.name.JKRowling"),
+      SpaceMention("OPS") -> SpaceValue(
+        "Book.a.HP",
+        "Book.a.LOTR",
+        "R.author.HP",
+        "T.author.LOTR",
+        "JKRowling.name.R"
+      )))
+
+    given SpaceContext = books
+
+    given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
+
+    // SELECT ?book ?authorName
+    // WHERE {
+    //   ?book a ex:Book .
+    //
+    //   OPTIONAL {
+    //     ?book ex:author ?author .
+    //     ?author foaf:name ?authorName .
+    //   }
+    // }
+    val e = S"OPS"("Book.a").iter("book", "_", {
+      val author = S"SPO"(P"book" x "author")
+      val authorName = author.iter("author", "_", S"SPO"(P"author" x "name"))
+      Singleton(spaceout(Singleton("book" x P"book") \/ ("authorName" x authorName)))
+    })
+
+    eval(e)
+    //assert(ps.toList == List(SpaceValue("book.HP", "authorName.JKROWLING")))
+  }
+  test("algebra") {
+    val sps: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("lhs") -> SpaceValue(
+        "person.A",
+        "name.Alice",
+        "hobby.reading"),
+      SpaceMention("rhs") -> SpaceValue(
+        "person.A",
+        "name.Alice",
+        "age.13"
+      )))
+
+    val incompatible: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("lhs") -> SpaceValue(
+        "person.B",
+        "name.Alice",
+        "hobby.reading"),
+      SpaceMention("rhs") -> SpaceValue(
+        "person.A",
+        "name.Alice",
+        "age.13"
+      )))
+
+    given SpaceContext = sps
+
+    val get_incompatible_ = S"lhs".iter("v", "os", S"os".iter("o", "_", {
+       val v2 = P"v" x S"rhs"(P"v")
+       val o2 = P"v" x P"o" x S"rhs"(P"v" x P"o")
+       v2 \ o2
+    }))
+
+    val get_incompatible2 = (Head(S"lhs") /\ Head(S"rhs")).iter("v", "os", {
+      (P"v" x (S"lhs"(P"v") \ S"rhs"(P"v"))) \/ (P"v" x (S"rhs"(P"v") \ S"lhs"(P"v")))
+    })
+
+    def get_incompatible(s1: Space, s2: Space): Space =
+      (Head(s1) /\ Head(s2)).iter("v", "_", {
+        P"v" x (s1(P"v") \ s2(P"v"))
+      })
+
+    def if_empty_do(e:Space, todo: Space): Space =
+      (Singleton("tobeempty") \ Head("tobeempty" x e)).tee(todo)
+
+    def join(s1: Space, s2: Space): Space =
+      (Singleton("incompatible")\Head("incompatible" x get_incompatible(s1, s2))).tee(s1 \/ s2)
+
+    def join2(s1: Space, s2: Space): Space =
+      if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
+
+    def difference(s1: Space, s2: Space): Space =
+      // assuming filter = True
+      get_incompatible(s1, s2).tee(s1)
+
+    def leftJoin(s1: Space, s2: Space): Space =
+      // assuming filter = True
+      join(s1, s2) \/ difference(s1, s2)
+
+
+
+    // assert(eval(get_incompatible_) == eval(get_incompatible(S"lhs", S"rhs")))
+
+    val e = S"lhs" \/ S"lhs".iter("v", "o", S"rhs"(P"v"))
+
+    val e2 = S"lhs".iter("v", "o", S"rhs"(P"v"))
+
+    println(eval(get_incompatible_))
+    println(eval(get_incompatible(S"lhs", S"rhs")))
+    println(eval(get_incompatible(S"lhs", S"rhs"))(using sc = incompatible))
+    println(eval(join(S"lhs", S"rhs"))(using sc = sps).show)
+    println(eval(join2(S"lhs", S"rhs"))(using sc = sps).show)
+    println(eval(join(S"lhs", S"rhs"))(using sc = incompatible).show)
+    println(eval(join2(S"lhs", S"rhs"))(using sc = incompatible).show)
+    println(eval(difference(S"lhs", S"rhs"))(using sc = sps).show)
+    println(eval(difference(S"lhs", S"rhs"))(using sc = incompatible).show)
+    println(eval(leftJoin(S"lhs", S"rhs"))(using sc = sps).show)
+    println(eval(leftJoin(S"lhs", S"rhs"))(using sc = incompatible).show)
+
+  }
+
 
 end SPARQL
 
