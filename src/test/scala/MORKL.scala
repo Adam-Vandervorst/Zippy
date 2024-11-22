@@ -457,6 +457,68 @@ class Routines extends FunSuite:
   }
 end Routines
 
+class Fuzzy extends FunSuite:
+  import Space.*
+
+  val temperature = SpaceContextMap(Map(SpaceMention("world_slice") -> SpaceValue(
+//    "0.0.0.0.0.",
+//    "0.0.0.0.1.",
+//    "0.0.0.1.0.",
+    "0.0.0.1.1.H",
+    "0.0.1.0.0.M",
+//    "0.0.1.0.1.",
+    "0.0.1.1.0.M",
+//    "0.0.1.1.1.",
+    "0.1.0.0.0.M",
+    "0.1.0.0.1.M",
+    "0.1.0.1.0.C",
+//    "0.1.0.1.1.",
+//    "0.1.1.0.0.",
+//    "0.1.1.0.1.",
+    "0.1.1.1.0.C",
+    "0.1.1.1.1.M",
+//    "1.0.0.0.0.",
+//    "1.0.0.0.1.",
+    "1.0.0.1.0.H",
+//    "1.0.0.1.1.",
+    "1.0.1.0.0.M",
+//    "1.0.1.0.1.",
+    "1.0.1.1.0.M",
+    "1.0.1.1.1.H",
+//    "1.1.0.0.0.",
+//    "1.1.0.0.1.",
+//    "1.1.0.1.0.",
+    "1.1.0.1.1.H",
+    "1.1.1.0.0.M",
+    "1.1.1.0.1.C",
+//    "1.1.1.1.0.",
+    "1.1.1.1.1.H",
+  )))
+
+  def about(point: Int, surrounding: Int): SpaceValue = interval(point - surrounding, point + surrounding)
+  def interval(start: Int, end: Int, height: Int = 5, trail: Vector[Boolean] = Vector()): SpaceValue =
+    val lowest = trail.padTo(height, false).reverseIterator.zipWithIndex.foldLeft(0){case (k, (b, i)) => if b then k + (1 << i) else k}
+    val middle = trail.appended(true).padTo(height, false).reverseIterator.zipWithIndex.foldLeft(0){case (k, (b, i)) => if b then k + (1 << i) else k}
+    val highest = trail.padTo(height, true).reverseIterator.zipWithIndex.foldLeft(0){case (k, (b, i)) => if b then k + (1 << i) else k}
+    if start == lowest && end == highest then SpaceValue(trail.map(if _ then "1" else "0").mkString("."))
+    else if start < middle && end >= middle then SpaceValue(interval(start, middle - 1, height, trail.appended(false)).paths union interval(middle, end, height, trail.appended(true)).paths)
+    else if end < middle then interval(start, end, height, trail.appended(false))
+    else interval(start, end, height, trail.appended(true)) // start >= middle
+
+//    if start == lowest && end == highest then Singleton("$")
+//    else if start < middle && end >= middle then Union("0" x interval(start, middle - 1, height, trail.appended(false)), "1" x interval(middle, end, height, trail.appended(true)))
+//    else if end < middle then "0" x interval(start, end, height, trail.appended(false))
+//    else "1" x interval(start, end, height, trail.appended(true)) // start >= middle
+
+  test("temperature") {
+    given SpaceContext = temperature
+    assert(eval(S"world_slice" <| Space.Literal(about(1, 1))) == SpaceValue())
+    assert(eval(S"world_slice" <| Space.Literal(interval(3, 4))) == SpaceValue("0.0.0.1.1.H", "0.0.1.0.0.M"))
+    assert(eval(S"world_slice" <| Space.Literal(about(12, 3))) == SpaceValue("0.1.0.0.1.M", "0.1.0.1.0.C", "0.1.1.1.0.C", "0.1.1.1.1.M"))
+    assert(eval(S"world_slice" <| Space.Literal(interval(18, 21))) == SpaceValue("1.0.0.1.0.H", "1.0.1.0.0.M"))
+    assert(eval(S"world_slice" <| Space.Literal(interval(16, 31))) == SpaceValue("1.0.0.1.0.H", "1.0.1.0.0.M", "1.0.1.1.0.M", "1.0.1.1.1.H", "1.1.0.1.1.H", "1.1.1.0.0.M", "1.1.1.0.1.C", "1.1.1.1.1.H"))
+  }
+end Fuzzy
 
 class Grounded extends FunSuite:
   import Space.*
