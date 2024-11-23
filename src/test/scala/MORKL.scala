@@ -543,6 +543,21 @@ class Unification extends FunSuite:
           Path.Deref(PathRef(n)) x Q(Space.Mention(SpaceMention(n + "_")), PathValue(tail), bound + (n -> PathRef(n)), d + 1))
     case Nil => src
 
+  def T(src: Space, p: PathValue, t: PathValue, bound: Map[String, PathRef] = Map.empty, d: Int = 0): Space = p.items match
+    case h :: tail => h match
+      case PathItem.Symbol(s) => T(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), t, bound, d + 1)
+      case PathItem.Arity(a) => T(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), t, bound, d + 1)
+      case PathItem.Variable(n) =>
+        if bound.contains(n) then T(Unwrap(src, Path.Deref(bound(n))), PathValue(tail), t, bound, d + 1)
+        else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
+          T(Space.Mention(SpaceMention(n + "_")), PathValue(tail), t, bound + (n -> PathRef(n)), d + 1))
+    case Nil =>
+      t.items.foldRight(src)((h, r) => h match
+        case PathItem.Symbol(n) => Path.Constant(PathValue(h :: Nil)) x r
+        case PathItem.Arity(k) => Path.Constant(PathValue(h :: Nil)) x r
+        case PathItem.Variable(n) => Path.Deref(bound(n)) x r)
+
+
   test("query") {
     given SpaceContext = context
     assert(eval(Q(S"sequences", "$x.$y.$z")) == context.resolve(SpaceMention("sequences")))
@@ -550,6 +565,13 @@ class Unification extends FunSuite:
     assert(eval(Q(S"sequences", "$x.$y.$x.$y")) == SpaceValue("a.c.a.c", "b.a.b.a.b.a"))
     assert(eval(Q(S"sequences", "b.$x.$x.$y")) == SpaceValue("b.a.a.b", "b.e.e.b", "b.e.e.b.b.e.e.b", "b.e.e.p.b.o.o.p"))
     assert(eval(Q(S"sequences", "b.$x.$x.$e1.b.$y.$y.$e2")) == SpaceValue("b.e.e.b.b.e.e.b", "b.e.e.p.b.o.o.p"))
+  }
+
+  test("transform") {
+    given SpaceContext = context
+    assert(eval(T(S"sequences", "$x.$y.$z", "$x.$z.$y")) == SpaceValue("a.a.c.c", "b.a.a.b", "b.b.a.a.b.a", "b.e.e.b", "b.e.e.b.b.e.e.b", "b.e.e.p.b.o.o.p"))
+    assert(eval(T(S"sequences", "b.$x.$x.$e1.b.$y.$y.$e2", "b.$y.$y.$e1.b.$x.$x.$e2")) == SpaceValue("b.e.e.b.b.e.e.b", "b.o.o.p.b.e.e.p"))
+    assert(eval(T(S"sequences", "b.$x.$x.$e1.b.$y.$y.$e2", "b.$y.$x.$e1")) == SpaceValue("b.e.e.b", "b.o.e.p"))
   }
 end Unification
 
