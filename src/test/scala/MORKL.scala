@@ -523,6 +523,18 @@ end Fuzzy
 class Unification extends FunSuite:
   import Space.*
 
+  test("renameFrom") {
+    assert(("$x.$y.$x" renameFrom "$a.$b.$a") == Syntax.parse("$a.$b.$a"))
+    assert(("$x.c.$x" renameFrom "$a.c.$b") == Syntax.parse("$a.c.$a"))
+    assert(("s.$x.$y" renameFrom "s.$a.$a") == Syntax.parse("s.$a.$y"))
+    assert(("$x.p.$y.$x" renameFrom "$a.q.$a.$b") == Syntax.parse("$a.p.$y.$a"))
+  }
+
+//  enum Spec:
+//    case Constant(s: String)
+//    case Variable(s: String)
+//  case class PathSpec(keys: Spec)
+
   val context = SpaceContextMap(Map(
     SpaceMention("sequences") -> SpaceValue(
       "b.a.a.b",
@@ -557,6 +569,33 @@ class Unification extends FunSuite:
         case PathItem.Arity(k) => Path.Constant(PathValue(h :: Nil)) x r
         case PathItem.Variable(n) => Path.Deref(bound(n)) x r)
 
+  // determine maximal sharing, sort `ps` from lowest to highest freedom
+  def DQT(src: Space, p: PathValue, q: PathValue, t: PathValue): Space =
+    DQT__(src, src, p, q, t)
+
+  def DQT__(osrc: Space, src: Space, p: PathValue, q: PathValue, t: PathValue, bound: Map[String, PathRef] = Map.empty, d: Int = 0): Space = p.items match
+    case h :: tail => h match
+      case PathItem.Symbol(s) => DQT__(osrc, Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), q, t, bound, d + 1)
+      case PathItem.Arity(a) => DQT__(osrc, Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), q, t, bound, d + 1)
+      case PathItem.Variable(n) =>
+        if bound.contains(n) then DQT__(osrc, Unwrap(src, Path.Deref(bound(n))), PathValue(tail), q, t, bound, d + 1)
+        else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
+          DQT__(osrc, Space.Mention(SpaceMention(n + "_")), PathValue(tail), q, t, bound + (n -> PathRef(n)), d + 1))
+    case Nil => DQT_(src, osrc, p, q, t, bound, d)
+
+  def DQT_(osrc: Space, src: Space, p: PathValue, q: PathValue, t: PathValue, bound: Map[String, PathRef] = Map.empty, d: Int = 0): Space = q.items match
+    case h :: tail => h match
+      case PathItem.Symbol(s) => DQT_(osrc, Unwrap(src, Path.Constant(PathValue(h :: Nil))), p, PathValue(tail), t, bound, d + 1)
+      case PathItem.Arity(a) => DQT_(osrc, Unwrap(src, Path.Constant(PathValue(h :: Nil))), p, PathValue(tail), t, bound, d + 1)
+      case PathItem.Variable(n) =>
+        if bound.contains(n) then DQT_(osrc, Unwrap(src, Path.Deref(bound(n))), p, PathValue(tail), t, bound, d + 1)
+        else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
+          DQT_(osrc, Space.Mention(SpaceMention(n + "_")), p, PathValue(tail), t, bound + (n -> PathRef(n)), d + 1))
+    case Nil =>
+      t.items.foldRight(src)((h, r) => h match
+        case PathItem.Symbol(n) => Path.Constant(PathValue(h :: Nil)) x r
+        case PathItem.Arity(k) => Path.Constant(PathValue(h :: Nil)) x r
+        case PathItem.Variable(n) => Path.Deref(bound(n)) x r)
 
   test("query") {
     given SpaceContext = context
@@ -572,6 +611,15 @@ class Unification extends FunSuite:
     assert(eval(T(S"sequences", "$x.$y.$z", "$x.$z.$y")) == SpaceValue("a.a.c.c", "b.a.a.b", "b.b.a.a.b.a", "b.e.e.b", "b.e.e.b.b.e.e.b", "b.e.e.p.b.o.o.p"))
     assert(eval(T(S"sequences", "b.$x.$x.$e1.b.$y.$y.$e2", "b.$y.$y.$e1.b.$x.$x.$e2")) == SpaceValue("b.e.e.b.b.e.e.b", "b.o.o.p.b.e.e.p"))
     assert(eval(T(S"sequences", "b.$x.$x.$e1.b.$y.$y.$e2", "b.$y.$x.$e1")) == SpaceValue("b.e.e.b", "b.o.e.p"))
+  }
+
+  test("double query") {
+    given SpaceContext = context
+    assert(eval(DQT(S"sequences", "$x", "$y", "$x.$y")) == eval(("a" x S"sequences") \/ ("b" x S"sequences")))
+    assert(eval(DQT(S"sequences", "$x.$a", "$x.$b", "$a.$b")) == SpaceValue("a.a.a.b", "a.a.b.a.b.a", "a.e.e.b", "a.e.e.b.b.e.e.b", "a.e.e.p.b.o.o.p", "c.c.a.c", "e.a.a.b", "e.a.b.a.b.a", "e.e.e.b", "e.e.e.b.b.e.e.b", "e.e.e.p.b.o.o.p"))
+    assert(eval(DQT(S"sequences", "b.a.a.$x", "b.e.e.$y", "$x.$y")) == SpaceValue("b.b", "b.b.b.e.e.b", "b.p.b.o.o.p"))
+    assert(eval(DQT(S"sequences", "a.$x", "b.$y", "$x.$y")) == SpaceValue("c.a.a.b", "c.a.b.a.b.a", "c.e.e.b", "c.e.e.b.b.e.e.b", "c.e.e.p.b.o.o.p"))
+    assert(eval(DQT(S"sequences", "$x.a.$y", "$x.e.$z", "$x.$y.$z")) == SpaceValue("b.a.e.b", "b.a.e.b.b.e.e.b", "b.a.e.p.b.o.o.p", "b.b.e.b", "b.b.e.b.b.e.e.b", "b.b.e.p.b.o.o.p"))
   }
 end Unification
 

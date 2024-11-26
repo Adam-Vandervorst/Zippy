@@ -52,11 +52,33 @@ case class PathValue(items: List[PathItem]):
     // e.g. Test.Foo.Bar.2 |-> Vector(Test.Foo.Bar.2, Foo.Bar.2, Bar.2, 2)
     items.indices.map(i => PathValue(items.slice(i, items.length)))
 
-  infix def mostSpecific(other: PathValue): Option[PathValue] =
-    // Foo.Bar mostSpecific Foo.Bar.Baz
-    if this.prefixes.contains(other) then Some(this)
-    else if other.prefixes.contains(this) then Some(other)
+  infix def mostSpecific(that: PathValue): Option[PathValue] =
+    // Foo.Bar mostSpecific Foo.Bar.Baz == Some(Foo.Bar.Baz)
+    if this.prefixes.contains(that) then Some(this)
+    else if that.prefixes.contains(this) then Some(that)
     else None
+
+  infix def renameFrom(that: PathValue, bound: Map[String, String] = Map.empty): PathValue =
+    // $x.$y.$x renameFrom $a.$b.$a == $a.$b.$a
+    // $x.c.$x renameFrom $a.c.$b == $a.c.$a
+    // s.$x.$y renameFrom s.$a.$a == s.$a.$y
+    // $x.p.$y.$x renameFrom $a.q.$a.$b == $a.p.$y.$a
+    (this.items, that.items) match
+      case (PathItem.Variable(x)::this_tail, PathItem.Variable(y)::that_tail) =>
+        bound.get(x) match
+          case Some(y_analog) =>
+            val v = PathItem.Variable(y_analog)
+            PathValue(v::(PathValue(this_tail).renameFrom(PathValue(that_tail), bound)).items)
+          case None =>
+            val v = PathItem.Variable(x)
+            if bound.exists((_, y_) => y == y_) then
+              PathValue(v::(PathValue(this_tail).renameFrom(PathValue(that_tail), bound)).items)
+            else
+              PathValue(PathItem.Variable(y)::(PathValue(this_tail).renameFrom(PathValue(that_tail), bound + (x -> y))).items)
+      case (v::this_tail, _::that_tail) =>
+        PathValue(v::(PathValue(this_tail).renameFrom(PathValue(that_tail), bound)).items)
+      case (Nil, _) => PathValue(Nil)
+      case (rest, Nil) => PathValue(rest.map{ case PathItem.Variable(v) => PathItem.Variable(bound.getOrElse(v, v)); case x => x })
 
 
 class PathContext:
