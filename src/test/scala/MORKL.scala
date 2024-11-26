@@ -673,7 +673,9 @@ class SPARQL extends FunSuite:
     //   ?y vcard:Given  ?givenName .
     // }
 
-    val basic_blank_nodes = S"POS"("family" x "Smith").iter("y", "_", Singleton("y" x P"y") \/ ("given" x S"SPO"(P"y" x "given")))
+    val pos = S"POS"
+
+    val basic_blank_nodes = pos("family" x "Smith").iter("y", "_", Singleton("y" x P"y") \/ ("given" x S"SPO"(P"y" x "given")))
     assert(eval(basic_blank_nodes) == SpaceValue("given.Lis", "y.Alice"))
 
     val basic_blank_nodes_ = S"POS"("family" x "Smith").iter("y", "_", Singleton(spaceout(Singleton("y" x P"y") \/ ("given" x S"SPO"(P"y" x "given")))))
@@ -714,7 +716,7 @@ class SPARQL extends FunSuite:
     // 	?person vcard:FN  ?name .
     // 	OPTIONAL { ?person info:age ?age }
     // }
-
+    val pso = "PSO"
     val a = S"PSO"("name").iter("person", "names", {
       val age = "names" x S"SPO"(P"person" x "age")
       Singleton(spaceout(("name" x S"names") \/ ("age" x age("names"))))
@@ -912,4 +914,206 @@ class SPARQL extends FunSuite:
 
 
 end SPARQL
+
+class TranslateSPARQL extends FunSuite:
+
+  import org.apache.jena.query.ParameterizedSparqlString
+  import org.apache.jena.query.Query
+  import org.apache.jena.sparql.expr.ExprVisitorBase
+  import org.apache.jena.sparql.expr.E_LessThan
+  import org.apache.jena.sparql.algebra.Algebra
+  import org.apache.jena.sparql.algebra.OpVisitorBase
+  import org.apache.jena.sparql.algebra.walker.WalkerVisitor
+  import org.apache.jena.sparql.algebra.{OpVisitor, op, Op, OpVisitorByTypeBase, OpVisitorByType}
+  import org.apache.jena.sparql.algebra.op.{Op0, Op1, Op2, OpN, OpAssign, OpBGP, OpConditional, OpDatasetNames, OpDiff, OpDisjunction, OpDistinct, OpExtend, OpFilter, OpGroup, OpJoin, OpLabel, OpLateral, OpLeftJoin, OpList, OpMinus, OpNull, OpOrder, OpPath, OpProcedure, OpProject, OpPropFunc, OpQuad, OpQuadBlock, OpQuadPattern, OpReduced, OpSequence, OpService, OpSlice, OpTable, OpTopN, OpTriple, OpUnion}
+  import org.apache.jena.graph.{Node_Literal, Node_URI, Node_Variable}
+
+  import Space.*
+
+  def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path =
+    Path.GroundedSP(space, sv => {
+      ab.addOne(sv);
+      PathValue(List(PathItem.Symbol("unit")))
+    })
+
+  def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
+
+  extension (s: Space)
+    def tee(run: Space): Space = s.iter("_1", "_2", run)
+
+  def get_incompatible(s1: Space, s2: Space): Space =
+    (Head(s1) /\ Head(s2)).iter("v", "_", {
+      P"v" x (s1(P"v") \ s2(P"v"))
+    })
+
+  def if_empty_do(e: Space, todo: Space): Space =
+    (Singleton("tobeempty") \ Head("tobeempty" x e)).tee(todo)
+
+  def join(s1: Space, s2: Space): Space =
+    (Singleton("incompatible") \ Head("incompatible" x get_incompatible(s1, s2))).tee(s1 \/ s2)
+
+  def join2(s1: Space, s2: Space): Space =
+    if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
+
+
+  val context: SpaceContextMap = SpaceContextMap(Map(
+    SpaceMention("SPO") -> SpaceValue(
+      "A.isa.Person", "A.name.Alice", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis",
+      "B.isa.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
+      "C.name.Charlie"),
+    SpaceMention("PSO") -> SpaceValue(
+      "age.A.25", "age.B.12",
+      "isa.A.Person", "isa.B.Person",
+      "name.A.Alice", "name.B.Bob", "name.C.Charlie",
+      "Family.Alice.Smith", "Given.Alice.Lis",
+      "Family.Bob.Bouwer", "Given.Bob.Bow"),
+    SpaceMention("POS") -> SpaceValue(
+      "age.12.B", "age.25.A",
+      "isa.Person.A", "isa.Person.B",
+      "name.Alice.A", "name.Bob.B", "name.Charlie.C",
+      "Family.Smith.Alice", "Given.Lis.Alice",
+      "Family.Bouwer.Bob", "Given.Bob.Bow")
+  ))
+
+  test("query parsed") {
+    val q = new ParameterizedSparqlString(
+      """PREFIX ex: <http://example.org/ns#>
+        |
+        |SELECT ?price ?title
+        |WHERE {
+        |  ?book ex:price ?price .
+        |  FILTER (?price > 15) .
+        |  OPTIONAL { ?book ex:title ?title } .
+        |  {
+        |    ?book ex:author ex:Shakespeare
+        |  } UNION {
+        |    ?book ex:author ex:Marlowe
+
+
+        |  }
+        |}""".stripMargin).asQuery()
+
+    val blindNodes = new ParameterizedSparqlString(
+      """PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
+        |
+        |SELECT ?y ?givenName
+        |WHERE
+        | { ?y vcard:Family "Smith" .
+        |   ?y vcard:Given  ?givenName .
+        | }
+        |""".stripMargin).asQuery()
+
+    println(q)
+    val aq = Algebra.compile(q)
+    val algblind = Algebra.compile(blindNodes)
+    println(aq)
+    println(algblind)
+    println(Algebra.optimize(aq))
+
+    def r(op: Op): Unit = op match
+      case op: OpProject =>
+        println(op.getVars)
+        r(op.getSubOp)
+      case op: OpFilter =>
+        op.getExprs.get(0) match
+          case e: E_LessThan =>
+            println(s"less than $e")
+          case e =>
+            println(s"unsupported expr $e (${e.getClass.getName})")
+        r(op.getSubOp)
+      case op =>
+        println(s"unhandled case $op")
+    r(aq)
+
+    def order_bgp(triple: org.apache.jena.graph.Triple): (IndexedSeq[Int], IndexedSeq[Int]) =
+      // spo -> fixed first
+      // ?y http://www.w3.org/2001/vcard-rdf/3.0#Family "Smith" -> ((1, 2), (0))
+      val trip_list = List(triple.getSubject, triple.getPredicate, triple.getObject)
+      Range(0, 3).partition(x => {
+        trip_list(x) match
+          case i: org.apache.jena.sparql.core.Var => false
+          case _ => true})
+
+    def triple_get(triple: org.apache.jena.graph.Triple, i: Int): org.apache.jena.graph.Node =
+      val trip_list = List(triple.getSubject, triple.getPredicate, triple.getObject)
+      trip_list(i)
+
+    def get_str(n: org.apache.jena.graph.Node): String =
+      n match
+        case n: Node_Literal => n.getLiteral.getLexicalForm
+        case n: Node_URI => n.getLocalName
+
+    def get_space_from_bgp(triple: org.apache.jena.graph.Triple): Space =
+      val rotation: (IndexedSeq[Int], IndexedSeq[Int]) = order_bgp(triple)
+      val ordered_spo = rotation(0).concat(rotation(1)).map(x => "spo".charAt(x)).fold("")((c1, c2) => s"$c1$c2").toString
+      val m: Map[String, Space] = Map("spo" -> S"SPO", "pos" -> S"POS", "pso" -> S"PSO")
+
+      val constant_ids = rotation(0)
+      val var_ids = rotation(1)
+      rotation(0).length match
+        case 0 => ???
+        case 1 =>
+          val c0 = get_str(triple_get(triple, constant_ids(0)))
+          val v0 = triple_get(triple, var_ids(0)).getName
+          val v1 = triple_get(triple, var_ids(1)).getName
+          val e = m(ordered_spo)(c0).iter("x", "y", Singleton(v0 x P"x") \/ (v1 x S"y"))
+          println(eval(e)(using sc = context).show)
+          e
+        case 2 =>
+          val c0 = get_str(triple_get(triple, constant_ids(0)))
+          val c1 = get_str(triple_get(triple, constant_ids(1)))
+          val v0 = triple_get(triple, var_ids(0)).getName
+          val e = v0 x m(ordered_spo)(c0 x c1)
+          println(eval(e)(using sc = context).show)
+          e
+
+        case 3 => ???
+
+
+    def translate(op: Op): Unit = op match
+      case op: OpProject =>
+        println("project")
+        println(op.getVars)
+        translate(op.getSubOp)
+      case op: OpBGP =>
+        println("bgp")
+        val e = Range(0, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(Space.Empty)((s1, s2) => join2(s1, s2))
+        // for i <- Range(0, op.getPattern.size()) do
+        //   val triple: org.apache.jena.graph.Triple = op.getPattern.get(i)
+        //  get_space_from_bgp(triple)
+        println(eval(e)(using sc = context).show)
+
+
+      case op: OpJoin =>
+        println("join")
+        translate(op.getLeft)
+        translate(op.getRight)
+      case op: OpLeftJoin =>
+        println("leftjoin")
+        translate(op.getLeft)
+        translate(op.getRight)
+      case op: OpFilter =>
+        println("filter")
+        translate(op.getSubOp)
+        op.getExprs.get(0) match
+          case e: E_LessThan =>
+            println(s"less than $e")
+          case e =>
+            println(s"unsupported expr $e (${e.getClass.getName})")
+      case op: OpUnion =>
+        println("Union")
+        translate(op.getLeft)
+        translate(op.getRight)
+
+      case op =>
+        println(s"unhandled case $op")
+
+    // r(aq)
+    println("------------")
+    translate(algblind)
+  }
+
+
+
+
 
