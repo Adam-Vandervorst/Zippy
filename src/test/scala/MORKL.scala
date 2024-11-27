@@ -853,9 +853,20 @@ class AlgebraSPARQL extends FunSuite:
     // assuming filter = True
     get_incompatible(s1, s2).tee(s1)
 
+  def hyperDifference(s1: Space, s2: Space): Space =
+    // assuming filter = True
+    val p1 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", if_empty_do(get_incompatible(S"tail1", S"tail2"), Singleton("compatible"))), P"hash1" x S"tail1"))
+    val p2 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", get_incompatible(S"tail1", S"tail2").tee(Singleton("incompatible"))), P"hash1" x S"tail1"))
+    p1 \/ p2
+
+
   def leftJoin(s1: Space, s2: Space): Space =
     // assuming filter = True
     join(s1, s2) \/ difference(s1, s2)
+
+  def hyperLeftJoin(s1: Space, s2: Space): Space =
+    // assuming filter = True
+    hyperJoin(s1, s2) \/ hyperDifference(s1, s2)
 
   def filterBiggerThen(s1: Space, v: String, i: Int): Space =
     val max = 200
@@ -983,8 +994,7 @@ class TranslateSPARQL extends FunSuite:
 
   def join2(s1: Space, s2: Space): Space = sparqlAlg.join2(s1, s2)
   def hyperJoin(s1: Space, s2: Space): Space = sparqlAlg.hyperJoin(s1, s2)
-
-  def spo_to_pso(space: Space) = space.iter("s", "po", S"po".iter("p", "o", Singleton(P"p" x P"s") x S"o"))
+  def hyperLeftJoin(s1: Space, s2: Space): Space = sparqlAlg.hyperLeftJoin(s1, s2)
 
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
@@ -1033,9 +1043,11 @@ class TranslateSPARQL extends FunSuite:
         | }
         |""".stripMargin).asQuery()
 
+
     println(q)
     val aq = Algebra.compile(q)
     val algblind = Algebra.compile(blindNodes)
+
     println(aq)
     println(algblind)
     println(Algebra.optimize(aq))
@@ -1094,14 +1106,14 @@ class TranslateSPARQL extends FunSuite:
         val t = translate(op.getSubOp)
         val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
         val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
-
         e
 
       case op: OpBGP =>
         println("bgp")
         val e = Range(1, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => hyperJoin(s1, s2))
-
+        println(eval(e)(using sc = context))
         e
+
       case op: OpJoin =>
         println("join")
         translate(op.getLeft)
@@ -1109,9 +1121,10 @@ class TranslateSPARQL extends FunSuite:
         return ???
       case op: OpLeftJoin =>
         println("leftjoin")
-        translate(op.getLeft)
-        translate(op.getRight)
-        return ???
+        // translate(op.getLeft)
+        // translate(op.getRight)
+        hyperLeftJoin(translate(op.getLeft), translate(op.getRight))
+
       case op: OpFilter =>
         println("filter")
         translate(op.getSubOp)
@@ -1136,8 +1149,24 @@ class TranslateSPARQL extends FunSuite:
     println("------------")
 
     val t = translate(algblind)
-    println("endresult")
-    println(eval(t)(using sc = context).show)
+    // println(t.show)
+    assert(eval(t)(using sc = context) == SpaceValue("R4f8194bd.givenName.Al", "R4f8194bd.y.Alice", "Re30ef3e3.givenName.Lis", "Re30ef3e3.y.Alice"))
+
+    val optionalQuery = new ParameterizedSparqlString(
+      """PREFIX info:	<http://somewhere/peopleInfo#>
+        |PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |
+        |SELECT ?name ?age
+        |WHERE
+        |{
+        |	?person vcard:name  ?name .
+        |	OPTIONAL { ?person info:age ?age }
+        |}""".stripMargin).asQuery()
+
+    val algoptional = Algebra.compile(optionalQuery)
+    val t2 = translate(algoptional)
+    // println(t2.show)
+    assert(eval(t2)(using sc = context) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R29640fc9.age.12", "R29640fc9.name.Bob", "R4a4fbc23.name.Charlie"))
   }
 
 
