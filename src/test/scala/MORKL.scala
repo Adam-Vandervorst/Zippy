@@ -533,21 +533,15 @@ end Grounded
 class SPARQL extends FunSuite:
   import Space.*
 
-  def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path =
-    Path.GroundedSP(space, sv => {
-      ab.addOne(sv); PathValue(List(PathItem.Symbol("unit")))
-    })
+  val grounded = Grounded()
+  def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path = grounded.spaceout(space)(using ab: collection.mutable.ArrayBuffer[SpaceValue])
 
   def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
 
   extension (s: Space)
     def tee(run: Space): Space = s.iter("_1", "_2", run)
 
-  def range(path: Path): Space =
-    Space.GroundedPS(path, x => x.items.map { case PathItem.Symbol(s) => s.toIntOption } match
-      case Seq(Some(stop)) => SpaceValue((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet)
-      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet))
-
+  def range(path: Path): Space = grounded.range(path)
 
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
@@ -833,28 +827,9 @@ class AlgebraSPARQL extends FunSuite:
 
   val grounded = Grounded()
   def range(path: Path): Space = grounded.range(path)
+  def phash(path: Path) = grounded.hash(path)
+  def shash(space: Space) = grounded.hash(space)
 
-  val compatible: SpaceContextMap = SpaceContextMap(Map(
-    SpaceMention("lhs") -> SpaceValue(
-      "person.A",
-      "name.Alice",
-      "hobby.reading"),
-    SpaceMention("rhs") -> SpaceValue(
-      "person.A",
-      "name.Alice",
-      "age.13"
-    )))
-
-  val incompatible: SpaceContextMap = SpaceContextMap(Map(
-    SpaceMention("lhs") -> SpaceValue(
-      "person.B",
-      "name.Alice",
-      "hobby.reading"),
-    SpaceMention("rhs") -> SpaceValue(
-      "person.A",
-      "name.Alice",
-      "age.13"
-    )))
 
   def get_incompatible(s1: Space, s2: Space): Space =
     (Head(s1) /\ Head(s2)).iter("v", "_", {
@@ -869,6 +844,10 @@ class AlgebraSPARQL extends FunSuite:
 
   def join2(s1: Space, s2: Space): Space =
     if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
+
+  def joinComplete(s1: Space, s2: Space): Space =
+    // s1.iter("h1", "tail1", S"tail1")
+    s1.iter("h1", "tail1", s2.iter("h2", "tail2", shash(join2(S"tail1", S"tail2")) x join2(S"tail1", S"tail2")))
 
   def difference(s1: Space, s2: Space): Space =
     // assuming filter = True
@@ -887,6 +866,28 @@ class AlgebraSPARQL extends FunSuite:
 
 
   test("algebra") {
+    val compatible: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("lhs") -> SpaceValue(
+        "person.A",
+        "name.Alice",
+        "hobby.reading"),
+      SpaceMention("rhs") -> SpaceValue(
+        "person.A",
+        "name.Alice",
+        "age.13"
+      )))
+
+    val incompatible: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("lhs") -> SpaceValue(
+        "person.B",
+        "name.Alice",
+        "hobby.reading"),
+      SpaceMention("rhs") -> SpaceValue(
+        "person.A",
+        "name.Alice",
+        "age.13"
+      )))
+
     given SpaceContext = compatible
 
     val get_incompatible_ = S"lhs".iter("v", "os", S"os".iter("o", "_", {
@@ -923,6 +924,25 @@ class AlgebraSPARQL extends FunSuite:
     assert(eval(filterSmallerThen(S"rhs", "age", 15))(using sc = compatible) == SpaceValue("age.13", "name.Alice", "person.A"))
   }
 
+  test("algebra over hyperspaces") {
+    val context: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("lhs") -> SpaceValue(
+        "00.name.Alice",
+        "01.name.Mel"),
+      SpaceMention("rhs") -> SpaceValue(
+        "10.name.Alice",
+        "10.give.Lis",
+        "10.age.13",
+        "11.name.Bob",
+        "11.given.Bobbie",
+        "11.age.20"
+      )))
+
+    given SpaceContext = context
+    assert(eval(joinComplete(S"lhs", S"rhs")) == SpaceValue("R2ec263c.age.13", "R2ec263c.give.Lis", "R2ec263c.name.Alice"))
+
+  }
+
 
 end AlgebraSPARQL
 
@@ -957,23 +977,10 @@ class TranslateSPARQL extends FunSuite:
   extension (s: Space)
     def tee(run: Space): Space = s.iter("_1", "_2", run)
 
-  def get_incompatible(s1: Space, s2: Space): Space =
-    (Head(s1) /\ Head(s2)).iter("v", "_", {
-      P"v" x (s1(P"v") \ s2(P"v"))
-    })
+  val sparqlAlg = AlgebraSPARQL()
 
-  def if_empty_do(e: Space, todo: Space): Space =
-    (Singleton("tobeempty") \ Head("tobeempty" x e)).tee(todo)
-
-  def join(s1: Space, s2: Space): Space =
-    (Singleton("incompatible") \ Head("incompatible" x get_incompatible(s1, s2))).tee(s1 \/ s2)
-
-  def join2(s1: Space, s2: Space): Space =
-    if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
-
-  def joinComplete(s1: Space, s2: Space): Space =
-    // s1.iter("h1", "tail1", S"tail1")
-    s1.iter("h1", "tail1", s2.iter("h2", "tail2", shash(join2(S"tail1", S"tail2")) x join2(S"tail1", S"tail2")))
+  def join2(s1: Space, s2: Space): Space = sparqlAlg.join2(s1, s2)
+  def joinComplete(s1: Space, s2: Space): Space = sparqlAlg.joinComplete(s1, s2)
 
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
