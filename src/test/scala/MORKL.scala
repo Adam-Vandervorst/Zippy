@@ -1,5 +1,6 @@
 package morkl
 
+import morkl.Space.Singleton
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
 
@@ -822,30 +823,71 @@ class SPARQL extends FunSuite:
     eval(e)
     //assert(ps.toList == List(SpaceValue("book.HP", "authorName.JKROWLING")))
   }
+end SPARQL
+
+class AlgebraSPARQL extends FunSuite:
+  val sparql = SPARQL()
+  def Head(space:Space): Space = sparql.Head(space)
+  extension (s: Space)
+    def tee(run: Space): Space = s.iter("_1", "_2", run)
+
+  val grounded = Grounded()
+  def range(path: Path): Space = grounded.range(path)
+
+  val compatible: SpaceContextMap = SpaceContextMap(Map(
+    SpaceMention("lhs") -> SpaceValue(
+      "person.A",
+      "name.Alice",
+      "hobby.reading"),
+    SpaceMention("rhs") -> SpaceValue(
+      "person.A",
+      "name.Alice",
+      "age.13"
+    )))
+
+  val incompatible: SpaceContextMap = SpaceContextMap(Map(
+    SpaceMention("lhs") -> SpaceValue(
+      "person.B",
+      "name.Alice",
+      "hobby.reading"),
+    SpaceMention("rhs") -> SpaceValue(
+      "person.A",
+      "name.Alice",
+      "age.13"
+    )))
+
+  def get_incompatible(s1: Space, s2: Space): Space =
+    (Head(s1) /\ Head(s2)).iter("v", "_", {
+      P"v" x (s1(P"v") \ s2(P"v"))
+    })
+
+  def if_empty_do(e: Space, todo: Space): Space =
+    (Singleton("tobeempty") \ Head("tobeempty" x e)).tee(todo)
+
+  def join(s1: Space, s2: Space): Space =
+    (Singleton("incompatible") \ Head("incompatible" x get_incompatible(s1, s2))).tee(s1 \/ s2)
+
+  def join2(s1: Space, s2: Space): Space =
+    if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
+
+  def difference(s1: Space, s2: Space): Space =
+    // assuming filter = True
+    get_incompatible(s1, s2).tee(s1)
+
+  def leftJoin(s1: Space, s2: Space): Space =
+    // assuming filter = True
+    join(s1, s2) \/ difference(s1, s2)
+
+  def filterBiggerThen(s1: Space, v: String, i: Int): Space =
+    val max = 200
+    (s1(v) <| range(i.toString + "." + max.toString + "." + "1")).tee(s1)
+
+  def filterSmallerThen(s1: Space, v: String, i: Int): Space =
+    (s1(v) <| range("0." + i.toString + ".1")).tee(s1)
+
+
   test("algebra") {
-    val sps: SpaceContextMap = SpaceContextMap(Map(
-      SpaceMention("lhs") -> SpaceValue(
-        "person.A",
-        "name.Alice",
-        "hobby.reading"),
-      SpaceMention("rhs") -> SpaceValue(
-        "person.A",
-        "name.Alice",
-        "age.13"
-      )))
-
-    val incompatible: SpaceContextMap = SpaceContextMap(Map(
-      SpaceMention("lhs") -> SpaceValue(
-        "person.B",
-        "name.Alice",
-        "hobby.reading"),
-      SpaceMention("rhs") -> SpaceValue(
-        "person.A",
-        "name.Alice",
-        "age.13"
-      )))
-
-    given SpaceContext = sps
+    given SpaceContext = compatible
 
     val get_incompatible_ = S"lhs".iter("v", "os", S"os".iter("o", "_", {
        val v2 = P"v" x S"rhs"(P"v")
@@ -857,36 +899,6 @@ class SPARQL extends FunSuite:
       (P"v" x (S"lhs"(P"v") \ S"rhs"(P"v"))) \/ (P"v" x (S"rhs"(P"v") \ S"lhs"(P"v")))
     })
 
-    def get_incompatible(s1: Space, s2: Space): Space =
-      (Head(s1) /\ Head(s2)).iter("v", "_", {
-        P"v" x (s1(P"v") \ s2(P"v"))
-      })
-
-    def if_empty_do(e:Space, todo: Space): Space =
-      (Singleton("tobeempty") \ Head("tobeempty" x e)).tee(todo)
-
-    def join(s1: Space, s2: Space): Space =
-      (Singleton("incompatible")\Head("incompatible" x get_incompatible(s1, s2))).tee(s1 \/ s2)
-
-    def join2(s1: Space, s2: Space): Space =
-      if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
-
-    def difference(s1: Space, s2: Space): Space =
-      // assuming filter = True
-      get_incompatible(s1, s2).tee(s1)
-
-    def leftJoin(s1: Space, s2: Space): Space =
-      // assuming filter = True
-      join(s1, s2) \/ difference(s1, s2)
-
-    def filterBiggerThen(s1: Space, v: String, i: Int): Space =
-      val max = 200
-      (s1(v) <| range(i.toString + "." + max.toString + "." + "1")).tee(s1)
-
-    def filterSmallerThen(s1: Space, v: String, i: Int): Space =
-      (s1(v) <| range("0." + i.toString + ".1")).tee(s1)
-
-
 
     // assert(eval(get_incompatible_) == eval(get_incompatible(S"lhs", S"rhs")))
 
@@ -894,26 +906,25 @@ class SPARQL extends FunSuite:
 
     val e2 = S"lhs".iter("v", "o", S"rhs"(P"v"))
 
-    println(eval(get_incompatible_))
-    println(eval(get_incompatible(S"lhs", S"rhs")))
-    println(eval(get_incompatible(S"lhs", S"rhs"))(using sc = incompatible))
-    println(eval(join(S"lhs", S"rhs"))(using sc = sps).show)
-    println(eval(join2(S"lhs", S"rhs"))(using sc = sps).show)
-    println(eval(join(S"lhs", S"rhs"))(using sc = incompatible).show)
-    println(eval(join2(S"lhs", S"rhs"))(using sc = incompatible).show)
-    println(eval(difference(S"lhs", S"rhs"))(using sc = sps).show)
-    println(eval(difference(S"lhs", S"rhs"))(using sc = incompatible).show)
-    println(eval(leftJoin(S"lhs", S"rhs"))(using sc = sps).show)
-    println(eval(leftJoin(S"lhs", S"rhs"))(using sc = incompatible).show)
-    println(eval(filterBiggerThen(S"rhs", "age", 10))(using sc = sps).show)
-    println(eval(filterBiggerThen(S"rhs", "age", 15))(using sc = sps).show)
-    println(eval(filterSmallerThen(S"rhs", "age", 10))(using sc = sps).show)
-    println(eval(filterSmallerThen(S"rhs", "age", 15))(using sc = sps).show)
-
+    assert(eval(get_incompatible_) == SpaceValue(Set()))
+    assert(eval(get_incompatible(S"lhs", S"rhs")) == SpaceValue(Set()))
+    assert(eval(get_incompatible(S"lhs", S"rhs"))(using sc = incompatible) == SpaceValue("person.B"))
+    assert(eval(join(S"lhs", S"rhs"))(using sc = compatible) == SpaceValue("age.13", "hobby.reading", "name.Alice", "person.A"))
+    assert(eval(join2(S"lhs", S"rhs"))(using sc = compatible) == SpaceValue("age.13", "hobby.reading", "name.Alice", "person.A"))
+    assert(eval(join(S"lhs", S"rhs"))(using sc = incompatible) == SpaceValue())
+    assert(eval(join2(S"lhs", S"rhs"))(using sc = incompatible) == SpaceValue())
+    assert(eval(difference(S"lhs", S"rhs"))(using sc = compatible) == SpaceValue())
+    assert(eval(difference(S"lhs", S"rhs"))(using sc = incompatible) == SpaceValue("hobby.reading", "name.Alice", "person.B"))
+    assert(eval(leftJoin(S"lhs", S"rhs"))(using sc = compatible) == SpaceValue("age.13", "hobby.reading", "name.Alice", "person.A"))
+    assert(eval(leftJoin(S"lhs", S"rhs"))(using sc = incompatible) == SpaceValue("hobby.reading", "name.Alice", "person.B"))
+    assert(eval(filterBiggerThen(S"rhs", "age", 10))(using sc = compatible) == SpaceValue("age.13", "name.Alice", "person.A"))
+    assert(eval(filterBiggerThen(S"rhs", "age", 15))(using sc = compatible) == SpaceValue())
+    assert(eval(filterSmallerThen(S"rhs", "age", 10))(using sc = compatible) == SpaceValue())
+    assert(eval(filterSmallerThen(S"rhs", "age", 15))(using sc = compatible) == SpaceValue("age.13", "name.Alice", "person.A"))
   }
 
 
-end SPARQL
+end AlgebraSPARQL
 
 class TranslateSPARQL extends FunSuite:
 
@@ -936,6 +947,11 @@ class TranslateSPARQL extends FunSuite:
       PathValue(List(PathItem.Symbol("unit")))
     })
 
+  val g = Grounded()
+  def phash(path: Path) = g.hash(path)
+  def shash(space: Space) = g.hash(space)
+
+
   def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
 
   extension (s: Space)
@@ -955,23 +971,26 @@ class TranslateSPARQL extends FunSuite:
   def join2(s1: Space, s2: Space): Space =
     if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
 
+  def joinComplete(s1: Space, s2: Space): Space =
+    // s1.iter("h1", "tail1", S"tail1")
+    s1.iter("h1", "tail1", s2.iter("h2", "tail2", shash(join2(S"tail1", S"tail2")) x join2(S"tail1", S"tail2")))
 
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
-      "A.isa.Person", "A.name.Alice", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis",
+      "A.isa.Person", "A.name.Alice", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
       "B.isa.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
       "C.name.Charlie"),
     SpaceMention("PSO") -> SpaceValue(
       "age.A.25", "age.B.12",
       "isa.A.Person", "isa.B.Person",
       "name.A.Alice", "name.B.Bob", "name.C.Charlie",
-      "Family.Alice.Smith", "Given.Alice.Lis",
+      "Family.Alice.Smith", "Given.Alice.Lis", "Given.Alice.Al", "Family.Mel.Smith",
       "Family.Bob.Bouwer", "Given.Bob.Bow"),
     SpaceMention("POS") -> SpaceValue(
       "age.12.B", "age.25.A",
       "isa.Person.A", "isa.Person.B",
       "name.Alice.A", "name.Bob.B", "name.Charlie.C",
-      "Family.Smith.Alice", "Given.Lis.Alice",
+      "Family.Smith.Alice", "Given.Lis.Alice", "Given.Al.Alice", "Family.Smith.Mel",
       "Family.Bouwer.Bob", "Given.Bob.Bow")
   ))
 
@@ -1010,21 +1029,6 @@ class TranslateSPARQL extends FunSuite:
     println(algblind)
     println(Algebra.optimize(aq))
 
-    def r(op: Op): Unit = op match
-      case op: OpProject =>
-        println(op.getVars)
-        r(op.getSubOp)
-      case op: OpFilter =>
-        op.getExprs.get(0) match
-          case e: E_LessThan =>
-            println(s"less than $e")
-          case e =>
-            println(s"unsupported expr $e (${e.getClass.getName})")
-        r(op.getSubOp)
-      case op =>
-        println(s"unhandled case $op")
-    r(aq)
-
     def order_bgp(triple: org.apache.jena.graph.Triple): (IndexedSeq[Int], IndexedSeq[Int]) =
       // spo -> fixed first
       // ?y http://www.w3.org/2001/vcard-rdf/3.0#Family "Smith" -> ((1, 2), (0))
@@ -1056,14 +1060,19 @@ class TranslateSPARQL extends FunSuite:
           val c0 = get_str(triple_get(triple, constant_ids(0)))
           val v0 = triple_get(triple, var_ids(0)).getName
           val v1 = triple_get(triple, var_ids(1)).getName
-          val e = m(ordered_spo)(c0).iter("x", "y", Singleton(v0 x P"x") \/ (v1 x S"y"))
+          val e = m(ordered_spo)(c0).iter("x", "sy", S"sy".iter("y", "_", {
+            val s = Singleton(v0 x P"x") \/ Singleton(v1 x P"y")
+            shash(s) x s
+          }))
           println(eval(e)(using sc = context).show)
           e
         case 2 =>
           val c0 = get_str(triple_get(triple, constant_ids(0)))
           val c1 = get_str(triple_get(triple, constant_ids(1)))
           val v0 = triple_get(triple, var_ids(0)).getName
-          val e = v0 x m(ordered_spo)(c0 x c1)
+          val e = m(ordered_spo)(c0 x c1).iter("x", "_", {
+            val s = v0 x Singleton(P"x")
+            shash(s) x s})
           println(eval(e)(using sc = context).show)
           e
 
@@ -1077,10 +1086,11 @@ class TranslateSPARQL extends FunSuite:
         translate(op.getSubOp)
       case op: OpBGP =>
         println("bgp")
-        val e = Range(0, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(Space.Empty)((s1, s2) => join2(s1, s2))
+        val e = Range(0, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => joinComplete(s1, s2))
         // for i <- Range(0, op.getPattern.size()) do
         //   val triple: org.apache.jena.graph.Triple = op.getPattern.get(i)
         //  get_space_from_bgp(triple)
+        println("endresult")
         println(eval(e)(using sc = context).show)
 
 
