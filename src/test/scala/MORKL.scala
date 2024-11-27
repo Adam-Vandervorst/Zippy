@@ -970,7 +970,7 @@ class TranslateSPARQL extends FunSuite:
   val g = Grounded()
   def phash(path: Path) = g.hash(path)
   def shash(space: Space) = g.hash(space)
-  
+
   def prefixHash(space: Space): Space = shash(space) x space
 
 
@@ -1072,8 +1072,7 @@ class TranslateSPARQL extends FunSuite:
           val v0 = triple_get(triple, var_ids(0)).getName
           val v1 = triple_get(triple, var_ids(1)).getName
           val e = m(ordered_spo)(c0).iter("x", "sy", S"sy".iter("y", "_", {
-            val s = Singleton(v0 x P"x") \/ Singleton(v1 x P"y")
-            shash(s) x s
+            prefixHash(Singleton(v0 x P"x") \/ Singleton(v1 x P"y"))
           }))
           println(eval(e)(using sc = context).show)
           e
@@ -1082,8 +1081,8 @@ class TranslateSPARQL extends FunSuite:
           val c1 = get_str(triple_get(triple, constant_ids(1)))
           val v0 = triple_get(triple, var_ids(0)).getName
           val e = m(ordered_spo)(c0 x c1).iter("x", "_", {
-            val s = v0 x Singleton(P"x")
-            shash(s) x s})
+            prefixHash(v0 x Singleton(P"x"))
+          })
           println(eval(e)(using sc = context).show)
           e
 
@@ -1094,11 +1093,7 @@ class TranslateSPARQL extends FunSuite:
       case op: OpProject =>
         val t = translate(op.getSubOp)
         val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
-
-        val e = t.iter("hash", "vv", {
-          val s = S"vv" <| varspace
-          shash(s) x s
-        })
+        val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
 
         e
 
