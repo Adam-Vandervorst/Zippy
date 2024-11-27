@@ -998,21 +998,26 @@ class TranslateSPARQL extends FunSuite:
 
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
-      "A.isa.Person", "A.name.Alice", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
-      "B.isa.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
-      "C.name.Charlie"),
+      "A.type.Person", "A.name.Alice", "A.FN.AliceFN", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
+      "B.type.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
+      "C.name.Charlie",
+      "D.type.Person", "D.FN.Dora"),
     SpaceMention("PSO") -> SpaceValue(
       "age.A.25", "age.B.12",
-      "isa.A.Person", "isa.B.Person",
+      "type.A.Person", "type.B.Person",
       "name.A.Alice", "name.B.Bob", "name.C.Charlie",
+      "FN.A.AliceFN",
       "Family.Alice.Smith", "Given.Alice.Lis", "Given.Alice.Al", "Family.Mel.Smith",
-      "Family.Bob.Bouwer", "Given.Bob.Bow"),
+      "Family.Bob.Bouwer", "Given.Bob.Bow",
+      "type.D.Person", "FN.D.Dora"),
     SpaceMention("POS") -> SpaceValue(
       "age.12.B", "age.25.A",
-      "isa.Person.A", "isa.Person.B",
+      "type.Person.A", "type.Person.B",
       "name.Alice.A", "name.Bob.B", "name.Charlie.C",
+      "Fn.AliceFN.A",
       "Family.Smith.Alice", "Given.Lis.Alice", "Given.Al.Alice", "Family.Smith.Mel",
-      "Family.Bouwer.Bob", "Given.Bob.Bow")
+      "Family.Bouwer.Bob", "Given.Bob.Bow",
+      "type.Person.D", "FN.Dora.D")
   ))
 
   test("query parsed") {
@@ -1145,7 +1150,6 @@ class TranslateSPARQL extends FunSuite:
         println(s"unhandled case $op")
         return ???
 
-    // r(aq)
     println("------------")
 
     val t = translate(algblind)
@@ -1167,6 +1171,23 @@ class TranslateSPARQL extends FunSuite:
     val t2 = translate(algoptional)
     // println(t2.show)
     assert(eval(t2)(using sc = context) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R29640fc9.age.12", "R29640fc9.name.Bob", "R4a4fbc23.name.Charlie"))
+
+    val dependentOptional = new ParameterizedSparqlString("""PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+                                                            |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
+                                                            |
+                                                            |SELECT ?name
+                                                            |WHERE
+                                                            |{
+                                                            |  ?x a foaf:Person .
+                                                            |  OPTIONAL { ?x foaf:name ?name }
+                                                            |  OPTIONAL { ?x vCard:FN  ?name }
+                                                            |}""".stripMargin).asQuery()
+    val algdependent = Algebra.compile(dependentOptional)
+    val t3 = translate(algdependent)
+    println("eval 3")
+    assert(eval(t3)(using sc = context) == SpaceValue("R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
+
+
   }
 
 
