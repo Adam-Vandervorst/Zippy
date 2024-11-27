@@ -3,6 +3,7 @@ package morkl
 import morkl.Space.Singleton
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
+import org.apache.jena.sparql.expr.E_GreaterThanOrEqual
 
 
 /*class MORKL2Path extends FunSuite:
@@ -868,12 +869,17 @@ class AlgebraSPARQL extends FunSuite:
     // assuming filter = True
     hyperJoin(s1, s2) \/ hyperDifference(s1, s2)
 
-  def filterBiggerThen(s1: Space, v: String, i: Int): Space =
-    val max = 200
+  def filterBiggerThen(s1: Space, v: String, i: Int, max: Int = 2000): Space =
     (s1(v) <| range(i.toString + "." + max.toString + "." + "1")).tee(s1)
+
+  def hyperFilterBiggerThen(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+    s1.iter("hash", "tail", "hash" x filterBiggerThen(S"tail", v, i, max))
 
   def filterSmallerThen(s1: Space, v: String, i: Int): Space =
     (s1(v) <| range("0." + i.toString + ".1")).tee(s1)
+
+  def hyperFilterLessThen(s1: Space, v: String, i: Int): Space =
+    s1.iter("hash", "tail", "hash" x filterSmallerThen(S"tail", v, i))
 
 
   test("algebra") {
@@ -995,6 +1001,11 @@ class TranslateSPARQL extends FunSuite:
   def join2(s1: Space, s2: Space): Space = sparqlAlg.join2(s1, s2)
   def hyperJoin(s1: Space, s2: Space): Space = sparqlAlg.hyperJoin(s1, s2)
   def hyperLeftJoin(s1: Space, s2: Space): Space = sparqlAlg.hyperLeftJoin(s1, s2)
+  def filterBiggerThen(s1: Space, v: String, i: Int): Space = sparqlAlg.filterBiggerThen(s1, v, i)
+  def hyperFilterBiggerThen: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterBiggerThen
+  def filterLessThen(s1: Space, v: String, i: Int): Space = sparqlAlg.filterSmallerThen(s1, v, i)
+  def hyperFilterLessThen: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessThen
+
 
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
@@ -1033,8 +1044,6 @@ class TranslateSPARQL extends FunSuite:
         |    ?book ex:author ex:Shakespeare
         |  } UNION {
         |    ?book ex:author ex:Marlowe
-
-
         |  }
         |}""".stripMargin).asQuery()
 
@@ -1125,9 +1134,6 @@ class TranslateSPARQL extends FunSuite:
         translate(op.getRight)
         return ???
       case op: OpLeftJoin =>
-        println("leftjoin")
-        // translate(op.getLeft)
-        // translate(op.getRight)
         hyperLeftJoin(translate(op.getLeft), translate(op.getRight))
 
       case op: OpFilter =>
@@ -1136,6 +1142,14 @@ class TranslateSPARQL extends FunSuite:
         op.getExprs.get(0) match
           case e: E_LessThan =>
             println(s"less than $e")
+            println(e.getArg1)
+            return hyperFilterLessThen(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.asVar().getName.toInt)
+
+            return ???
+          case e: E_GreaterThanOrEqual =>
+            println(e.getArg2.getConstant.getInteger)
+
+            return hyperFilterBiggerThen(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt, 2000)
             return ???
           case e =>
             println(s"unsupported expr $e (${e.getClass.getName})")
@@ -1187,6 +1201,17 @@ class TranslateSPARQL extends FunSuite:
     println("eval 3")
     assert(eval(t3)(using sc = context) == SpaceValue("R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
 
+    val filterQuery = new ParameterizedSparqlString("""PREFIX info: <http://somewhere/peopleInfo#>
+                                                      |
+                                                      |SELECT ?resource
+                                                      |WHERE
+                                                      |{
+                                                      |?resource info:age ?age .
+                                                      |FILTER (?age >= 24)
+                                                      |}""".stripMargin).asQuery()
+    val algfilter = Algebra.compile(filterQuery)
+    val t4= translate(algfilter)
+    assert(eval(t4)(using sc = context) == SpaceValue("R9623531d.resource.A"))
 
   }
 
