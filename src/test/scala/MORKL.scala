@@ -845,7 +845,7 @@ class AlgebraSPARQL extends FunSuite:
   def join2(s1: Space, s2: Space): Space =
     if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
 
-  def joinComplete(s1: Space, s2: Space): Space =
+  def hyperJoin(s1: Space, s2: Space): Space =
     // s1.iter("h1", "tail1", S"tail1")
     s1.iter("h1", "tail1", s2.iter("h2", "tail2", shash(join2(S"tail1", S"tail2")) x join2(S"tail1", S"tail2")))
 
@@ -939,7 +939,7 @@ class AlgebraSPARQL extends FunSuite:
       )))
 
     given SpaceContext = context
-    assert(eval(joinComplete(S"lhs", S"rhs")) == SpaceValue("R2ec263c.age.13", "R2ec263c.give.Lis", "R2ec263c.name.Alice"))
+    assert(eval(hyperJoin(S"lhs", S"rhs")) == SpaceValue("R2ec263c.age.13", "R2ec263c.give.Lis", "R2ec263c.name.Alice"))
 
   }
 
@@ -970,6 +970,8 @@ class TranslateSPARQL extends FunSuite:
   val g = Grounded()
   def phash(path: Path) = g.hash(path)
   def shash(space: Space) = g.hash(space)
+  
+  def prefixHash(space: Space): Space = shash(space) x space
 
 
   def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
@@ -980,7 +982,9 @@ class TranslateSPARQL extends FunSuite:
   val sparqlAlg = AlgebraSPARQL()
 
   def join2(s1: Space, s2: Space): Space = sparqlAlg.join2(s1, s2)
-  def joinComplete(s1: Space, s2: Space): Space = sparqlAlg.joinComplete(s1, s2)
+  def hyperJoin(s1: Space, s2: Space): Space = sparqlAlg.hyperJoin(s1, s2)
+
+  def spo_to_pso(space: Space) = space.iter("s", "po", S"po".iter("p", "o", Singleton(P"p" x P"s") x S"o"))
 
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
@@ -1086,48 +1090,59 @@ class TranslateSPARQL extends FunSuite:
         case 3 => ???
 
 
-    def translate(op: Op): Unit = op match
+    def translate(op: Op): Space = op match
       case op: OpProject =>
-        println("project")
-        println(op.getVars)
-        translate(op.getSubOp)
+        val t = translate(op.getSubOp)
+        val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
+
+        val e = t.iter("hash", "vv", {
+          val s = S"vv" <| varspace
+          shash(s) x s
+        })
+
+        e
+
       case op: OpBGP =>
         println("bgp")
-        val e = Range(0, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => joinComplete(s1, s2))
-        // for i <- Range(0, op.getPattern.size()) do
-        //   val triple: org.apache.jena.graph.Triple = op.getPattern.get(i)
-        //  get_space_from_bgp(triple)
-        println("endresult")
-        println(eval(e)(using sc = context).show)
+        val e = Range(1, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => hyperJoin(s1, s2))
 
-
+        e
       case op: OpJoin =>
         println("join")
         translate(op.getLeft)
         translate(op.getRight)
+        return ???
       case op: OpLeftJoin =>
         println("leftjoin")
         translate(op.getLeft)
         translate(op.getRight)
+        return ???
       case op: OpFilter =>
         println("filter")
         translate(op.getSubOp)
         op.getExprs.get(0) match
           case e: E_LessThan =>
             println(s"less than $e")
+            return ???
           case e =>
             println(s"unsupported expr $e (${e.getClass.getName})")
+            return ???
       case op: OpUnion =>
         println("Union")
         translate(op.getLeft)
         translate(op.getRight)
+        return ???
 
       case op =>
         println(s"unhandled case $op")
+        return ???
 
     // r(aq)
     println("------------")
-    translate(algblind)
+
+    val t = translate(algblind)
+    println("endresult")
+    println(eval(t)(using sc = context).show)
   }
 
 
