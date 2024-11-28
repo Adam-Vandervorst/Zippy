@@ -863,9 +863,17 @@ class AlgebraSPARQL extends FunSuite:
     //        { μ | μ in Ω1 such that for all μ′ in Ω2, μ and μ′ are not compatible }
     //            set-union
     //        { μ | μ in Ω1 such that for all μ′ in Ω2, μ and μ' are compatible and expr(merge(μ, μ')) is false }
+
     val p1 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", if_empty_do(get_incompatible(S"tail1", S"tail2"), Singleton("compatible"))), P"hash1" x S"tail1"))
     val p2 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", get_incompatible(S"tail1", S"tail2") \/ filter(S"tail1" \/ S"tail2")), P"hash1" x S"tail1"))
-    p1 \/ p2
+    // p1 \/ p2
+
+    // Diff(Ω1, Ω2, expr) =
+    //        { μ | μ such that for all μ′, μ and μ' are not compatible or expr(merge(μ, μ')) is false}
+
+    val p = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", if_empty_do(get_incompatible(S"tail1", S"tail2"), Singleton("check")) /\ filter(S"tail1" \/ S"tail2").tee(Singleton("check"))), P"hash1" x S"tail1"))
+    p
+
 
   def leftJoin(s1: VarMapping, s2: VarMapping): VarMapping =
     // assuming filter = True
@@ -1248,7 +1256,7 @@ class TranslateSPARQL extends FunSuite:
 
     val algoptional = Algebra.compile(optionalQuery)
     val t2 = translate(algoptional)
-    // println(t2.show)
+    println(eval(t2)(using sc = context).show)
     assert(eval(t2)(using sc = context) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R29640fc9.age.12", "R29640fc9.name.Bob", "R4a4fbc23.name.Charlie"))
 
     val dependentOptional = new ParameterizedSparqlString(
@@ -1297,7 +1305,8 @@ class TranslateSPARQL extends FunSuite:
     println(algOptFilter)
     val t5 = translate(algOptFilter)
     println(eval(t5)(using sc = context).show)
-    assert(eval(t5)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
+    // assert(eval(t5)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
+    assert(eval(t5)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "R739c1f7f.name.Dora", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
 
     val optionalFilter2 = new ParameterizedSparqlString("""PREFIX info:    	<http://somewhere/peopleInfo#>
                                                           |PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
