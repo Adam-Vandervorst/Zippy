@@ -832,7 +832,11 @@ class AlgebraSPARQL extends FunSuite:
   def shash(space: Space) = grounded.hash(space)
 
 
-  def get_incompatible(s1: Space, s2: Space): Space =
+  type VarMapping = Space
+  type VarMappings = Space
+
+
+  def get_incompatible(s1: VarMapping, s2: VarMapping): VarMapping =
     (Head(s1) /\ Head(s2)).iter("v", "_", {
       P"v" x (s1(P"v") \ s2(P"v"))
     })
@@ -840,21 +844,21 @@ class AlgebraSPARQL extends FunSuite:
   def if_empty_do(e: Space, todo: Space): Space =
     (Singleton("tobeempty") \ Head("tobeempty" x e)).tee(todo)
 
-  def join(s1: Space, s2: Space): Space =
+  def join(s1: VarMapping, s2: VarMapping): VarMapping =
     (Singleton("incompatible") \ Head("incompatible" x get_incompatible(s1, s2))).tee(s1 \/ s2)
 
-  def join2(s1: Space, s2: Space): Space =
+  def join2(s1: VarMapping, s2: VarMapping): VarMapping =
     if_empty_do(get_incompatible(s1, s2), s1 \/ s2)
 
-  def hyperJoin(s1: Space, s2: Space): Space =
+  def hyperJoin(s1: VarMappings, s2: VarMappings): VarMappings =
     // s1.iter("h1", "tail1", S"tail1")
     s1.iter("h1", "tail1", s2.iter("h2", "tail2", shash(join2(S"tail1", S"tail2")) x join2(S"tail1", S"tail2")))
 
-  def difference(s1: Space, s2: Space): Space =
+  def difference(s1: VarMapping, s2: VarMapping): VarMapping =
     // assuming filter = True
     get_incompatible(s1, s2).tee(s1)
 
-  def hyperDifference(s1: Space, s2: Space, filter: Space => Space = (s => s)): Space =
+  def hyperDifference(s1: VarMappings, s2: VarMappings, filter: VarMapping => VarMapping = (s => s)): VarMappings =
     // Diff(Ω1, Ω2, expr) =
     //        { μ | μ in Ω1 such that for all μ′ in Ω2, μ and μ′ are not compatible }
     //            set-union
@@ -863,10 +867,7 @@ class AlgebraSPARQL extends FunSuite:
     val p2 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", get_incompatible(S"tail1", S"tail2") \/ filter(S"tail1" \/ S"tail2")), P"hash1" x S"tail1"))
     p1 \/ p2
 
-  type VarMapping = Space
-  type VarMappings = Space
-
-  def leftJoin(s1: Space, s2: Space): Space =
+  def leftJoin(s1: VarMapping, s2: VarMapping): VarMapping =
     // assuming filter = True
     join(s1, s2) \/ difference(s1, s2)
 
@@ -877,27 +878,25 @@ class AlgebraSPARQL extends FunSuite:
     // assuming filter = True
     hyperFilter(hyperJoin(s1, s2), filter) \/ hyperDifference(s1, s2, filter)
 
-  def filterGreaterThan(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+  def filterGreaterThan(s1: VarMapping, v: String, i: Int, max: Int = 2000): VarMapping =
     (s1(v) <| range(f"${(i + 1).toString}.${max.toString}.1")).tee(s1)
-  def filterGreaterOrEqual(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+  def filterGreaterOrEqual(s1: VarMapping, v: String, i: Int, max: Int = 2000): VarMapping =
     (s1(v) <| range(f"${i.toString}.${max.toString}.1")).tee(s1)
 
-  def hyperFilterGreaterThan(s1: Space, v: String, i: Int, max: Int = 2000): Space =
-    s1.iter("h", "tail", P"h" x filterGreaterThan(S"tail", v, i, max))
-  def hyperFilterGreaterOrEqual(s1: Space, v: String, i: Int, max: Int = 2000): Space =
-    s1.iter("h", "tail", P"h" x filterGreaterOrEqual(S"tail", v, i, max))
+//  def hyperFilterGreaterThan(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+//    s1.iter("h", "tail", P"h" x filterGreaterThan(S"tail", v, i, max))
+//  def hyperFilterGreaterOrEqual(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+//    s1.iter("h", "tail", P"h" x filterGreaterOrEqual(S"tail", v, i, max))
 
-
-
-  def filterLessThan(s1: Space, v: String, i: Int): Space =
+  def filterLessThan(s1: VarMapping, v: String, i: Int): VarMapping =
     (s1(v) <| range(f"0.${i.toString}.1")).tee(s1)
-  def filterLessOrEqual(s1: Space, v: String, i: Int): Space =
+  def filterLessOrEqual(s1: VarMapping, v: String, i: Int): VarMapping =
     (s1(v) <| range(f"0.${(i + 1).toString}.1")).tee(s1)
 
-  def hyperFilterLessThan(s1: Space, v: String, i: Int): Space =
-    s1.iter("h", "tail", P"h" x filterLessThan(S"tail", v, i))
-  def hyperFilterLessOrEqual(s1: Space, v: String, i: Int): Space =
-    s1.iter("h", "tail", P"h" x filterLessOrEqual(S"tail", v, i))
+//  def hyperFilterLessThan(s1: Space, v: String, i: Int): Space =
+//    s1.iter("h", "tail", P"h" x filterLessThan(S"tail", v, i))
+//  def hyperFilterLessOrEqual(s1: Space, v: String, i: Int): Space =
+//    s1.iter("h", "tail", P"h" x filterLessOrEqual(S"tail", v, i))
 
 
   test("algebra") {
@@ -1021,12 +1020,12 @@ class TranslateSPARQL extends FunSuite:
   def hyperLeftJoin(s1: Space, s2: Space, f: Space => Space): Space = sparqlAlg.hyperLeftJoin(s1, s2, f)
   def filterGreaterThan(s1: Space, v: String, i: Int, m: Int = 2000): Space = sparqlAlg.filterGreaterThan(s1, v, i, m)
   def filterGreaterOrEqual(s1: Space, v: String, i: Int, m: Int = 2000): Space = sparqlAlg.filterGreaterOrEqual(s1, v, i, m)
-  def hyperFilterGreaterThan: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterGreaterThan
-  def hyperFilterGreaterOrEqual: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterGreaterOrEqual
+  // def hyperFilterGreaterThan: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterGreaterThan
+  // def hyperFilterGreaterOrEqual: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterGreaterOrEqual
   def filterLessThan(s1: Space, v: String, i: Int): Space = sparqlAlg.filterLessThan(s1, v, i)
   def filterLessOrEqual(s1: Space, v: String, i: Int): Space = sparqlAlg.filterLessOrEqual(s1, v, i)
-  def hyperFilterLessThan: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessThan
-  def hyperFilterLessOrEqual: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessOrEqual
+  // def hyperFilterLessThan: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessThan
+  //def hyperFilterLessOrEqual: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessOrEqual
 
 
   def order_bgp(triple: org.apache.jena.graph.Triple): (IndexedSeq[Int], IndexedSeq[Int]) =
