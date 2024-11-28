@@ -857,8 +857,8 @@ class AlgebraSPARQL extends FunSuite:
   def hyperDifference(s1: Space, s2: Space): Space =
     // assuming filter = True
     val p1 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", if_empty_do(get_incompatible(S"tail1", S"tail2"), Singleton("compatible"))), P"hash1" x S"tail1"))
-    val p2 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", get_incompatible(S"tail1", S"tail2").tee(Singleton("incompatible"))), P"hash1" x S"tail1"))
-    p1 \/ p2
+    // if filter = False: val p2 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", get_incompatible(S"tail1", S"tail2").tee(Singleton("incompatible"))), P"hash1" x S"tail1"))
+    p1
 
 
   def leftJoin(s1: Space, s2: Space): Space =
@@ -875,9 +875,9 @@ class AlgebraSPARQL extends FunSuite:
     (s1(v) <| range(f"${i.toString}.${max.toString}.1")).tee(s1)
 
   def hyperFilterGreaterThan(s1: Space, v: String, i: Int, max: Int = 2000): Space =
-    s1.iter("hash", "tail", "hash" x filterGreaterThen(S"tail", v, i, max))
+    s1.iter("h", "tail", P"h" x filterGreaterThen(S"tail", v, i, max))
   def hyperFilterGreaterOrEqual(s1: Space, v: String, i: Int, max: Int = 2000): Space =
-    s1.iter("hash", "tail", "hash" x filterGreaterOrEqual(S"tail", v, i, max))
+    s1.iter("h", "tail", P"h" x filterGreaterOrEqual(S"tail", v, i, max))
 
   def filterLessThen(s1: Space, v: String, i: Int): Space =
     (s1(v) <| range(f"0.${i.toString}.1")).tee(s1)
@@ -885,9 +885,9 @@ class AlgebraSPARQL extends FunSuite:
     (s1(v) <| range(f"0.${(i + 1).toString}.1")).tee(s1)
 
   def hyperFilterLessThan(s1: Space, v: String, i: Int): Space =
-    s1.iter("hash", "tail", "hash" x filterLessThen(S"tail", v, i))
+    s1.iter("h", "tail", P"h" x filterLessThen(S"tail", v, i))
   def hyperFilterLessOrEqual(s1: Space, v: String, i: Int): Space =
-    s1.iter("hash", "tail", "hash" x filterLessOrEqual(S"tail", v, i))
+    s1.iter("h", "tail", P"h" x filterLessOrEqual(S"tail", v, i))
 
 
   test("algebra") {
@@ -1041,14 +1041,34 @@ class TranslateSPARQL extends FunSuite:
       "type.Person.D", "FN.Dora.D")
   ))
 
+  // example from https://iccl.inf.tu-dresden.de/w/images/e/ee/FSWT-L16-SPARQL-Algebra.pdf
+  val books: SpaceContextMap = SpaceContextMap(Map(
+    SpaceMention("SPO") -> SpaceValue(
+      "Hamlet.author.Shakespeare", "Hamlet.price.10",
+      "Macbeth.author.Shakespeare",
+      "Tamburlaine.author.Marlowe", "Tamburlaine.price.17",
+      "DoctorFaustus.author.Marlowe", "DoctorFaustus.price.12", "DoctorFaustus.title.\"The Tragical History of Doctor Faustus\"",
+      "RomeoJulia.author.Brooke", "RomeoJulia.price.9"
+    ),
+    SpaceMention("PSO") -> SpaceValue(
+      "author.DoctorFaustus.Marlowe", "author.Hamlet.Shakespeare", "author.Macbeth.Shakespeare", "author.RomeoJulia.Brooke", "author.Tamburlaine.Marlowe",
+      "price.DoctorFaustus.12", "price.Hamlet.10", "price.RomeoJulia.9", "price.Tamburlaine.17",
+      "title.DoctorFaustus.\"The Tragical History of Doctor Faustus\""),
+    SpaceMention("POS") -> SpaceValue(
+      "author.Brooke.RomeoJulia", "author.Marlowe.DoctorFaustus", "author.Marlowe.Tamburlaine", "author.Shakespeare.Hamlet", "author.Shakespeare.Macbeth",
+      "price.10.Hamlet", "price.12.DoctorFaustus", "price.17.Tamburlaine", "price.9.RomeoJulia",
+      "title.\"The Tragical History of Doctor Faustus\".DoctorFaustus")
+
+  ))
+
   test("query parsed") {
     val q = new ParameterizedSparqlString(
       """PREFIX ex: <http://example.org/ns#>
         |
-        |SELECT ?price ?title
+        |SELECT ?book ?price ?title
         |WHERE {
         |  ?book ex:price ?price .
-        |  FILTER (?price > 15) .
+        |  FILTER (?price < 15) .
         |  OPTIONAL { ?book ex:title ?title } .
         |  {
         |    ?book ex:author ex:Shakespeare
@@ -1119,7 +1139,6 @@ class TranslateSPARQL extends FunSuite:
           val e = m(ordered_spo)(c0 x c1).iter("x", "_", {
             prefixHash(v0 x Singleton(P"x"))
           })
-          println(eval(e)(using sc = context).show)
           e
 
         case 3 => ???
@@ -1129,43 +1148,64 @@ class TranslateSPARQL extends FunSuite:
       case op: OpProject =>
         val t = translate(op.getSubOp)
         val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
+        println("my vars are")
+        println(varspace)
         val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
         e
 
       case op: OpBGP =>
         println("bgp")
         val e = Range(1, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => hyperJoin(s1, s2))
-        println(eval(e)(using sc = context))
+        println(eval(e)(using sc = books).show)
         e
 
       case op: OpJoin =>
+        val e = hyperJoin(translate(op.getLeft), translate(op.getRight))
         println("join")
-        translate(op.getLeft)
-        translate(op.getRight)
-        return ???
+        println(eval(e)(using sc = books).show)
+        e
+
       case op: OpLeftJoin =>
-        hyperLeftJoin(translate(op.getLeft), translate(op.getRight))
+
+        val l = translate(op.getLeft)
+        val r = translate(op.getRight)
+        println("diff")
+        println(eval(sparqlAlg.hyperDifference(l, r))(using sc = books).show)
+        val e = hyperLeftJoin(translate(op.getLeft), translate(op.getRight))
+        println("leftjoin")
+        println(eval(e)(using sc = books).show)
+        e
 
       case op: OpFilter =>
-        println("filter")
-        translate(op.getSubOp)
         op.getExprs.get(0) match
           case e: E_LessThan =>
-            hyperFilterLessThan(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.asVar().getName.toInt)
+            val i = hyperFilterLessThan(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt)
+            println("filter")
+            println(eval(i)(using sc = books).show)
+            i
           case e: E_LessThanOrEqual =>
-            hyperFilterLessOrEqual(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.asVar().getName.toInt)
+            val i = hyperFilterLessOrEqual(translate(op.getSubOp), e.getArg1.asVar().getName,e.getArg2.getConstant.toString.toInt)
+            println("filter")
+            println(eval(i)(using sc = books).show)
+            i
           case e: E_GreaterThan =>
-            hyperFilterGreaterThan(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.asVar().getName.toInt, 2000)
+            val i = hyperFilterGreaterThan(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt, 2000)
+            println("filter")
+            println(eval(i)(using sc = books).show)
+            i
           case e: E_GreaterThanOrEqual =>
-            hyperFilterGreaterOrEqual(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt, 2000)
+            val i = hyperFilterGreaterOrEqual(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt, 2000)
+            println("filter")
+            println(eval(i)(using sc = books).show)
+            i
           case e =>
             println(s"unsupported expr $e (${e.getClass.getName})")
             return ???
       case op: OpUnion =>
+        val e = translate(op.getLeft) \/ translate(op.getRight)
         println("Union")
-        translate(op.getLeft)
-        translate(op.getRight)
-        return ???
+        println(eval(e)(using sc = books).show)
+        e
 
       case op =>
         println(s"unhandled case $op")
@@ -1219,6 +1259,12 @@ class TranslateSPARQL extends FunSuite:
     val algfilter = Algebra.compile(filterQuery)
     val t4= translate(algfilter)
     assert(eval(t4)(using sc = context) == SpaceValue("R9623531d.resource.A"))
+
+    println("books example")
+    val t_books = translate(aq)
+    assert(eval(t_books)(using sc = books) == SpaceValue(
+      "R36707057.book.Hamlet", "R36707057.price.10",
+      "R5bb27dcc.book.DoctorFaustus", "R5bb27dcc.price.12", "R5bb27dcc.title.\"The Tragical History of Doctor Faustus\""))
 
   }
 
