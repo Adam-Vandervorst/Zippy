@@ -1029,51 +1029,152 @@ class TranslateSPARQL extends FunSuite:
   def hyperFilterLessOrEqual: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessOrEqual
 
 
-  val context: SpaceContextMap = SpaceContextMap(Map(
-    SpaceMention("SPO") -> SpaceValue(
-      "A.type.Person", "A.name.Alice", "A.FN.AliceFN", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
-      "B.type.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
-      "C.name.Charlie",
-      "D.type.Person", "D.FN.Dora", "D.age.20"),
-    SpaceMention("PSO") -> SpaceValue(
-      "age.A.25", "age.B.12",
-      "type.A.Person", "type.B.Person",
-      "name.A.Alice", "name.B.Bob", "name.C.Charlie",
-      "FN.A.AliceFN",
-      "Family.Alice.Smith", "Given.Alice.Lis", "Given.Alice.Al", "Family.Mel.Smith",
-      "Family.Bob.Bouwer", "Given.Bob.Bow",
-      "type.D.Person", "FN.D.Dora", "age.D.20"),
-    SpaceMention("POS") -> SpaceValue(
-      "age.12.B", "age.25.A",
-      "type.Person.A", "type.Person.B",
-      "name.Alice.A", "name.Bob.B", "name.Charlie.C",
-      "FN.AliceFN.A",
-      "Family.Smith.Alice", "Given.Lis.Alice", "Given.Al.Alice", "Family.Smith.Mel",
-      "Family.Bouwer.Bob", "Given.Bob.Bow",
-      "type.Person.D", "FN.Dora.D", "age.20.D")
-  ))
+  def order_bgp(triple: org.apache.jena.graph.Triple): (IndexedSeq[Int], IndexedSeq[Int]) =
+    // spo -> fixed first
+    // ?y http://www.w3.org/2001/vcard-rdf/3.0#Family "Smith" -> ((1, 2), (0))
+    val trip_list = List(triple.getSubject, triple.getPredicate, triple.getObject)
+    Range(0, 3).partition(x => {
+      trip_list(x) match
+        case i: org.apache.jena.sparql.core.Var => false
+        case _ => true})
 
-  // example from https://iccl.inf.tu-dresden.de/w/images/e/ee/FSWT-L16-SPARQL-Algebra.pdf
-  val books: SpaceContextMap = SpaceContextMap(Map(
-    SpaceMention("SPO") -> SpaceValue(
-      "Hamlet.author.Shakespeare", "Hamlet.price.10",
-      "Macbeth.author.Shakespeare",
-      "Tamburlaine.author.Marlowe", "Tamburlaine.price.17",
-      "DoctorFaustus.author.Marlowe", "DoctorFaustus.price.12", "DoctorFaustus.title.\"The Tragical History of Doctor Faustus\"",
-      "RomeoJulia.author.Brooke", "RomeoJulia.price.9"
-    ),
-    SpaceMention("PSO") -> SpaceValue(
-      "author.DoctorFaustus.Marlowe", "author.Hamlet.Shakespeare", "author.Macbeth.Shakespeare", "author.RomeoJulia.Brooke", "author.Tamburlaine.Marlowe",
-      "price.DoctorFaustus.12", "price.Hamlet.10", "price.RomeoJulia.9", "price.Tamburlaine.17",
-      "title.DoctorFaustus.\"The Tragical History of Doctor Faustus\""),
-    SpaceMention("POS") -> SpaceValue(
-      "author.Brooke.RomeoJulia", "author.Marlowe.DoctorFaustus", "author.Marlowe.Tamburlaine", "author.Shakespeare.Hamlet", "author.Shakespeare.Macbeth",
-      "price.10.Hamlet", "price.12.DoctorFaustus", "price.17.Tamburlaine", "price.9.RomeoJulia",
-      "title.\"The Tragical History of Doctor Faustus\".DoctorFaustus")
+  def triple_get(triple: org.apache.jena.graph.Triple, i: Int): org.apache.jena.graph.Node =
+    val trip_list = List(triple.getSubject, triple.getPredicate, triple.getObject)
+    trip_list(i)
 
-  ))
+  def get_str(n: org.apache.jena.graph.Node): String =
+    n match
+      case n: Node_Literal => n.getLiteral.getLexicalForm
+      case n: Node_URI => n.getLocalName
 
-  test("query parsed") {
+  def get_space_from_bgp(triple: org.apache.jena.graph.Triple): Space =
+    val rotation: (IndexedSeq[Int], IndexedSeq[Int]) = order_bgp(triple)
+    val ordered_spo = rotation(0).concat(rotation(1)).map(x => "spo".charAt(x)).fold("")((c1, c2) => s"$c1$c2").toString
+    val m: Map[String, Space] = Map("spo" -> S"SPO", "pos" -> S"POS", "pso" -> S"PSO")
+
+    val constant_ids = rotation(0)
+    val var_ids = rotation(1)
+    rotation(0).length match
+      case 0 => ???
+      case 1 =>
+        val c0 = get_str(triple_get(triple, constant_ids(0)))
+        val v0 = triple_get(triple, var_ids(0)).getName
+        val v1 = triple_get(triple, var_ids(1)).getName
+        val e = m(ordered_spo)(c0).iter("x", "sy", S"sy".iter("y", "_", {
+          prefixHash(Singleton(v0 x P"x") \/ Singleton(v1 x P"y"))
+        }))
+        e
+      case 2 =>
+        val c0 = get_str(triple_get(triple, constant_ids(0)))
+        val c1 = get_str(triple_get(triple, constant_ids(1)))
+        val v0 = triple_get(triple, var_ids(0)).getName
+        val e = m(ordered_spo)(c0 x c1).iter("x", "_", {
+          prefixHash(v0 x Singleton(P"x"))
+        })
+        e
+
+      case 3 => ???
+
+  def get_filter_function(ex: Expr): Space => Space =
+    // TODO arguments can also both be variables or integers or ...
+    // assumes first argument is a variable and second argument is an integer
+    ex match
+      case e: E_LessThan => (s => filterLessThan(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
+      case e: E_LessThanOrEqual => (s => filterLessOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
+      case e: E_GreaterThan => (s => filterGreaterThan(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
+      case e: E_GreaterThanOrEqual => (s => filterGreaterOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
+      case _ => println(s"unsupported filter $ex (${ex.getClass.getName})")
+        return ???
+
+
+  def translate(op: Op): Space = op match
+    case op: OpProject =>
+      val t = translate(op.getSubOp)
+      val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
+      println("my vars are")
+      println(varspace)
+      val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
+      e
+
+    case op: OpBGP =>
+      println("bgp")
+      val e = Range(1, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => hyperJoin(s1, s2))
+      e
+
+    case op: OpJoin =>
+      val e = hyperJoin(translate(op.getLeft), translate(op.getRight))
+      e
+
+    case op: OpLeftJoin =>
+      // TODO multiple filters
+      op.getExprs match
+        case null => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), s => s)
+        case ex: ExprList => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), get_filter_function(ex.get(0)))
+
+    case op: OpFilter =>
+      // TODO multiple filters
+      val f = get_filter_function(op.getExprs.get(0))
+      val i1 = sparqlAlg.hyperFilter(translate(op.getSubOp), f)
+      i1
+
+    case op: OpUnion =>
+      val e = translate(op.getLeft) \/ translate(op.getRight)
+      e
+
+    case op =>
+      println(s"unhandled case $op")
+      return ???
+
+  println("------------")
+
+
+  test("SPARQL: jenna tutorial examples"){
+
+
+    val context: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("SPO") -> SpaceValue(
+        "A.type.Person", "A.name.Alice", "A.FN.AliceFN", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
+        "B.type.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
+        "C.name.Charlie",
+        "D.type.Person", "D.FN.Dora", "D.age.20"),
+      SpaceMention("PSO") -> SpaceValue(
+        "age.A.25", "age.B.12",
+        "type.A.Person", "type.B.Person",
+        "name.A.Alice", "name.B.Bob", "name.C.Charlie",
+        "FN.A.AliceFN",
+        "Family.Alice.Smith", "Given.Alice.Lis", "Given.Alice.Al", "Family.Mel.Smith",
+        "Family.Bob.Bouwer", "Given.Bob.Bow",
+        "type.D.Person", "FN.D.Dora", "age.D.20"),
+      SpaceMention("POS") -> SpaceValue(
+        "age.12.B", "age.25.A",
+        "type.Person.A", "type.Person.B",
+        "name.Alice.A", "name.Bob.B", "name.Charlie.C",
+        "FN.AliceFN.A",
+        "Family.Smith.Alice", "Given.Lis.Alice", "Given.Al.Alice", "Family.Smith.Mel",
+        "Family.Bouwer.Bob", "Given.Bob.Bow",
+        "type.Person.D", "FN.Dora.D", "age.20.D")
+    ))
+    // example from https://iccl.inf.tu-dresden.de/w/images/e/ee/FSWT-L16-SPARQL-Algebra.pdf
+    val books: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("SPO") -> SpaceValue(
+        "Hamlet.author.Shakespeare", "Hamlet.price.10",
+        "Macbeth.author.Shakespeare",
+        "Tamburlaine.author.Marlowe", "Tamburlaine.price.17",
+        "DoctorFaustus.author.Marlowe", "DoctorFaustus.price.12", "DoctorFaustus.title.\"The Tragical History of Doctor Faustus\"",
+        "RomeoJulia.author.Brooke", "RomeoJulia.price.9"
+      ),
+      SpaceMention("PSO") -> SpaceValue(
+        "author.DoctorFaustus.Marlowe", "author.Hamlet.Shakespeare", "author.Macbeth.Shakespeare", "author.RomeoJulia.Brooke", "author.Tamburlaine.Marlowe",
+        "price.DoctorFaustus.12", "price.Hamlet.10", "price.RomeoJulia.9", "price.Tamburlaine.17",
+        "title.DoctorFaustus.\"The Tragical History of Doctor Faustus\""),
+      SpaceMention("POS") -> SpaceValue(
+        "author.Brooke.RomeoJulia", "author.Marlowe.DoctorFaustus", "author.Marlowe.Tamburlaine", "author.Shakespeare.Hamlet", "author.Shakespeare.Macbeth",
+        "price.10.Hamlet", "price.12.DoctorFaustus", "price.17.Tamburlaine", "price.9.RomeoJulia",
+        "title.\"The Tragical History of Doctor Faustus\".DoctorFaustus")
+
+    ))
+
+
     val q = new ParameterizedSparqlString(
       """PREFIX ex: <http://example.org/ns#>
         |
@@ -1108,110 +1209,6 @@ class TranslateSPARQL extends FunSuite:
     println(algblind)
     println(Algebra.optimize(aq))
 
-    def order_bgp(triple: org.apache.jena.graph.Triple): (IndexedSeq[Int], IndexedSeq[Int]) =
-      // spo -> fixed first
-      // ?y http://www.w3.org/2001/vcard-rdf/3.0#Family "Smith" -> ((1, 2), (0))
-      val trip_list = List(triple.getSubject, triple.getPredicate, triple.getObject)
-      Range(0, 3).partition(x => {
-        trip_list(x) match
-          case i: org.apache.jena.sparql.core.Var => false
-          case _ => true})
-
-    def triple_get(triple: org.apache.jena.graph.Triple, i: Int): org.apache.jena.graph.Node =
-      val trip_list = List(triple.getSubject, triple.getPredicate, triple.getObject)
-      trip_list(i)
-
-    def get_str(n: org.apache.jena.graph.Node): String =
-      n match
-        case n: Node_Literal => n.getLiteral.getLexicalForm
-        case n: Node_URI => n.getLocalName
-
-    def get_space_from_bgp(triple: org.apache.jena.graph.Triple): Space =
-      val rotation: (IndexedSeq[Int], IndexedSeq[Int]) = order_bgp(triple)
-      val ordered_spo = rotation(0).concat(rotation(1)).map(x => "spo".charAt(x)).fold("")((c1, c2) => s"$c1$c2").toString
-      val m: Map[String, Space] = Map("spo" -> S"SPO", "pos" -> S"POS", "pso" -> S"PSO")
-
-      val constant_ids = rotation(0)
-      val var_ids = rotation(1)
-      rotation(0).length match
-        case 0 => ???
-        case 1 =>
-          val c0 = get_str(triple_get(triple, constant_ids(0)))
-          val v0 = triple_get(triple, var_ids(0)).getName
-          val v1 = triple_get(triple, var_ids(1)).getName
-          val e = m(ordered_spo)(c0).iter("x", "sy", S"sy".iter("y", "_", {
-            prefixHash(Singleton(v0 x P"x") \/ Singleton(v1 x P"y"))
-          }))
-          println(eval(e)(using sc = context).show)
-          e
-        case 2 =>
-          val c0 = get_str(triple_get(triple, constant_ids(0)))
-          val c1 = get_str(triple_get(triple, constant_ids(1)))
-          val v0 = triple_get(triple, var_ids(0)).getName
-          val e = m(ordered_spo)(c0 x c1).iter("x", "_", {
-            prefixHash(v0 x Singleton(P"x"))
-          })
-          e
-
-        case 3 => ???
-
-    def get_filter_function(ex: Expr): Space => Space =
-      // TODO arguments can also both be variables or integers or ...
-      // assumes first argument is a variable and second argument is an integer
-      ex match
-        case e: E_LessThan => (s => filterLessThan(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
-        case e: E_LessThanOrEqual => (s => filterLessOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
-        case e: E_GreaterThan => (s => filterGreaterThan(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
-        case e: E_GreaterThanOrEqual => (s => filterGreaterOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
-        case _ => println(s"unsupported filter $ex (${ex.getClass.getName})")
-          return ???
-
-
-    def translate(op: Op): Space = op match
-      case op: OpProject =>
-        val t = translate(op.getSubOp)
-        val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
-        println("my vars are")
-        println(varspace)
-        val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
-        e
-
-      case op: OpBGP =>
-        println("bgp")
-        val e = Range(1, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => hyperJoin(s1, s2))
-        println(eval(e)(using sc = books).show)
-        e
-
-      case op: OpJoin =>
-        val e = hyperJoin(translate(op.getLeft), translate(op.getRight))
-        println("join")
-        println(eval(e)(using sc = books).show)
-        e
-
-      case op: OpLeftJoin =>
-        // TODO multiple filters
-        op.getExprs match
-          case null => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), s => s)
-          case ex: ExprList => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), get_filter_function(ex.get(0)))
-
-      case op: OpFilter =>
-        // TODO multiple filters
-        val f = get_filter_function(op.getExprs.get(0))
-        val i1 = sparqlAlg.hyperFilter(translate(op.getSubOp), f)
-        i1
-
-      case op: OpUnion =>
-        val e = translate(op.getLeft) \/ translate(op.getRight)
-        println("Union")
-        println(eval(e)(using sc = books).show)
-        e
-
-      case op =>
-        println(s"unhandled case $op")
-        return ???
-
-    println("------------")
-
     val t = translate(algblind)
     // println(t.show)
     assert(eval(t)(using sc = context) == SpaceValue("R4f8194bd.givenName.Al", "R4f8194bd.y.Alice", "Re30ef3e3.givenName.Lis", "Re30ef3e3.y.Alice"))
@@ -1232,31 +1229,33 @@ class TranslateSPARQL extends FunSuite:
     // println(t2.show)
     assert(eval(t2)(using sc = context) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R29640fc9.age.12", "R29640fc9.name.Bob", "R4a4fbc23.name.Charlie"))
 
-    val dependentOptional = new ParameterizedSparqlString("""PREFIX foaf: <http://xmlns.com/foaf/0.1/>
-                                                            |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
-                                                            |
-                                                            |SELECT ?name
-                                                            |WHERE
-                                                            |{
-                                                            |  ?x a foaf:Person .
-                                                            |  OPTIONAL { ?x foaf:name ?name }
-                                                            |  OPTIONAL { ?x vCard:FN  ?name }
-                                                            |}""".stripMargin).asQuery()
+    val dependentOptional = new ParameterizedSparqlString(
+      """PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+        |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |
+        |SELECT ?name
+        |WHERE
+        |{
+        |  ?x a foaf:Person .
+        |  OPTIONAL { ?x foaf:name ?name }
+        |  OPTIONAL { ?x vCard:FN  ?name }
+        |}""".stripMargin).asQuery()
     val algdependent = Algebra.compile(dependentOptional)
     val t3 = translate(algdependent)
     println("eval 3")
     assert(eval(t3)(using sc = context) == SpaceValue("R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
 
-    val filterQuery = new ParameterizedSparqlString("""PREFIX info: <http://somewhere/peopleInfo#>
-                                                      |
-                                                      |SELECT ?resource
-                                                      |WHERE
-                                                      |{
-                                                      |?resource info:age ?age .
-                                                      |FILTER (?age >= 24)
-                                                      |}""".stripMargin).asQuery()
+    val filterQuery = new ParameterizedSparqlString(
+      """PREFIX info: <http://somewhere/peopleInfo#>
+        |
+        |SELECT ?resource
+        |WHERE
+        |{
+        |?resource info:age ?age .
+        |FILTER (?age >= 24)
+        |}""".stripMargin).asQuery()
     val algfilter = Algebra.compile(filterQuery)
-    val t4= translate(algfilter)
+    val t4 = translate(algfilter)
     assert(eval(t4)(using sc = context) == SpaceValue("R9623531d.resource.A"))
 
     println("books example")
@@ -1267,22 +1266,22 @@ class TranslateSPARQL extends FunSuite:
       "R5bb27dcc.book.DoctorFaustus", "R5bb27dcc.price.12", "R5bb27dcc.title.\"The Tragical History of Doctor Faustus\""))
 
 
-    val optionalFilter = new ParameterizedSparqlString("""PREFIX info:    	<http://somewhere/peopleInfo#>
-                                                         |PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
-                                                         |
-                                                         |SELECT ?name ?age
-                                                         |WHERE
-                                                         |{
-                                                         |	?person vcard:FN  ?name .
-                                                         |	OPTIONAL { ?person info:age ?age . FILTER ( ?age > 24 ) }
-                                                         |}
-                                                         |""".stripMargin).asQuery()
+    val optionalFilter = new ParameterizedSparqlString(
+      """PREFIX info:    	<http://somewhere/peopleInfo#>
+        |PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
+        |
+        |SELECT ?name ?age
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |	OPTIONAL { ?person info:age ?age . FILTER ( ?age > 24 ) }
+        |}
+        |""".stripMargin).asQuery()
 
     val algOptFilter = Algebra.compile(optionalFilter)
     println(algOptFilter)
     val t5 = translate(algOptFilter)
     assert(eval(t5)(using sc = context) == SpaceValue("Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
-
 
   }
 
