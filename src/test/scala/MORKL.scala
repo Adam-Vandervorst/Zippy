@@ -1127,33 +1127,7 @@ class TranslateSPARQL extends FunSuite:
 
   println("------------")
 
-
-  test("SPARQL: jenna tutorial examples"){
-
-
-    val context: SpaceContextMap = SpaceContextMap(Map(
-      SpaceMention("SPO") -> SpaceValue(
-        "A.type.Person", "A.name.Alice", "A.FN.AliceFN", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
-        "B.type.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
-        "C.name.Charlie",
-        "D.type.Person", "D.FN.Dora", "D.age.20"),
-      SpaceMention("PSO") -> SpaceValue(
-        "age.A.25", "age.B.12",
-        "type.A.Person", "type.B.Person",
-        "name.A.Alice", "name.B.Bob", "name.C.Charlie",
-        "FN.A.AliceFN",
-        "Family.Alice.Smith", "Given.Alice.Lis", "Given.Alice.Al", "Family.Mel.Smith",
-        "Family.Bob.Bouwer", "Given.Bob.Bow",
-        "type.D.Person", "FN.D.Dora", "age.D.20"),
-      SpaceMention("POS") -> SpaceValue(
-        "age.12.B", "age.25.A",
-        "type.Person.A", "type.Person.B",
-        "name.Alice.A", "name.Bob.B", "name.Charlie.C",
-        "FN.AliceFN.A",
-        "Family.Smith.Alice", "Given.Lis.Alice", "Given.Al.Alice", "Family.Smith.Mel",
-        "Family.Bouwer.Bob", "Given.Bob.Bow",
-        "type.Person.D", "FN.Dora.D", "age.20.D")
-    ))
+  test("books example"){
     // example from https://iccl.inf.tu-dresden.de/w/images/e/ee/FSWT-L16-SPARQL-Algebra.pdf
     val books: SpaceContextMap = SpaceContextMap(Map(
       SpaceMention("SPO") -> SpaceValue(
@@ -1190,6 +1164,46 @@ class TranslateSPARQL extends FunSuite:
         |  }
         |}""".stripMargin).asQuery()
 
+
+    println(q)
+    val aq = Algebra.compile(q)
+    println(aq)
+    println(Algebra.optimize(aq))
+
+
+    println("books example")
+    val t_books = translate(aq)
+    println(eval(t_books)(using sc = books).show)
+    assert(eval(t_books)(using sc = books) == SpaceValue(
+      "R36707057.book.Hamlet", "R36707057.price.10",
+      "R5bb27dcc.book.DoctorFaustus", "R5bb27dcc.price.12", "R5bb27dcc.title.\"The Tragical History of Doctor Faustus\""))
+  }
+
+  test("jenna tutorial examples"){
+    val context: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("SPO") -> SpaceValue(
+        "A.type.Person", "A.name.Alice", "A.FN.AliceFN", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
+        "B.type.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
+        "C.name.Charlie",
+        "D.type.Person", "D.FN.Dora", "D.age.20"),
+      SpaceMention("PSO") -> SpaceValue(
+        "age.A.25", "age.B.12",
+        "type.A.Person", "type.B.Person",
+        "name.A.Alice", "name.B.Bob", "name.C.Charlie",
+        "FN.A.AliceFN",
+        "Family.Alice.Smith", "Given.Alice.Lis", "Given.Alice.Al", "Family.Mel.Smith",
+        "Family.Bob.Bouwer", "Given.Bob.Bow",
+        "type.D.Person", "FN.D.Dora", "age.D.20"),
+      SpaceMention("POS") -> SpaceValue(
+        "age.12.B", "age.25.A",
+        "type.Person.A", "type.Person.B",
+        "name.Alice.A", "name.Bob.B", "name.Charlie.C",
+        "FN.AliceFN.A",
+        "Family.Smith.Alice", "Given.Lis.Alice", "Given.Al.Alice", "Family.Smith.Mel",
+        "Family.Bouwer.Bob", "Given.Bob.Bow",
+        "type.Person.D", "FN.Dora.D", "age.20.D")
+    ))
+
     val blindNodes = new ParameterizedSparqlString(
       """PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
         |
@@ -1201,13 +1215,9 @@ class TranslateSPARQL extends FunSuite:
         |""".stripMargin).asQuery()
 
 
-    println(q)
-    val aq = Algebra.compile(q)
     val algblind = Algebra.compile(blindNodes)
-
-    println(aq)
     println(algblind)
-    println(Algebra.optimize(aq))
+
 
     val t = translate(algblind)
     // println(t.show)
@@ -1257,13 +1267,6 @@ class TranslateSPARQL extends FunSuite:
     val algfilter = Algebra.compile(filterQuery)
     val t4 = translate(algfilter)
     assert(eval(t4)(using sc = context) == SpaceValue("R9623531d.resource.A"))
-
-    println("books example")
-    val t_books = translate(aq)
-    println(eval(t_books)(using sc = books).show)
-    assert(eval(t_books)(using sc = books) == SpaceValue(
-      "R36707057.book.Hamlet", "R36707057.price.10",
-      "R5bb27dcc.book.DoctorFaustus", "R5bb27dcc.price.12", "R5bb27dcc.title.\"The Tragical History of Doctor Faustus\""))
 
 
     val optionalFilter = new ParameterizedSparqlString(
