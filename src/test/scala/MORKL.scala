@@ -3,7 +3,7 @@ package morkl
 import morkl.Space.Singleton
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
-import org.apache.jena.sparql.expr.E_GreaterThanOrEqual
+import org.apache.jena.sparql.expr.{E_GreaterThan, E_GreaterThanOrEqual, E_LessThanOrEqual}
 
 
 /*class MORKL2Path extends FunSuite:
@@ -869,17 +869,25 @@ class AlgebraSPARQL extends FunSuite:
     // assuming filter = True
     hyperJoin(s1, s2) \/ hyperDifference(s1, s2)
 
-  def filterBiggerThen(s1: Space, v: String, i: Int, max: Int = 2000): Space =
-    (s1(v) <| range(i.toString + "." + max.toString + "." + "1")).tee(s1)
+  def filterGreaterThen(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+    (s1(v) <| range(f"${(i + 1).toString}.${max.toString}.1")).tee(s1)
+  def filterGreaterOrEqual(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+    (s1(v) <| range(f"${i.toString}.${max.toString}.1")).tee(s1)
 
-  def hyperFilterBiggerThen(s1: Space, v: String, i: Int, max: Int = 2000): Space =
-    s1.iter("hash", "tail", "hash" x filterBiggerThen(S"tail", v, i, max))
+  def hyperFilterGreaterThan(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+    s1.iter("hash", "tail", "hash" x filterGreaterThen(S"tail", v, i, max))
+  def hyperFilterGreaterOrEqual(s1: Space, v: String, i: Int, max: Int = 2000): Space =
+    s1.iter("hash", "tail", "hash" x filterGreaterOrEqual(S"tail", v, i, max))
 
-  def filterSmallerThen(s1: Space, v: String, i: Int): Space =
-    (s1(v) <| range("0." + i.toString + ".1")).tee(s1)
+  def filterLessThen(s1: Space, v: String, i: Int): Space =
+    (s1(v) <| range(f"0.${i.toString}.1")).tee(s1)
+  def filterLessOrEqual(s1: Space, v: String, i: Int): Space =
+    (s1(v) <| range(f"0.${(i + 1).toString}.1")).tee(s1)
 
-  def hyperFilterLessThen(s1: Space, v: String, i: Int): Space =
-    s1.iter("hash", "tail", "hash" x filterSmallerThen(S"tail", v, i))
+  def hyperFilterLessThan(s1: Space, v: String, i: Int): Space =
+    s1.iter("hash", "tail", "hash" x filterLessThen(S"tail", v, i))
+  def hyperFilterLessOrEqual(s1: Space, v: String, i: Int): Space =
+    s1.iter("hash", "tail", "hash" x filterLessOrEqual(S"tail", v, i))
 
 
   test("algebra") {
@@ -935,10 +943,10 @@ class AlgebraSPARQL extends FunSuite:
     assert(eval(difference(S"lhs", S"rhs"))(using sc = incompatible) == SpaceValue("hobby.reading", "name.Alice", "person.B"))
     assert(eval(leftJoin(S"lhs", S"rhs"))(using sc = compatible) == SpaceValue("age.13", "hobby.reading", "name.Alice", "person.A"))
     assert(eval(leftJoin(S"lhs", S"rhs"))(using sc = incompatible) == SpaceValue("hobby.reading", "name.Alice", "person.B"))
-    assert(eval(filterBiggerThen(S"rhs", "age", 10))(using sc = compatible) == SpaceValue("age.13", "name.Alice", "person.A"))
-    assert(eval(filterBiggerThen(S"rhs", "age", 15))(using sc = compatible) == SpaceValue())
-    assert(eval(filterSmallerThen(S"rhs", "age", 10))(using sc = compatible) == SpaceValue())
-    assert(eval(filterSmallerThen(S"rhs", "age", 15))(using sc = compatible) == SpaceValue("age.13", "name.Alice", "person.A"))
+    assert(eval(filterGreaterThen(S"rhs", "age", 10))(using sc = compatible) == SpaceValue("age.13", "name.Alice", "person.A"))
+    assert(eval(filterGreaterThen(S"rhs", "age", 15))(using sc = compatible) == SpaceValue())
+    assert(eval(filterLessThen(S"rhs", "age", 10))(using sc = compatible) == SpaceValue())
+    assert(eval(filterLessThen(S"rhs", "age", 15))(using sc = compatible) == SpaceValue("age.13", "name.Alice", "person.A"))
   }
 
   test("algebra over hyperspaces") {
@@ -1001,10 +1009,12 @@ class TranslateSPARQL extends FunSuite:
   def join2(s1: Space, s2: Space): Space = sparqlAlg.join2(s1, s2)
   def hyperJoin(s1: Space, s2: Space): Space = sparqlAlg.hyperJoin(s1, s2)
   def hyperLeftJoin(s1: Space, s2: Space): Space = sparqlAlg.hyperLeftJoin(s1, s2)
-  def filterBiggerThen(s1: Space, v: String, i: Int): Space = sparqlAlg.filterBiggerThen(s1, v, i)
-  def hyperFilterBiggerThen: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterBiggerThen
-  def filterLessThen(s1: Space, v: String, i: Int): Space = sparqlAlg.filterSmallerThen(s1, v, i)
-  def hyperFilterLessThen: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessThen
+  // def filterBiggerThen(s1: Space, v: String, i: Int): Space = sparqlAlg.filterGreaterThen(s1, v, i)
+  def hyperFilterGreaterThan: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterGreaterThan
+  def hyperFilterGreaterOrEqual: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterGreaterOrEqual
+  // def filterLessThen(s1: Space, v: String, i: Int): Space = sparqlAlg.filterLessThen(s1, v, i)
+  def hyperFilterLessThan: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessThan
+  def hyperFilterLessOrEqual: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessOrEqual
 
 
   val context: SpaceContextMap = SpaceContextMap(Map(
@@ -1141,16 +1151,13 @@ class TranslateSPARQL extends FunSuite:
         translate(op.getSubOp)
         op.getExprs.get(0) match
           case e: E_LessThan =>
-            println(s"less than $e")
-            println(e.getArg1)
-            return hyperFilterLessThen(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.asVar().getName.toInt)
-
-            return ???
+            hyperFilterLessThan(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.asVar().getName.toInt)
+          case e: E_LessThanOrEqual =>
+            hyperFilterLessOrEqual(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.asVar().getName.toInt)
+          case e: E_GreaterThan =>
+            hyperFilterGreaterThan(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.asVar().getName.toInt, 2000)
           case e: E_GreaterThanOrEqual =>
-            println(e.getArg2.getConstant.getInteger)
-
-            return hyperFilterBiggerThen(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt, 2000)
-            return ???
+            hyperFilterGreaterOrEqual(translate(op.getSubOp), e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt, 2000)
           case e =>
             println(s"unsupported expr $e (${e.getClass.getName})")
             return ???
