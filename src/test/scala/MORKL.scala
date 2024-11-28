@@ -3,7 +3,7 @@ package morkl
 import morkl.Space.Singleton
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
-import org.apache.jena.sparql.expr.{E_GreaterThan, E_GreaterThanOrEqual, E_LessThanOrEqual, Expr, ExprFunction, ExprList}
+import org.apache.jena.sparql.expr.{E_Bound, E_GreaterThan, E_GreaterThanOrEqual, E_LessThanOrEqual, E_LogicalAnd, E_LogicalNot, E_LogicalOr, Expr, ExprFunction, ExprList}
 
 
 /*class MORKL2Path extends FunSuite:
@@ -898,6 +898,12 @@ class AlgebraSPARQL extends FunSuite:
 //  def hyperFilterLessOrEqual(s1: Space, v: String, i: Int): Space =
 //    s1.iter("h", "tail", P"h" x filterLessOrEqual(S"tail", v, i))
 
+  def filterNot(s: VarMapping, f: VarMapping => VarMapping): VarMapping =
+    if_empty_do(f(s), s)
+
+  def filterBound(s: VarMapping, v: String): VarMapping =
+    s(v)
+
 
   test("algebra") {
     val compatible: SpaceContextMap = SpaceContextMap(Map(
@@ -1026,6 +1032,7 @@ class TranslateSPARQL extends FunSuite:
   def filterLessOrEqual(s1: Space, v: String, i: Int): Space = sparqlAlg.filterLessOrEqual(s1, v, i)
   // def hyperFilterLessThan: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessThan
   //def hyperFilterLessOrEqual: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessOrEqual
+  def filterNot: (sparqlAlg.VarMapping, sparqlAlg.VarMapping => sparqlAlg.VarMapping) => sparqlAlg.VarMapping = sparqlAlg.filterNot
 
 
   def order_bgp(triple: org.apache.jena.graph.Triple): (IndexedSeq[Int], IndexedSeq[Int]) =
@@ -1082,6 +1089,12 @@ class TranslateSPARQL extends FunSuite:
       case e: E_LessThanOrEqual => (s => filterLessOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
       case e: E_GreaterThan => (s => filterGreaterThan(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
       case e: E_GreaterThanOrEqual => (s => filterGreaterOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
+      case e: E_LogicalOr => (s => get_filter_function(e.getArg1)(s) \/ get_filter_function(e.getArg2)(s))
+      case e: E_LogicalAnd => (s => get_filter_function(e.getArg1)(s) /\ get_filter_function(e.getArg2)(s))
+      case e: E_LogicalNot => (s => filterNot(s, get_filter_function(e.getArg)))
+      case e: E_Bound => (s => s(e.getArg.asVar().getName).tee(s))
+
+      //(s => get_filter_function(e.getExpr)(s))
       case _ => println(s"unsupported filter $ex (${ex.getClass.getName})")
         return ???
 
@@ -1183,13 +1196,13 @@ class TranslateSPARQL extends FunSuite:
       SpaceMention("SPO") -> SpaceValue(
         "A.type.Person", "A.name.Alice", "A.FN.AliceFN", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
         "B.type.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
-        "C.name.Charlie",
+        "C.name.Charlie", "C.FN.CharlieFN",
         "D.type.Person", "D.FN.Dora", "D.age.20"),
       SpaceMention("PSO") -> SpaceValue(
         "age.A.25", "age.B.12",
         "type.A.Person", "type.B.Person",
         "name.A.Alice", "name.B.Bob", "name.C.Charlie",
-        "FN.A.AliceFN",
+        "FN.A.AliceFN", "FN.C.CharlieFN",
         "Family.Alice.Smith", "Given.Alice.Lis", "Given.Alice.Al", "Family.Mel.Smith",
         "Family.Bob.Bouwer", "Given.Bob.Bow",
         "type.D.Person", "FN.D.Dora", "age.D.20"),
@@ -1197,7 +1210,7 @@ class TranslateSPARQL extends FunSuite:
         "age.12.B", "age.25.A",
         "type.Person.A", "type.Person.B",
         "name.Alice.A", "name.Bob.B", "name.Charlie.C",
-        "FN.AliceFN.A",
+        "FN.AliceFN.A", "FN.CharlieFN.C",
         "Family.Smith.Alice", "Given.Lis.Alice", "Given.Al.Alice", "Family.Smith.Mel",
         "Family.Bouwer.Bob", "Given.Bob.Bow",
         "type.Person.D", "FN.Dora.D", "age.20.D")
@@ -1283,7 +1296,25 @@ class TranslateSPARQL extends FunSuite:
     val algOptFilter = Algebra.compile(optionalFilter)
     println(algOptFilter)
     val t5 = translate(algOptFilter)
-    assert(eval(t5)(using sc = context) == SpaceValue("Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
+    println(eval(t5)(using sc = context).show)
+    assert(eval(t5)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
+
+    val optionalFilter2 = new ParameterizedSparqlString("""PREFIX info:    	<http://somewhere/peopleInfo#>
+                                                          |PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
+                                                          |
+                                                          |SELECT ?name ?age
+                                                          |WHERE
+                                                          |{
+                                                          |	?person vcard:FN  ?name .
+                                                          |	OPTIONAL { ?person info:age ?age . }
+                                                          |	FILTER ( !bound(?age) || ?age > 24 )
+                                                          |}
+                                                          |""".stripMargin).asQuery()
+    val algOpt2Filter = Algebra.compile(optionalFilter2)
+    println(algOpt2Filter)
+    val t6 = translate(algOpt2Filter)
+    println(eval(t6)(using sc = context).show)
+    assert(eval(t6)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
 
   }
 
