@@ -3,7 +3,7 @@ package morkl
 import morkl.Space.Singleton
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
-import org.apache.jena.sparql.expr.{E_Bound, E_GreaterThan, E_GreaterThanOrEqual, E_LessThanOrEqual, E_LogicalAnd, E_LogicalNot, E_LogicalOr, Expr, ExprFunction, ExprList}
+import org.apache.jena.sparql.expr.{E_Bound, E_Equals, E_GreaterThan, E_GreaterThanOrEqual, E_LessThanOrEqual, E_LogicalAnd, E_LogicalNot, E_LogicalOr, Expr, ExprFunction, ExprList}
 
 
 /*class MORKL2Path extends FunSuite:
@@ -886,6 +886,9 @@ class AlgebraSPARQL extends FunSuite:
     // assuming filter = True
     hyperFilter(hyperJoin(s1, s2), filter) \/ hyperDifference(s1, s2, filter)
 
+  def filterStringEquals(s1: VarMapping, v: String, to_match: String): VarMapping =
+    (s1(v) <| Singleton(to_match)).tee(s1)
+
   def filterGreaterThan(s1: VarMapping, v: String, i: Int, max: Int = 2000): VarMapping =
     (s1(v) <| range(f"${(i + 1).toString}.${max.toString}.1")).tee(s1)
   def filterGreaterOrEqual(s1: VarMapping, v: String, i: Int, max: Int = 2000): VarMapping =
@@ -1068,8 +1071,12 @@ class TranslateSPARQL extends FunSuite:
 
     val constant_ids = rotation(0)
     val var_ids = rotation(1)
-    rotation(0).length match
-      case 0 => ???
+    constant_ids.length match
+      case 0 => println("indeed here")
+        val v0 = triple_get(triple, var_ids(0)).getName
+        val v1 = triple_get(triple, var_ids(1)).getName
+        val v2 = triple_get(triple, var_ids(2)).getName
+        m(ordered_spo).iter("v0", "v12s", S"v12s".iter("v1", "v2s", S"v2s".iter("v2", "_", prefixHash(Singleton(v0 x P"v0") \/ Singleton(v1 x P"v1") \/ Singleton(v2 x P"v2")))))
       case 1 =>
         val c0 = get_str(triple_get(triple, constant_ids(0)))
         val v0 = triple_get(triple, var_ids(0)).getName
@@ -1090,13 +1097,15 @@ class TranslateSPARQL extends FunSuite:
       case 3 => ???
 
   def get_filter_function(ex: Expr): Space => Space =
-    // TODO arguments can also both be variables or integers or ...
+    // TODO arguments can also both be variables or integers or ... in numerical comparisons
     // assumes first argument is a variable and second argument is an integer
     ex match
       case e: E_LessThan => (s => filterLessThan(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
       case e: E_LessThanOrEqual => (s => filterLessOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
       case e: E_GreaterThan => (s => filterGreaterThan(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
       case e: E_GreaterThanOrEqual => (s => filterGreaterOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
+      case e: E_Equals => // TODO differ between number equals and string equals
+        (s => sparqlAlg.filterStringEquals(s, e.getArg1.asVar().getName, get_str(e.getArg2.getConstant.asNode())))
       case e: E_LogicalOr => (s => get_filter_function(e.getArg1)(s) \/ get_filter_function(e.getArg2)(s))
       case e: E_LogicalAnd => (s => get_filter_function(e.getArg1)(s) /\ get_filter_function(e.getArg2)(s))
       case e: E_LogicalNot => (s => filterNot(s, get_filter_function(e.getArg)))
@@ -1144,8 +1153,6 @@ class TranslateSPARQL extends FunSuite:
     case op =>
       println(s"unhandled case $op")
       return ???
-
-  println("------------")
 
   test("books example"){
     // example from https://iccl.inf.tu-dresden.de/w/images/e/ee/FSWT-L16-SPARQL-Algebra.pdf
@@ -1223,6 +1230,8 @@ class TranslateSPARQL extends FunSuite:
         "Family.Bouwer.Bob", "Given.Bob.Bow",
         "type.Person.D", "FN.Dora.D", "age.20.D")
     ))
+
+    given SpaceContext = context
 
     val blindNodes = new ParameterizedSparqlString(
       """PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -1324,6 +1333,35 @@ class TranslateSPARQL extends FunSuite:
     val t6 = translate(algOpt2Filter)
     println(eval(t6)(using sc = context).show)
     assert(eval(t6)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
+
+    val unionQuery = new ParameterizedSparqlString("""PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+                                                     |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
+                                                     |
+                                                     |SELECT ?name
+                                                     |WHERE
+                                                     |{
+                                                     |   { [] foaf:name ?name } UNION { [] vCard:FN ?name }
+                                                     |}
+                                                     |""".stripMargin).asQuery()
+
+    val algUnion = Algebra.compile(unionQuery)
+    val unionMORKL = translate(algUnion)
+    assert(eval(unionMORKL)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R4a4fbc23.name.Charlie", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora", "Raa5b8e36.name.AliceFN"))
+
+    val twoWaysQuery = new ParameterizedSparqlString("""PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+                                                      |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
+                                                      |
+                                                      |SELECT ?name
+                                                      |WHERE
+                                                      |{
+                                                      |  [] ?p ?name
+                                                      |  FILTER ( ?p = foaf:name || ?p = vCard:FN )
+                                                      |}""".stripMargin).asQuery()
+    val algTwoWays = Algebra.compile(twoWaysQuery)
+    val twoWaysMorkl = translate(algTwoWays)
+
+    assert(eval(twoWaysMorkl) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R4a4fbc23.name.Charlie", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora", "Raa5b8e36.name.AliceFN"))
+
 
   }
 
