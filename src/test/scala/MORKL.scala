@@ -1072,7 +1072,7 @@ class TranslateSPARQL extends FunSuite:
     val constant_ids = rotation(0)
     val var_ids = rotation(1)
     constant_ids.length match
-      case 0 => println("indeed here")
+      case 0 =>
         val v0 = triple_get(triple, var_ids(0)).getName
         val v1 = triple_get(triple, var_ids(1)).getName
         val v2 = triple_get(triple, var_ids(2)).getName
@@ -1250,7 +1250,7 @@ class TranslateSPARQL extends FunSuite:
 
     val t = translate(algblind)
     // println(t.show)
-    assert(eval(t)(using sc = context) == SpaceValue("R4f8194bd.givenName.Al", "R4f8194bd.y.Alice", "Re30ef3e3.givenName.Lis", "Re30ef3e3.y.Alice"))
+    assert(eval(t) == SpaceValue("R4f8194bd.givenName.Al", "R4f8194bd.y.Alice", "Re30ef3e3.givenName.Lis", "Re30ef3e3.y.Alice"))
 
     val optionalQuery = new ParameterizedSparqlString(
       """PREFIX info:	<http://somewhere/peopleInfo#>
@@ -1265,8 +1265,7 @@ class TranslateSPARQL extends FunSuite:
 
     val algoptional = Algebra.compile(optionalQuery)
     val t2 = translate(algoptional)
-    println(eval(t2)(using sc = context).show)
-    assert(eval(t2)(using sc = context) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R29640fc9.age.12", "R29640fc9.name.Bob", "R4a4fbc23.name.Charlie"))
+    assert(eval(t2) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R29640fc9.age.12", "R29640fc9.name.Bob", "R4a4fbc23.name.Charlie"))
 
     val dependentOptional = new ParameterizedSparqlString(
       """PREFIX foaf: <http://xmlns.com/foaf/0.1/>
@@ -1281,8 +1280,7 @@ class TranslateSPARQL extends FunSuite:
         |}""".stripMargin).asQuery()
     val algdependent = Algebra.compile(dependentOptional)
     val t3 = translate(algdependent)
-    println("eval 3")
-    assert(eval(t3)(using sc = context) == SpaceValue("R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
+    assert(eval(t3) == SpaceValue("R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
 
     val filterQuery = new ParameterizedSparqlString(
       """PREFIX info: <http://somewhere/peopleInfo#>
@@ -1295,7 +1293,7 @@ class TranslateSPARQL extends FunSuite:
         |}""".stripMargin).asQuery()
     val algfilter = Algebra.compile(filterQuery)
     val t4 = translate(algfilter)
-    assert(eval(t4)(using sc = context) == SpaceValue("R9623531d.resource.A"))
+    assert(eval(t4) == SpaceValue("R9623531d.resource.A"))
 
 
     val optionalFilter = new ParameterizedSparqlString(
@@ -1313,9 +1311,9 @@ class TranslateSPARQL extends FunSuite:
     val algOptFilter = Algebra.compile(optionalFilter)
     println(algOptFilter)
     val t5 = translate(algOptFilter)
-    println(eval(t5)(using sc = context).show)
+    println(eval(t5).show)
     // assert(eval(t5)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
-    assert(eval(t5)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "R739c1f7f.name.Dora", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
+    assert(eval(t5) == SpaceValue("R252f02a6.name.CharlieFN", "R739c1f7f.name.Dora", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
 
     val optionalFilter2 = new ParameterizedSparqlString("""PREFIX info:    	<http://somewhere/peopleInfo#>
                                                           |PREFIX vcard:  	<http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -1329,10 +1327,8 @@ class TranslateSPARQL extends FunSuite:
                                                           |}
                                                           |""".stripMargin).asQuery()
     val algOpt2Filter = Algebra.compile(optionalFilter2)
-    println(algOpt2Filter)
     val t6 = translate(algOpt2Filter)
-    println(eval(t6)(using sc = context).show)
-    assert(eval(t6)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
+    assert(eval(t6) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
 
     val unionQuery = new ParameterizedSparqlString("""PREFIX foaf: <http://xmlns.com/foaf/0.1/>
                                                      |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -1346,7 +1342,7 @@ class TranslateSPARQL extends FunSuite:
 
     val algUnion = Algebra.compile(unionQuery)
     val unionMORKL = translate(algUnion)
-    assert(eval(unionMORKL)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R4a4fbc23.name.Charlie", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora", "Raa5b8e36.name.AliceFN"))
+    assert(eval(unionMORKL) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R4a4fbc23.name.Charlie", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora", "Raa5b8e36.name.AliceFN"))
 
     val twoWaysQuery = new ParameterizedSparqlString("""PREFIX foaf: <http://xmlns.com/foaf/0.1/>
                                                       |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -1361,6 +1357,34 @@ class TranslateSPARQL extends FunSuite:
     val twoWaysMorkl = translate(algTwoWays)
 
     assert(eval(twoWaysMorkl) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R4a4fbc23.name.Charlie", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora", "Raa5b8e36.name.AliceFN"))
+
+
+    val remeberingWhereQuery = new ParameterizedSparqlString("""PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+                                                               |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
+                                                               |
+                                                               |SELECT ?name1 ?name2
+                                                               |WHERE
+                                                               |{
+                                                               |   { [] foaf:name ?name1 } UNION { [] vCard:FN ?name2 }
+                                                               |}""".stripMargin).asQuery()
+    val rememberingWhereAlg = Algebra.compile(remeberingWhereQuery)
+    val rememberingWhereMorkl = translate(rememberingWhereAlg)
+
+    assert(eval(rememberingWhereMorkl) == SpaceValue("R3f073e44.name2.AliceFN", "R891f221b.name2.CharlieFN", "R8ed45e.name1.Bob", "R957c521b.name1.Alice", "R9ef340ab.name1.Charlie", "Re39e7030.name2.Dora"))
+
+    val optionalAndUnionQuery = new ParameterizedSparqlString("""PREFIX foaf: <http://xmlns.com/foaf/0.1/>
+                                                                |PREFIX vCard: <http://www.w3.org/2001/vcard-rdf/3.0#>
+                                                                |
+                                                                |SELECT ?name1 ?name2
+                                                                |WHERE
+                                                                |{
+                                                                |  ?x a foaf:Person
+                                                                |  OPTIONAL { ?x  foaf:name  ?name1 }
+                                                                |  OPTIONAL { ?x  vCard:FN   ?name2 }
+                                                                |}""".stripMargin).asQuery()
+    val optionalAndUnionAlg = Algebra.compile(optionalAndUnionQuery)
+    val optionalAndUnionMorkl = translate(optionalAndUnionAlg)
+    assert(eval(optionalAndUnionMorkl) == SpaceValue("R8ed45e.name1.Bob", "Rc95260c5.name1.Alice", "Rc95260c5.name2.AliceFN", "Re39e7030.name2.Dora"))
 
 
   }
