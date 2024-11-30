@@ -624,13 +624,19 @@ class Unification extends FunSuite:
 //    println(MQT(S"sequences", List("$x", "$y", "$z"), "$z.$y.$x").show)
     assert(eval(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$x"), "$z.$y.$x")) == SpaceValue("x.y.z", "y.z.x", "z.x.y"))
     assert(eval(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")) == SpaceValue("start.s.end.v", "start.t.end.w", "start.x.end.x", "start.x.end.y", "start.x.end.z", "start.y.end.x", "start.y.end.y", "start.z.end.y", "start.z.end.z"))
-    val code = optimize_sharing(optimize_sharing(transpile(routine("3-paths", Vector(), Vector("graph"),
-      MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")
-    ))))
+//    val code = optimize(transpile(routine("3-paths", Vector(), Vector("graph"),
+//      MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$u", "$u.$v", "$v.$w"), "start.$x.end.$w")
+//    )))
+
+    val code = optimize(transpile(routine("3-paths", Vector(), Vector("graph"),
+      MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$u", "$u.$v", "$v.$w", "$w.$x"), "$w.$v.$u.$z.$y.$x")
+    )))
+
     println(code.show)
     println()
-    println((push_out(code)).show)
-    println(mermaid((push_out(code))))
+//    val po_code = push_out(code)
+//    println(po_code.show)
+    println(mermaid(code))
 //    println(mermaid())
 //    println(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w").show)
 //    println(transpile(routine("paths-3", Vector(), Vector("g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w"))).show)

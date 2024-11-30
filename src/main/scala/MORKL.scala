@@ -4,6 +4,7 @@ import scala.io.AnsiColor.*
 import scala.util.Random
 import scala.collection.mutable.{ArrayBuffer, LongMap, Stack}
 import java.util.Base64
+import scala.collection.mutable
 
 
 enum PathItem:
@@ -518,19 +519,19 @@ def mermaid(g: RecursiveOpGraph, show_label: Boolean = false, vertical: Boolean 
         inputs.zipWithIndex.foreach{ case ((d, j), k) => g.lookup((d, j)) match
           case Left(n) =>
             val label = if show_label then s"|\"${n.kind} ${k}\"|" else ""
-            ff += s"g${path.take(d).map(_.toString).mkString("_")}_f$j ---->$label g${path.map(_.toString).mkString("_")}_f$i %% LL"
+            ff += s"g${path.take(d).map(_.toString).mkString("_")}_f$j ---->$label g${path.map(_.toString).mkString("_")}_f$i"
           case Right(sg) =>
             val label = if show_label then s"|\"${sg.root.kind} ${k}\"|" else ""
-            gf += s"g${(path.take(d) :+ j).map(_.toString).mkString("_")} --->$label g${path.map(_.toString).mkString("_")}_f$i %% LR"
+            gf += s"g${(path.take(d) :+ j).map(_.toString).mkString("_")} --->$label g${path.map(_.toString).mkString("_")}_f$i"
         }
       case (Right(sg), i) =>
         sg.root.inputs.zipWithIndex.foreach{ case ((d, j), k) => g.lookup((d, j)) match
           case Left(n) =>
             val label = if show_label then s"|\"${n.kind} ${k}\"|" else ""
-            fg += s"g${path.take(d).map(_.toString).mkString("_")}_f$j --->$label g${(path :+ i).map(_.toString).mkString("_")} %% RL"
+            fg += s"g${path.take(d).map(_.toString).mkString("_")}_f$j --->$label g${(path :+ i).map(_.toString).mkString("_")}"
           case Right(sg) =>
             val label = if show_label then s"|\"${sg.root.kind} ${k}\"|" else ""
-            gg += s"g${(path.take(d) :+ j).map(_.toString).mkString("_")} -->$label g${(path :+ i).map(_.toString).mkString("_")} %% RR"
+            gg += s"g${(path.take(d) :+ j).map(_.toString).mkString("_")} -->$label g${(path :+ i).map(_.toString).mkString("_")}"
         }
     }
     g.nodes.zipWithIndex.collect { case (Right(sg), i) =>
@@ -566,26 +567,21 @@ def optimize_sharing(g: RecursiveOpGraph, stack: ArrayBuffer[(LongMap[(Int, Int)
   r
 
 
-def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = ArrayBuffer.empty): RecursiveOpGraph =
-  val r = RecursiveOpGraph(g.root, g.parent, ArrayBuffer.empty)
+def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = ArrayBuffer.empty, parent: Option[RecursiveOpGraph] = None): RecursiveOpGraph =
+  val r = RecursiveOpGraph(g.root, parent, ArrayBuffer.empty)
   val lb = g.level
-
+  var jb = 0
 
   def pred(g: RecursiveOpGraph, n: Node[(Int, Int)], pos: (Int, Int), gather: Boolean): Boolean =
-
-    val c = {
     (pos._2 != g.nodes.length - 1) &&
-    n.inputs.forall((l, x) => stack(l)(x)._1 < lb) &&
-    !n.operation.startsWith("Extract") &&
-    !((lb == pos._1) && (lb == 0))}
-    println(s"${gather} move ${n.show} from ${pos} to ${lb -> (r.nodes.length - 1)}: $c")
-    c
-//    !stack(pos._1).get(pos._2).fold(false)((l, x) => l <= lb)
+    n.inputs.forall((l, x) => l < pos._1 && (stack(l)(x)._1 < lb || (stack(l)(x)._1 == lb && stack(l)(x)._2 < jb))) &&
+    !n.operation.startsWith("Extract")
 
   def gather(g: RecursiveOpGraph, r: RecursiveOpGraph): Unit =
     val lr = g.level
     if lr == stack.length then
       stack.addOne(LongMap.withDefault[(Int, Int)](x => lr -> x.toInt))
+    assert(lr < stack.length)
 
     for (n_sg, j) <- g.nodes.zipWithIndex do n_sg match
       case Left(n) =>
@@ -599,20 +595,26 @@ def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = Arra
   stack.addOne(LongMap.withDefault[(Int, Int)](x => lb -> x.toInt))
   for (n_sg, j) <- g.nodes.zipWithIndex do n_sg match
     case Left(n) =>
-//      if !pred(g, n, lb -> j, false) then
       if !stack(lb).contains(j) then
-//        println()
-//        assert(!stack(lb).contains(j))
         stack(lb)(j) = r.store(n)
     case Right(sg) =>
+      jb = j
       gather(sg, r)
-      stack(lb)(j) = r.store(push_out(sg, stack))
+      stack(lb)(j) = r.store(push_out(sg, stack, Some(r)))
+
   r.nodes.mapInPlace{
     case Left(n) => Left(n.map((l, x) => stack(l)(x)))
-    case Right(sg) => Right(RecursiveOpGraph(sg.root.map((l, x) => stack(l)(x)), sg.parent, sg.nodes))
+    case Right(sg) =>
+      sg.root = sg.root.map((l, x) => stack(l)(x))
+      Right(sg)
   }
   r
 
+
+def optimize(g: RecursiveOpGraph): RecursiveOpGraph =
+  val g_ = optimize_sharing(push_out(g))
+  if g.show == g_.show then g
+  else optimize(g_)
 
 object Syntax:
   import PathItem.*
