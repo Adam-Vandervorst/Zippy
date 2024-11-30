@@ -292,6 +292,11 @@ class RecursiveOpGraph(var root: Node[(Int, Int)], val parent: Option[RecursiveO
   )).mkString("\n")
   def store(node: Node[(Int, Int)]): (Int, Int) = {val i = nodes.length; nodes.addOne(Left(node)); level -> i}
   def store(node: RecursiveOpGraph): (Int, Int) = {val i = nodes.length; nodes.addOne(Right(node)); level -> i}
+  def lookup(pos: (Int, Int)): Either[Node[(Int, Int)], RecursiveOpGraph] =
+    val desired_level = pos._1
+    if desired_level == level then nodes(pos._2)
+    else if desired_level < level then parent.get.lookup(pos)
+    else throw RuntimeException(s"Not in tree $pos")
   def find(pred: Node[(Int, Int)] => Boolean): Option[(Int, Int)] =
     nodes.zipWithIndex.collectFirst{ case (x, i) if x.left.exists(pred) => level -> i } match
       case None => ()
@@ -439,6 +444,107 @@ def exec(rog: RecursiveOpGraph,
     c += 1
   end while
 
+def graphviz_table(g: RecursiveOpGraph, path: Vector[Int] = Vector()): Unit =
+  if path.length == 0 then
+    println("digraph G {")
+    println("graph [rankdir = \"LR\"];")
+  val label = g.nodes.zipWithIndex.map{
+    case (Left(n @ Node(operation, constant, kind, inputs)), i) =>
+      inputs.foreach((d, j) => println(s"g${path.take(d).map(_.toString).mkString("_")}:f$j -> g${path.map(_.toString).mkString("_")}:f$i:nw"))
+      f"<f$i>" + n.operation
+    case (Right(sg), i) =>
+      sg.root.inputs.foreach((d, j) => println(s"g${path.take(d).map(_.toString).mkString("_")}:f$j -> g${path.map(_.toString).mkString("_")}:f$i:nw"))
+      sg.root.operation match
+        case "Iteration" =>
+          println(s"g${path.map(_.toString).mkString("_")}:f$i -> g${(path :+ i).map(_.toString).mkString("_")}:f0:nw [style=dotted]")
+          println(s"g${path.map(_.toString).mkString("_")}:f$i -> g${(path :+ i).map(_.toString).mkString("_")}:f1:nw [style=dotted]")
+      f"<f$i>" + sg.root.operation
+  }.mkString(" | ")
+  println(s"g${path.map(_.toString).mkString("_")} [label=\"${label}\", shape=\"record\"];")
+  g.nodes.zipWithIndex.collect { case (Right(sg), i) =>
+    graphviz(sg, path :+ i)
+  }
+  if path.length == 0 then
+    println("}")
+
+def graphviz(g: RecursiveOpGraph, path: Vector[Int] = Vector(), show_label: Boolean = false): Unit =
+  if path.length == 0 then { println("digraph G {"); println("graph [rankdir=\"LR\" compound=true];") }
+  val indent = "  ".repeat(path.length)
+  println(s"${indent}subgraph cluster_${path.map(_.toString).mkString("_")} {")
+  println(s"${indent}  label=\"${g.root.operation}[${g.root.constant}]\"")
+  g.nodes.zipWithIndex.foreach {
+    case (Left(n@Node(operation, constant, kind, inputs)), i) =>
+      val shape = if kind == "space" then s" shape=\"box\"" else ""
+      println(s"${indent}  g${path.map(_.toString).mkString("_")}_f$i [label=\"${operation}[${constant}]\"$shape]")
+      inputs.zipWithIndex.foreach{ case ((d, j), k) => g.lookup((d, j)) match
+        case Left(n) =>
+          val label = if show_label then s"label=\"${n.kind} ${k}\"" else ""
+          println(s"${indent}  g${path.take(d).map(_.toString).mkString("_")}_f$j -> g${path.map(_.toString).mkString("_")}_f$i [$label]")
+        case Right(sg) =>
+          val label = if show_label then s"label=\"${sg.root.kind} ${k}\"" else ""
+          println(s"${indent}  g${(path.take(d) :+ j).map(_.toString).mkString("_")}_f0 -> g${path.map(_.toString).mkString("_")}_f$i [$label ltail=cluster_${(path.take(d) :+ j).map(_.toString).mkString("_")}]")
+      }
+    case (Right(sg), i) =>
+      sg.root.inputs.zipWithIndex.foreach{ case ((d, j), k) => g.lookup((d, j)) match
+        case Left(n) =>
+          val label = if show_label then s"label=\"${n.kind} ${k}\"" else ""
+          println(s"${indent}  g${path.take(d).map(_.toString).mkString("_")}_f$j -> g${(path :+ i).map(_.toString).mkString("_")}_f0 [$label lhead=cluster_${(path :+ i).map(_.toString).mkString("_")}]")
+        case Right(sg) =>
+          val label = if show_label then s"label=\"${sg.root.kind} ${k}\"" else ""
+          println(s"${indent}  g${(path.take(d) :+ j).map(_.toString).mkString("_")}_f0 -> g${(path :+ i).map(_.toString).mkString("_")}_f0 [$label lhead=cluster_${(path :+ i).map(_.toString).mkString("_")} ltail=cluster_${(path.take(d) :+ j).map(_.toString).mkString("_")}]")
+      }
+  }
+  g.nodes.zipWithIndex.collect { case (Right(sg), i) =>
+    graphviz(sg, path :+ i, show_label)
+  }
+  println(s"${indent}}")
+  if path.length == 0 then println("}")
+
+
+def mermaid(g: RecursiveOpGraph, show_label: Boolean = false, vertical: Boolean = true): Unit =
+  val ff = ArrayBuffer.empty[String]
+  val fg = ArrayBuffer.empty[String]
+  val gf = ArrayBuffer.empty[String]
+  val gg = ArrayBuffer.empty[String]
+  println("flowchart LR")
+  def rec(g: RecursiveOpGraph, path: Vector[Int] = Vector()): Unit =
+    val indent = "  ".repeat(path.length)
+    println(s"${indent}subgraph g${path.map(_.toString).mkString("_")} [\"${g.root.operation}[${g.root.constant}]\"]")
+    println(s"${indent}  direction ${if vertical then "TB" else "LR"}")
+    g.nodes.zipWithIndex.foreach {
+      case (Left(n@Node(operation, constant, kind, inputs)), i) =>
+        val shape = if kind == "space" then "rect" else "rounded"
+        println(s"${indent}  g${path.map(_.toString).mkString("_")}_f$i@{ shape: $shape, label: \"${operation}[${constant}]\"}")
+        inputs.zipWithIndex.foreach{ case ((d, j), k) => g.lookup((d, j)) match
+          case Left(n) =>
+            val label = if show_label then s"|\"${n.kind} ${k}\"|" else ""
+            ff += s"g${path.take(d).map(_.toString).mkString("_")}_f$j ---->$label g${path.map(_.toString).mkString("_")}_f$i %% LL"
+          case Right(sg) =>
+            val label = if show_label then s"|\"${sg.root.kind} ${k}\"|" else ""
+            gf += s"g${(path.take(d) :+ j).map(_.toString).mkString("_")} --->$label g${path.map(_.toString).mkString("_")}_f$i %% LR"
+        }
+      case (Right(sg), i) =>
+        sg.root.inputs.zipWithIndex.foreach{ case ((d, j), k) => g.lookup((d, j)) match
+          case Left(n) =>
+            val label = if show_label then s"|\"${n.kind} ${k}\"|" else ""
+            fg += s"g${path.take(d).map(_.toString).mkString("_")}_f$j --->$label g${(path :+ i).map(_.toString).mkString("_")} %% RL"
+          case Right(sg) =>
+            val label = if show_label then s"|\"${sg.root.kind} ${k}\"|" else ""
+            gg += s"g${(path.take(d) :+ j).map(_.toString).mkString("_")} -->$label g${(path :+ i).map(_.toString).mkString("_")} %% RR"
+        }
+    }
+    g.nodes.zipWithIndex.collect { case (Right(sg), i) =>
+      rec(sg, path :+ i)
+    }
+    println(s"${indent}end")
+  rec(g)
+  given ordering: Ordering[String] = Ordering.String.on(_.takeWhile(_ != '-'))
+  println(ff.sorted.mkString("\n"))
+  println(fg.sorted.mkString("\n"))
+  println(gf.sorted.mkString("\n"))
+  println(gg.sorted.mkString("\n"))
+
+
 def optimize_sharing(g: RecursiveOpGraph, stack: ArrayBuffer[(LongMap[(Int, Int)], LongMap[(Int, Int)])] = ArrayBuffer.empty): RecursiveOpGraph =
   val r = RecursiveOpGraph(g.root, g.parent, ArrayBuffer.empty)
   val l = g.level
@@ -459,29 +565,53 @@ def optimize_sharing(g: RecursiveOpGraph, stack: ArrayBuffer[(LongMap[(Int, Int)
       c += 1
   r
 
-//def prune_redundant(g: OpGraph): OpGraph =
-//  var old = g
-//  var cur = g
-//  while
-//    old = cur
-//    cur = OpGraph()
-//    val condensing = collection.mutable.LongMap.withDefault[Int](_.toInt)
-//    var c = 0
-//    for (n, i) <- old.nodes.init.zipWithIndex do
-//      if old.nodes.exists(_.inputs.contains(i)) then
-//        cur.store(n.map(condensing(_)))
-//        condensing.update(i, c)
-//        c += 1
-//    cur.store(old.nodes.last.map(condensing(_)))
-//    old.nodes != cur.nodes
-//  do ()
-//  cur
 
-//def push_out(g: OpGraph): OpGraph =
-//  g.nodes.zipWithIndex.collectFirst { case (Node(op, kind, inputs), i) =>
-//    val dest = inputs.map(i => g.nodes(i).scope).reduce(_ mostSpecific)
-//    if dest != scope then move n from i to last(dest)
-//  }
+def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = ArrayBuffer.empty): RecursiveOpGraph =
+  val r = RecursiveOpGraph(g.root, g.parent, ArrayBuffer.empty)
+  val lb = g.level
+
+
+  def pred(g: RecursiveOpGraph, n: Node[(Int, Int)], pos: (Int, Int), gather: Boolean): Boolean =
+
+    val c = {
+    (pos._2 != g.nodes.length - 1) &&
+    n.inputs.forall((l, x) => stack(l)(x)._1 < lb) &&
+    !n.operation.startsWith("Extract") &&
+    !((lb == pos._1) && (lb == 0))}
+    println(s"${gather} move ${n.show} from ${pos} to ${lb -> (r.nodes.length - 1)}: $c")
+    c
+//    !stack(pos._1).get(pos._2).fold(false)((l, x) => l <= lb)
+
+  def gather(g: RecursiveOpGraph, r: RecursiveOpGraph): Unit =
+    val lr = g.level
+    if lr == stack.length then
+      stack.addOne(LongMap.withDefault[(Int, Int)](x => lr -> x.toInt))
+
+    for (n_sg, j) <- g.nodes.zipWithIndex do n_sg match
+      case Left(n) =>
+        if pred(g, n, lr -> j, true) then
+          val value = r.store(n)
+//          assert(!stack(lr).contains(j), s"pos: ${lr -> j} current: ${stack(lr)(j)} new: $value node: $n")
+          stack(lr)(j) = value
+      case Right(sg) =>
+        gather(sg, r)
+
+  stack.addOne(LongMap.withDefault[(Int, Int)](x => lb -> x.toInt))
+  for (n_sg, j) <- g.nodes.zipWithIndex do n_sg match
+    case Left(n) =>
+//      if !pred(g, n, lb -> j, false) then
+      if !stack(lb).contains(j) then
+//        println()
+//        assert(!stack(lb).contains(j))
+        stack(lb)(j) = r.store(n)
+    case Right(sg) =>
+      gather(sg, r)
+      stack(lb)(j) = r.store(push_out(sg, stack))
+  r.nodes.mapInPlace{
+    case Left(n) => Left(n.map((l, x) => stack(l)(x)))
+    case Right(sg) => Right(RecursiveOpGraph(sg.root.map((l, x) => stack(l)(x)), sg.parent, sg.nodes))
+  }
+  r
 
 
 object Syntax:

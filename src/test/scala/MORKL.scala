@@ -338,6 +338,19 @@ class Imperative extends FunSuite:
     exec(code, stack)
     assert(stack.top.last.asInstanceOf[SpaceValue] == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
   }
+
+  test("mermaid") {
+    mermaid(optimize_sharing(transpile(union_iter_routine)))
+  }
+
+  test("push out") {
+    val code = transpile(routine("test", Vector("k"), Vector("xs"), S"xs".iter("x", "r", S"r"(P"k" x "test"))))
+    println(code.show)
+    println()
+    println(push_out(code).show)
+    println()
+    println(push_out(push_out(code)).show)
+  }
 end Imperative
 
 class Routines extends FunSuite:
@@ -543,59 +556,42 @@ class Unification extends FunSuite:
       "b.e.e.p.b.o.o.p",
       "b.a.b.a.b.a",
       "a.c.a.c",
+    ),
+    SpaceMention("graph") -> SpaceValue(
+      "edge.a.b", "edge.a.d", "edge.d.c",
+      "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y",
+      "edge.s.t", "edge.t.u", "edge.u.v", "edge.v.w",
     )))
 
-  def Q(src: Space, p: PathValue, bound: Map[String, PathRef] = Map.empty, d: Int = 0): Space = p.items match
+  def U(src: Space, p: PathValue, c: (Space, Map[String, PathRef]) => Space, bound: Map[String, PathRef] = Map.empty): Space = p.items match
     case h::tail => h match
-      case PathItem.Symbol(s) => Path.Constant(PathValue(h::Nil)) x Q(Unwrap(src, Path.Constant(PathValue(h::Nil))), PathValue(tail), bound, d + 1)
-      case PathItem.Arity(a) => Path.Constant(PathValue(h::Nil)) x Q(Unwrap(src, Path.Constant(PathValue(h::Nil))), PathValue(tail), bound, d + 1)
+      case PathItem.Symbol(s) => U(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), c, bound)
+      case PathItem.Arity(a) => U(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), c, bound)
       case PathItem.Variable(n) =>
-        if bound.contains(n) then Path.Deref(bound(n)) x Q(Unwrap(src, Path.Deref(bound(n))), PathValue(tail), bound, d + 1)
+        if bound.contains(n) then U(Unwrap(src, Path.Deref(bound(n))), PathValue(tail), c, bound)
         else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
-          Path.Deref(PathRef(n)) x Q(Space.Mention(SpaceMention(n + "_")), PathValue(tail), bound + (n -> PathRef(n)), d + 1))
-    case Nil => src
+          U(Space.Mention(SpaceMention(n + "_")), PathValue(tail), c, bound + (n -> PathRef(n))))
+    case Nil => c(src, bound)
 
-  def T(src: Space, p: PathValue, t: PathValue, bound: Map[String, PathRef] = Map.empty, d: Int = 0): Space = p.items match
-    case h :: tail => h match
-      case PathItem.Symbol(s) => T(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), t, bound, d + 1)
-      case PathItem.Arity(a) => T(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), t, bound, d + 1)
-      case PathItem.Variable(n) =>
-        if bound.contains(n) then T(Unwrap(src, Path.Deref(bound(n))), PathValue(tail), t, bound, d + 1)
-        else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
-          T(Space.Mention(SpaceMention(n + "_")), PathValue(tail), t, bound + (n -> PathRef(n)), d + 1))
-    case Nil =>
-      t.items.foldRight(src)((h, r) => h match
-        case PathItem.Symbol(n) => Path.Constant(PathValue(h :: Nil)) x r
-        case PathItem.Arity(k) => Path.Constant(PathValue(h :: Nil)) x r
-        case PathItem.Variable(n) => Path.Deref(bound(n)) x r)
+  def W(src: Space, t: PathValue, bound: Map[String, PathRef] = Map.empty): Space =
+    t.items.foldRight(src)((h, r) => h match
+      case PathItem.Symbol(n) => Path.Constant(PathValue(h :: Nil)) x r
+      case PathItem.Arity(k) => Path.Constant(PathValue(h :: Nil)) x r
+      case PathItem.Variable(n) => Path.Deref(bound(n)) x r)
+
+  def Q(src: Space, p: PathValue): Space =
+    U(src, p, W(_, p, _))
+
+  def T(src: Space, p: PathValue, t: PathValue): Space =
+    U(src, p, W(_, t, _))
+
+  def DQT(src: Space, p: PathValue, q: PathValue, t: PathValue): Space =
+    U(src, p, (s, b) => U(src, q, W(_, t, _), b))
 
   // determine maximal sharing, sort `ps` from lowest to highest freedom
-  def DQT(src: Space, p: PathValue, q: PathValue, t: PathValue): Space =
-    DQT__(src, src, p, q, t)
-
-  def DQT__(osrc: Space, src: Space, p: PathValue, q: PathValue, t: PathValue, bound: Map[String, PathRef] = Map.empty, d: Int = 0): Space = p.items match
-    case h :: tail => h match
-      case PathItem.Symbol(s) => DQT__(osrc, Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), q, t, bound, d + 1)
-      case PathItem.Arity(a) => DQT__(osrc, Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), q, t, bound, d + 1)
-      case PathItem.Variable(n) =>
-        if bound.contains(n) then DQT__(osrc, Unwrap(src, Path.Deref(bound(n))), PathValue(tail), q, t, bound, d + 1)
-        else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
-          DQT__(osrc, Space.Mention(SpaceMention(n + "_")), PathValue(tail), q, t, bound + (n -> PathRef(n)), d + 1))
-    case Nil => DQT_(src, osrc, p, q, t, bound, d)
-
-  def DQT_(osrc: Space, src: Space, p: PathValue, q: PathValue, t: PathValue, bound: Map[String, PathRef] = Map.empty, d: Int = 0): Space = q.items match
-    case h :: tail => h match
-      case PathItem.Symbol(s) => DQT_(osrc, Unwrap(src, Path.Constant(PathValue(h :: Nil))), p, PathValue(tail), t, bound, d + 1)
-      case PathItem.Arity(a) => DQT_(osrc, Unwrap(src, Path.Constant(PathValue(h :: Nil))), p, PathValue(tail), t, bound, d + 1)
-      case PathItem.Variable(n) =>
-        if bound.contains(n) then DQT_(osrc, Unwrap(src, Path.Deref(bound(n))), p, PathValue(tail), t, bound, d + 1)
-        else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
-          DQT_(osrc, Space.Mention(SpaceMention(n + "_")), p, PathValue(tail), t, bound + (n -> PathRef(n)), d + 1))
-    case Nil =>
-      t.items.foldRight(src)((h, r) => h match
-        case PathItem.Symbol(n) => Path.Constant(PathValue(h :: Nil)) x r
-        case PathItem.Arity(k) => Path.Constant(PathValue(h :: Nil)) x r
-        case PathItem.Variable(n) => Path.Deref(bound(n)) x r)
+  def MQT(src: Space, ps: List[PathValue], t: PathValue, r: Option[Space] = None, bound: Map[String, PathRef] = Map.empty): Space = ps match
+    case p::ps => U(src, p, (s, b) => MQT(src, ps, t, Some(s), b), bound)
+    case Nil => W(r.get, t, bound)
 
   test("query") {
     given SpaceContext = context
@@ -613,13 +609,37 @@ class Unification extends FunSuite:
     assert(eval(T(S"sequences", "b.$x.$x.$e1.b.$y.$y.$e2", "b.$y.$x.$e1")) == SpaceValue("b.e.e.b", "b.o.e.p"))
   }
 
-  test("double query") {
+  test("double transform") {
     given SpaceContext = context
     assert(eval(DQT(S"sequences", "$x", "$y", "$x.$y")) == eval(("a" x S"sequences") \/ ("b" x S"sequences")))
     assert(eval(DQT(S"sequences", "$x.$a", "$x.$b", "$a.$b")) == SpaceValue("a.a.a.b", "a.a.b.a.b.a", "a.e.e.b", "a.e.e.b.b.e.e.b", "a.e.e.p.b.o.o.p", "c.c.a.c", "e.a.a.b", "e.a.b.a.b.a", "e.e.e.b", "e.e.e.b.b.e.e.b", "e.e.e.p.b.o.o.p"))
     assert(eval(DQT(S"sequences", "b.a.a.$x", "b.e.e.$y", "$x.$y")) == SpaceValue("b.b", "b.b.b.e.e.b", "b.p.b.o.o.p"))
     assert(eval(DQT(S"sequences", "a.$x", "b.$y", "$x.$y")) == SpaceValue("c.a.a.b", "c.a.b.a.b.a", "c.e.e.b", "c.e.e.b.b.e.e.b", "c.e.e.p.b.o.o.p"))
     assert(eval(DQT(S"sequences", "$x.a.$y", "$x.e.$z", "$x.$y.$z")) == SpaceValue("b.a.e.b", "b.a.e.b.b.e.e.b", "b.a.e.p.b.o.o.p", "b.b.e.b", "b.b.e.b.b.e.e.b", "b.b.e.p.b.o.o.p"))
+  }
+
+  test("multi transform") {
+    given SpaceContext = context
+
+//    println(MQT(S"sequences", List("$x", "$y", "$z"), "$z.$y.$x").show)
+    assert(eval(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$x"), "$z.$y.$x")) == SpaceValue("x.y.z", "y.z.x", "z.x.y"))
+    assert(eval(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")) == SpaceValue("start.s.end.v", "start.t.end.w", "start.x.end.x", "start.x.end.y", "start.x.end.z", "start.y.end.x", "start.y.end.y", "start.z.end.y", "start.z.end.z"))
+    val code = optimize_sharing(optimize_sharing(transpile(routine("3-paths", Vector(), Vector("graph"),
+      MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")
+    ))))
+    println(code.show)
+    println()
+    println((push_out(code)).show)
+    println(mermaid((push_out(code))))
+//    println(mermaid())
+//    println(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w").show)
+//    println(transpile(routine("paths-3", Vector(), Vector("g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w"))).show)
+//    println(push_out(transpile(routine("paths-3", Vector(), Vector("g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")))).show)
+  }
+
+  test("graphviz") {
+//    val program = transpile(routine("paths-3", Vector(), Vector("g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")))
+//    graphviz(program)
   }
 end Unification
 
