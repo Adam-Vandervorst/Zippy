@@ -1437,6 +1437,29 @@ class TranslateSPARQL extends FunSuite:
 
     assert(eval(twoFiltersInOptionalMORKL) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R252f02a6.name.CharlieFN", "R739c1f7f.name.Dora", "Ra8769d5b.age.28", "Ra8769d5b.name.Bob"))
 
+    val twoExprsInFilterQuery = new ParameterizedSparqlString("""PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+                                                                  |PREFIX info:    <http://somewhere/peopleInfo#>
+                                                                  |SELECT ?name ?age
+                                                                  |WHERE
+                                                                  |{
+                                                                  |	?person vcard:FN  ?name .
+                                                                  |	?person info:age ?age .
+                                                                  | FILTER ( ?age > 20 )
+                                                                  | FILTER(?age < 30)
+                                                                  |}""".stripMargin).asQuery()
+
+    val twoExprsInFilterAlg = Algebra.compile(twoExprsInFilterQuery)
+    // println(twoExprsInFilterAlg)
+    // (project (?name ?age)
+    //  (filter (exprlist (> ?age 20) (< ?age 30))
+    //    (bgp
+    //      (triple ?person <http://www.w3.org/2001/vcard-rdf/3.0#FN> ?name)
+    //      (triple ?person <http://somewhere/peopleInfo#age> ?age)
+    //    )))
+
+    val twoExprsInFilterMORKL = translate(twoExprsInFilterAlg)
+    assert(eval(twoExprsInFilterMORKL) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "Ra8769d5b.age.28", "Ra8769d5b.name.Bob"))
+
 
   }
 
