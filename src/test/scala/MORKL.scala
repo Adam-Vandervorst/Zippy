@@ -1156,13 +1156,11 @@ class TranslateSPARQL extends FunSuite:
       e
 
     case op: OpLeftJoin =>
-      // TODO multiple filters
       op.getExprs match
         case null => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), s => s)
         case ex: ExprList => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), get_filter_function(ex.to_expression()))
 
     case op: OpFilter =>
-      // TODO multiple filters
       val f = get_filter_function(op.getExprs.to_expression())
       val i1 = sparqlAlg.hyperFilter(translate(op.getSubOp), f)
       i1
@@ -1348,6 +1346,7 @@ class TranslateSPARQL extends FunSuite:
                                                           |}
                                                           |""".stripMargin).asQuery()
     val algOpt2Filter = Algebra.compile(optionalFilter2)
+    println(algOpt2Filter)
     val t6 = translate(algOpt2Filter)
     assert(eval(t6) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
 
