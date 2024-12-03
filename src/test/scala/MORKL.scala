@@ -864,8 +864,8 @@ class AlgebraSPARQL extends FunSuite:
     //            set-union
     //        { μ | μ in Ω1 such that for all μ′ in Ω2, μ and μ' are compatible and expr(merge(μ, μ')) is false }
 
-    val p1 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", if_empty_do(get_incompatible(S"tail1", S"tail2"), Singleton("compatible"))), P"hash1" x S"tail1"))
-    val p2 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", get_incompatible(S"tail1", S"tail2") \/ filter(S"tail1" \/ S"tail2")), P"hash1" x S"tail1"))
+    // val p1 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", if_empty_do(get_incompatible(S"tail1", S"tail2"), Singleton("compatible"))), P"hash1" x S"tail1"))
+    // val p2 = s1.iter("hash1", "tail1", if_empty_do(s2.iter("hash2", "tail2", get_incompatible(S"tail1", S"tail2") \/ filter(S"tail1" \/ S"tail2")), P"hash1" x S"tail1"))
     // p1 \/ p2
 
     // Diff(Ω1, Ω2, expr) =
@@ -883,7 +883,6 @@ class AlgebraSPARQL extends FunSuite:
     s1.iter("h", "varmapping", P"h" x filter(S"varmapping"))
 
   def hyperLeftJoin(s1: VarMappings, s2: VarMappings, filter: VarMapping => VarMapping = (s => s)): VarMappings =
-    // assuming filter = True
     hyperFilter(hyperJoin(s1, s2), filter) \/ hyperDifference(s1, s2, filter)
 
   def filterStringEquals(s1: VarMapping, v: String, to_match: String): VarMapping =
@@ -1012,6 +1011,17 @@ class TranslateSPARQL extends FunSuite:
 
   import Space.*
 
+  def spo_to_pso = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p" x P"s") x S"o"))
+
+  def spo_to_pos = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p") x S"o" x Singleton(P"s")))
+
+  def print_context_permutations(c: SpaceContext): Unit =
+    println("PSO: ")
+    println(eval(spo_to_pso)(using sc = c).show)
+    println("POS: ")
+    println(eval(spo_to_pos)(using sc = c).show)
+
+
   def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path =
     Path.GroundedSP(space, sv => {
       ab.addOne(sv);
@@ -1029,6 +1039,17 @@ class TranslateSPARQL extends FunSuite:
 
   extension (s: Space)
     def tee(run: Space): Space = s.iter("_1", "_2", run)
+
+  extension (e: ExprList)
+    def to_expression(): Expr =
+      e.size() match
+        case 0 =>
+          println("Not implemented, empty expressionlist")
+          ???
+        case 1 => e.get(0)
+        case _ =>
+          val e_list = Range(0, e.size()).map(i => e.get(i))
+          e_list.tail.foldLeft(e_list.head)((exp1, exp2) => E_LogicalAnd(exp1, exp2))
 
   val sparqlAlg = AlgebraSPARQL()
 
@@ -1138,11 +1159,11 @@ class TranslateSPARQL extends FunSuite:
       // TODO multiple filters
       op.getExprs match
         case null => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), s => s)
-        case ex: ExprList => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), get_filter_function(ex.get(0)))
+        case ex: ExprList => hyperLeftJoin(translate(op.getLeft), translate(op.getRight), get_filter_function(ex.to_expression()))
 
     case op: OpFilter =>
       // TODO multiple filters
-      val f = get_filter_function(op.getExprs.get(0))
+      val f = get_filter_function(op.getExprs.to_expression())
       val i1 = sparqlAlg.hyperFilter(translate(op.getSubOp), f)
       i1
 
@@ -1385,6 +1406,37 @@ class TranslateSPARQL extends FunSuite:
     val optionalAndUnionAlg = Algebra.compile(optionalAndUnionQuery)
     val optionalAndUnionMorkl = translate(optionalAndUnionAlg)
     assert(eval(optionalAndUnionMorkl) == SpaceValue("R8ed45e.name1.Bob", "Rc95260c5.name1.Alice", "Rc95260c5.name2.AliceFN", "Re39e7030.name2.Dora"))
+
+
+  }
+
+  test("specific funtionality"){
+    val context: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("SPO") -> SpaceValue(
+        "A.FN.Alice", "A.age.25",
+        "B.FN.Bob", "B.age.28",
+        "C.FN.CharlieFN", "C.age.51",
+        "D.FN.Dora", "D.age.20"),
+      SpaceMention("PSO") -> SpaceValue("FN.A.Alice", "FN.B.Bob", "FN.C.CharlieFN", "FN.D.Dora", "age.A.25", "age.B.28", "age.C.51", "age.D.20"),
+      SpaceMention("POS") -> SpaceValue("FN.Alice.A", "FN.Bob.B", "FN.CharlieFN.C", "FN.Dora.D", "age.20.D", "age.25.A", "age.28.B", "age.51.C")
+    ))
+    given SpaceContext = context
+
+    // print_context_permutations(context)
+
+    val twoFiltersInOptionalQuery = new ParameterizedSparqlString("""PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+                                                                    |PREFIX info:    <http://somewhere/peopleInfo#>
+                                                                    |SELECT ?name ?age
+                                                                    |WHERE
+                                                                    |{
+                                                                    |	?person vcard:FN  ?name .
+                                                                    |	OPTIONAL { ?person info:age ?age . FILTER ( ?age > 20 ) . FILTER ( ?age < 30)}
+                                                                    |}""".stripMargin).asQuery()
+
+    val twoFiltersInOptionalAlg = Algebra.compile(twoFiltersInOptionalQuery)
+    val twoFiltersInOptionalMORKL = translate(twoFiltersInOptionalAlg)
+
+    assert(eval(twoFiltersInOptionalMORKL) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R252f02a6.name.CharlieFN", "R739c1f7f.name.Dora", "Ra8769d5b.age.28", "Ra8769d5b.name.Bob"))
 
 
   }
