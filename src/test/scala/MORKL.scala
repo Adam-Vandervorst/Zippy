@@ -1141,13 +1141,10 @@ class TranslateSPARQL extends FunSuite:
     case op: OpProject =>
       val t = translate(op.getSubOp)
       val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
-      println("my vars are")
-      println(varspace)
       val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
       e
 
     case op: OpBGP =>
-      println("bgp")
       val e = Range(1, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => hyperJoin(s1, s2))
       e
 
@@ -1211,15 +1208,13 @@ class TranslateSPARQL extends FunSuite:
         |}""".stripMargin).asQuery()
 
 
-    println(q)
+    // println(q)
     val aq = Algebra.compile(q)
-    println(aq)
-    println(Algebra.optimize(aq))
+    // println(aq)
+    // println(Algebra.optimize(aq))
 
 
-    println("books example")
     val t_books = translate(aq)
-    println(eval(t_books)(using sc = books).show)
     assert(eval(t_books)(using sc = books) == SpaceValue(
       "R36707057.book.Hamlet", "R36707057.price.10",
       "R5bb27dcc.book.DoctorFaustus", "R5bb27dcc.price.12", "R5bb27dcc.title.\"The Tragical History of Doctor Faustus\""))
@@ -1264,7 +1259,6 @@ class TranslateSPARQL extends FunSuite:
 
 
     val algblind = Algebra.compile(blindNodes)
-    println(algblind)
 
 
     val t = translate(algblind)
@@ -1328,9 +1322,7 @@ class TranslateSPARQL extends FunSuite:
         |""".stripMargin).asQuery()
 
     val algOptFilter = Algebra.compile(optionalFilter)
-    println(algOptFilter)
     val t5 = translate(algOptFilter)
-    println(eval(t5).show)
     // assert(eval(t5)(using sc = context) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
     assert(eval(t5) == SpaceValue("R252f02a6.name.CharlieFN", "R739c1f7f.name.Dora", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
 
@@ -1346,7 +1338,6 @@ class TranslateSPARQL extends FunSuite:
                                                           |}
                                                           |""".stripMargin).asQuery()
     val algOpt2Filter = Algebra.compile(optionalFilter2)
-    println(algOpt2Filter)
     val t6 = translate(algOpt2Filter)
     assert(eval(t6) == SpaceValue("R252f02a6.name.CharlieFN", "Rb9e3bf8d.age.25", "Rb9e3bf8d.name.AliceFN"))
 
