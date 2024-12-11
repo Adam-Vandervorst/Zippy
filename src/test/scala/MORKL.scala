@@ -885,17 +885,21 @@ class AlgebraSPARQL extends FunSuite:
   def hyperLeftJoin(s1: VarMappings, s2: VarMappings, filter: VarMapping => VarMapping = (s => s)): VarMappings =
     hyperFilter(hyperJoin(s1, s2), filter) \/ hyperDifference(s1, s2, filter)
 
-  def filterStringEquals(s1: VarMapping, v: String, to_match: String): VarMapping =
-    (s1(v) <| Singleton(to_match)).tee(s1)
+  def filterVarEqualsString(s1: VarMapping, v: String, to_match: String): VarMapping =
+    (s1(v) /\ Singleton(to_match)).tee(s1)
+  def filterVarEqualsVar(s1: VarMapping, v1: String, v2: String): VarMapping =
+    (s1(v1) /\ s1(v2)).tee(s1)
+  def filterStringEqualsString(s1: VarMapping, c1: String, c2: String): VarMapping =
+    if c1 == c2 then s1 else Space.Empty
 
 
   def filterLessThan(s1: VarMapping, v: String, i: Int): VarMapping =
     (s1(v) <| range(f"0.${i.toString}.1")).tee(s1)
   def filterLessThanVars(s1: VarMapping, v1: String, v2: String): VarMapping =
+    // TODO use max or min to assert that s1(v1) and s1(v2) only have one element
     (s1(v1) <| s1(v2).iter("i", "_", range("0" x P"i" x "1"))).tee(s1)
   def filterLessThanCons(s1: VarMapping, i1: Int, i2: Int): VarMapping =
-    // if i1 >= i2, range is empty
-    range(i1.toString x i2.toString x "1").tee(s1)
+    if i1 < i2 then s1 else Space.Empty
 
   def filterLessOrEqual(s1: VarMapping, v: String, i: Int): VarMapping =
     (s1(v) <| range(f"0.${(i + 1).toString}.1")).tee(s1)
@@ -905,7 +909,7 @@ class AlgebraSPARQL extends FunSuite:
   def filterGreaterThanVars(s1: VarMapping, v1: String, v2: String): VarMapping =
     filterLessThanVars(s1, v2, v1)
   def filterGreaterThanCons(s1: VarMapping, i1: Int, i2: Int): VarMapping =
-    filterLessThanCons(s1, i2, i1)
+    if i1 > i2 then s1 else Space.Empty
 
   def filterGreaterOrEqual(s1: VarMapping, v: String, i: Int, max: Int = 2000): VarMapping =
     (s1(v) <| range(f"${i.toString}.${max.toString}.1")).tee(s1)
@@ -1130,43 +1134,68 @@ class TranslateSPARQL extends FunSuite:
 
       case 3 => ???
 
-  def inequality_arg_match(arg1: Expr, arg2: Expr, base: (Space, String, Int) => Space, opp: (Space, String, Int) => Space, doublevar: (Space, String, String) => Space, doubleint: (Space, Int, Int) => Space): (Space => Space) =
-    (arg1, arg2) match
-      case (a1, a2) if a1.isVariable & a2.isConstant =>
-        s => base(s, a1.asVar().getName, a2.getConstant.toString.toInt)
-      case (a1, a2) if a1.isConstant & a2.isVariable =>
-        assert(a1.getConstant.isInteger)
-        s => opp(s, a2.asVar().getName, a1.getConstant.toString.toInt)
-      case (a1, a2) if a1.isVariable & a2.isVariable =>
-        s => doublevar(s, a1.asVar().getName, a2.asVar().getName)
-      case (a1, a2) if a1.isConstant & a2.isConstant =>
-        s => doubleint(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
-      case (a1, a2) =>
-        println(s"unsupported inequality between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
-        ???
 
   def get_filter_function(ex: Expr): Space => Space =
     // TODO arguments can also both be variables or integers or ... in numerical comparisons
     // assumes first argument is a variable and second argument is an integer
     ex match
       case e: E_LessThan =>
-        inequality_arg_match(
-          e.getArg1, e.getArg2,
-          base = filterLessThan,
-          opp = (s, v, i) => filterGreaterThan(s, v, i),
-          doublevar = sparqlAlg.filterLessThanVars,
-          doubleint = sparqlAlg.filterLessThanCons)
+        (e.getArg1, e.getArg2) match
+          case (a1, a2) if a1.isVariable & a2.isConstant =>
+            s => filterLessThan(s, a1.asVar().getName, a2.getConstant.toString.toInt)
+          case (a1, a2) if a1.isConstant & a2.isVariable =>
+            assert(a1.getConstant.isInteger)
+            s => filterGreaterThan(s, a2.asVar().getName, a1.getConstant.toString.toInt)
+          case (a1, a2) if a1.isVariable & a2.isVariable =>
+            s => sparqlAlg.filterLessThanVars(s, a1.asVar().getName, a2.asVar().getName)
+          case (a1, a2) if a1.isConstant & a2.isConstant =>
+            assert(a1.getConstant.isInteger && a2.getConstant.isInteger)
+            s => sparqlAlg.filterLessThanCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
+          case (a1, a2) =>
+            println(s"unsupported Less Than between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
+            ???
       case e: E_LessThanOrEqual => (s => filterLessOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
       case e: E_GreaterThan =>
-        inequality_arg_match(
-          e.getArg1, e.getArg2,
-          base = (s, v, i) => filterGreaterThan(s, v, i),
-          opp = filterLessThan,
-          doublevar = sparqlAlg.filterGreaterThanVars,
-          doubleint = sparqlAlg.filterGreaterThanCons)
+        (e.getArg1, e.getArg2) match
+          case (a1, a2) if a1.isVariable & a2.isConstant =>
+            s => filterGreaterThan(s, a1.asVar().getName, a2.getConstant.toString.toInt)
+          case (a1, a2) if a1.isConstant & a2.isVariable =>
+            assert(a1.getConstant.isInteger)
+            s => filterLessThan(s, a2.asVar().getName, a1.getConstant.toString.toInt)
+          case (a1, a2) if a1.isVariable & a2.isVariable =>
+            // This will compare the strings of the objects attached to the variables
+            // Might not work for dates, doubles, ...
+            s => sparqlAlg.filterGreaterThanVars(s, a1.asVar().getName, a2.asVar().getName)
+          case (a1, a2) if a1.isConstant & a2.isConstant =>
+            s => sparqlAlg.filterGreaterThanCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
+          case (a1, a2) =>
+            println(s"unsupported Greater Than between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
+            ???
       case e: E_GreaterThanOrEqual => (s => filterGreaterOrEqual(s, e.getArg1.asVar().getName, e.getArg2.getConstant.toString.toInt))
-      case e: E_Equals => // TODO differ between number equals and string equals
-        (s => sparqlAlg.filterStringEquals(s, e.getArg1.asVar().getName, get_str(e.getArg2.getConstant.asNode())))
+      case e: E_Equals =>
+        (e.getArg1, e.getArg2) match
+          case (a1, a2) if a1.isVariable & a2.isConstant =>
+            a2.getConstant match
+              case c2 if c2.isString || c2.isInteger || c2.isIRI =>
+                (s => sparqlAlg.filterVarEqualsString(s, a1.asVar().getName, get_str(a2.getConstant.asNode())))
+              case c2 =>
+                println(s"unsupported equality between variable and $c2 (${c2.getClass.getName})")
+                ???
+          case (a1, a2) if a1.isConstant & a2.isVariable =>
+            a1.getConstant match
+              case c1 if c1.isString || c1.isInteger || c1.isIRI => (s => sparqlAlg.filterVarEqualsString(s, a2.asVar().getName, get_str(a1.getConstant.asNode())))
+              case c1 => println(s"unsupported equality between $c1 (${c1.getClass.getName}) and variable")
+                ???
+          case (a1, a2) if a1.isVariable & a2.isVariable => (s => sparqlAlg.filterVarEqualsVar(s, a1.asVar().getName, a2.asVar().getName))
+          case (a1, a2) if a1.isConstant & a2.isConstant =>
+            (a1.getConstant, a2.getConstant) match
+              case (c1, c2) if (c1.isString & c2.isString) || (c1.isInteger & c2.isInteger) || (c1.isIRI & c2.isIRI) =>
+                (s => sparqlAlg.filterStringEqualsString(s, get_str(c1.asNode()), get_str(c2.asNode())))
+              case (c1, c2) =>
+                println(s"unsupported equality between constants $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
+                ???
+          case (a1, a2) => println(s"unsupported equality between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
+            ???
       case e: E_LogicalOr => (s => get_filter_function(e.getArg1)(s) \/ get_filter_function(e.getArg2)(s))
       case e: E_LogicalAnd => (s => get_filter_function(e.getArg1)(s) /\ get_filter_function(e.getArg2)(s))
       case e: E_LogicalNot => (s => filterNot(s, get_filter_function(e.getArg)))
@@ -1443,12 +1472,12 @@ class TranslateSPARQL extends FunSuite:
   test("specific funtionality"){
     val context: SpaceContextMap = SpaceContextMap(Map(
       SpaceMention("SPO") -> SpaceValue(
-        "A.FN.Alice", "A.age.25",
-        "B.FN.Bob", "B.age.28",
-        "C.FN.CharlieFN", "C.age.51",
+        "A.FN.Alice", "A.age.25", "A.family.Smith",
+        "B.FN.Bob", "B.age.28", "B.family.Bouwer",
+        "C.FN.CharlieFN", "C.age.51", "C.family.Smith",
         "D.FN.Dora", "D.age.20"),
-      SpaceMention("PSO") -> SpaceValue("FN.A.Alice", "FN.B.Bob", "FN.C.CharlieFN", "FN.D.Dora", "age.A.25", "age.B.28", "age.C.51", "age.D.20"),
-      SpaceMention("POS") -> SpaceValue("FN.Alice.A", "FN.Bob.B", "FN.CharlieFN.C", "FN.Dora.D", "age.20.D", "age.25.A", "age.28.B", "age.51.C")
+      SpaceMention("PSO") -> SpaceValue("FN.A.Alice", "FN.B.Bob", "FN.C.CharlieFN", "FN.D.Dora", "age.A.25", "age.B.28", "age.C.51", "age.D.20", "family.A.Smith", "family.B.Bouwer", "family.C.Smith"),
+      SpaceMention("POS") -> SpaceValue("FN.Alice.A", "FN.Bob.B", "FN.CharlieFN.C", "FN.Dora.D", "age.20.D", "age.25.A", "age.28.B", "age.51.C", "family.Smith.A", "family.Bouwer.B", "family.Smith.C")
     ))
     given SpaceContext = context
 
@@ -1620,6 +1649,217 @@ class TranslateSPARQL extends FunSuite:
     val filterConsGreaterThanConsNegMORKL = translate(filterConsGreaterThanConsNegAlg)
 
     assert(eval(filterConsLessThanConsNegMORKL) == SpaceValue())
+
+
+    val filterVarEqualsStringQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN ?name .
+        | FILTER ( ?name = "Alice")
+        |}""".stripMargin).asQuery()
+
+    val filterVarEqualsStringAlgebra = Algebra.compile(filterVarEqualsStringQuery)
+    val filterVarEqualsStringMORKL = translate(filterVarEqualsStringAlgebra)
+
+    // println(eval(filterVarEqualsStringMORKL).show)
+    assert(eval(filterVarEqualsStringMORKL) == SpaceValue("R5caa4e81.name.Alice"))
+
+    val filterStringEqualsVarQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN ?name .
+        | FILTER ("Alice" = ?name)
+        |}""".stripMargin).asQuery()
+
+    val filterStringEqualsVarAlgebra = Algebra.compile(filterStringEqualsVarQuery)
+    val filterStringEqualsVarMORKL = translate(filterStringEqualsVarAlgebra)
+
+    // println(eval(filterVarEqualsStringMORKL).show)
+    assert(eval(filterStringEqualsVarMORKL) == SpaceValue("R5caa4e81.name.Alice"))
+
+
+    val filterVarEqualsIntQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?person
+        |WHERE
+        |{
+        | ?person info:age ?age
+        | FILTER ( ?age = 20)
+        |}""".stripMargin).asQuery()
+
+    val filterVarEqualsIntAlgebra = Algebra.compile(filterVarEqualsIntQuery)
+    val filterVarEqualsIntMORKL = translate(filterVarEqualsIntAlgebra)
+
+    // println(eval(filterVarEqualsIntMORKL).show)
+    assert(eval(filterVarEqualsIntMORKL) == SpaceValue("Ra1467c53.person.D"))
+
+    val filterIntEqualsVarQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?person
+        |WHERE
+        |{
+        | ?person info:age ?age
+        | FILTER (20 = ?age)
+        |}""".stripMargin).asQuery()
+
+    val filterIntEqualsVarAlgebra = Algebra.compile(filterIntEqualsVarQuery)
+    val filterIntEqualsVarMORKL = translate(filterIntEqualsVarAlgebra)
+
+    // println(eval(filterIntEqualsVarMORKL).show)
+    assert(eval(filterIntEqualsVarMORKL) == SpaceValue("Ra1467c53.person.D"))
+
+
+    val filterVarEqualsIRIQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        | ?person ?p ?name
+        | FILTER (?p = vcard:FN)
+        |}""".stripMargin).asQuery()
+
+    val filterVarEqualsIRIAlgebra = Algebra.compile(filterVarEqualsIRIQuery)
+    val filterVarEqualsIRIMORKL = translate(filterVarEqualsIRIAlgebra)
+
+    // println(eval(filterVarEqualsIRIMORKL).show)
+    assert(eval(filterVarEqualsIRIMORKL) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora")
+    )
+
+    val filterIRIEqualsVarQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        | ?person ?p ?name
+        | FILTER (vcard:FN = ?p)
+        |}""".stripMargin).asQuery()
+
+    val filterIRIEqualsVarAlgebra = Algebra.compile(filterIRIEqualsVarQuery)
+    val filterIRIEqualsVarMORKL = translate(filterIRIEqualsVarAlgebra)
+
+    // println(eval(filterIRIEqualsVarMORKL).show)
+    assert(eval(filterIRIEqualsVarMORKL) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
+
+    val filterVarEqualsVarQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?person1 ?person2
+        |WHERE
+        |{
+        | ?person1 info:family ?family1 .
+        | ?person2 info:family ?family2 .
+        | FILTER (?family1 = ?family2) .
+        |}""".stripMargin).asQuery()
+
+    val filterVarEqualsVarAlgebra = Algebra.compile(filterVarEqualsVarQuery)
+    val filterVarEqualsVarMORKL = translate(filterVarEqualsVarAlgebra)
+
+    // println(eval(filterVarEqualsVarMORKL).show)
+    assert(eval(filterVarEqualsVarMORKL) == SpaceValue("R13c5b67a.person1.A", "R13c5b67a.person2.C", "R2710c9c9.person1.B", "R2710c9c9.person2.B", "R73b91de9.person1.C", "R73b91de9.person2.C", "R861c57a0.person1.C", "R861c57a0.person2.A", "Rd194f6fa.person1.A", "Rd194f6fa.person2.A"))
+
+
+    val filterStringEqualsStringNegQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN ?name .
+        | FILTER ( "hello" = "ehllo")
+        |}""".stripMargin).asQuery()
+
+    val filterStringEqualsStringNegAlg = Algebra.compile(filterStringEqualsStringNegQuery)
+    val filterStringEqualsStringNegMORKL = translate(filterStringEqualsStringNegAlg)
+
+    // println(eval(filterStringEqualsStringNegMORKL).show)
+    assert(eval(filterStringEqualsStringNegMORKL) == SpaceValue())
+
+    val filterStringEqualsStringPosQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN ?name .
+        | FILTER ( "hello" = "hello")
+        |}""".stripMargin).asQuery()
+
+    val filterStringEqualsStringPosAlg = Algebra.compile(filterStringEqualsStringPosQuery)
+    val filterStringEqualsStringPosMORKL = translate(filterStringEqualsStringPosAlg)
+
+    assert(eval(filterStringEqualsStringPosMORKL) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
+
+
+    val filterStringEqualsIntPosQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN ?name .
+        | FILTER ( 5 = 5)
+        |}""".stripMargin).asQuery()
+
+    val filterStringEqualsIntPosAlg = Algebra.compile(filterStringEqualsIntPosQuery)
+    val filterStringEqualsIntPosMORKL = translate(filterStringEqualsIntPosAlg)
+
+    assert(eval(filterStringEqualsIntPosMORKL) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
+
+    val filterStringEqualsIntNegQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN ?name .
+        | FILTER ( 4 = 5)
+        |}""".stripMargin).asQuery()
+
+    val filterStringEqualsIntNegAlg = Algebra.compile(filterStringEqualsIntNegQuery)
+    val filterStringEqualsIntNegMORKL = translate(filterStringEqualsIntNegAlg)
+
+    assert(eval(filterStringEqualsIntNegMORKL) == SpaceValue())
+
+
+    val filterStringEqualsIRIPosQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN ?name .
+        | FILTER ( vcard:FN = vcard:FN)
+        |}""".stripMargin).asQuery()
+
+    val filterStringEqualsIRIPosAlg = Algebra.compile(filterStringEqualsIRIPosQuery)
+    val filterStringEqualsIRIPosMORKL = translate(filterStringEqualsIRIPosAlg)
+
+    assert(eval(filterStringEqualsIRIPosMORKL) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
+
+    val filterStringEqualsIRINegQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN ?name .
+        | FILTER ( vcard:FN = info:name)
+        |}""".stripMargin).asQuery()
+
+    val filterStringEqualsIRINegAlg = Algebra.compile(filterStringEqualsIRINegQuery)
+    val filterStringEqualsIRINegMORKL = translate(filterStringEqualsIRINegAlg)
+
+    assert(eval(filterStringEqualsIRINegMORKL) == SpaceValue())
 
     // val alg = AlgebraSPARQL()
     // val e = S"SPO"("A.age").iter("age", "_", S"SPO"("A.age") <| alg.range(P"age" x "100" x "1"))
