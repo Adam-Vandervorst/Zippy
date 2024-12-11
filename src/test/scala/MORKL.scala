@@ -1595,7 +1595,7 @@ class TranslateSPARQL extends FunSuite:
   }
 
 
-  test("filter greater than") {
+  test("greater than filters") {
     given SpaceContext = context
 
     val filterIntGreaterThanVarQuery = new ParameterizedSparqlString(
@@ -1665,7 +1665,7 @@ class TranslateSPARQL extends FunSuite:
     assert(eval(filterConsGreaterThanConsNegMORKL) == SpaceValue())
   }
 
-  test("filter equals"){
+  test("equal filters"){
     given SpaceContext = context
 
     val filterVarEqualsStringQuery = new ParameterizedSparqlString(
