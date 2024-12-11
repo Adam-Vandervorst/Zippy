@@ -1469,44 +1469,48 @@ class TranslateSPARQL extends FunSuite:
 
   }
 
-  test("specific funtionality"){
-    val context: SpaceContextMap = SpaceContextMap(Map(
-      SpaceMention("SPO") -> SpaceValue(
-        "A.FN.Alice", "A.age.25", "A.family.Smith",
-        "B.FN.Bob", "B.age.28", "B.family.Bouwer",
-        "C.FN.CharlieFN", "C.age.51", "C.family.Smith",
-        "D.FN.Dora", "D.age.20"),
-      SpaceMention("PSO") -> SpaceValue("FN.A.Alice", "FN.B.Bob", "FN.C.CharlieFN", "FN.D.Dora", "age.A.25", "age.B.28", "age.C.51", "age.D.20", "family.A.Smith", "family.B.Bouwer", "family.C.Smith"),
-      SpaceMention("POS") -> SpaceValue("FN.Alice.A", "FN.Bob.B", "FN.CharlieFN.C", "FN.Dora.D", "age.20.D", "age.25.A", "age.28.B", "age.51.C", "family.Smith.A", "family.Bouwer.B", "family.Smith.C")
-    ))
+  val context: SpaceContextMap = SpaceContextMap(Map(
+    SpaceMention("SPO") -> SpaceValue(
+      "A.FN.Alice", "A.age.25", "A.family.Smith",
+      "B.FN.Bob", "B.age.28", "B.family.Bouwer",
+      "C.FN.CharlieFN", "C.age.51", "C.family.Smith",
+      "D.FN.Dora", "D.age.20"),
+    SpaceMention("PSO") -> SpaceValue("FN.A.Alice", "FN.B.Bob", "FN.C.CharlieFN", "FN.D.Dora", "age.A.25", "age.B.28", "age.C.51", "age.D.20", "family.A.Smith", "family.B.Bouwer", "family.C.Smith"),
+    SpaceMention("POS") -> SpaceValue("FN.Alice.A", "FN.Bob.B", "FN.CharlieFN.C", "FN.Dora.D", "age.20.D", "age.25.A", "age.28.B", "age.51.C", "family.Smith.A", "family.Bouwer.B", "family.Smith.C")
+  ))
+
+  test("double filters") {
+
     given SpaceContext = context
 
     // print_context_permutations(context)
 
-    val twoFiltersInOptionalQuery = new ParameterizedSparqlString("""PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
-                                                                    |PREFIX info:    <http://somewhere/peopleInfo#>
-                                                                    |SELECT ?name ?age
-                                                                    |WHERE
-                                                                    |{
-                                                                    |	?person vcard:FN  ?name .
-                                                                    |	OPTIONAL { ?person info:age ?age . FILTER ( ?age > 20 ) . FILTER ( ?age < 30)}
-                                                                    |}""".stripMargin).asQuery()
+    val twoFiltersInOptionalQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name ?age
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |	OPTIONAL { ?person info:age ?age . FILTER ( ?age > 20 ) . FILTER ( ?age < 30)}
+        |}""".stripMargin).asQuery()
 
     val twoFiltersInOptionalAlg = Algebra.compile(twoFiltersInOptionalQuery)
     val twoFiltersInOptionalMORKL = translate(twoFiltersInOptionalAlg)
 
     assert(eval(twoFiltersInOptionalMORKL) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "R252f02a6.name.CharlieFN", "R739c1f7f.name.Dora", "Ra8769d5b.age.28", "Ra8769d5b.name.Bob"))
 
-    val twoExprsInFilterQuery = new ParameterizedSparqlString("""PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
-                                                                  |PREFIX info:    <http://somewhere/peopleInfo#>
-                                                                  |SELECT ?name ?age
-                                                                  |WHERE
-                                                                  |{
-                                                                  |	?person vcard:FN  ?name .
-                                                                  |	?person info:age ?age .
-                                                                  | FILTER ( ?age > 20 )
-                                                                  | FILTER(?age < 30)
-                                                                  |}""".stripMargin).asQuery()
+    val twoExprsInFilterQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name ?age
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |	?person info:age ?age .
+        | FILTER ( ?age > 20 )
+        | FILTER(?age < 30)
+        |}""".stripMargin).asQuery()
 
     val twoExprsInFilterAlg = Algebra.compile(twoExprsInFilterQuery)
     // println(twoExprsInFilterAlg)
@@ -1519,24 +1523,12 @@ class TranslateSPARQL extends FunSuite:
 
     val twoExprsInFilterMORKL = translate(twoExprsInFilterAlg)
     assert(eval(twoExprsInFilterMORKL) == SpaceValue("R24e793cb.age.25", "R24e793cb.name.Alice", "Ra8769d5b.age.28", "Ra8769d5b.name.Bob"))
+  }
 
-    val filterIntLessThanVarQuery = new ParameterizedSparqlString("""PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
-                                                               |PREFIX info:    <http://somewhere/peopleInfo#>
-                                                               |SELECT ?name ?age
-                                                               |WHERE
-                                                               |{
-                                                               |	?person vcard:FN  ?name .
-                                                               |	?person info:age ?age .
-                                                               |  FILTER ( 25 < ?age)
-                                                               |}""".stripMargin).asQuery()
+  test("less than filters") {
+    given SpaceContext = context
 
-    val filterIntLessThanVarAlg = Algebra.compile(filterIntLessThanVarQuery)
-    val filterIntLessThanVarMORKL = translate(filterIntLessThanVarAlg)
-
-    //println(eval(filterIntLessThanVarMORKL).show)
-    assert(eval(filterIntLessThanVarMORKL) == SpaceValue("R6e648a5d.age.51", "R6e648a5d.name.CharlieFN", "Ra8769d5b.age.28", "Ra8769d5b.name.Bob"))
-
-    val filterIntGreaterThanVarQuery = new ParameterizedSparqlString(
+    val filterIntLessThanVarQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
         |PREFIX info:    <http://somewhere/peopleInfo#>
         |SELECT ?name ?age
@@ -1544,14 +1536,14 @@ class TranslateSPARQL extends FunSuite:
         |{
         |	?person vcard:FN  ?name .
         |	?person info:age ?age .
-        |  FILTER ( 25 > ?age)
+        |  FILTER ( 25 < ?age)
         |}""".stripMargin).asQuery()
 
-    val filterIntGreaterThanVarAlg = Algebra.compile(filterIntGreaterThanVarQuery)
-    val filterIntGreaterThanVarMORKL = translate(filterIntGreaterThanVarAlg)
+    val filterIntLessThanVarAlg = Algebra.compile(filterIntLessThanVarQuery)
+    val filterIntLessThanVarMORKL = translate(filterIntLessThanVarAlg)
 
-    // println(eval(filterIntGreaterThanVarMORKL).show)
-    assert(eval(filterIntGreaterThanVarMORKL) == SpaceValue("Re15e3a2f.age.20", "Re15e3a2f.name.Dora"))
+    //println(eval(filterIntLessThanVarMORKL).show)
+    assert(eval(filterIntLessThanVarMORKL) == SpaceValue("R6e648a5d.age.51", "R6e648a5d.name.CharlieFN", "Ra8769d5b.age.28", "Ra8769d5b.name.Bob"))
 
     val filterVarLessThanVarQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -1570,24 +1562,6 @@ class TranslateSPARQL extends FunSuite:
     val filterVarLessThanVarMORKL = translate(filterVarLessThanVarAlg)
 
     assert(eval(filterVarLessThanVarMORKL) == SpaceValue("R3a6c1807.age1.25", "R3a6c1807.age2.28", "R561941bb.age1.20", "R561941bb.age2.28", "R71b32826.age1.28", "R71b32826.age2.51", "R966b0251.age1.20", "R966b0251.age2.25", "R99fc5b9a.age1.25", "R99fc5b9a.age2.51", "Rc264a24d.age1.20", "Rc264a24d.age2.51"))
-
-    val filterVarGreaterThanVarQuery = new ParameterizedSparqlString(
-      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
-        |PREFIX info:    <http://somewhere/peopleInfo#>
-        |SELECT ?age1 ?age2
-        |WHERE
-        |{
-        |	?person1 vcard:FN  ?name1 .
-        |	?person1 info:age ?age1 .
-        | ?person2 vcard:FN  ?name2 .
-        |	?person2 info:age ?age2 .
-        | FILTER ( ?age2 > ?age1)
-        |}""".stripMargin).asQuery()
-
-    val filterVarGreaterThanVarAlg = Algebra.compile(filterVarGreaterThanVarQuery)
-    val filterVarGreaterThanVarMORKL = translate(filterVarGreaterThanVarAlg)
-
-    assert(eval(filterVarGreaterThanVarMORKL) == SpaceValue("R3a6c1807.age1.25", "R3a6c1807.age2.28", "R561941bb.age1.20", "R561941bb.age2.28", "R71b32826.age1.28", "R71b32826.age2.51", "R966b0251.age1.20", "R966b0251.age2.25", "R99fc5b9a.age1.25", "R99fc5b9a.age2.51", "Rc264a24d.age1.20", "Rc264a24d.age2.51"))
 
     val filterConsLessThanConsPosQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -1618,6 +1592,46 @@ class TranslateSPARQL extends FunSuite:
     val filterConsLessThanConsNegMORKL = translate(filterConsLessThanConsNegAlg)
 
     assert(eval(filterConsLessThanConsNegMORKL) == SpaceValue())
+  }
+
+
+  test("filter greater than") {
+    given SpaceContext = context
+
+    val filterIntGreaterThanVarQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name ?age
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |	?person info:age ?age .
+        |  FILTER ( 25 > ?age)
+        |}""".stripMargin).asQuery()
+
+    val filterIntGreaterThanVarAlg = Algebra.compile(filterIntGreaterThanVarQuery)
+    val filterIntGreaterThanVarMORKL = translate(filterIntGreaterThanVarAlg)
+
+    // println(eval(filterIntGreaterThanVarMORKL).show)
+    assert(eval(filterIntGreaterThanVarMORKL) == SpaceValue("Re15e3a2f.age.20", "Re15e3a2f.name.Dora"))
+
+    val filterVarGreaterThanVarQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?age1 ?age2
+        |WHERE
+        |{
+        |	?person1 vcard:FN  ?name1 .
+        |	?person1 info:age ?age1 .
+        | ?person2 vcard:FN  ?name2 .
+        |	?person2 info:age ?age2 .
+        | FILTER ( ?age2 > ?age1)
+        |}""".stripMargin).asQuery()
+
+    val filterVarGreaterThanVarAlg = Algebra.compile(filterVarGreaterThanVarQuery)
+    val filterVarGreaterThanVarMORKL = translate(filterVarGreaterThanVarAlg)
+
+    assert(eval(filterVarGreaterThanVarMORKL) == SpaceValue("R3a6c1807.age1.25", "R3a6c1807.age2.28", "R561941bb.age1.20", "R561941bb.age2.28", "R71b32826.age1.28", "R71b32826.age2.51", "R966b0251.age1.20", "R966b0251.age2.25", "R99fc5b9a.age1.25", "R99fc5b9a.age2.51", "Rc264a24d.age1.20", "Rc264a24d.age2.51"))
 
 
     val filterConsGreaterThanConsPosQuery = new ParameterizedSparqlString(
@@ -1648,8 +1662,11 @@ class TranslateSPARQL extends FunSuite:
     val filterConsGreaterThanConsNegAlg = Algebra.compile(filterConsGreaterThanConsNegQuery)
     val filterConsGreaterThanConsNegMORKL = translate(filterConsGreaterThanConsNegAlg)
 
-    assert(eval(filterConsLessThanConsNegMORKL) == SpaceValue())
+    assert(eval(filterConsGreaterThanConsNegMORKL) == SpaceValue())
+  }
 
+  test("filter equals"){
+    given SpaceContext = context
 
     val filterVarEqualsStringQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
