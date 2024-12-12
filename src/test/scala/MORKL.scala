@@ -3,7 +3,7 @@ package morkl
 import morkl.Space.Singleton
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
-import org.apache.jena.sparql.expr.{E_Bound, E_Equals, E_GreaterThan, E_GreaterThanOrEqual, E_LessThanOrEqual, E_LogicalAnd, E_LogicalNot, E_LogicalOr, Expr, ExprFunction, ExprList}
+import org.apache.jena.sparql.expr.{E_Bound, E_Equals, E_GreaterThan, E_GreaterThanOrEqual, E_LessThanOrEqual, E_LogicalAnd, E_LogicalNot, E_LogicalOr, E_NotEquals, Expr, ExprFunction, ExprList}
 
 
 /*class MORKL2Path extends FunSuite:
@@ -431,6 +431,9 @@ class Grounded extends FunSuite:
       "male.Tom", "male.Bob", "male.Jim",
       "person.Tom", "person.Bob", "person.Jim", "person.Pam", "person.Liz", "person.Pat", "person.Ann"),
     SpaceMention("people") -> SpaceValue("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")))
+
+  def symbol_concat(path: Path, sep: String = " "): Path =
+    Path.GroundedPP(path, pv => PathValue(List(PathItem.Symbol(pv.items.mkString(sep)))))
 
   def hash(path: Path): Path =
     Path.GroundedPP(path, pv => PathValue(List(PathItem.Symbol("R" + pv.hashCode().toHexString))))
@@ -1055,6 +1058,7 @@ class TranslateSPARQL extends FunSuite:
     })
 
   val g = Grounded()
+  def symbol_concat(path: Path, sep: String = " "): Path = g.symbol_concat(path, sep)
   def phash(path: Path) = g.hash(path)
   def shash(space: Space) = g.hash(space)
 
@@ -1204,7 +1208,6 @@ class TranslateSPARQL extends FunSuite:
           s => sparqlAlg.filterGreaterOrEqualVars(s, a1.asVar().getName, a2.asVar().getName)
         case (a1, a2) if a1.isConstant & a2.isConstant =>
           assert(a1.getConstant.isInteger && a2.getConstant.isInteger)
-          println("right case")
           s => sparqlAlg.filterGreaterOrEqualCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
         case (a1, a2) =>
           println(s"unsupported Less Than between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
@@ -1247,7 +1250,14 @@ class TranslateSPARQL extends FunSuite:
     case op: OpProject =>
       val t = translate(op.getSubOp)
       val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
-      val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
+      val e = op.getSubOp match
+        case op2: OpOrder =>
+          t.iter("order", "hvv", S"hvv".iter("h", "vv", P"order" x prefixHash(S"vv" <| varspace)))
+        case _ =>
+          t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
+      // val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace).iter("nhash", "space",
+      //   symbol_concat(P"hash" x P"nhash") x S"space"
+      // ))
       e
 
     case op: OpBGP =>
@@ -1271,6 +1281,21 @@ class TranslateSPARQL extends FunSuite:
     case op: OpUnion =>
       val e = translate(op.getLeft) \/ translate(op.getRight)
       e
+
+    case op: OpOrder =>
+      val c1 = op.getConditions.get(0)
+      c1.getDirection match
+        case -2 =>
+          assert(c1.getExpression.isVariable)
+          val v = c1.getExpression.asVar().getName
+          val e = translate(op.getSubOp)
+          // e.iter("h", "vc", S"vc"(v).iter("c", "_", symbol_concat("c" x P"h") x S"vc"))
+          // TODO what to use as prefix for unordered elements
+          e.iter("h", "vc", S"vc"(v).iter("c", "_", P"c" x P"h" x S"vc") \/ sparqlAlg.if_empty_do(S"vc"(v), "0" x P"h" x S"vc"))
+
+        case d =>
+          println(s"unhandled order direction $d")
+          ???
 
     case op =>
       println(s"unhandled case $op")
@@ -1330,7 +1355,7 @@ class TranslateSPARQL extends FunSuite:
     val context: SpaceContextMap = SpaceContextMap(Map(
       SpaceMention("SPO") -> SpaceValue(
         "A.type.Person", "A.name.Alice", "A.FN.AliceFN", "A.age.25", "Alice.Family.Smith", "Alice.Given.Lis", "Alice.Given.Al", "Mel.Family.Smith",
-        "B.type.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bow",
+        "B.type.Person", "B.name.Bob", "B.age.12", "Bob.Family.Bouwer", "Bob.Given.Bobbie",
         "C.name.Charlie", "C.FN.CharlieFN",
         "D.type.Person", "D.FN.Dora", "D.age.20"),
       SpaceMention("PSO") -> SpaceValue(
@@ -1339,7 +1364,7 @@ class TranslateSPARQL extends FunSuite:
         "name.A.Alice", "name.B.Bob", "name.C.Charlie",
         "FN.A.AliceFN", "FN.C.CharlieFN",
         "Family.Alice.Smith", "Given.Alice.Lis", "Given.Alice.Al", "Family.Mel.Smith",
-        "Family.Bob.Bouwer", "Given.Bob.Bow",
+        "Family.Bob.Bouwer", "Given.Bob.Bobbie",
         "type.D.Person", "FN.D.Dora", "age.D.20"),
       SpaceMention("POS") -> SpaceValue(
         "age.12.B", "age.25.A",
@@ -1347,7 +1372,7 @@ class TranslateSPARQL extends FunSuite:
         "name.Alice.A", "name.Bob.B", "name.Charlie.C",
         "FN.AliceFN.A", "FN.CharlieFN.C",
         "Family.Smith.Alice", "Given.Lis.Alice", "Given.Al.Alice", "Family.Smith.Mel",
-        "Family.Bouwer.Bob", "Given.Bob.Bow",
+        "Family.Bouwer.Bob", "Given.Bob.Bobbie",
         "type.Person.D", "FN.Dora.D", "age.20.D")
     ))
 
@@ -1399,6 +1424,9 @@ class TranslateSPARQL extends FunSuite:
         |}""".stripMargin).asQuery()
     val algdependent = Algebra.compile(dependentOptional)
     val t3 = translate(algdependent)
+    // println(eval(t3).show)
+
+    // Charlie is not labeled as person
     assert(eval(t3) == SpaceValue("R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
 
     val filterQuery = new ParameterizedSparqlString(
@@ -2061,6 +2089,75 @@ class TranslateSPARQL extends FunSuite:
 
     // println(eval(sparqlAlg.range("2.1.1")))
     // println(Range(2, 1, 1))
+
+
+  }
+
+  test("ordering"){
+    val ordering_context: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("SPO") -> SpaceValue(
+        "A.FN.Alice", "A.age.25",
+        "B.FN.Bob", "B.age.28",
+        "C.FN.Charlie", "C.age.25",
+        "D.FN.Dora"),
+      SpaceMention("PSO") -> SpaceValue("FN.A.Alice", "FN.B.Bob", "FN.C.Charlie", "FN.D.Dora", "age.A.25", "age.B.28", "age.C.25"),
+      SpaceMention("POS") -> SpaceValue("FN.Alice.A", "FN.Bob.B", "FN.Charlie.C", "FN.Dora.D", "age.25.A", "age.28.B", "age.25.C")
+    ))
+
+
+    given SpaceContext = ordering_context
+
+    val orderAgeQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |	?person info:age ?age .
+        |}
+        |ORDER BY ?age""".stripMargin).asQuery()
+
+    val orderAgeAlgebra = Algebra.compile(orderAgeQuery)
+    val orderAgeMORKL = translate(orderAgeAlgebra)
+
+    assert(eval(orderAgeMORKL) == SpaceValue("25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
+
+    // TODO
+    val orderAgeNameQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |	?person info:age ?age .
+        |}
+        |ORDER BY ?age ?name""".stripMargin).asQuery()
+
+    val orderAgeNameAlgebra = Algebra.compile(orderAgeNameQuery)
+    val orderAgeNameMORKL = translate(orderAgeNameAlgebra)
+
+    // println(eval(orderAgeNameMORKL))
+    // assert(eval(orderAgeNameMORKL) == SpaceValue("25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
+
+    val orderOptionalQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |	OPTIONAL {?person info:age ?age} .
+        |}
+        |ORDER BY ?age""".stripMargin).asQuery()
+
+    val orderOptionalAlgebra = Algebra.compile(orderOptionalQuery)
+    val orderOptionalMORKL = translate(orderOptionalAlgebra)
+
+    // TODO what to use as prefix for unordered elements (like Dorav in this example)
+    // println(eval(orderOptionalMORKL).show)
+    assert(eval(orderOptionalMORKL) == SpaceValue("0.R739c1f7f.name.Dora", "25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
 
 
   }
