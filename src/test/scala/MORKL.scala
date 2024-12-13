@@ -538,14 +538,12 @@ class SPARQL extends FunSuite:
   import Space.*
 
   val grounded = Grounded()
-  def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path = grounded.spaceout(space)(using ab: collection.mutable.ArrayBuffer[SpaceValue])
+  import grounded.{spaceout, range}
 
   def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
 
   extension (s: Space)
     def tee(run: Space): Space = s.iter("_1", "_2", run)
-
-  def range(path: Path): Space = grounded.range(path)
 
   val context: SpaceContextMap = SpaceContextMap(Map(
     SpaceMention("SPO") -> SpaceValue(
@@ -825,15 +823,10 @@ end SPARQL
 
 class AlgebraSPARQL extends FunSuite:
   val sparql = SPARQL()
-  def Head(space:Space): Space = sparql.Head(space)
-  extension (s: Space)
-    def tee(run: Space): Space = s.iter("_1", "_2", run)
+  import sparql.{Head, tee}
 
   val grounded = Grounded()
-  def range(path: Path): Space = grounded.range(path)
-  def phash(path: Path) = grounded.hash(path)
-  def shash(space: Space) = grounded.hash(space)
-
+  import grounded.{range, hash}
 
   type VarMapping = Space  // space with paths of the form varname.value
   type VarMappings = Space  // space with paths of the form hash.varname.value
@@ -858,7 +851,7 @@ class AlgebraSPARQL extends FunSuite:
 
   def hyperJoin(s1: VarMappings, s2: VarMappings): VarMappings =
     // s1.iter("h1", "tail1", S"tail1")
-    s1.iter("h1", "tail1", s2.iter("h2", "tail2", shash(join2(S"tail1", S"tail2")) x join2(S"tail1", S"tail2")))
+    s1.iter("h1", "tail1", s2.iter("h2", "tail2", hash(join2(S"tail1", S"tail2")) x join2(S"tail1", S"tail2")))
 
   def difference(s1: VarMapping, s2: VarMapping): VarMapping =
     // assuming filter = True
@@ -1043,6 +1036,16 @@ class TranslateSPARQL extends FunSuite:
 
   import Space.*
 
+  val g = Grounded()
+  import g.{symbol_concat, hash, spaceout}
+
+  val sparqlAlg = AlgebraSPARQL()
+  import sparqlAlg.*
+
+  val sparqlTests = SPARQL()
+  import sparqlTests.{tee, Head}
+
+
   def spo_to_pso = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p" x P"s") x S"o"))
 
   def spo_to_pos = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p") x S"o" x Singleton(P"s")))
@@ -1054,24 +1057,7 @@ class TranslateSPARQL extends FunSuite:
     println(eval(spo_to_pos)(using sc = c).show)
 
 
-  def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path =
-    Path.GroundedSP(space, sv => {
-      ab.addOne(sv);
-      PathValue(List(PathItem.Symbol("unit")))
-    })
-
-  val g = Grounded()
-  def symbol_concat(path: Path, sep: String = " "): Path = g.symbol_concat(path, sep)
-  def phash(path: Path) = g.hash(path)
-  def shash(space: Space) = g.hash(space)
-
-  def prefixHash(space: Space): Space = shash(space) x space
-
-
-  def Head(s: Space): Space = s.iter("s", "_", Singleton(P"s"))
-
-  extension (s: Space)
-    def tee(run: Space): Space = s.iter("_1", "_2", run)
+  def prefixHash(space: Space): Space = hash(space) x space
 
   extension (e: ExprList)
     def to_expression(): Expr =
@@ -1084,20 +1070,6 @@ class TranslateSPARQL extends FunSuite:
           val e_list = Range(0, e.size()).map(i => e.get(i))
           e_list.tail.foldLeft(e_list.head)((exp1, exp2) => E_LogicalAnd(exp1, exp2))
 
-  val sparqlAlg = AlgebraSPARQL()
-
-  def join2(s1: Space, s2: Space): Space = sparqlAlg.join2(s1, s2)
-  def hyperJoin(s1: Space, s2: Space): Space = sparqlAlg.hyperJoin(s1, s2)
-  def hyperLeftJoin(s1: Space, s2: Space, f: Space => Space): Space = sparqlAlg.hyperLeftJoin(s1, s2, f)
-  def filterGreaterThan(s1: Space, v: String, i: Int, m: Int = 2000): Space = sparqlAlg.filterGreaterThan(s1, v, i, m)
-  def filterGreaterOrEqual(s1: Space, v: String, i: Int, m: Int = 2000): Space = sparqlAlg.filterGreaterOrEqual(s1, v, i, m)
-  // def hyperFilterGreaterThan: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterGreaterThan
-  // def hyperFilterGreaterOrEqual: (Space, String, Int, Int) => Space = sparqlAlg.hyperFilterGreaterOrEqual
-  def filterLessThan(s1: Space, v: String, i: Int): Space = sparqlAlg.filterLessThan(s1, v, i)
-  def filterLessOrEqual(s1: Space, v: String, i: Int): Space = sparqlAlg.filterLessOrEqual(s1, v, i)
-  // def hyperFilterLessThan: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessThan
-  //def hyperFilterLessOrEqual: (Space, String, Int) => Space = sparqlAlg.hyperFilterLessOrEqual
-  def filterNot: (sparqlAlg.VarMapping, sparqlAlg.VarMapping => sparqlAlg.VarMapping) => sparqlAlg.VarMapping = sparqlAlg.filterNot
 
 
   def order_bgp(triple: org.apache.jena.graph.Triple): (IndexedSeq[Int], IndexedSeq[Int]) =
@@ -1166,7 +1138,7 @@ class TranslateSPARQL extends FunSuite:
             s => sparqlAlg.filterLessThanVars(s, a1.asVar().getName, a2.asVar().getName)
           case (a1, a2) if a1.isConstant & a2.isConstant =>
             assert(a1.getConstant.isInteger && a2.getConstant.isInteger)
-            s => sparqlAlg.filterLessThanCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
+            s => filterLessThanCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
           case (a1, a2) =>
             println(s"unsupported Less Than between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
             ???
@@ -1178,10 +1150,10 @@ class TranslateSPARQL extends FunSuite:
           assert(a1.getConstant.isInteger)
           s => filterGreaterOrEqual(s, a2.asVar().getName, a1.getConstant.toString.toInt)
         case (a1, a2) if a1.isVariable & a2.isVariable =>
-          s => sparqlAlg.filterLessOrEqualVars(s, a1.asVar().getName, a2.asVar().getName)
+          s => filterLessOrEqualVars(s, a1.asVar().getName, a2.asVar().getName)
         case (a1, a2) if a1.isConstant & a2.isConstant =>
           assert(a1.getConstant.isInteger && a2.getConstant.isInteger)
-          s => sparqlAlg.filterLessOrEqualCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
+          s => filterLessOrEqualCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
         case (a1, a2) =>
           println(s"unsupported Less Than between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
           ???
@@ -1195,9 +1167,9 @@ class TranslateSPARQL extends FunSuite:
           case (a1, a2) if a1.isVariable & a2.isVariable =>
             // This will compare the strings of the objects attached to the variables
             // Might not work for dates, doubles, ...
-            s => sparqlAlg.filterGreaterThanVars(s, a1.asVar().getName, a2.asVar().getName)
+            s => filterGreaterThanVars(s, a1.asVar().getName, a2.asVar().getName)
           case (a1, a2) if a1.isConstant & a2.isConstant =>
-            s => sparqlAlg.filterGreaterThanCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
+            s => filterGreaterThanCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
           case (a1, a2) =>
             println(s"unsupported Greater Than between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
             ???
@@ -1208,10 +1180,10 @@ class TranslateSPARQL extends FunSuite:
           assert(a1.getConstant.isInteger)
           s => filterLessOrEqual(s, a2.asVar().getName, a1.getConstant.toString.toInt)
         case (a1, a2) if a1.isVariable & a2.isVariable =>
-          s => sparqlAlg.filterGreaterOrEqualVars(s, a1.asVar().getName, a2.asVar().getName)
+          s => filterGreaterOrEqualVars(s, a1.asVar().getName, a2.asVar().getName)
         case (a1, a2) if a1.isConstant & a2.isConstant =>
           assert(a1.getConstant.isInteger && a2.getConstant.isInteger)
-          s => sparqlAlg.filterGreaterOrEqualCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
+          s => filterGreaterOrEqualCons(s, a1.getConstant.toString.toInt, a2.getConstant.toString.toInt)
         case (a1, a2) =>
           println(s"unsupported Less Than between $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
           ???
@@ -1220,20 +1192,20 @@ class TranslateSPARQL extends FunSuite:
           case (a1, a2) if a1.isVariable & a2.isConstant =>
             a2.getConstant match
               case c2 if c2.isString || c2.isInteger || c2.isIRI =>
-                (s => sparqlAlg.filterVarEqualsString(s, a1.asVar().getName, get_str(a2.getConstant.asNode())))
+                (s => filterVarEqualsString(s, a1.asVar().getName, get_str(a2.getConstant.asNode())))
               case c2 =>
                 println(s"unsupported equality between variable and $c2 (${c2.getClass.getName})")
                 ???
           case (a1, a2) if a1.isConstant & a2.isVariable =>
             a1.getConstant match
-              case c1 if c1.isString || c1.isInteger || c1.isIRI => (s => sparqlAlg.filterVarEqualsString(s, a2.asVar().getName, get_str(a1.getConstant.asNode())))
+              case c1 if c1.isString || c1.isInteger || c1.isIRI => (s => filterVarEqualsString(s, a2.asVar().getName, get_str(a1.getConstant.asNode())))
               case c1 => println(s"unsupported equality between $c1 (${c1.getClass.getName}) and variable")
                 ???
-          case (a1, a2) if a1.isVariable & a2.isVariable => (s => sparqlAlg.filterVarEqualsVar(s, a1.asVar().getName, a2.asVar().getName))
+          case (a1, a2) if a1.isVariable & a2.isVariable => (s => filterVarEqualsVar(s, a1.asVar().getName, a2.asVar().getName))
           case (a1, a2) if a1.isConstant & a2.isConstant =>
             (a1.getConstant, a2.getConstant) match
               case (c1, c2) if (c1.isString & c2.isString) || (c1.isInteger & c2.isInteger) || (c1.isIRI & c2.isIRI) =>
-                (s => sparqlAlg.filterStringEqualsString(s, get_str(c1.asNode()), get_str(c2.asNode())))
+                (s => filterStringEqualsString(s, get_str(c1.asNode()), get_str(c2.asNode())))
               case (c1, c2) =>
                 println(s"unsupported equality between constants $a1 (${a1.getClass.getName}) and $a2 (${a2.getClass.getName})")
                 ???
@@ -1278,7 +1250,7 @@ class TranslateSPARQL extends FunSuite:
 
     case op: OpFilter =>
       val f = get_filter_function(op.getExprs.to_expression())
-      val i1 = sparqlAlg.hyperFilter(translate(op.getSubOp), f)
+      val i1 = hyperFilter(translate(op.getSubOp), f)
       i1
 
     case op: OpUnion =>
@@ -1312,14 +1284,14 @@ class TranslateSPARQL extends FunSuite:
       if op.getConditions.size() == 1 then
         val c1 = op.getConditions.get(0)
         val v = c1.getExpression.asVar().getName
-        e.iter("h", "vc", S"vc"(v).iter("c", "_", P"c" x P"h" x S"vc") \/ sparqlAlg.if_empty_do(S"vc"(v), prefix_unordered x P"h" x S"vc"))
+        e.iter("h", "vc", S"vc"(v).iter("c", "_", P"c" x P"h" x S"vc") \/ if_empty_do(S"vc"(v), prefix_unordered x P"h" x S"vc"))
 
       else if op.getConditions.size() == 2 then
         val c0 = op.getConditions.get(0)
         val c1 = op.getConditions.get(1)
         val v0 = c0.getExpression.asVar().getName
         val v1 = c1.getExpression.asVar().getName
-        e.iter("h", "vc", sparqlAlg.if_nonempty_else(S"vc"(v0), Singleton(prefix_unordered)).iter("val0", "_", sparqlAlg.if_nonempty_else(S"vc"(v1), Singleton(prefix_unordered)).iter("val1", "_", Singleton(symbol_concat(P"val0" x P"val1")))) x Singleton(P"h") x S"vc")
+        e.iter("h", "vc", if_nonempty_else(S"vc"(v0), Singleton(prefix_unordered)).iter("val0", "_", if_nonempty_else(S"vc"(v1), Singleton(prefix_unordered)).iter("val1", "_", Singleton(symbol_concat(P"val0" x P"val1")))) x Singleton(P"h") x S"vc")
 
       else ??? // TODO more conditions
 
