@@ -847,6 +847,9 @@ class AlgebraSPARQL extends FunSuite:
   def if_empty_do(e: Space, todo: Space): Space =
     (Singleton("tobeempty") \ Head("tobeempty" x e)).tee(todo)
 
+  def if_nonempty_else(e: Space, ifempty: Space): Space =
+    e \/ if_empty_do(e, ifempty)
+
   def join(s1: VarMapping, s2: VarMapping): VarMapping =
     (Singleton("incompatible") \ Head("incompatible" x get_incompatible(s1, s2))).tee(s1 \/ s2)
 
@@ -1282,7 +1285,7 @@ class TranslateSPARQL extends FunSuite:
       val e = translate(op.getLeft) \/ translate(op.getRight)
       e
 
-    case op: OpOrder =>
+    /*case op: OpOrder =>
       val c1 = op.getConditions.get(0)
       c1.getDirection match
         case -2 =>
@@ -1295,7 +1298,32 @@ class TranslateSPARQL extends FunSuite:
 
         case d =>
           println(s"unhandled order direction $d")
-          ???
+          ???*/
+
+    case op: OpOrder =>
+      // TODO incorporate direction
+      // val varspace = Range(0, op.getConditions.size()).map(i => {
+      //  (i, op.getConditions.get(i).getExpression.asVar().getName)
+      //}).foldLeft(Space.Empty)((s1, tup) => s1 \/ (Singleton(tup._1.toString) x Singleton(tup._2)))
+      val prefix_unordered = "0"
+
+      val e = translate(op.getSubOp)
+      // TODO what to use as prefix for unordered elements (now 0)
+      if op.getConditions.size() == 1 then
+        val c1 = op.getConditions.get(0)
+        val v = c1.getExpression.asVar().getName
+        e.iter("h", "vc", S"vc"(v).iter("c", "_", P"c" x P"h" x S"vc") \/ sparqlAlg.if_empty_do(S"vc"(v), prefix_unordered x P"h" x S"vc"))
+
+      else if op.getConditions.size() == 2 then
+        val c0 = op.getConditions.get(0)
+        val c1 = op.getConditions.get(1)
+        val v0 = c0.getExpression.asVar().getName
+        val v1 = c1.getExpression.asVar().getName
+        e.iter("h", "vc", sparqlAlg.if_nonempty_else(S"vc"(v0), Singleton(prefix_unordered)).iter("val0", "_", sparqlAlg.if_nonempty_else(S"vc"(v1), Singleton(prefix_unordered)).iter("val1", "_", Singleton(symbol_concat(P"val0" x P"val1")))) x Singleton(P"h") x S"vc")
+
+      else ??? // TODO more conditions
+
+
 
     case op =>
       println(s"unhandled case $op")
@@ -2131,15 +2159,15 @@ class TranslateSPARQL extends FunSuite:
         |WHERE
         |{
         |	?person vcard:FN  ?name .
-        |	?person info:age ?age .
+        |	OPTIONAL {?person info:age ?age} .
         |}
         |ORDER BY ?age ?name""".stripMargin).asQuery()
 
     val orderAgeNameAlgebra = Algebra.compile(orderAgeNameQuery)
     val orderAgeNameMORKL = translate(orderAgeNameAlgebra)
 
-    // println(eval(orderAgeNameMORKL))
-    // assert(eval(orderAgeNameMORKL) == SpaceValue("25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
+    // println(eval(orderAgeNameMORKL).show)
+    assert(eval(orderAgeNameMORKL) == SpaceValue("Symbol(0) Symbol(Dora).R739c1f7f.name.Dora", "Symbol(25) Symbol(Alice).R5caa4e81.name.Alice", "Symbol(25) Symbol(Charlie).R4a4fbc23.name.Charlie", "Symbol(28) Symbol(Bob).R44c6683b.name.Bob"))
 
     val orderOptionalQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -2155,7 +2183,7 @@ class TranslateSPARQL extends FunSuite:
     val orderOptionalAlgebra = Algebra.compile(orderOptionalQuery)
     val orderOptionalMORKL = translate(orderOptionalAlgebra)
 
-    // TODO what to use as prefix for unordered elements (like Dorav in this example)
+    // TODO what to use as prefix for unordered elements (like Dora in this example)
     // println(eval(orderOptionalMORKL).show)
     assert(eval(orderOptionalMORKL) == SpaceValue("0.R739c1f7f.name.Dora", "25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
 
