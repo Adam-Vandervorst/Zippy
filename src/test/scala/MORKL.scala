@@ -433,7 +433,7 @@ class Grounded extends FunSuite:
     SpaceMention("people") -> SpaceValue("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")))
 
   def symbol_concat(path: Path, sep: String = " "): Path =
-    Path.GroundedPP(path, pv => PathValue(List(PathItem.Symbol(pv.items.mkString(sep)))))
+    Path.GroundedPP(path, pv => PathValue(List(PathItem.Symbol(pv.items.map(_.show).mkString(sep)))))
 
   def hash(path: Path): Path =
     Path.GroundedPP(path, pv => PathValue(List(PathItem.Symbol("R" + pv.hashCode().toHexString))))
@@ -1225,14 +1225,21 @@ class TranslateSPARQL extends FunSuite:
     case op: OpProject =>
       val t = translate(op.getSubOp)
       val varspace = Range(0, op.getVars.size()).map(i => {op.getVars.get(i).getName}).foldLeft(Space.Empty)((s1, p2) => s1 \/ Singleton(p2))
+
       val e = op.getSubOp match
         case op2: OpOrder =>
-          t.iter("order", "hvv", S"hvv".iter("h", "vv", P"order" x prefixHash(S"vv" <| varspace)))
+
+          def recursion(s: Space, d: Int): Space =
+            if d == 0 then
+              s.iter("h", "vv", prefixHash(S"vv" <| varspace))
+            else
+              s.iter(s"dir$d", s"otail$d", S"otail$d".iter(s"o$d", s"tail$d", P"dir$d" x P"o$d" x recursion(S"tail$d", d - 1)))
+
+          op2.getConditions.size().toString x recursion(t, op2.getConditions.size())
+
+          // t.iter("order", "hvv", S"hvv".iter("h", "vv", P"order" x prefixHash(S"vv" <| varspace)))
         case _ =>
           t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
-      // val e = t.iter("hash", "vv", prefixHash(S"vv" <| varspace).iter("nhash", "space",
-      //   symbol_concat(P"hash" x P"nhash") x S"space"
-      // ))
       e
 
     case op: OpBGP =>
@@ -1257,43 +1264,39 @@ class TranslateSPARQL extends FunSuite:
       val e = translate(op.getLeft) \/ translate(op.getRight)
       e
 
-    /*case op: OpOrder =>
-      val c1 = op.getConditions.get(0)
-      c1.getDirection match
-        case -2 =>
-          assert(c1.getExpression.isVariable)
-          val v = c1.getExpression.asVar().getName
-          val e = translate(op.getSubOp)
-          // e.iter("h", "vc", S"vc"(v).iter("c", "_", symbol_concat("c" x P"h") x S"vc"))
-          // TODO what to use as prefix for unordered elements
-          e.iter("h", "vc", S"vc"(v).iter("c", "_", P"c" x P"h" x S"vc") \/ sparqlAlg.if_empty_do(S"vc"(v), "0" x P"h" x S"vc"))
-
-        case d =>
-          println(s"unhandled order direction $d")
-          ???*/
 
     case op: OpOrder =>
-      // TODO incorporate direction
-      // val varspace = Range(0, op.getConditions.size()).map(i => {
-      //  (i, op.getConditions.get(i).getExpression.asVar().getName)
-      //}).foldLeft(Space.Empty)((s1, tup) => s1 \/ (Singleton(tup._1.toString) x Singleton(tup._2)))
       val prefix_unordered = "0"
 
       val e = translate(op.getSubOp)
       // TODO what to use as prefix for unordered elements (now 0)
+      def get_direction_name(i: Int): String =
+        i match
+          case 1 => "asc"
+          case -1 => "desc"
+          case -2 => "asc"
       if op.getConditions.size() == 1 then
         val c1 = op.getConditions.get(0)
         val v = c1.getExpression.asVar().getName
-        e.iter("h", "vc", S"vc"(v).iter("c", "_", P"c" x P"h" x S"vc") \/ if_empty_do(S"vc"(v), prefix_unordered x P"h" x S"vc"))
+        e.iter("h", "vc",
+          S"vc"(v).iter("c", "_",
+            get_direction_name(c1.direction) x P"c" x P"h" x S"vc") \/
+        if_empty_do(S"vc"(v), get_direction_name(c1.direction) x prefix_unordered x P"h" x S"vc"))
 
-      else if op.getConditions.size() == 2 then
-        val c0 = op.getConditions.get(0)
-        val c1 = op.getConditions.get(1)
-        val v0 = c0.getExpression.asVar().getName
-        val v1 = c1.getExpression.asVar().getName
-        e.iter("h", "vc", if_nonempty_else(S"vc"(v0), Singleton(prefix_unordered)).iter("val0", "_", if_nonempty_else(S"vc"(v1), Singleton(prefix_unordered)).iter("val1", "_", Singleton(symbol_concat(P"val0" x P"val1")))) x Singleton(P"h") x S"vc")
+      else if op.getConditions.size() >= 2 then
 
-      else ??? // TODO more conditions
+        def highest(s: Space, backup: PathValue): Path =
+          Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).maxByOption(_.show).fold(backup)(x => PathValue(List(x))))
+
+        e.iter("h", "vc",
+          ((0 until op.getConditions.size())
+            .map(i => op.getConditions.get(i))
+            .map(n => get_direction_name(n.getDirection) x highest(S"vc"(n.getExpression.asVar().getName), prefix_unordered))
+            .reduce(_ x _) x P"h") x S"vc"
+        )
+
+      else
+        ???
 
 
 
@@ -2121,9 +2124,10 @@ class TranslateSPARQL extends FunSuite:
     val orderAgeAlgebra = Algebra.compile(orderAgeQuery)
     val orderAgeMORKL = translate(orderAgeAlgebra)
 
-    assert(eval(orderAgeMORKL) == SpaceValue("25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
+    // println(eval(orderAgeMORKL).show)
+    // assert(eval(orderAgeMORKL) == SpaceValue("25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
+    assert(eval(orderAgeMORKL) == SpaceValue("1.asc.25.R4a4fbc23.name.Charlie", "1.asc.25.R5caa4e81.name.Alice", "1.asc.28.R44c6683b.name.Bob"))
 
-    // TODO
     val orderAgeNameQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
         |PREFIX info:    <http://somewhere/peopleInfo#>
@@ -2139,7 +2143,8 @@ class TranslateSPARQL extends FunSuite:
     val orderAgeNameMORKL = translate(orderAgeNameAlgebra)
 
     // println(eval(orderAgeNameMORKL).show)
-    assert(eval(orderAgeNameMORKL) == SpaceValue("Symbol(0) Symbol(Dora).R739c1f7f.name.Dora", "Symbol(25) Symbol(Alice).R5caa4e81.name.Alice", "Symbol(25) Symbol(Charlie).R4a4fbc23.name.Charlie", "Symbol(28) Symbol(Bob).R44c6683b.name.Bob"))
+    // assert(eval(orderAgeNameMORKL) == SpaceValue("lr.0.lr.Dora.R739c1f7f.name.Dora", "Symbol(25) Symbol(Alice).R5caa4e81.name.Alice", "Symbol(25) Symbol(Charlie).R4a4fbc23.name.Charlie", "Symbol(28) Symbol(Bob).R44c6683b.name.Bob"))
+    assert(eval(orderAgeNameMORKL) == SpaceValue("2.asc.0.asc.Dora.R739c1f7f.name.Dora", "2.asc.25.asc.Alice.R5caa4e81.name.Alice", "2.asc.25.asc.Charlie.R4a4fbc23.name.Charlie", "2.asc.28.asc.Bob.R44c6683b.name.Bob"))
 
     val orderOptionalQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -2157,8 +2162,26 @@ class TranslateSPARQL extends FunSuite:
 
     // TODO what to use as prefix for unordered elements (like Dora in this example)
     // println(eval(orderOptionalMORKL).show)
-    assert(eval(orderOptionalMORKL) == SpaceValue("0.R739c1f7f.name.Dora", "25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
+    // assert(eval(orderOptionalMORKL) == SpaceValue("0.R739c1f7f.name.Dora", "25.R4a4fbc23.name.Charlie", "25.R5caa4e81.name.Alice", "28.R44c6683b.name.Bob"))
+    assert(eval(orderOptionalMORKL) == SpaceValue("1.asc.0.R739c1f7f.name.Dora", "1.asc.25.R4a4fbc23.name.Charlie", "1.asc.25.R5caa4e81.name.Alice", "1.asc.28.R44c6683b.name.Bob"))
 
+
+    val orderAgeDescNameQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |	OPTIONAL {?person info:age ?age} .
+        |}
+        |ORDER BY ASC(?age) DESC(?name)""".stripMargin).asQuery()
+
+    val orderAgeDescNameAlgebra = Algebra.compile(orderAgeDescNameQuery)
+    val orderAgeDescNameMORKL = translate(orderAgeDescNameAlgebra)
+
+    // println(eval(orderAgeDescNameMORKL).show)
+    assert(eval(orderAgeDescNameMORKL) == SpaceValue("2.asc.0.desc.Dora.R739c1f7f.name.Dora", "2.asc.25.desc.Alice.R5caa4e81.name.Alice", "2.asc.25.desc.Charlie.R4a4fbc23.name.Charlie", "2.asc.28.desc.Bob.R44c6683b.name.Bob"))
 
   }
 
