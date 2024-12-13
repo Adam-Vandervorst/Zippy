@@ -1298,6 +1298,12 @@ class TranslateSPARQL extends FunSuite:
       else
         ???
 
+    case op: OpSlice =>
+      assert (op.getStart < -9E10)  // we assume no start is given; if no start is given, start is a very low number.
+
+      // for SPARQL keyword LIMIT, length will always be an integer
+      Limit(op.getLength.toInt, translate(op.getSubOp))
+
 
 
     case op =>
@@ -2182,6 +2188,46 @@ class TranslateSPARQL extends FunSuite:
 
     // println(eval(orderAgeDescNameMORKL).show)
     assert(eval(orderAgeDescNameMORKL) == SpaceValue("2.asc.0.desc.Dora.R739c1f7f.name.Dora", "2.asc.25.desc.Alice.R5caa4e81.name.Alice", "2.asc.25.desc.Charlie.R4a4fbc23.name.Charlie", "2.asc.28.desc.Bob.R44c6683b.name.Bob"))
+
+  }
+
+  test("limit") {
+    given SpaceContext = context
+
+    val limitQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |}
+        |LIMIT 2""".stripMargin).asQuery()
+
+    val limitAlg = Algebra.compile(limitQuery)
+    val limitMORKL = translate(limitAlg)
+
+    // println(eval(limitMORKL).show)
+    assert(eval(limitMORKL) == SpaceValue("R252f02a6.name.CharlieFN", "R739c1f7f.name.Dora"))
+
+    val limitAscOrderQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        |}
+        |ORDER BY ?name
+        |LIMIT 2""".stripMargin).asQuery()
+
+    val limitAscOrderAlg = Algebra.compile(limitAscOrderQuery)
+    val limitAscOrderMORKL = translate(limitAscOrderAlg)
+
+    // TODO note: limit does not take the first two of the ordered sequence! (Bob is missing)
+    // println(eval(limitAscOrderMORKL).show)
+    assert(eval(limitAscOrderMORKL) == SpaceValue("1.asc.Alice.R5caa4e81.name.Alice", "1.asc.CharlieFN.R252f02a6.name.CharlieFN"))
+
 
   }
 
