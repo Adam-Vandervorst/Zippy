@@ -465,6 +465,12 @@ class Grounded extends FunSuite:
       tsv
     })
 
+  def highest(s: Space, backup: PathValue): Path =
+    Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).maxByOption(_.show).fold(backup)(x => PathValue(List(x))))
+
+  def lowest(s: Space, backup: PathValue): Path =
+    Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).minByOption(_.show).fold(backup)(x => PathValue(List(x))))
+
   test("PP hash") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
@@ -851,7 +857,7 @@ class AlgebraSPARQL extends FunSuite:
 
   def hyperJoin(s1: VarMappings, s2: VarMappings): VarMappings =
     // s1.iter("h1", "tail1", S"tail1")
-    s1.iter("h1", "tail1", s2.iter("h2", "tail2", hash(join2(S"tail1", S"tail2")) x join2(S"tail1", S"tail2")))
+    s1.iter("h1_hj", "tail1_hj", s2.iter("h2_hj", "tail2_hj", hash(join2(S"tail1_hj", S"tail2_hj")) x join2(S"tail1_hj", S"tail2_hj")))
 
   def difference(s1: VarMapping, s2: VarMapping): VarMapping =
     // assuming filter = True
@@ -1037,7 +1043,7 @@ class TranslateSPARQL extends FunSuite:
   import Space.*
 
   val g = Grounded()
-  import g.{symbol_concat, hash, spaceout}
+  import g.{symbol_concat, hash, spaceout, highest, lowest}
 
   val sparqlAlg = AlgebraSPARQL()
   import sparqlAlg.*
@@ -1231,7 +1237,7 @@ class TranslateSPARQL extends FunSuite:
 
           def recursion(s: Space, d: Int): Space =
             if d == 0 then
-              s.iter("h", "vv", prefixHash(S"vv" <| varspace))
+              s.iter("h0", "vv0", prefixHash(S"vv0" <| varspace))
             else
               s.iter(s"dir$d", s"otail$d", S"otail$d".iter(s"o$d", s"tail$d", P"dir$d" x P"o$d" x recursion(S"tail$d", d - 1)))
 
@@ -1239,7 +1245,7 @@ class TranslateSPARQL extends FunSuite:
 
           // t.iter("order", "hvv", S"hvv".iter("h", "vv", P"order" x prefixHash(S"vv" <| varspace)))
         case _ =>
-          t.iter("hash", "vv", prefixHash(S"vv" <| varspace))
+          t.iter("hash_proj", "vv_proj", prefixHash(S"vv_proj" <| varspace))
       e
 
     case op: OpBGP =>
@@ -1304,6 +1310,59 @@ class TranslateSPARQL extends FunSuite:
       // for SPARQL keyword LIMIT, length will always be an integer
       Limit(op.getLength.toInt, translate(op.getSubOp))
 
+    case op: OpExtend =>
+      // println(op.getSubOp)
+      // println(op.getVarExprList.getVars)
+      // println(op.getVarExprList.getExprs)
+
+      // TODO multiple expressions
+      val expr_idx = 0
+      val new_var = op.getVarExprList.getVars.get(expr_idx) // m
+      val old_name = op.getVarExprList.getExpr(new_var).asVar().getName.replace('.', 'q')
+
+      translate(op.getSubOp).iter("h_ext", "vv_ext", prefixHash((new_var.getName x S"vv_ext"(old_name)) \/ S"vv_ext"))
+
+    case op: OpGroup =>
+      // println(op.getGroupVars)
+      // println(op.getAggregators)
+      // println(op.getAggregators.get(0))
+      // println(op.getAggregators.get(0).getAggVar)  // ?.0
+      // println(op.getAggregators.get(0).getConstant) // null
+      // println(op.getAggregators.get(0).getAggregator)  // MIN(?age)
+      // println(op.getAggregators.get(0).getAggregator.getName)  // MIN
+      // println(op.getAggregators.get(0).getAggregator.getExprList)  // ?age
+
+      // TODO multiple groupings
+      val groupvar = op.getGroupVars.getVars.get(0).getName
+      val agg = op.getAggregators.get(0)
+      val agg_operator = agg.getAggregator.getName
+      val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
+      val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
+
+      val aggregator = agg_operator match
+        case "MIN" => lowest
+        case "MAX" => highest
+        case _ =>
+          println(s"aggregator not implemented $agg_operator")
+          ???
+
+      // hash x var x val -> var x val x hash
+      // hash x family x val -> val x hash
+      // (val x age x hash).iter(val, agehash, Drophead(agehash) x varname x min(Head(agehash)))
+      // hash x var x val
+
+
+      // (hash x var x val).iter("h", "vv", S"vv"("family") x hash)
+      // group x hash
+      val t = translate(op.getSubOp)
+      val group = t.iter("group_h", "group_vv", S"group_vv"(groupvar) x Singleton(P"group_h"))
+
+
+
+      // (familyname x hash).iter(fn, hs, hs x varname x min(hs.iter(h, "_", SPO(h x age))))
+      val added = group.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
+
+      t \/ added
 
 
     case op =>
@@ -2228,6 +2287,27 @@ class TranslateSPARQL extends FunSuite:
     // println(eval(limitAscOrderMORKL).show)
     assert(eval(limitAscOrderMORKL) == SpaceValue("1.asc.Alice.R5caa4e81.name.Alice", "1.asc.CharlieFN.R252f02a6.name.CharlieFN"))
 
+
+  }
+
+  test("min and max"){
+    given SpaceContext = context
+
+    val minQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT (MIN(?age) AS ?min) ?family
+        |WHERE
+        |{
+        |	?person info:age ?age .
+        | ?person info:family ?family .
+        |}
+        | GROUP BY ?family""".stripMargin).asQuery()
+
+    val minAlg = Algebra.compile(minQuery)
+    val minMORKL = translate(minAlg)
+
+    assert(eval(minMORKL) == SpaceValue("R188a7221.family.Smith", "R188a7221.min.25", "R4c43991.family.Bouwer", "R4c43991.min.28"))
 
   }
 
