@@ -466,10 +466,18 @@ class Grounded extends FunSuite:
     })
 
   def highest(s: Space, backup: PathValue): Path =
-    Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).maxByOption(_.show).fold(backup)(x => PathValue(List(x))))
+    Path.GroundedSP(s, sv =>
+      val hs = sv.paths.flatMap(_.items.headOption).map(_.show)
+      val ml = hs.map(_.length).max
+      hs.maxByOption(o => " ".repeat(ml - o.length) + o).fold(backup)(x => PathValue(List(PathItem.Symbol(x))))
+    )
 
   def lowest(s: Space, backup: PathValue): Path =
-    Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).minByOption(_.show).fold(backup)(x => PathValue(List(x))))
+    Path.GroundedSP(s, sv =>
+      val hs = sv.paths.flatMap(_.items.headOption).map(_.show)
+      val ml = hs.map(_.length).max
+      hs.minByOption(o => " ".repeat(ml - o.length) + o).fold(backup)(x => PathValue(List(PathItem.Symbol(x))))
+    )
 
   test("PP hash") {
     given PathContext = PathContext.emptyMap
@@ -534,6 +542,23 @@ class Grounded extends FunSuite:
                         ("d" x Literal(SpaceValue("c"))) \/
                         (Literal(SpaceValue("x", "y", "z")) x Literal(SpaceValue("x", "y", "z"))))
     assert(eval(lhs) == eval(rhs))
+  }
+
+  test("highest and lowest"){
+
+    val number_context = SpaceContextMap(Map(
+      SpaceMention("numbers") -> SpaceValue("age.17", "age.56", "age.23", "age.45", "age.12", "age.31"),
+      SpaceMention("numbers2") -> SpaceValue("age.1", "age.10", "age.14", "age.16", "age.2", "age.36", "age.39", "age.40", "age.43", "age.8")))
+
+    given SpaceContext = number_context
+
+    assert(eval(Singleton(highest(S"numbers"("age"), "0"))) == SpaceValue("56"))
+    assert(eval(Singleton(lowest(S"numbers"("age"), "0"))) == SpaceValue("12"))
+
+    assert(eval(Singleton(highest(S"numbers2"("age"), "0"))) == SpaceValue("43"))
+    assert(eval(Singleton(lowest(S"numbers2"("age"), "0"))) == SpaceValue("1"))
+
+
   }
 
 end Grounded
