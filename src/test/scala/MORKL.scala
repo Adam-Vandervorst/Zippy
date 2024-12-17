@@ -2362,33 +2362,34 @@ class TranslateSPARQL extends FunSuite:
         "I.FN.Meg", "I.age.16", "I.family.Griffin", "I.gender.Female",
         "J.FN.Stewie", "J.age.2", "J.family.Griffin", "J.gender.Male",
 
-        "K.FN.Johnny", "K.age.25", "K.gender.Male"
-      ),
+        "K.FN.Johnny", "K.age.25", "K.gender.Male",
+        "L.FN.Sam", "L.age.30", "L.gender.Female"
+    ),
       SpaceMention("PSO") -> SpaceValue(
         "FN.A.Homer", "FN.B.Marge", "FN.C.Bart", "FN.D.Lisa", "FN.E.Maggie",
         "FN.F.Peter", "FN.G.Lois", "FN.H.Chris", "FN.I.Meg", "FN.J.Stewie",
-        "FN.K.Johnny",
+        "FN.K.Johnny", "FN.L.Sam",
         "age.A.39", "age.B.36", "age.C.10", "age.D.8", "age.E.1",
         "age.F.43", "age.G.40", "age.H.14", "age.I.16", "age.J.2",
-        "age.K.25",
+        "age.K.25", "age.L.30",
         "family.A.Simpson", "family.B.Simpson", "family.C.Simpson", "family.D.Simpson", "family.E.Simpson",
         "family.F.Griffin", "family.G.Griffin", "family.H.Griffin", "family.I.Griffin", "family.J.Griffin",
         "gender.A.Male", "gender.B.Female", "gender.C.Male", "gender.D.Female", "gender.E.Female",
         "gender.F.Male", "gender.G.Female", "gender.H.Male", "gender.I.Female", "gender.J.Male",
-        "gender.K.Male"
+        "gender.K.Male", "gender.L.Female"
       ),
       SpaceMention("POS") -> SpaceValue(
         "FN.Homer.A", "FN.Marge.B", "FN.Bart.C", "FN.Lisa.D", "FN.Maggie.E",
         "FN.Peter.F", "FN.Lois.G", "FN.Chris.H", "FN.Meg.I", "FN.Stewie.J",
-        "FN.Johnny.K",
+        "FN.Johnny.K", "FN.Sam.L",
         "age.39.A", "age.36.B", "age.10.C", "age.8.D", "age.1.E",
         "age.43.F", "age.40.G", "age.14.H", "age.16.I", "age.2.J",
-        "age.25.K",
+        "age.25.K", "age.30.L",
         "family.Simpson.A", "family.Simpson.B", "family.Simpson.C", "family.Simpson.D", "family.Simpson.E",
         "family.Griffin.F", "family.Griffin.G", "family.Griffin.H", "family.Griffin.I", "family.Griffin.J",
         "gender.Male.A", "gender.Female.B", "gender.Male.C", "gender.Female.D", "gender.Female.E",
         "gender.Male.F", "gender.Female.G", "gender.Male.H", "gender.Female.I", "gender.Male.J",
-        "gender.Male.K"
+        "gender.Male.K", "gender.Female.L"
       )
     ))
 
@@ -2430,7 +2431,6 @@ class TranslateSPARQL extends FunSuite:
     assert(eval(maxTwoGroupsMORKL) == SpaceValue("R63c1deb3.family.Simpson", "R63c1deb3.gender.Male", "R63c1deb3.max.39", "R6d9a48b6.family.Griffin", "R6d9a48b6.gender.Male", "R6d9a48b6.max.43", "Rec8498ee.family.Griffin", "Rec8498ee.gender.Female", "Rec8498ee.max.40", "Rfe48e514.family.Simpson", "Rfe48e514.gender.Female", "Rfe48e514.max.36"))
 
 
-    // TODO group with optional
     val minOptionalQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
         |PREFIX info:    <http://somewhere/peopleInfo#>
@@ -2448,7 +2448,59 @@ class TranslateSPARQL extends FunSuite:
     assert(eval(minOptionalMORKL) == SpaceValue("R19f346fb.min.25", "R2954a4d7.family.Simpson", "R2954a4d7.min.1", "R753b436c.family.Griffin", "R753b436c.min.2"))
 
 
-    //TODO instance of multiple groups
+    val multiple_fams: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("SPO") -> SpaceValue(
+        "A.FN.Anna", "A.age.30", "A.family.Family1", "A.family.Family2",
+        "B.FN.Ben", "B.age.40", "B.family.Family1",
+        "C.FN.Claire", "C.age.25", "C.family.Family2"
+      ),
+      SpaceMention("PSO") -> SpaceValue(
+        "FN.A.Anna", "FN.B.Ben", "FN.C.Claire",
+        "age.A.30", "age.B.40", "age.C.25",
+        "family.A.Family1", "family.A.Family2", "family.B.Family1", "family.C.Family2"
+      ),
+      SpaceMention("POS") -> SpaceValue(
+        "FN.Anna.A", "FN.Ben.B", "FN.Claire.C",
+        "age.30.A", "age.40.B", "age.25.C",
+        "family.Family1.A", "family.Family2.A", "family.Family1.B", "family.Family2.C"
+      )
+    ))
+
+
+    val minMultipleGroupsQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT (MIN(?age) AS ?min) ?family
+        |WHERE
+        |{
+        |	?person info:age ?age .
+        | ?person info:family ?family .
+        |}
+        | GROUP BY ?family""".stripMargin).asQuery()
+
+    val minMultipleGroupsAlg = Algebra.compile(minMultipleGroupsQuery)
+    val minMultipleGroupsMORKL = translate(minMultipleGroupsAlg)
+
+    // println(eval(minMultipleGroupsMORKL)(using sc = multiple_fams).show)
+    assert(eval(minMultipleGroupsMORKL)(using sc = multiple_fams) == SpaceValue("R456896af.family.Family1", "R456896af.min.30", "R63e3343a.family.Family2", "R63e3343a.min.25"))
+
+    val maxMultipleGroupsQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT (MAX(?age) AS ?min) ?family
+        |WHERE
+        |{
+        |	?person info:age ?age .
+        | ?person info:family ?family .
+        |}
+        | GROUP BY ?family""".stripMargin).asQuery()
+
+    val maxMultipleGroupsAlg = Algebra.compile(maxMultipleGroupsQuery)
+    val maxMultipleGroupsMORKL = translate(maxMultipleGroupsAlg)
+
+    // println(eval(maxMultipleGroupsMORKL)(using sc = multiple_fams).show)
+    assert(eval(maxMultipleGroupsMORKL)(using sc = multiple_fams) == SpaceValue("R7f459b58.family.Family2", "R7f459b58.min.30", "Rc132af48.family.Family1", "Rc132af48.min.40"))
+
     //TODO multiple aggregators
 
 
