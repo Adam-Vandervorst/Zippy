@@ -1356,18 +1356,12 @@ class TranslateSPARQL extends FunSuite:
       // println(op.getAggregators.get(0).getAggregator)  // MIN(?age)
       // println(op.getAggregators.get(0).getAggregator.getName)  // MIN
       // println(op.getAggregators.get(0).getAggregator.getExprList)  // ?age
-      assert(op.getAggregators.size() == 1)
 
-      val agg = op.getAggregators.get(0)
-      val agg_operator = agg.getAggregator.getName
-      val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
-      val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
-
-      val aggregator = agg_operator match
+      def get_aggregator(agg: String): ((Space, PathValue) => Path) = agg match
         case "MIN" => lowest
         case "MAX" => highest
         case _ =>
-          println(s"aggregator not implemented $agg_operator")
+          println(s"aggregator not implemented $agg")
           ???
 
       val t = translate(op.getSubOp)
@@ -1381,9 +1375,21 @@ class TranslateSPARQL extends FunSuite:
       val groups = t.iter("h", "vv", get_group_name(S"vv") x Singleton(P"h"))
 
       // (group_name x hash) -> (hash x new_var x aggregated_value)
-      val added = groups.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
+      val to_add = Range(0, op.getAggregators.size()).map(
+        i => {
+          val agg = op.getAggregators.get(i)
+          val agg_operator = agg.getAggregator.getName
+          val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
+          val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
+          val aggregator = get_aggregator(agg_operator)
 
-      t \/ added
+          groups.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
+        }
+      ).reduce((s1, s2) => s1 \/ s2)
+
+      // val added = groups.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
+
+      t \/ to_add
 
     case op =>
       println(s"unhandled case $op")
@@ -2393,6 +2399,30 @@ class TranslateSPARQL extends FunSuite:
 
     assert(eval(maxTwoGroupsMORKL) == SpaceValue("R63c1deb3.family.Simpson", "R63c1deb3.gender.Male", "R63c1deb3.max.39", "R6d9a48b6.family.Griffin", "R6d9a48b6.gender.Male", "R6d9a48b6.max.43", "Rec8498ee.family.Griffin", "Rec8498ee.gender.Female", "Rec8498ee.max.40", "Rfe48e514.family.Simpson", "Rfe48e514.gender.Female", "Rfe48e514.max.36"))
 
+    val twoAggregatorsQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT (MIN(?age) AS ?min) (MAX(?age) AS ?max) ?family
+        |WHERE
+        |{
+        |	?person info:age ?age .
+        | ?person info:family ?family .
+        |}
+        | GROUP BY ?family""".stripMargin).asQuery()
+
+    val twoAggregatorsAlg = Algebra.compile(twoAggregatorsQuery)
+    val twoAggregatorsMORKL = translate(twoAggregatorsAlg)
+
+    // println(eval(twoAggregatorsMORKL).show)
+    assert(eval(twoAggregatorsMORKL) == SpaceValue("R63f95531.family.Griffin", "R63f95531.max.43", "R63f95531.min.2", "Rbf015548.family.Simpson", "Rbf015548.max.39", "Rbf015548.min.1"))
+
+    // TODO
+    val twoAggregatorsAlgOptimized = Algebra.optimize(twoAggregatorsAlg)
+    val twoAggregatorsOptimizedMORKL = translate(twoAggregatorsAlgOptimized)
+
+    println(eval(twoAggregatorsOptimizedMORKL).show)
+    //assert(eval(twoAggregatorsOptimizedMORKL) == SpaceValue("R63f95531.family.Griffin", "R63f95531.max.43", "R63f95531.min.2", "Rbf015548.family.Simpson", "Rbf015548.max.39", "Rbf015548.min.1"))
+
 
     val minOptionalQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -2430,10 +2460,10 @@ class TranslateSPARQL extends FunSuite:
     ))
 
 
-    val minMultipleGroupsQuery = new ParameterizedSparqlString(
+    val belongsToMultipleGroupsQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
         |PREFIX info:    <http://somewhere/peopleInfo#>
-        |SELECT (MIN(?age) AS ?min) ?family
+        |SELECT (MIN(?age) AS ?min) (MAX(?age) AS ?max) ?family
         |WHERE
         |{
         |	?person info:age ?age .
@@ -2441,30 +2471,12 @@ class TranslateSPARQL extends FunSuite:
         |}
         | GROUP BY ?family""".stripMargin).asQuery()
 
-    val minMultipleGroupsAlg = Algebra.compile(minMultipleGroupsQuery)
-    val minMultipleGroupsMORKL = translate(minMultipleGroupsAlg)
+    val belongsToMultipleGroupsAlg = Algebra.compile(belongsToMultipleGroupsQuery)
+    val belongsToMultipleGroupsMORKL = translate(belongsToMultipleGroupsAlg)
 
-    // println(eval(minMultipleGroupsMORKL)(using sc = multiple_fams).show)
-    assert(eval(minMultipleGroupsMORKL)(using sc = multiple_fams) == SpaceValue("R456896af.family.Family1", "R456896af.min.30", "R63e3343a.family.Family2", "R63e3343a.min.25"))
+    // println(eval(belongsToMultipleMORKL)(using sc = multiple_fams).show)
+    assert(eval(belongsToMultipleGroupsMORKL)(using sc = multiple_fams) == SpaceValue("R22a61cce.family.Family1", "R22a61cce.max.40", "R22a61cce.min.30", "Rce374e5e.family.Family2", "Rce374e5e.max.30", "Rce374e5e.min.25"))
 
-    val maxMultipleGroupsQuery = new ParameterizedSparqlString(
-      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
-        |PREFIX info:    <http://somewhere/peopleInfo#>
-        |SELECT (MAX(?age) AS ?min) ?family
-        |WHERE
-        |{
-        |	?person info:age ?age .
-        | ?person info:family ?family .
-        |}
-        | GROUP BY ?family""".stripMargin).asQuery()
-
-    val maxMultipleGroupsAlg = Algebra.compile(maxMultipleGroupsQuery)
-    val maxMultipleGroupsMORKL = translate(maxMultipleGroupsAlg)
-
-    // println(eval(maxMultipleGroupsMORKL)(using sc = multiple_fams).show)
-    assert(eval(maxMultipleGroupsMORKL)(using sc = multiple_fams) == SpaceValue("R7f459b58.family.Family2", "R7f459b58.min.30", "Rc132af48.family.Family1", "Rc132af48.min.40"))
-
-    //TODO multiple aggregators
 
 
 
