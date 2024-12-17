@@ -132,6 +132,7 @@ class SpaceContext:
 
 case class SpaceContextMap(m: Map[SpaceMention, SpaceValue]) extends SpaceContext:
   override def resolve(pr: SpaceMention): SpaceValue =
+    if pr.s == "_" then throw RuntimeException("Tried to look up ignored variable \"_\"")
     try
       m(pr)
     catch
@@ -142,8 +143,9 @@ case class SpaceContextMap(m: Map[SpaceMention, SpaceValue]) extends SpaceContex
   override def grown(pv: Map[SpaceMention, SpaceValue]): SpaceContextMap =
     val n = collection.mutable.Map.from(m)
     pv.foreachEntry((k, v) =>
+      if k.s != "_" then
       n.updateWith(k)(mov =>
-        mov.foreach(ov => println(f"at $k, $ov was already present when trying to insert $v"))
+        mov.foreach(ov => println(f"at ${k.s}, ${ov.show} was already present when trying to insert ${v.show}"))
         Some(v)
       )
     )
