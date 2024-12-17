@@ -1336,16 +1336,18 @@ class TranslateSPARQL extends FunSuite:
       Limit(op.getLength.toInt, translate(op.getSubOp))
 
     case op: OpExtend =>
-      // println(op.getSubOp)
-      // println(op.getVarExprList.getVars)
-      // println(op.getVarExprList.getExprs)
-
-      // TODO multiple expressions
       val expr_idx = 0
       val new_var = op.getVarExprList.getVars.get(expr_idx) // m
       val old_name = op.getVarExprList.getExpr(new_var).asVar().getName.replace('.', 'q')
 
-      translate(op.getSubOp).iter("h_ext", "vv_ext", prefixHash((new_var.getName x S"vv_ext"(old_name)) \/ S"vv_ext"))
+      def new_variables(vv: Space): Space = Range(0, op.getVarExprList.size()).map(expr_idx => {
+        val new_var = op.getVarExprList.getVars.get(expr_idx) // m
+        val old_name = op.getVarExprList.getExpr(new_var).asVar().getName.replace('.', 'q')
+
+        new_var.getName x vv(old_name)
+      }).reduce((s1, s2) => s1 \/ s2)
+
+      translate(op.getSubOp).iter("h_ext", "vv_ext", prefixHash(new_variables(S"vv_ext") \/ S"vv_ext"))
 
     case op: OpGroup =>
       // println(op.getGroupVars)
@@ -2416,12 +2418,13 @@ class TranslateSPARQL extends FunSuite:
     // println(eval(twoAggregatorsMORKL).show)
     assert(eval(twoAggregatorsMORKL) == SpaceValue("R63f95531.family.Griffin", "R63f95531.max.43", "R63f95531.min.2", "Rbf015548.family.Simpson", "Rbf015548.max.39", "Rbf015548.min.1"))
 
-    // TODO
+    // only in an optimized algebra extend operators have multiple expressions
     val twoAggregatorsAlgOptimized = Algebra.optimize(twoAggregatorsAlg)
     val twoAggregatorsOptimizedMORKL = translate(twoAggregatorsAlgOptimized)
 
-    println(eval(twoAggregatorsOptimizedMORKL).show)
-    //assert(eval(twoAggregatorsOptimizedMORKL) == SpaceValue("R63f95531.family.Griffin", "R63f95531.max.43", "R63f95531.min.2", "Rbf015548.family.Simpson", "Rbf015548.max.39", "Rbf015548.min.1"))
+    // println(eval(twoAggregatorsOptimizedMORKL).show)
+    assert(eval(twoAggregatorsOptimizedMORKL) == SpaceValue("R63f95531.family.Griffin", "R63f95531.max.43", "R63f95531.min.2", "Rbf015548.family.Simpson", "Rbf015548.max.39", "Rbf015548.min.1"))
+    assert(eval(twoAggregatorsOptimizedMORKL) == eval(twoAggregatorsMORKL))
 
 
     val minOptionalQuery = new ParameterizedSparqlString(
@@ -2476,10 +2479,6 @@ class TranslateSPARQL extends FunSuite:
 
     // println(eval(belongsToMultipleMORKL)(using sc = multiple_fams).show)
     assert(eval(belongsToMultipleGroupsMORKL)(using sc = multiple_fams) == SpaceValue("R22a61cce.family.Family1", "R22a61cce.max.40", "R22a61cce.min.30", "Rce374e5e.family.Family2", "Rce374e5e.max.30", "Rce374e5e.min.25"))
-
-
-
-
 
 
   }
