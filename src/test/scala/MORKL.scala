@@ -1357,7 +1357,7 @@ class TranslateSPARQL extends FunSuite:
       // println(op.getAggregators.get(0).getAggregator.getName)  // MIN
       // println(op.getAggregators.get(0).getAggregator.getExprList)  // ?age
 
-      if op.getGroupVars.size() == 1 then
+      if op.getGroupVars.size() == 0 then
         // TODO multiple groupings
         val groupvar = op.getGroupVars.getVars.get(0).getName
         val agg = op.getAggregators.get(0)
@@ -1389,7 +1389,7 @@ class TranslateSPARQL extends FunSuite:
         val added = group.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
 
         return t \/ added
-      else if op.getGroupVars.size() > 1 then
+      else if op.getGroupVars.size() > 0 then
         val agg = op.getAggregators.get(0)
         val agg_operator = agg.getAggregator.getName
         val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
@@ -1406,13 +1406,13 @@ class TranslateSPARQL extends FunSuite:
 
         val group_names = Range(0, op.getGroupVars.size()).map(i => op.getGroupVars.getVars.get(i).getName)
         def get_group_name(s: Space): Space =
-          group_names.map(n => s(n)).reduce((s1, s2) => Singleton(symbol_concat(highest(s1, "0") x highest(s2, "0"), "")))
+          group_names.map(n => if_nonempty_else(s(n), Singleton("_unlabeled"))).reduce((s1, s2) => Singleton(symbol_concat(highest(s1, "0") x highest(s2, "0"), "")))
 
 
         // group_name x hash
         // val groups = t.iter("h", "vv", symbol_concat(highest(S"vv"(groupvar1), "0") x highest(S"vv"(groupvar2), "0"), "") x Singleton(P"h"))
         val groups = t.iter("h", "vv", get_group_name(S"vv") x Singleton(P"h"))
-        
+
         val added = groups.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
 
         t \/ added
@@ -2360,27 +2360,35 @@ class TranslateSPARQL extends FunSuite:
         "G.FN.Lois", "G.age.40", "G.family.Griffin", "G.gender.Female",
         "H.FN.Chris", "H.age.14", "H.family.Griffin", "H.gender.Male",
         "I.FN.Meg", "I.age.16", "I.family.Griffin", "I.gender.Female",
-        "J.FN.Stewie", "J.age.2", "J.family.Griffin", "J.gender.Male"
+        "J.FN.Stewie", "J.age.2", "J.family.Griffin", "J.gender.Male",
+
+        "K.FN.Johnny", "K.age.25", "K.gender.Male"
       ),
       SpaceMention("PSO") -> SpaceValue(
         "FN.A.Homer", "FN.B.Marge", "FN.C.Bart", "FN.D.Lisa", "FN.E.Maggie",
         "FN.F.Peter", "FN.G.Lois", "FN.H.Chris", "FN.I.Meg", "FN.J.Stewie",
+        "FN.K.Johnny",
         "age.A.39", "age.B.36", "age.C.10", "age.D.8", "age.E.1",
         "age.F.43", "age.G.40", "age.H.14", "age.I.16", "age.J.2",
+        "age.K.25",
         "family.A.Simpson", "family.B.Simpson", "family.C.Simpson", "family.D.Simpson", "family.E.Simpson",
         "family.F.Griffin", "family.G.Griffin", "family.H.Griffin", "family.I.Griffin", "family.J.Griffin",
         "gender.A.Male", "gender.B.Female", "gender.C.Male", "gender.D.Female", "gender.E.Female",
-        "gender.F.Male", "gender.G.Female", "gender.H.Male", "gender.I.Female", "gender.J.Male"
+        "gender.F.Male", "gender.G.Female", "gender.H.Male", "gender.I.Female", "gender.J.Male",
+        "gender.K.Male"
       ),
       SpaceMention("POS") -> SpaceValue(
         "FN.Homer.A", "FN.Marge.B", "FN.Bart.C", "FN.Lisa.D", "FN.Maggie.E",
         "FN.Peter.F", "FN.Lois.G", "FN.Chris.H", "FN.Meg.I", "FN.Stewie.J",
+        "FN.Johnny.K",
         "age.39.A", "age.36.B", "age.10.C", "age.8.D", "age.1.E",
         "age.43.F", "age.40.G", "age.14.H", "age.16.I", "age.2.J",
+        "age.25.K",
         "family.Simpson.A", "family.Simpson.B", "family.Simpson.C", "family.Simpson.D", "family.Simpson.E",
         "family.Griffin.F", "family.Griffin.G", "family.Griffin.H", "family.Griffin.I", "family.Griffin.J",
         "gender.Male.A", "gender.Female.B", "gender.Male.C", "gender.Female.D", "gender.Female.E",
-        "gender.Male.F", "gender.Female.G", "gender.Male.H", "gender.Female.I", "gender.Male.J"
+        "gender.Male.F", "gender.Female.G", "gender.Male.H", "gender.Female.I", "gender.Male.J",
+        "gender.Male.K"
       )
     ))
 
@@ -2433,6 +2441,15 @@ class TranslateSPARQL extends FunSuite:
         | OPTIONAL {?person info:family ?family} .
         |}
         | GROUP BY ?family""".stripMargin).asQuery()
+
+    val minOptionalAlg = Algebra.compile(minOptionalQuery)
+    val minOptionalMORKL = translate(minOptionalAlg)
+
+    assert(eval(minOptionalMORKL) == SpaceValue("R19f346fb.min.25", "R2954a4d7.family.Simpson", "R2954a4d7.min.1", "R753b436c.family.Griffin", "R753b436c.min.2"))
+
+
+    //TODO instance of multiple groups
+    //TODO multiple aggregators
 
 
 
