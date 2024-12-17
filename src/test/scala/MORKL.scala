@@ -1356,71 +1356,34 @@ class TranslateSPARQL extends FunSuite:
       // println(op.getAggregators.get(0).getAggregator)  // MIN(?age)
       // println(op.getAggregators.get(0).getAggregator.getName)  // MIN
       // println(op.getAggregators.get(0).getAggregator.getExprList)  // ?age
+      assert(op.getAggregators.size() == 1)
 
-      if op.getGroupVars.size() == 0 then
-        // TODO multiple groupings
-        val groupvar = op.getGroupVars.getVars.get(0).getName
-        val agg = op.getAggregators.get(0)
-        val agg_operator = agg.getAggregator.getName
-        val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
-        val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
+      val agg = op.getAggregators.get(0)
+      val agg_operator = agg.getAggregator.getName
+      val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
+      val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
 
-        val aggregator = agg_operator match
-          case "MIN" => lowest
-          case "MAX" => highest
-          case _ =>
-            println(s"aggregator not implemented $agg_operator")
-            ???
+      val aggregator = agg_operator match
+        case "MIN" => lowest
+        case "MAX" => highest
+        case _ =>
+          println(s"aggregator not implemented $agg_operator")
+          ???
 
-        // hash x var x val -> var x val x hash
-        // hash x family x val -> val x hash
-        // (val x age x hash).iter(val, agehash, Drophead(agehash) x varname x min(Head(agehash)))
-        // hash x var x val
+      val t = translate(op.getSubOp)
 
+      val group_names = Range(0, op.getGroupVars.size()).map(i => op.getGroupVars.getVars.get(i).getName)
+      def get_group_name(s: Space): Space =
+        group_names.map(n => if_nonempty_else(s(n), Singleton("_unlabeled"))).reduce((s1, s2) => Singleton(symbol_concat(highest(s1, "0") x highest(s2, "0"), "")))
 
-        // (hash x var x val).iter("h", "vv", S"vv"("family") x hash)
-        // group x hash
-        val t = translate(op.getSubOp)
-        val group = t.iter("group_h", "group_vv", S"group_vv"(groupvar) x Singleton(P"group_h"))
+      // (hash x var x value) -> (group_name x hash)
+      // val groups = t.iter("h", "vv", symbol_concat(highest(S"vv"(groupvar1), "0") x highest(S"vv"(groupvar2), "0"), "") x Singleton(P"h"))
+      val groups = t.iter("h", "vv", get_group_name(S"vv") x Singleton(P"h"))
 
+      // (group_name x hash) -> (hash x new_var x aggregated_value)
+      val added = groups.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
 
-
-        // (familyname x hash).iter(fn, hs, hs x varname x min(hs.iter(h, "_", SPO(h x age))))
-        val added = group.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
-
-        return t \/ added
-      else if op.getGroupVars.size() > 0 then
-        val agg = op.getAggregators.get(0)
-        val agg_operator = agg.getAggregator.getName
-        val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
-        val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
-
-        val aggregator = agg_operator match
-          case "MIN" => lowest
-          case "MAX" => highest
-          case _ =>
-            println(s"aggregator not implemented $agg_operator")
-            ???
-
-        val t = translate(op.getSubOp)
-
-        val group_names = Range(0, op.getGroupVars.size()).map(i => op.getGroupVars.getVars.get(i).getName)
-        def get_group_name(s: Space): Space =
-          group_names.map(n => if_nonempty_else(s(n), Singleton("_unlabeled"))).reduce((s1, s2) => Singleton(symbol_concat(highest(s1, "0") x highest(s2, "0"), "")))
-
-
-        // group_name x hash
-        // val groups = t.iter("h", "vv", symbol_concat(highest(S"vv"(groupvar1), "0") x highest(S"vv"(groupvar2), "0"), "") x Singleton(P"h"))
-        val groups = t.iter("h", "vv", get_group_name(S"vv") x Singleton(P"h"))
-
-        val added = groups.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
-
-        t \/ added
-
-      else
-        println(op.getGroupVars.size())
-        ???
-
+      t \/ added
 
     case op =>
       println(s"unhandled case $op")
