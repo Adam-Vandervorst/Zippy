@@ -1357,37 +1357,69 @@ class TranslateSPARQL extends FunSuite:
       // println(op.getAggregators.get(0).getAggregator.getName)  // MIN
       // println(op.getAggregators.get(0).getAggregator.getExprList)  // ?age
 
-      // TODO multiple groupings
-      val groupvar = op.getGroupVars.getVars.get(0).getName
-      val agg = op.getAggregators.get(0)
-      val agg_operator = agg.getAggregator.getName
-      val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
-      val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
+      if op.getGroupVars.size() == 1 then
+        // TODO multiple groupings
+        val groupvar = op.getGroupVars.getVars.get(0).getName
+        val agg = op.getAggregators.get(0)
+        val agg_operator = agg.getAggregator.getName
+        val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
+        val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
 
-      val aggregator = agg_operator match
-        case "MIN" => lowest
-        case "MAX" => highest
-        case _ =>
-          println(s"aggregator not implemented $agg_operator")
-          ???
+        val aggregator = agg_operator match
+          case "MIN" => lowest
+          case "MAX" => highest
+          case _ =>
+            println(s"aggregator not implemented $agg_operator")
+            ???
 
-      // hash x var x val -> var x val x hash
-      // hash x family x val -> val x hash
-      // (val x age x hash).iter(val, agehash, Drophead(agehash) x varname x min(Head(agehash)))
-      // hash x var x val
-
-
-      // (hash x var x val).iter("h", "vv", S"vv"("family") x hash)
-      // group x hash
-      val t = translate(op.getSubOp)
-      val group = t.iter("group_h", "group_vv", S"group_vv"(groupvar) x Singleton(P"group_h"))
+        // hash x var x val -> var x val x hash
+        // hash x family x val -> val x hash
+        // (val x age x hash).iter(val, agehash, Drophead(agehash) x varname x min(Head(agehash)))
+        // hash x var x val
 
 
+        // (hash x var x val).iter("h", "vv", S"vv"("family") x hash)
+        // group x hash
+        val t = translate(op.getSubOp)
+        val group = t.iter("group_h", "group_vv", S"group_vv"(groupvar) x Singleton(P"group_h"))
 
-      // (familyname x hash).iter(fn, hs, hs x varname x min(hs.iter(h, "_", SPO(h x age))))
-      val added = group.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
 
-      t \/ added
+
+        // (familyname x hash).iter(fn, hs, hs x varname x min(hs.iter(h, "_", SPO(h x age))))
+        val added = group.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
+
+        return t \/ added
+      else if op.getGroupVars.size() > 1 then
+        val agg = op.getAggregators.get(0)
+        val agg_operator = agg.getAggregator.getName
+        val to_assign = agg.getAggVar.asVar().getName.replace('.', 'q')
+        val agg_expr_var = agg.getAggregator.getExprList.get(0).asVar().getName
+
+        val aggregator = agg_operator match
+          case "MIN" => lowest
+          case "MAX" => highest
+          case _ =>
+            println(s"aggregator not implemented $agg_operator")
+            ???
+
+        val t = translate(op.getSubOp)
+
+        val group_names = Range(0, op.getGroupVars.size()).map(i => op.getGroupVars.getVars.get(i).getName)
+        def get_group_name(s: Space): Space =
+          group_names.map(n => s(n)).reduce((s1, s2) => Singleton(symbol_concat(highest(s1, "0") x highest(s2, "0"), "")))
+
+
+        // group_name x hash
+        // val groups = t.iter("h", "vv", symbol_concat(highest(S"vv"(groupvar1), "0") x highest(S"vv"(groupvar2), "0"), "") x Singleton(P"h"))
+        val groups = t.iter("h", "vv", get_group_name(S"vv") x Singleton(P"h"))
+        
+        val added = groups.iter("group_label", "group_hs", S"group_hs" x Singleton(to_assign) x Singleton(aggregator(S"group_hs".iter("group_h2", "_", t(P"group_h2" x agg_expr_var)), "0")))
+
+        t \/ added
+
+      else
+        println(op.getGroupVars.size())
+        ???
 
 
     case op =>
@@ -2316,7 +2348,44 @@ class TranslateSPARQL extends FunSuite:
   }
 
   test("min and max"){
-    given SpaceContext = context
+    val minmax_context: SpaceContextMap = SpaceContextMap(Map(
+      SpaceMention("SPO") -> SpaceValue(
+        "A.FN.Homer", "A.age.39", "A.family.Simpson", "A.gender.Male",
+        "B.FN.Marge", "B.age.36", "B.family.Simpson", "B.gender.Female",
+        "C.FN.Bart", "C.age.10", "C.family.Simpson", "C.gender.Male",
+        "D.FN.Lisa", "D.age.8", "D.family.Simpson", "D.gender.Female",
+        "E.FN.Maggie", "E.age.1", "E.family.Simpson", "E.gender.Female",
+
+        "F.FN.Peter", "F.age.43", "F.family.Griffin", "F.gender.Male",
+        "G.FN.Lois", "G.age.40", "G.family.Griffin", "G.gender.Female",
+        "H.FN.Chris", "H.age.14", "H.family.Griffin", "H.gender.Male",
+        "I.FN.Meg", "I.age.16", "I.family.Griffin", "I.gender.Female",
+        "J.FN.Stewie", "J.age.2", "J.family.Griffin", "J.gender.Male"
+      ),
+      SpaceMention("PSO") -> SpaceValue(
+        "FN.A.Homer", "FN.B.Marge", "FN.C.Bart", "FN.D.Lisa", "FN.E.Maggie",
+        "FN.F.Peter", "FN.G.Lois", "FN.H.Chris", "FN.I.Meg", "FN.J.Stewie",
+        "age.A.39", "age.B.36", "age.C.10", "age.D.8", "age.E.1",
+        "age.F.43", "age.G.40", "age.H.14", "age.I.16", "age.J.2",
+        "family.A.Simpson", "family.B.Simpson", "family.C.Simpson", "family.D.Simpson", "family.E.Simpson",
+        "family.F.Griffin", "family.G.Griffin", "family.H.Griffin", "family.I.Griffin", "family.J.Griffin",
+        "gender.A.Male", "gender.B.Female", "gender.C.Male", "gender.D.Female", "gender.E.Female",
+        "gender.F.Male", "gender.G.Female", "gender.H.Male", "gender.I.Female", "gender.J.Male"
+      ),
+      SpaceMention("POS") -> SpaceValue(
+        "FN.Homer.A", "FN.Marge.B", "FN.Bart.C", "FN.Lisa.D", "FN.Maggie.E",
+        "FN.Peter.F", "FN.Lois.G", "FN.Chris.H", "FN.Meg.I", "FN.Stewie.J",
+        "age.39.A", "age.36.B", "age.10.C", "age.8.D", "age.1.E",
+        "age.43.F", "age.40.G", "age.14.H", "age.16.I", "age.2.J",
+        "family.Simpson.A", "family.Simpson.B", "family.Simpson.C", "family.Simpson.D", "family.Simpson.E",
+        "family.Griffin.F", "family.Griffin.G", "family.Griffin.H", "family.Griffin.I", "family.Griffin.J",
+        "gender.Male.A", "gender.Female.B", "gender.Male.C", "gender.Female.D", "gender.Female.E",
+        "gender.Male.F", "gender.Female.G", "gender.Male.H", "gender.Female.I", "gender.Male.J"
+      )
+    ))
+
+
+    given SpaceContext = minmax_context
 
     val minQuery = new ParameterizedSparqlString(
       """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
@@ -2332,7 +2401,42 @@ class TranslateSPARQL extends FunSuite:
     val minAlg = Algebra.compile(minQuery)
     val minMORKL = translate(minAlg)
 
-    assert(eval(minMORKL) == SpaceValue("R188a7221.family.Smith", "R188a7221.min.25", "R4c43991.family.Bouwer", "R4c43991.min.28"))
+    // println(eval(minMORKL).show)
+    assert(eval(minMORKL) == SpaceValue("R2954a4d7.family.Simpson", "R2954a4d7.min.1", "R753b436c.family.Griffin", "R753b436c.min.2"))
+
+    val maxTwoGroupsQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT (MAX(?age) AS ?max) ?family ?gender
+        |WHERE
+        |{
+        |	?person info:age ?age .
+        | ?person info:gender ?gender .
+        | ?person info:family ?family .
+        |}
+        | GROUP BY ?family ?gender""".stripMargin).asQuery()
+
+    val maxTwoGroupsAlg = Algebra.compile(maxTwoGroupsQuery)
+    val maxTwoGroupsMORKL = translate(maxTwoGroupsAlg)
+
+    assert(eval(maxTwoGroupsMORKL) == SpaceValue("R63c1deb3.family.Simpson", "R63c1deb3.gender.Male", "R63c1deb3.max.39", "R6d9a48b6.family.Griffin", "R6d9a48b6.gender.Male", "R6d9a48b6.max.43", "Rec8498ee.family.Griffin", "Rec8498ee.gender.Female", "Rec8498ee.max.40", "Rfe48e514.family.Simpson", "Rfe48e514.gender.Female", "Rfe48e514.max.36"))
+
+
+    // TODO group with optional
+    val minOptionalQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |SELECT (MIN(?age) AS ?min) ?family
+        |WHERE
+        |{
+        |	?person info:age ?age .
+        | OPTIONAL {?person info:family ?family} .
+        |}
+        | GROUP BY ?family""".stripMargin).asQuery()
+
+
+
+
 
   }
 
