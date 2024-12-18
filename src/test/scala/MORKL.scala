@@ -1041,11 +1041,13 @@ class AlgebraSPARQL extends FunSuite:
         "10.age.13",
         "11.name.Bob",
         "11.given.Bobbie",
-        "11.age.20"
-      )))
+        "11.age.20"),
+      SpaceMention("empty") -> SpaceValue()))
 
     given SpaceContext = context
     assert(eval(hyperJoin(S"lhs", S"rhs")) == SpaceValue("R2ec263c.age.13", "R2ec263c.give.Lis", "R2ec263c.name.Alice"))
+    assert(eval(hyperJoin(S"lhs", S"empty")) == SpaceValue())
+    assert(eval(hyperJoin(S"empty", S"rhs")) == SpaceValue())
 
   }
 
@@ -1077,9 +1079,9 @@ class TranslateSPARQL extends FunSuite:
   import sparqlTests.{tee, Head}
 
 
-  def spo_to_pso = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p" x P"s") x S"o"))
+  def spo_to_pso: Space = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p" x P"s") x S"o"))
 
-  def spo_to_pos = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p") x S"o" x Singleton(P"s")))
+  def spo_to_pos: Space = S"SPO".iter("s", "po", S"po".iter("p", "o", Singleton(P"p") x S"o" x Singleton(P"s")))
 
   def print_context_permutations(c: SpaceContext): Unit =
     println("PSO: ")
@@ -1150,8 +1152,12 @@ class TranslateSPARQL extends FunSuite:
           prefixHash(v0 x Singleton(P"x"))
         })
         e
-
-      case 3 => ???
+      case 3 =>
+        val c0 = get_str(triple_get(triple, constant_ids(0)))
+        val c1 = get_str(triple_get(triple, constant_ids(1)))
+        val c2 = get_str(triple_get(triple, constant_ids(2)))
+        val e = (S"SPO" /\ Singleton(c0 x c1 x c2)).tee(Singleton("thiswillneverbeahash" x "thiswillneverbeavar" x "thiswillneverbeaval"))
+        e
 
 
   def get_filter_function(ex: Expr): Space => Space =
@@ -1274,7 +1280,7 @@ class TranslateSPARQL extends FunSuite:
       e
 
     case op: OpBGP =>
-      val e = Range(1, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).fold(get_space_from_bgp(op.getPattern.get(0)))((s1, s2) => hyperJoin(s1, s2))
+      val e = Range(0, op.getPattern.size()).map(x => get_space_from_bgp(op.getPattern.get(x))).reduce((s1, s2) => hyperJoin(s1, s2))
       e
 
     case op: OpJoin =>
@@ -1336,12 +1342,11 @@ class TranslateSPARQL extends FunSuite:
       Limit(op.getLength.toInt, translate(op.getSubOp))
 
     case op: OpExtend =>
-      val expr_idx = 0
-      val new_var = op.getVarExprList.getVars.get(expr_idx) // m
-      val old_name = op.getVarExprList.getExpr(new_var).asVar().getName.replace('.', 'q')
+      // currently only works for variables
 
       def new_variables(vv: Space): Space = Range(0, op.getVarExprList.size()).map(expr_idx => {
         val new_var = op.getVarExprList.getVars.get(expr_idx) // m
+        assert(op.getVarExprList.getExpr(new_var).isVariable)
         val old_name = op.getVarExprList.getExpr(new_var).asVar().getName.replace('.', 'q')
 
         new_var.getName x vv(old_name)
@@ -1639,6 +1644,63 @@ class TranslateSPARQL extends FunSuite:
     SpaceMention("PSO") -> SpaceValue("FN.A.Alice", "FN.B.Bob", "FN.C.CharlieFN", "FN.D.Dora", "age.A.25", "age.B.28", "age.C.51", "age.D.20", "family.A.Smith", "family.B.Bouwer", "family.C.Smith"),
     SpaceMention("POS") -> SpaceValue("FN.Alice.A", "FN.Bob.B", "FN.CharlieFN.C", "FN.Dora.D", "age.20.D", "age.25.A", "age.28.B", "age.51.C", "family.Smith.A", "family.Bouwer.B", "family.Smith.C")
   ))
+
+  test("unmatched statement"){
+    given SpaceContext = context
+
+    val unmatchedQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |
+        |SELECT ?hobby
+        |WHERE
+        |{
+        |	?person vcard:Hobby  ?hobby .
+        |}""".stripMargin).asQuery()
+
+    val unmatchedAlg = Algebra.compile(unmatchedQuery)
+    val unmatchedMORKL = translate(unmatchedAlg)
+
+    assert(eval(unmatchedMORKL) == SpaceValue())
+  }
+
+  test("BGP with three constants"){
+    given SpaceContext = context
+
+    val threeConstantsPosQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        | "A" vcard:FN "Alice" .
+        |}""".stripMargin).asQuery()
+
+    val threeConstantsPosAlg = Algebra.compile(threeConstantsPosQuery)
+    val threeConstantsPosMORKL = translate(threeConstantsPosAlg)
+
+    assert(eval(threeConstantsPosMORKL) == SpaceValue("R252f02a6.name.CharlieFN", "R44c6683b.name.Bob", "R5caa4e81.name.Alice", "R739c1f7f.name.Dora"))
+
+    val threeConstantsNegQuery = new ParameterizedSparqlString(
+      """PREFIX vcard:   <http://www.w3.org/2001/vcard-rdf/3.0#>
+        |PREFIX info:    <http://somewhere/peopleInfo#>
+        |
+        |SELECT ?name
+        |WHERE
+        |{
+        |	?person vcard:FN  ?name .
+        | "A" vcard:FN "Alice" .
+        | "A" vcard:FN "Bart" .
+        |}""".stripMargin).asQuery()
+
+    val threeConstantsNegAlg = Algebra.compile(threeConstantsNegQuery)
+    val threeConstantsNegMORKL = translate(threeConstantsNegAlg)
+
+    //println(eval(threeConstantsNegMORKL).show)
+    assert(eval(threeConstantsNegMORKL) == SpaceValue())
+  }
 
   test("double filters") {
 
@@ -2318,7 +2380,7 @@ class TranslateSPARQL extends FunSuite:
 
   }
 
-  test("min and max"){
+  test("group by, min and max"){
     val minmax_context: SpaceContextMap = SpaceContextMap(Map(
       SpaceMention("SPO") -> SpaceValue(
         "A.FN.Homer", "A.age.39", "A.family.Simpson", "A.gender.Male",
