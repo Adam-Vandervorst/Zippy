@@ -32,15 +32,15 @@ enum Path:
     case Path.Deref(pr) => s"P\"${pr.s}\""
     case Path.Constant(pi) => s"\"${pi.show}\""
     case Path.Concat(l, r) => s"${l.show} x ${r.show}"
-    case Path.GroundedPP(p, f) => s"${f.hashCode()}PP(${p.show})"
-    case Path.GroundedSP(s, f) => s"${f.hashCode()}SP(${s.show})"
+    case Path.GroundedPP(p, f) => s"PP${f.hashCode()}(${p.show})"
+    case Path.GroundedSP(s, f) => s"SP${f.hashCode()}(${s.show})"
 
   def pretty: String = this match
     case Path.Deref(pr) => pr.s
     case Path.Constant(pi) => pi.show
     case Path.Concat(l, r) => s"${l.pretty}.${r.pretty}"
-    case Path.GroundedPP(p, f) => s"${f.hashCode()}PP(${p})"
-    case Path.GroundedPP(s, f) => s"${f.hashCode()}SP(${s.show})"
+    case Path.GroundedPP(p, f) => s"PP${f.hashCode()}(${p.pretty})"
+    case Path.GroundedSP(s, f) => s"SP${f.hashCode()}(${s.show})"
 
 case class PathValue(items: List[PathItem]):
   def show: String = items.map(_.show).mkString(".")
@@ -195,6 +195,7 @@ enum Space:
   case Composition(x: Space, y: Space)
   case Transformation(src: Space, pattern: Path, template: Path)
   case Iteration(src: Space, symbol: PathRef, rest: SpaceMention, templates: Space)
+  case Fold(src: Space, initial: Path, acc: PathRef, symbol: PathRef, rest: SpaceMention, templates: Space, update: Path)
   case Wrap(src: Space, p: Path)
   case Unwrap(src: Space, p: Path)
   case DropHead(src: Space)
@@ -206,7 +207,7 @@ enum Space:
 
   def show(using indent: Int = 0): String = this match
     case Space.Empty => "Empty"
-    case Space.Call(r, refs, mentions) => s"${r.s}(${refs.mkString(", ")}; ${mentions.mkString(", ")})"
+    case Space.Call(r, refs, mentions) => s"${r.s}(${refs.map(_.show).mkString(", ")}; ${mentions.map(_.show).mkString(", ")})"
     case Space.Mention(variable) => s"S\"${variable.s}\""
     case Space.Singleton(p) => s"Singleton(${p.show})"
     case Space.Literal(p) => s"Literal(${p.show})"
@@ -222,8 +223,8 @@ enum Space:
     case Space.DropHead(src) => s"DropHead(${src.show})"
     case Space.LeftResidual(x, y) => s"(${y.show} /: ${x.show})"
     case Space.RightResidual(y, x) => s"(${y.show} :\\ ${x.show})"
-    case Space.GroundedPS(p, f) => s"${f.hashCode()}PS(${p.show})"
-    case Space.GroundedSS(s, f) => s"${f.hashCode()}SS(${s.show})"
+    case Space.GroundedPS(p, f) => s"PS${f.hashCode()}(${p.show})"
+    case Space.GroundedSS(s, f) => s"SS${f.hashCode()}(${s.show})"
     case Space.Limit(i, z) => s"Limit($i, ${z.show})"
 
 
@@ -552,18 +553,18 @@ def optimize_sharing(g: RecursiveOpGraph, stack: ArrayBuffer[(LongMap[(Int, Int)
   stack.addOne(LongMap.withDefault[(Int, Int)](x => l -> x.toInt) -> LongMap.withDefault[(Int, Int)](x => l -> x.toInt))
   var c = 0
   for (n, j) <- g.nodes.zipWithIndex do n match
-    case Left(n) => g.find(m => m.map((lm, xm) => stack(lm)._1(xm)) == n.map((ln, xn) => stack(ln)._1(xn))) match
-      case Some((l2, i)) =>
-        if (l, i) == (l2, j) then
-          r.store(n.map((l, x) => { val (l_, x_) = stack(l)._1(x); stack(l_)._2(x_) }))
-          stack(l2)._2.update(i, l -> c)
-          c += 1
-        else
-          stack.last._1.update(j, l2 -> i)
-      case None => ()
+    case Left(n) =>
+      val (l2, i) = g.find(m => m.map((lm, xm) => stack(lm)._1(xm)) == n.map((ln, xn) => stack(ln)._1(xn))).get
+      if (l, i) == (l2, j) then
+        r.store(n.map((l, x) => { val (l_, x_) = stack(l)._1(x); stack(l_)._2(x_) }))
+        stack(l2)._2.update(i, l -> c)
+        c += 1
+      else
+        stack.last._1.update(j, l2 -> i)
     case Right(sg) =>
       r.store(optimize_sharing(sg, stack))
       c += 1
+  r.root = r.root.map((l, x) => { val (l_, x_) = stack(l)._1(x); stack(l_)._2(x_) })
   r
 
 
@@ -571,6 +572,7 @@ def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = Arra
   val r = RecursiveOpGraph(g.root, parent, ArrayBuffer.empty)
   val lb = g.level
   var jb = 0
+  var added = 0
 
   def pred(g: RecursiveOpGraph, n: Node[(Int, Int)], pos: (Int, Int), gather: Boolean): Boolean =
     (pos._2 != g.nodes.length - 1) &&
@@ -581,6 +583,7 @@ def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = Arra
     val lr = g.level
     if lr == stack.length then
       stack.addOne(LongMap.withDefault[(Int, Int)](x => lr -> x.toInt))
+      added += 1
     assert(lr < stack.length)
 
     for (n_sg, j) <- g.nodes.zipWithIndex do n_sg match
@@ -591,16 +594,22 @@ def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = Arra
           stack(lr)(j) = value
       case Right(sg) =>
         gather(sg, r)
+//    if lr == stack.length - 1 then
+//      stack.dropRightInPlace(1)
 
   stack.addOne(LongMap.withDefault[(Int, Int)](x => lb -> x.toInt))
   for (n_sg, j) <- g.nodes.zipWithIndex do n_sg match
     case Left(n) =>
       if !stack(lb).contains(j) then
         stack(lb)(j) = r.store(n)
+//      else
+//        println(s"not storing ${n.show} because stack($lb)($j)=${stack(lb)(j)}")
     case Right(sg) =>
       jb = j
+      added = 0
       gather(sg, r)
       stack(lb)(j) = r.store(push_out(sg, stack, Some(r)))
+      stack.dropRightInPlace(added)
 
   r.nodes.mapInPlace{
     case Left(n) => Left(n.map((l, x) => stack(l)(x)))
@@ -608,6 +617,7 @@ def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = Arra
       sg.root = sg.root.map((l, x) => stack(l)(x))
       Right(sg)
   }
+  stack.dropRightInPlace(1)
   r
 
 
@@ -636,6 +646,8 @@ object Syntax:
     def apply(p: Path) = Space.Unwrap(x, p)
     infix def transform(lhs: Path, rhs: Path): Space = Space.Transformation(x, lhs, rhs)
     infix def iter(symbol: String, rest: String, rhs: Space): Space = Space.Iteration(x, PathRef(symbol), SpaceMention(rest), rhs)
+    infix def fold(initial: Path, acc: String, symbol: String, rest: String, rhs: Space, update: Path): Space = 
+      Space.Fold(x, initial, PathRef(acc), PathRef(symbol), SpaceMention(rest), rhs, update)
     def :\(y: Space) = Space.RightResidual(x, y)
     def /:(y: Space) = Space.LeftResidual(x, y)
 
