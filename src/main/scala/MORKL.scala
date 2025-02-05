@@ -273,9 +273,9 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.DropHead(src_e) => recs(src_e).collect { case PathValue(_::r) => PathValue(r) }
     case Space.Transformation(src_e, pattern, template) => val transformer = make_transform(PathValue(recp(pattern)), PathValue(recp(template))).unlift; recs(src_e).collect(transformer)
     case Space.Iteration(src_e, symbol, rest, templates) =>
-      (for (h, r) <- recs(src_e).groupMap(x => PathValue(x.items.head::Nil))(x => PathValue(x.items.tail));
-          p <- eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(r))), rc).paths
-      yield p).toSet
+      Set.from(for (h, r) <- recs(src_e).groupMap(x => PathValue(x.items.head::Nil))(x => PathValue(x.items.tail));
+          p <- eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(Set.from(r)))), rc).paths
+      yield p)
     case Space.LeftResidual(x_e, y_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.prefixes; if ys.forall(g => xs.contains(PathValue(r.items ++ g.items))) yield r
     case Space.RightResidual(y_e, x_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.postfixes; if ys.forall(g => xs.contains(PathValue(g.items ++ r.items))) yield r
     case Space.GroundedPS(p, f) => f(PathValue(recp(p))).paths
@@ -379,7 +379,7 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
           Vector(rest),
           templates
         ), Some(g))
-        rog.root = Node("Iteration", "", "space", Vector(s))
+        rog.root = Node("Iteration", symbol.s, "space", Vector(s))
         g.store(rog)
       case Space.LeftResidual(x, y) =>
         g.store(Node("LeftResidual", "", "space", Vector(recs(x), recs(y))))
@@ -440,7 +440,7 @@ def exec(rog: RecursiveOpGraph,
             for (h, r) <- inputs(0).sget.paths.groupMap(x => PathValue(x.items.head :: Nil))(x => PathValue(x.items.tail)) do
               stack.push(new Array(sg.nodes.length))
               stack.top(0) = h
-              stack.top(1) = SpaceValue(r)
+              stack.top(1) = SpaceValue(Set.from(r))
               exec(sg, stack)
               s(c) = SpaceValue(pos.sget.paths union stack.pop().last.asInstanceOf[SpaceValue].paths)
     c += 1
@@ -563,8 +563,10 @@ def optimize_sharing(g: RecursiveOpGraph, stack: ArrayBuffer[(LongMap[(Int, Int)
         stack.last._1.update(j, l2 -> i)
     case Right(sg) =>
       r.store(optimize_sharing(sg, stack))
+      stack(l)._2.update(j, l -> c)
       c += 1
   r.root = r.root.map((l, x) => { val (l_, x_) = stack(l)._1(x); stack(l_)._2(x_) })
+  stack.remove(stack.length - 1)
   r
 
 
@@ -652,7 +654,7 @@ object Syntax:
     def /:(y: Space) = Space.LeftResidual(x, y)
 
   extension (st: SpaceValue.type)
-    def apply(ps: PathValue*): SpaceValue = SpaceValue(ps.toSet)
+    def apply(ps: PathValue*): SpaceValue = SpaceValue(Set.from(ps))
 
   extension (rp: RoutinePtr)
     def apply(refs: Vector[Path], mentions: Vector[Space]) = Space.Call(rp, refs, mentions)

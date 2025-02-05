@@ -141,6 +141,17 @@ class AuntQuery extends FunSuite:
     assert(eval(rhs)(using PathContext.emptyMap, initial_context) == eval(S"family")(using PathContext(), context))
   }
 
+  test("query via restriction") {
+    given PathContext = PathContext.emptyMap
+    given SpaceContext = context
+
+    assert(eval(S"family" <| Literal(SpaceValue("male", "female"))) ==
+      SpaceValue("female.Ann", "female.Liz", "female.Pam", "female.Pat", "male.Bob", "male.Jim", "male.Tom"))
+
+    assert(eval(S"family" <| Literal(SpaceValue("parent.Bob", "child.Bob"))) ==
+      SpaceValue("child.Bob.Pam", "child.Bob.Tom", "parent.Bob.Ann", "parent.Bob.Pat"))
+  }
+
   test("parent_query") {
     given PathContext()
     given SpaceContext = context
@@ -180,45 +191,31 @@ class AuntQuery extends FunSuite:
     assert(eval(res) == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
   }
 
-/*  test("predecessors_query") {
+  val predecessor_helper_routine = routine("predecessor_helper", Vector(), Vector("family", "oldest", "people"),
+    S"people" \/ R"predecessor_helper"(Vector(), Vector(S"family",
+      DropHead(S"family"("child") <| S"oldest"),
+      S"people" \/ DropHead(S"family"("child") <| S"oldest")))
+  )
+
+  test("predecessors_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
+    given PartialFunction[RoutinePtr, Routine] = { case RoutinePtr("predecessor_helper") => predecessor_helper_routine }
 
-    val res = "Predecessor" x R"people".iter($"person",
-      {
-        val pred0 = R"family.child"($"person")
-        var oldest0 = pred0
-
-        pred1 = pred0 \/ oldest0
-        oldest1 = DropHead(R"family.child" <| oldest0)
-
-        pred2 = pred1 \/ oldest1
-        oldest2 = DropHead(R"family.child" <| oldest1)
-
-        Space.Literal(SpaceValue("1", "2")).fix($"i",
-          ("pred" x $"i" x Read("pred" x Call($"decr", $"i")) \/ Read("oldest" x Call($"decr", $"i"))) \/
-          ("oldest" x $"i" x DropHead(R"family.child" <| Read("oldest" x Call($"decr", $"i"))))
-        )
-
-
-        val pred = R"family.child"($"person")
-        var oldest = pred
-        while eval(oldest).nonEmpty do
-          pred = pred \/ oldest
-          oldest = DropHead(family("child") <| oldest)
-      }
-
-      $"person" x ((DropHead(R"family.parent" <| DropHead(R"family.child" <| R"family.child"($"person"))) \ R"family.child"($"person")) /\ R"family.female")
+    val lhs = "Predecessor" x S"people".iter("person", "_",
+      P"person" x R"predecessor_helper"(Vector(), Vector(S"family", Singleton(P"person"), Space.Empty))
     )
 
-      for person <- eval(people) do
-        var pred = family(Concat("child", person))
-        var oldest = pred
-        while eval(oldest).nonEmpty do
-          pred = pred \/ oldest
-          oldest = DropHead(family("child") <| oldest)
-        println(S"$person : ${eval(pred)}")
-  }*/
+    val rhs = "Predecessor" x (
+      ("Ann" x Literal(SpaceValue("Bob", "Pam", "Tom"))) \/
+      ("Bob" x Literal(SpaceValue("Pam", "Tom"))) \/
+      ("Jim" x Literal(SpaceValue("Bob", "Pam", "Pat", "Tom"))) \/
+      ("Liz" x Literal(SpaceValue("Tom"))) \/
+      ("Pat" x Literal(SpaceValue("Bob", "Pam", "Tom")))
+    )
+
+    assert(eval(lhs) == eval(rhs))
+  }
 end AuntQuery
 
 object AuntQuery:
@@ -831,8 +828,8 @@ class Grounded extends FunSuite:
 
   def range(path: Path): Space =
     Space.GroundedPS(path, x => x.items.map{ case PathItem.Symbol(s) => s.toIntOption } match
-      case Seq(Some(stop)) => SpaceValue((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet)
-      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet))
+      case Seq(Some(stop)) => SpaceValue(Set.from((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString))))))
+      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue(Set.from((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))))))
 
   def transitive(space: Space): Space =
     Space.GroundedSS(space, sv => {
@@ -920,7 +917,7 @@ object Grounded:
       val count = eval(Literal(sv)("count")).paths.head.show.toInt
       val space = eval(Literal(sv)("space")).paths
       val r = util.Random(seed)
-      SpaceValue(r.shuffle(space.toSeq).take(count).toSet)
+      SpaceValue(Set.from(r.shuffle(space.toSeq).take(count)))
     })
 
 end Grounded
@@ -960,7 +957,33 @@ class Datalog extends FunSuite:
   }
 end Datalog
 
-/*class IV extends FunSuite:
+class UnionFind extends FunSuite:
+  import Space.*
+
+  val tree0 = SpaceValue("parent.4.3", "parent.3.0", "parent.0.0", "parent.1.0", "parent.2.5", "parent.5.5")
+
+  val find_routine = routine("find", Vector("x"), Vector("tree"),
+    (S"tree"(P"x") \ Singleton(P"x")).iter("p", "_", R"find"(Vector(P"p"), Vector((S"tree" \ Singleton(P"x" x P"p")) \/ (P"x" x S"tree"(P"p"))))) \/
+      (Singleton("tobeempty") \ ("tobeempty" x (S"tree"(P"x") \ Singleton(P"x")) ).iter("H", "E", Singleton(P"H"))).iter("T", "N",
+
+        ("res" x Singleton(P"x")) \/ ("tree" x S"tree")
+
+      )
+  )
+
+//  val union_routine = routine("union", Vector("x", "y"), Vector("tree"),
+//
+//  )
+
+  test("find") {
+    given PartialFunction[RoutinePtr, Routine] = { case RoutinePtr("find") => find_routine }
+    println(eval(R"find"(Vector("4"), Vector(Literal(tree0)("parent")))).prettyLines)
+  }
+
+end UnionFind
+
+/*
+class IV extends FunSuite:
   import Space.*
 
   def highest(s: Space, backup: PathValue): Path =
@@ -1050,7 +1073,7 @@ end Datalog
 
   // zip_with_f([a, b, c], [foo, bar]) == [f(a, foo), f(b, bar)]
   def zip_with_routine(combine: (Space, Space) => Space) = routine(s"zip_with${combine.hashCode()}", Vector(), Vector("xs", "ys"),
-    max(highest(maxsymbol(S"xs"), "0") x highest(maxsymbol(S"ys"), "0")).iter("ms", "ms_",
+    min(highest(maxsymbol(S"xs"), "0") x highest(maxsymbol(S"ys"), "0")).iter("ms", "ms_",
       range("0" x add(P"ms" x "1") x "1").iter("i", "_",
         P"i" x combine(S"xs"(P"i"), S"ys"(P"i"))
       )
