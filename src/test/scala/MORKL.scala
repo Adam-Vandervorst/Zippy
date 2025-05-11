@@ -1,5 +1,6 @@
 package morkl
 
+import morkl.Space.DropHead
 import munit.FunSuite
 import morkl.Syntax.{x, *, given}
 
@@ -127,6 +128,33 @@ class MORKL2Space extends FunSuite:
 //    assert(eval(lhs) == eval(rhs))
 //  }
 end MORKL2Space
+
+object Graphs:
+  val scc_context = SpaceContextMap(Map(
+    /*
+    a  ->  b   x  <->  y
+      \           \    ^
+        ◢           ◢  |
+    c  <-  d           z
+     */
+    SpaceMention("g1") -> SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y"),
+    /*
+    a  ->  b   x  <->  y  s -> t -> u -> v -> w
+      \           \    ^
+        ◢           ◢  |
+    c  <-  d           z
+     */
+    SpaceMention("g2") -> SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y",
+      "edge.s.t", "edge.t.u", "edge.u.v", "edge.v.w"),
+    /*
+    a  ->  b   x  <->  y  s -> t -> u -> v -> w -> s
+      \           \    ^
+        ◢           ◢  |
+    c  <-  d           z
+     */
+    SpaceMention("g3") -> SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y",
+      "edge.s.t", "edge.t.u", "edge.u.v", "edge.v.w", "edge.w.s")))
+end Graphs
 
 class AuntQuery extends FunSuite:
   import Space.*
@@ -284,13 +312,8 @@ end Poly
 class Imperative extends FunSuite:
   import Space.*
 
-  val union_iter_routine = routine("union_iter", Vector(), Vector("xs", "ys"),
-    S"xs".iter("x", "rx", P"x" x "Left" x S"rx") \/
-    S"ys".iter("y", "ry", P"y" x "Right" x S"ry")
-  )
-
   test("union iter transpiled") {
-    val code = transpile(union_iter_routine)
+    val code = transpile(Routines.union_iter_routine)
     println(code.show)
 
     val stack = collection.mutable.Stack(new Array[PathValue | SpaceValue | Null](code.nodes.length))
@@ -326,8 +349,25 @@ class Imperative extends FunSuite:
     assert(stack.top.last.asInstanceOf[SpaceValue] == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
   }
 
+  test("scc exec") {
+    val code = transpile(Routines.seedless_scc_routine, None)
+    val reachable_code = transpile(Routines.reachable_routine, None)
+    //    println(code.show)
+    val graph = eval(Literal(Graphs.scc_context.resolve(SpaceMention("g2")))("edge"))
+    val transpose = eval(Literal(graph).iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x"))))
+    val nodes = eval(Literal(graph).iter("fwd", "_1", Singleton(P"fwd")) \/ Literal(transpose).iter("bwd", "_2", Singleton(P"bwd")))
+
+    val stack = collection.mutable.Stack(new Array[PathValue | SpaceValue | Null](code.nodes.length))
+    stack.top(0) = graph
+    stack.top(1) = transpose
+    stack.top(2) = nodes
+    exec(code, stack, {case "seedless_scc" => code; case "reachable" => reachable_code})
+    println(stack.top.last.asInstanceOf[SpaceValue])
+//    assert(stack.top.last.asInstanceOf[SpaceValue] == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
+  }
+
   test("mermaid") {
-    mermaid(optimize_sharing(transpile(union_iter_routine)))
+    mermaid(optimize_sharing(transpile(Routines.union_iter_routine)))
   }
 
   test("push out") {
@@ -355,7 +395,7 @@ class Imperative extends FunSuite:
                                      |  2 Unwrap[]((1,1), (0,3)): space""".stripMargin)
     }
     {
-      val code = transpile(union_iter_routine)
+      val code = transpile(Routines.union_iter_routine)
       assert(code.show == """Routine[union_iter](): space
                             |0 ExtractSpaceMention[xs](): space
                             |1 ExtractSpaceMention[ys](): space
@@ -461,7 +501,7 @@ class Routines extends FunSuite:
   import Space.*
   import Routines.*
   import AuntQuery.context
-
+  import Graphs.scc_context
 
   test("eval routine") {
     val lpeople = Literal(SpaceValue("Tom", "Bob", "Jim"))
@@ -472,14 +512,8 @@ class Routines extends FunSuite:
 
   test("transitive") {
     given PathContext = PathContext.emptyMap
-    given SpaceContext = context
-    /*
-    a  ->  b   x  <->  y
-      \           \    ^
-        ◢           ◢  |
-    c  <-  d           z
-     */
-    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y"))
+    given SpaceContext = scc_context
+    val graph = S"g1"
     val lhs = "edge" x R"transitive"(Vector(), Vector(graph("edge")))
     val rhs = "edge" x (("a" x Literal(SpaceValue("b", "d", "c"))) \/
       ("d" x Literal(SpaceValue("c"))) \/
@@ -489,15 +523,8 @@ class Routines extends FunSuite:
 
   test("reachable") {
     given PathContext = PathContext.emptyMap
-    given SpaceContext = context
-    /*
-    a  ->  b   x  <->  y  s -> t -> u -> v -> w
-      \           \    ^
-        ◢           ◢  |
-    c  <-  d           z
-     */
-    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y",
-                                   "edge.s.t", "edge.t.u", "edge.u.v", "edge.v.w"))
+    given SpaceContext = scc_context
+    val graph = S"g2"
     val transpose = graph("edge").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x")))
     val nodes = graph("edge").iter("fwd", "_1", Singleton(P"fwd")) \/ transpose.iter("bwd", "_2", Singleton(P"bwd"))
     val fwd_t = R"reachable"(Vector(), Vector(graph("edge"), nodes, Singleton("t")))
@@ -512,17 +539,8 @@ class Routines extends FunSuite:
 
   test("scc") {
     given PathContext = PathContext.emptyMap
-
-    given SpaceContext = context
-
-    /*
-    a  ->  b   x  <->  y  s -> t -> u -> v -> w -> s
-      \           \    ^
-        ◢           ◢  |
-    c  <-  d           z
-     */
-    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y",
-      "edge.s.t", "edge.t.u", "edge.u.v", "edge.v.w", "edge.w.s"))
+    given SpaceContext = scc_context
+    val graph = S"g3"
     val transpose = graph("edge").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x")))
     val nodes = graph("edge").iter("fwd", "_1", Singleton(P"fwd")) \/ transpose.iter("bwd", "_2", Singleton(P"bwd"))
     val e = R"scc"(Vector("42"), Vector(graph("edge"), transpose, nodes))
@@ -576,6 +594,15 @@ object Routines:
 
   def fixpoint(f: Space => Space) = routine(s"step${f.hashCode()}", Vector(), Vector("last"),
     S"last" \/ R"step${f.hashCode()}"(Vector(), Vector(S"last" \/ f(S"last")))
+  )
+
+  val or_else_routine = routine("or_else", Vector(), Vector("e, backup"),
+    (Singleton("E") \ ("E" x S"e").iter("h", "_", Singleton(P"h"))).iter("_", "_", S"backup")
+  )
+
+  val union_iter_routine = routine("union_iter", Vector(), Vector("xs", "ys"),
+    S"xs".iter("x", "rx", P"x" x "Left" x S"rx") \/
+      S"ys".iter("y", "ry", P"y" x "Right" x S"ry")
   )
 end Routines
 
@@ -794,6 +821,64 @@ object Unification:
     case p :: ps => U(src, p, (s, b) => MQMT(src, ps, ts, b), bound)
     case Nil => ts.map(t => Singleton(C(t, bound))).reduceRight(_ \/ _)
 end Unification
+
+
+class Lowering extends FunSuite:
+  test("DropHead iter subs") {
+    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
+    assert(code.show == ("Aunt" x S"people".iter("person", "_",
+      (P"person" x (((S"family"("parent") <| (S"family"("child") <| S"family"("child" x P"person")).iter("_", "s90ea6c6d", S"s90ea6c6d")).iter("_", "sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
+    )).show)
+  }
+
+  test("aunt query specialize") {
+    val literal_people = subs(Routines.aunt_query_routine.body)(spre={ case Space.Mention(SpaceMention("people")) => Space.Literal(SpaceValue("Xeya", "Jim")) })
+//    "Aunt" x Literal(SpaceValue("Jim", "Xeya")).iter("person", "_",
+//      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
+    val unrolled_people = Lower.IterateLiteral_Union(literal_people)
+//    "Aunt" x (("Xeya" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x "Xeya"))) \ S"family"("child" x "Xeya")) /\ S"family"("female")))
+//           \/ ("Jim" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x "Jim"))) \ S"family"("child" x "Jim")) /\ S"family"("female"))))
+    val folded_people = Lower.Concat_Path(unrolled_people)
+//    "Aunt" x (("Xeya" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female")))
+//           \/ ("Jim" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female"))))
+    assert(folded_people.show == ("Aunt" x (("Xeya" x ((DropHead((S"family"("parent") <| DropHead((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))) \/ ("Jim" x ((DropHead((S"family"("parent") <| DropHead((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))))).show)
+  }
+end Lowering
+
+
+class SpacialType extends FunSuite:
+//  routine("aunts", Vector(), Vector("family", "people"),
+//    "Aunt" x S"people".iter("person", "_",
+//      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
+//  )
+
+  test("aunt query input type") {
+//    INPUT TYPE: "people" x $person \/
+//      "family" x ("parent" x _ \/
+//                  "child" x _ x _ \/
+//                  "female" x _)
+    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
+    println(code.show)
+    println(itypes(code).show)
+
+    ("Aunt" x S"people".iter("person", "_",
+      (P"person" x (((S"family"("parent") <|
+        (S"family"("child") <| S"family"("child" x P"person")).iter("_", "s90ea6c6d", S"s90ea6c6d")
+        ).iter("_", "sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
+    ))
+  }
+
+  test("aunt query output type") {
+//    OUTPUT TYPE: "Aunt" x $person x _
+//    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
+    val code = Routines.child_routine.body
+    println(code.show)
+    println(itypes(code).show)
+    println(otypes(code).show)
+
+  }
+end SpacialType
+
 
 class Grounded extends FunSuite:
   import Space.*
