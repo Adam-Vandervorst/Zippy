@@ -1119,12 +1119,24 @@ object Syntax:
     def /:(y: Space) = Space.LeftResidual(x, y)
     def tee(run: Space): Space = x.iter("_", "_", run)
     def on_empty(todo: Space): Space = (Space.Singleton("tobeempty") \ Head("tobeempty" x x)).tee(todo)
+    def :=(s: Space) = x match
+      case Space.Call(rp, refs, mentions) => Routine(rp, refs.map { case Path.Deref(pr) => pr }, mentions.map { case Space.Mention(sm) => sm }, s)
 
   extension (st: SpaceValue.type)
     def apply(ps: PathValue*): SpaceValue = SpaceValue(Set.from(ps))
 
   extension (rp: RoutinePtr)
-    def apply(refs: Vector[Path], mentions: Vector[Space]) = Space.Call(rp, refs, mentions)
+    def apply() = Space.Call(rp, Vector(), Vector())
+    def apply(r0: Path) = Space.Call(rp, Vector(r0), Vector())
+    def apply(r0: Path, r1: Path) = Space.Call(rp, Vector(r0, r1), Vector())
+    def apply(r0: Path, r1: Path, r2: Path) = Space.Call(rp, Vector(r0, r1, r2), Vector())
+    def apply(m0: Space) = Space.Call(rp, Vector(), Vector(m0))
+    def apply(m0: Space, m1: Space) = Space.Call(rp, Vector(), Vector(m0, m1))
+    def apply(m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(), Vector(m0, m1, m2))
+
+    def apply(r0: Path, m0: Space) = Space.Call(rp, Vector(r0), Vector(m0))
+    def apply(r0: Path, m0: Space, m1: Space) = Space.Call(rp, Vector(r0), Vector(m0, m1))
+    def apply(r0: Path, m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(r0), Vector(m0, m1, m2))
 
   extension (inline sc: StringContext)
     inline def S(inline args: Any*): Space =
@@ -1141,7 +1153,15 @@ object Syntax:
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       RoutinePtr(k)
 
-  def routine(name: String, refs: Vector[String], mentions: Vector[String], space: Space) = Routine(RoutinePtr(name), refs.map(PathRef(_)), mentions.map(SpaceMention(_)), space)
+  extension (inline sc: StringContext)
+    inline def ss(inline args: Any*): Space =
+      val k = StringContext.standardInterpolator(identity, args, sc.parts)
+      Space.Singleton(Path.Constant(parse(k)))
+
+  extension (inline sc: StringContext)
+    inline def sP(inline args: Any*): Space =
+      val k = StringContext.standardInterpolator(identity, args, sc.parts)
+      Space.Singleton(Path.Deref(PathRef(k)))
 
   def Head(s: Space): Space = s.iter("head", "_", Space.Singleton(P"head"))
 
