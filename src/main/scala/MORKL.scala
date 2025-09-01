@@ -1112,12 +1112,14 @@ object Syntax:
     infix def x(y: Space) = Space.Composition(x, y)
     def apply(p: Path) = Space.Unwrap(x, p)
     infix def transform(lhs: Path, rhs: Path): Space = Space.Transformation(x, lhs, rhs)
-    infix def iter(symbol: String, rest: String, rhs: Space): Space = Space.Iteration(x, PathRef(symbol), SpaceMention(rest), rhs)
+    infix def iter(h: Path.Deref, t: Space.Mention, rhs: Space): Space = Space.Iteration(x, h.pr, t.variable, rhs)
     infix def fold(initial: Path, acc: String, symbol: String, rest: String, rhs: Space, update: Path): Space = 
       Space.Fold(x, initial, PathRef(acc), PathRef(symbol), SpaceMention(rest), rhs, update)
     def :\(y: Space) = Space.RightResidual(x, y)
     def /:(y: Space) = Space.LeftResidual(x, y)
-    def tee(run: Space): Space = x.iter("_", "_", run)
+    def iterh(h: Path.Deref, run: Space): Space = x.iter(h, S"_", run)
+    def itert(t: Space.Mention, run: Space): Space = x.iter(P"_", t, run)
+    def tee(run: Space): Space = x.iter(P"_", S"_", run)
     def on_empty(todo: Space): Space = (Space.Singleton("tobeempty") \ Head("tobeempty" x x)).tee(todo)
     def :=(s: Space) = x match
       case Space.Call(rp, refs, mentions) => Routine(rp, refs.map { case Path.Deref(pr) => pr }, mentions.map { case Space.Mention(sm) => sm }, s)
@@ -1138,13 +1140,21 @@ object Syntax:
     def apply(r0: Path, m0: Space, m1: Space) = Space.Call(rp, Vector(r0), Vector(m0, m1))
     def apply(r0: Path, m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(r0), Vector(m0, m1, m2))
 
+    def apply(r0: Path, r1: Path, m0: Space) = Space.Call(rp, Vector(r0, r1), Vector(m0))
+    def apply(r0: Path, r1: Path, m0: Space, m1: Space) = Space.Call(rp, Vector(r0, r1), Vector(m0, m1))
+    def apply(r0: Path, r1: Path, m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(r0, r1), Vector(m0, m1, m2))
+
+    def apply(r0: Path, r1: Path, r2: Path, m0: Space) = Space.Call(rp, Vector(r0, r1, r2), Vector(m0))
+    def apply(r0: Path, r1: Path, r2: Path, m0: Space, m1: Space) = Space.Call(rp, Vector(r0, r1, r2), Vector(m0, m1))
+    def apply(r0: Path, r1: Path, r2: Path, m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(r0, r1, r2), Vector(m0, m1, m2))
+
   extension (inline sc: StringContext)
-    inline def S(inline args: Any*): Space =
+    inline def S(inline args: Any*): Space.Mention =
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Space.Mention(SpaceMention(k))
 
   extension (inline sc: StringContext)
-    inline def P(inline args: Any*): Path =
+    inline def P(inline args: Any*): Path.Deref =
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Path.Deref(PathRef(k))
 
@@ -1154,14 +1164,14 @@ object Syntax:
       RoutinePtr(k)
 
   extension (inline sc: StringContext)
-    inline def ss(inline args: Any*): Space =
+    inline def ss(inline args: Any*): Space.Singleton =
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Space.Singleton(Path.Constant(parse(k)))
 
   extension (inline sc: StringContext)
-    inline def sP(inline args: Any*): Space =
+    inline def sP(inline args: Any*): Space.Singleton =
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Space.Singleton(Path.Deref(PathRef(k)))
 
-  def Head(s: Space): Space = s.iter("head", "_", Space.Singleton(P"head"))
+  def Head(s: Space): Space = s.iterh(P"h", sP"h")
 
