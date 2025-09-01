@@ -193,7 +193,7 @@ class AuntQuery extends FunSuite:
     given SpaceContext = context
     
     val res = "Mother" x S"people".iter("person", "_",
-      P"person" x (S"family"("child" x P"person") /\ S"family"("female"))
+      Singleton(P"person") x (S"family"("child")(P"person") /\ S"family"("female"))
     )
 
     assert(eval(res) == SpaceValue("Mother.Jim.Pat", "Mother.Bob.Pam"))
@@ -582,7 +582,7 @@ object Routines:
   )
 
   val seedless_scc_routine = routine("seedless_scc", Vector(), Vector("fwd", "bwd", "nodes"),
-    Limit(1, S"nodes").iter("v", "_", {
+    First(1, S"nodes").iter("v", "_", {
       val pred: Space = R"reachable"(Vector(), Vector(S"fwd", S"nodes", Singleton(P"v")))
       val desc: Space = R"reachable"(Vector(), Vector(S"bwd", S"nodes", Singleton(P"v")))
       (P"v" x ((pred /\ desc) \ Singleton(P"v"))) \/
@@ -712,6 +712,398 @@ class Unification extends FunSuite:
     assert(eval(DQT(S"sequences", "$x.a.$y", "$x.e.$z", "$x.$y.$z")) == SpaceValue("b.a.e.b", "b.a.e.b.b.e.e.b", "b.a.e.p.b.o.o.p", "b.b.e.b", "b.b.e.b.b.e.e.b", "b.b.e.p.b.o.o.p"))
   }
 
+  test("transpile transform") {
+    {
+      // {(foo $x), (bar $y), (baz $z)} => {(cux $x), (cux $y), (cux $z)}
+      val expr = MQMT(S"s", List("foo.$x", "bar.$y", "baz.$z"), List("cux.$x", "cux.$y", "cux.$z"))
+      val f = all_forever(_, List(Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep))
+
+      routine("union_example", Vector(), Vector("s"), Wrap(Unwrap(S"s", "foo") \/ Unwrap(S"s", "bar") \/ Unwrap(S"s", "baz"), "cux"))
+
+      assert(optimize(transpile(routine("union", Vector(), Vector("s"), f(expr)))).show
+      == """Routine[union](): space
+           |0 ExtractSpaceMention[s](): space
+           |1 Constant[foo](): path
+           |2 Unwrap[]((0,0), (0,1)): space
+           |3 Iteration[x]((0,2)): space
+           |  0 ExtractPathRef[x](): path
+           |  1 ExtractSpaceMention[x_](): space
+           |  2 Singleton[]((1,0)): space
+           |4 Constant[cux](): path
+           |5 Wrap[]((0,3), (0,4)): space
+           |6 Constant[bar](): path
+           |7 Unwrap[]((0,0), (0,6)): space
+           |8 Iteration[y]((0,7)): space
+           |  0 ExtractPathRef[y](): path
+           |  1 ExtractSpaceMention[y_](): space
+           |  2 Singleton[]((1,0)): space
+           |9 Wrap[]((0,8), (0,4)): space
+           |10 Constant[baz](): path
+           |11 Unwrap[]((0,0), (0,10)): space
+           |12 Iteration[z]((0,11)): space
+           |  0 ExtractPathRef[z](): path
+           |  1 ExtractSpaceMention[z_](): space
+           |  2 Singleton[]((1,0)): space
+           |13 Wrap[]((0,12), (0,4)): space
+           |14 Union[]((0,9), (0,13)): space
+           |15 Union[]((0,5), (0,14)): space""".stripMargin)
+    }/*
+    {
+      val expr = MQT(S"s", List("bar.$x.$y", "foo.$z.$w"), "cux.$y.$w")
+//      println(expr.show)
+      val f = all_forever(_, List(Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident))
+//      println(f(expr).show)
+      assert(optimize(transpile(routine("union", Vector(), Vector("s"), f(expr)))).show
+        == """Routine[union](): space
+             |0 ExtractSpaceMention[s](): space
+             |1 Constant[bar](): path
+             |2 Unwrap[]((0,0), (0,1)): space
+             |3 Constant[foo](): path
+             |4 Unwrap[]((0,0), (0,3)): space
+             |5 Iteration[x]((0,2)): space
+             |  0 ExtractPathRef[x](): path
+             |  1 ExtractSpaceMention[x_](): space
+             |  2 Iteration[y]((1,1)): space
+             |    0 ExtractPathRef[y](): path
+             |    1 ExtractSpaceMention[y_](): space
+             |    2 Iteration[z]((0,4)): space
+             |      0 ExtractPathRef[z](): path
+             |      1 ExtractSpaceMention[z_](): space
+             |    3 Wrap[]((2,2), (2,0)): space
+             |6 Constant[cux](): path
+             |7 Wrap[]((0,5), (0,6)): space""".stripMargin)
+    }*/
+    {
+//      val expr = MQMT(S"s", List("bar.$x", "foo.$x"), List("cux.$x"))
+//      val expr = DQT(S"s", "bar.$x", "foo.$x", "cux.$x") // , "baz.$x"
+
+//      println(eval(Space.Literal(SpaceValue("foo.a", "foo.b"))("foo.a")))
+//      println(eval(Space.Literal(SpaceValue("foo.a", "foo.b"))("foo")("a")))
+//      println(eval(Space.Literal(SpaceValue("foo.a", "foo.b")).iter("x", "ys", S"ys"("a"))))
+//      val expr = TQT(S"s", "foo.$x", "bar.$x", "baz.$x", "cux.$x")
+//      val expr = TQT(S"s", "foo.$x", "bar.$x", "baz.$y", "cux.$x")
+      val expr = TQT(S"s", "$x.foo", "$x.bar", "$y.baz", "cux.$x")
+      println(expr.show)
+    }
+  }
+
+  test("unify") {
+    given SpaceContext = SpaceContextMap(Map(
+      //     [2][2] $ a [2] _1  a  unification
+      //     [2][2] b $ [2]  b _1  ==>
+      //     [2][2] b a [2]  b  a
+      SpaceMention("e0lhs") -> SpaceValue(
+        "0.0.$x",
+        "0.1.a",
+        "1.0.$x",
+        "1.1.a"
+      ),
+      SpaceMention("e0rhs") -> SpaceValue(
+        "0.0.b",
+        "0.1.$y",
+        "1.0.b",
+        "1.1.$y"
+      ),
+      //   [4]  $  $ _1 _2  unification
+      //   [4]  $  $ _2 _1  ==>
+      //   [4]  $ _1 _1 _1
+      SpaceMention("e1lhs") -> SpaceValue(
+        "0.$s",
+        "1.$t",
+        "2.$s",
+        "3.$t"
+      ),
+      SpaceMention("e1rhs") -> SpaceValue(
+        "0.$x",
+        "1.$y",
+        "2.$y",
+        "3.$s"
+      ),
+      // ($z (h $z $w) (f $w))
+      // ((f $x) (h $y (f a)) $y)
+      SpaceMention("e2lhs") -> SpaceValue(
+        "0.$z",
+        "1.0.h",
+        "1.1.$z",
+        "1.2.$w",
+        "2.0.f",
+        "2.1.$w",
+      ),
+      SpaceMention("e2rhs") -> SpaceValue(
+        "0.0.f",
+        "0.1.$x",
+        "1.0.h",
+        "1.1.$y",
+        "1.2.0.f",
+        "1.2.1.a",
+        "2.$y"
+      )
+    ))
+
+
+    val vars = Space.Literal(SpaceValue("$x", "$y", "$z", "$w", "$s", "$t", "$u", "$v"))
+    val children = Space.Literal(SpaceValue("0", "1", "2", "3", "4"))
+    given PartialFunction[RoutinePtr, Routine] = {
+      case RoutinePtr("subst") => routine("subst", Vector("v"), Vector("x", "e"),
+        (S"x" /\ Space.Singleton(P"v")).iter("m", "_", S"e") \/
+        ((S"x" \ Space.Singleton(P"v")) \| children).iter("s", "_", Space.Singleton(P"s")) \/
+        children.iter("c", "_",
+          (P"c" x (S"x" <| Space.Singleton(P"c")).iter("_", "st", R"subst"(Vector(P"v"), Vector(S"st", S"e")))))
+      )
+      case RoutinePtr("descend") => routine("descend", Vector(), Vector("x", "y"),
+        (S"x" /\ vars).iter("v", "_", "bind" x P"v" x (S"y" \ S"x")) \/
+        (S"y" /\ vars).iter("v", "_", "bind" x P"v" x (S"x" \ S"y")) \/
+        (((S"x" \ vars) \| children) \ S"y").iter("v", "_", "conflict" x P"v" x (S"y" \ vars)) \/
+        children.iter("c", "_",
+          (S"x" <| Singleton(P"c")).iter("_", "st", R"descend"(Vector(), Vector(S"st", S"y"(P"c")))))
+      )
+      case RoutinePtr("unify") => routine("descend", Vector(), Vector("x", "y"), {
+        val bind_or_conflict = R"descend"(Vector(), Vector(S"x", S"y"))
+        (bind_or_conflict.on_empty(S"x") \/ (bind_or_conflict <| Singleton("conflict"))) \/
+        bind_or_conflict("conflict").on_empty(First(1, Head(bind_or_conflict("bind"))).iter("v", "_",
+          R"unify"(Vector(), Vector(
+            R"subst"(Vector(P"v"), Vector(S"x", bind_or_conflict("bind")(P"v"))),
+            R"subst"(Vector(P"v"), Vector(S"y", bind_or_conflict("bind")(P"v")))
+          ))
+        ))
+      })
+    }
+
+//    println(eval(S"e0"("L")).prettyLines)
+//    println("---")
+//    println(eval(R"subst"(Vector("$x"), Vector(S"e0", Space.Literal(SpaceValue("L.p", "R.q"))))).prettyLines)
+//    println("---")
+//    println(eval(R"descend"(Vector(), Vector(Space.Literal(SpaceValue("L.p", "R.L.a", "R.R.$y")), Space.Literal(SpaceValue("L.p", "R.$x"))))).prettyLines)
+    println(eval(R"unify"(Vector(), Vector(S"e0lhs", S"e0rhs"))).prettyLines)
+    println("---")
+    println(eval(R"unify"(Vector(), Vector(S"e1lhs", S"e1rhs"))).prettyLines)
+    println("---")
+    println(eval(R"unify"(Vector(), Vector(S"e2lhs", S"e2rhs"))).prettyLines)
+  }
+
+  test("overlap") {
+    // overlap( {(: a2 (A 2)) (: a1 (A 1))}, {(: $a1 (A $v1)) (: $a2 (A $v2))}) = {((: a2 (A 2)))} {(: a1 (A 1)) (: a1 (A 1))} {}
+
+    given SpaceContext = SpaceContextMap(Map(
+      //     overlap( {(: a A)}, {(: $x A), (: (f $x) B)} ) = ({} {(: a A)} {(: (f a) B)})
+      // while lhs /\ rhs not empty
+      //  find binding or conflict
+      //  on binding, apply binding to every term
+      //  on conflict, move the involved terms to their respective sides
+      //  else done
+      SpaceMention("e0lhs") -> SpaceValue(
+        "0.:.*.0",
+        "1.a.*.0",
+        "2.A.*.0"
+      ),
+      SpaceMention("e0rhs") -> SpaceValue(
+        "0.:.*.1",
+        "1.$x.*.1",
+        "2.A.*.1",
+        "0.:.*.2",
+        "1.0.f.*.2",
+        "1.1.$x.*.2",
+        "2.B.*.2"
+      )
+    ))
+
+
+    val vars = Space.Literal(SpaceValue("$x", "$y", "$z", "$w", "$s", "$t", "$u", "$v"))
+    val children = Space.Literal(SpaceValue("0", "1", "2", "3", "4"))
+    val lhs_ids = Space.Literal(SpaceValue("0"))
+    val rhs_ids = Space.Literal(SpaceValue("1", "2"))
+
+    given PartialFunction[RoutinePtr, Routine] = {
+      case RoutinePtr("substone") => routine("subst", Vector("v"), Vector("x", "e"),
+        (S"x" <| Space.Singleton(P"v")).iter("m", "_", S"e") \/
+          ((S"x" \| Space.Singleton(P"v")) \| children) \/
+          children.iter("c", "_",
+            (P"c" x (S"x" <| Space.Singleton(P"c")).iter("_", "st", R"subst"(Vector(P"v"), Vector(S"st", S"e")))))
+      )
+      case RoutinePtr("subst") => routine("subst", Vector("v"), Vector("x", "e"),
+        (S"x" <| Space.Singleton(P"v")).iter("m", "r", S"e" x S"r") \/
+        ((S"x" \| Space.Singleton(P"v")) \| children) \/
+          children.iter("c", "_",
+            (P"c" x (S"x" <| Space.Singleton(P"c")).iter("_", "st", R"subst"(Vector(P"v"), Vector(S"st", S"e")))))
+      )
+      case RoutinePtr("descend") => routine("descend", Vector(), Vector("lhsm", "rhsm"),
+//        ("evaluating" x S"superposition") \/
+        ("bindl" x (S"lhsm" <| vars) x (S"rhsm" \| vars)) \/
+        ("bindr" x (S"rhsm" <| vars) x (S"lhsm" \| vars)) \/
+        ("conflict" x { // coalesce into single conflict
+          val lhs_pc = ((S"lhsm" \| vars) \| children)
+          val rhs_pc = ((S"rhsm" \| vars) \| children)
+          val pure_lhs_pc = lhs_pc \| Head(rhs_pc)
+          val pure_rhs_pc = rhs_pc \| Head(lhs_pc)
+          Head(pure_lhs_pc) x Head(pure_rhs_pc) x pure_lhs_pc
+        }) \/
+        children.iter("c", "_",
+          (S"lhsm" <| Singleton(P"c")).iter("_", "st", R"descend"(Vector(), Vector(S"st", S"rhsm"(P"c")))))
+      )
+//      case RoutinePtr("unify") => routine("descend", Vector(), Vector("lhsm", "rhsm"), {
+//        val bind_ior_conflict = R"descend"(Vector(), Vector(S"lhsm", S"rhsm"))
+//        (bind_ior_conflict.on_empty(S"x") \/ (bind_or_conflict <| Singleton("conflict"))) \/
+//          bind_or_conflict("conflict").on_empty(First(1, Head(bind_or_conflict("bind"))).iter("v", "_",
+//            R"unify"(Vector(), Vector(
+//              R"subst"(Vector(P"v"), Vector(S"x", bind_or_conflict("bind")(P"v"))),
+//              R"subst"(Vector(P"v"), Vector(S"y", bind_or_conflict("bind")(P"v")))
+//            ))
+//          ))
+//      })
+    }
+
+//$a.*.1
+//0.f.*.2
+//1.$a.*.2
+//a.*.0
+    // split superposition
+//    println(eval(S"e0lhs" \/ S"e0rhs").prettyLines)
+    val conflicts = Space.Literal(SpaceValue("conflict.lhs.a.*.0", "conflict.rhs.B.*.2"))
+    println(eval(R"descend"(Vector(), Vector(S"e0lhs", S"e0rhs"))).prettyLines)
+    println("---")
+    println(eval(R"subst"(Vector("$x"), Vector(S"e0rhs", Space.Literal(SpaceValue("a"))))).prettyLines)
+    println("---")
+    println(eval( conflicts("conflict")("lhs")  ).prettyLines)
+  }
+
+  test("division") {
+    given SpaceContext = SpaceContextMap(Map(
+      SpaceMention("DB") -> SpaceValue(
+        "Completed.Fred.Database1",
+        "Completed.Fred.Database2",
+        "Completed.Fred.Compiler1",
+        "Completed.Eugene.Database1",
+        "Completed.Eugene.Compiler1",
+        "Completed.Sarah.Database1",
+        "Completed.Sarah.Database2",
+        "DBProject.Database1",
+        "DBProject.Database2",
+      )))
+
+    def Head(x: Space): Space = x.iter("i", "r", Singleton(P"i"))
+    val program = routine("÷", Vector(), Vector("db"), {
+      val students = Head(S"db"("Completed"))
+      students \ Head((students x S"db"("DBProject")) \ S"db"("Completed"))
+    })
+
+    println(program.show)
+    println(transpile(program).show)
+    println(optimize(transpile(program)).show)
+  }
+
+//  test("sexpr") {
+//    routine("sym", Vector(), Vector("size_data"), {
+//      S"size_data"("1").iter("x", "_", P"x") \/
+//      S"size_data"("2").iter("x", "ys", S"ys".iter("y", "_", P"x" x P"y"))
+//    })
+//
+//    routine("var", Vector(), Vector("data", "bindings"), {
+//      S"data"("$").iter("x", "_", P"x") \/
+//      S"data".iter("x", "ys", R"convert"(S"bindings"(P"x"), S"ys")  )
+//    })
+//
+//    routine("convert", Vector(), Vector("pattern", "rest"), {
+//      (S"data" <| arity)
+//      (S"data" <| symbol_size)
+//      (S"data" <| Singleton("$")).iter("_", "_", R"expr"(Vector(), Vector(S"rest")))
+//
+//      S"data"("$").iter("x", "_", P"x") \/
+//        S"data".iter("x", "ys", R"convert"(S"bindings"(P"x")))
+//    })
+//  }
+
+  def headk(space: Space, k: Int): Space =
+    space.iter(s"h$k", s"t$k", if k == 1 then Space.Singleton(Path.Deref(PathRef(s"h$k")))
+                               else Path.Deref(PathRef(s"h$k")) x headk(Space.Mention(SpaceMention(s"t$k")), k - 1))
+
+  test("sudoku") {
+    // column-row
+    Map((0, 2) -> 3, (1, 1) -> 4, (2, 2) -> 2, (3, 3) -> 1)
+
+    given SpaceContext = SpaceContextMap(Map(
+      SpaceMention("p1") -> SpaceValue(
+        "Cell.0.2.3",
+        "Cell.1.1.4",
+        "Cell.2.2.2",
+        "Cell.3.3.1",
+      )))
+    given PartialFunction[RoutinePtr, Routine] = {
+      case RoutinePtr("remaining") => routine("remaining", Vector(), Vector(), Space.Empty)
+    }
+
+    val indices = Space.Literal(SpaceValue("0", "1", "2", "3"))
+    val options = Space.Literal(SpaceValue("1", "2", "3", "4"))
+    val blocks = Space.Literal(SpaceValue("0.0.0", "0.0.1", "0.1.0", "0.1.1",
+                                          "1.2.0", "1.2.1", "1.3.0", "1.3.1",
+                                          "2.0.2", "2.0.3", "2.1.2", "2.1.3",
+                                          "3.2.2", "3.2.3", "3.3.2", "3.3.3"))
+    val all = "Cell" x indices x indices x options
+    val initial = (all \| headk(S"p1", 3)) \/ S"p1"
+    val column_deductions = indices.iter("c", "_", "Deduction" x "remaining" x "Cell" x P"c" x indices.iter("r", "_", P"r" x "Cell" x P"c" x (indices \ Space.Singleton(P"r"))))
+    val row_deductions = indices.iter("r", "_", "Deduction" x "remaining" x "Cell" x indices.iter("c", "_", P"c" x P"r" x "Cell" x (indices \ Space.Singleton(P"c")) x Space.Singleton(P"r")))
+    val block_deductions = blocks.iter("b", "locs", "Deduction" x "remaining" x "Cell" x S"locs".iter("c", "rs", P"c" x S"rs".iter("r", "_", P"r" x ("Cell" x (blocks(P"b") \ Space.Singleton(P"c" x P"r"))))))
+    val deductions = column_deductions \/ row_deductions \/ block_deductions
+    val run_deductions = deductions("Deduction").iter("d", "rem", (Space.Singleton(P"remaining") /\ Space.Singleton(P"d")).iter("_", "_",
+//      R"remaining"(Vector(), Vector(S"r"))
+      S"rem"("Cell").iter("cx", "rx_r", S"rx_r".iter("rx", "other", {
+//      case s if s.size == 1 => inf.bottom - s.head
+        val lvs = initial(P"cx")(P"rx")
+        (First(1, lvs) /\ Last(1, lvs)).iter("s", "_",
+          ("rem" x headk(S"other", 3)) \/ ("add" x headk(S"other", 3) x (options \ Space.Singleton(P"s")))
+        )
+      }))
+    ))
+
+
+    println(eval(block_deductions).prettyLines)
+  }
+
+  test("gol") {
+    //   0  1  2  3  4
+    // 0
+    // 1    x
+    // 2 x     x
+    // 3          x
+    // 4
+    // (evolves into square)
+    given SpaceContext = SpaceContextMap(Map(
+      SpaceMention("Living") -> SpaceValue(
+        "Cell.0.2",
+        "Cell.1.1",
+        "Cell.2.2",
+        "Cell.3.3"),
+      SpaceMention("Boundary") -> SpaceValue("0", "1", "2", "3", "4")
+    ))
+    extension (p: Path) def + (s: Space): Space = ("+" x p x s).arithmetic
+    extension (p: Path) def `+₂` (s: Space): Space = ("+₂" x p x s).arithmetic
+    extension (s: Space) def arithmetic: Space = Space.GroundedSS(s, s => SpaceValue(
+      (for case PathValue(PathItem.Symbol("+")::PathItem.Symbol(x)::PathItem.Symbol(y)::Nil) <- s.paths yield
+        PathValue(PathItem.Symbol((x.toInt + y.toInt).toString)::Nil)) union
+      (for case PathValue(PathItem.Symbol("+₂")::PathItem.Symbol(x0)::PathItem.Symbol(x1)::
+                                                 PathItem.Symbol(y0)::PathItem.Symbol(y1)::Nil) <- s.paths yield
+        PathValue(PathItem.Symbol((x0.toInt + y0.toInt).toString)::PathItem.Symbol((x1.toInt + y1.toInt).toString)::Nil))
+    ))
+    def card(space: Space): Path = Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol(sv.paths.size.toString))))
+    given PartialFunction[RoutinePtr, Routine] = {
+      case RoutinePtr("neigh") => routine("neigh", Vector("coord"), Vector(), {
+        val offsets = Space.Literal(SpaceValue("-1", "0", "1"))
+        (P"coord" `+₂` (offsets x offsets)) \ Singleton(P"coord")
+      })
+      case RoutinePtr("nextStep") => routine("nextStep", Vector(), Vector("field"), "Cell" x (
+        S"field"("Cell").iter("x", "ys", S"ys".iter("y", "_",
+          DropHead((Singleton(card(R"neigh"(Vector(P"x" x P"y"), Vector()) /\ S"field"("Cell"))) /\ Singleton("2")) x Singleton(P"x" x P"y"))))
+        \/
+        S"field"("Cell").iter("x", "ys", S"ys".iter("y", "_",
+          R"neigh"(Vector(P"x" x P"y"), Vector()))).iter("x", "ys", S"ys".iter("y", "_",
+          DropHead((Singleton(card(R"neigh"(Vector(P"x" x P"y"), Vector()) /\ S"field"("Cell"))) /\ Singleton("3")) x Singleton(P"x" x P"y"))))
+      ))
+    }
+
+    println(eval(R"nextStep"(Vector(), Vector(S"Living"))).prettyLines)
+    println()
+    assert(eval(R"nextStep"(Vector(), Vector(R"nextStep"(Vector(), Vector(S"Living"))))).prettyLines == "Cell.1.1\nCell.1.2\nCell.2.1\nCell.2.2")
+  }
+
 /*  test("multi transform") {
     given SpaceContext = context
 
@@ -810,13 +1202,23 @@ object Unification:
     U(src, p, W(_, t, _))
 
   def DQT(src: Space, p: PathValue, q: PathValue, t: PathValue): Space =
-    U(src, p, (s, b) => U(src, q, W(_, t, _), b))
+    U(src, p, (s, b) => U(src, q, (ss, bb) => W(
+//      U(s, p) /\ ss
+      Space.Empty
+
+      , t, bb), b))
+
+  def TQT(src: Space, p: PathValue, q: PathValue, r: PathValue, t: PathValue): Space = {
+    // W(Space.Empty, t, bbb)
+    U(src, p, (s, b) => U(src, q, (ss, bb) => U(src, r, (sss, bbb) => { println(s"3 $p $q $r $bbb"); W(Space.Empty, t, bbb) }, bb), b))
+  }
 
   // determine maximal sharing, sort `ps` from lowest to highest freedom
   def MQT(src: Space, ps: List[PathValue], t: PathValue, r: Option[Space] = None, bound: Map[String, PathRef] = Map.empty): Space = ps match
     case p :: ps => U(src, p, (s, b) => MQT(src, ps, t, Some(s), b), bound)
     case Nil => W(r.get, t, bound)
 
+  /// uhm, why do we drop (s
   def MQMT(src: Space, ps: List[PathValue], ts: List[PathValue], bound: Map[String, PathRef] = Map.empty): Space = ps match
     case p :: ps => U(src, p, (s, b) => MQMT(src, ps, ts, b), bound)
     case Nil => ts.map(t => Singleton(C(t, bound))).reduceRight(_ \/ _)
