@@ -367,7 +367,8 @@ enum Space:
   case Fold(src: Space, initial: Path, acc: PathRef, symbol: PathRef, rest: SpaceMention, templates: Space, update: Path)
   case Wrap(src: Space, p: Path)
   case Unwrap(src: Space, p: Path)
-  case DropHead(src: Space)
+  case TailsUnion(src: Space)
+  case TailsIntersection(src: Space)
   case LeftResidual(x: Space, y: Space) // likely not to be included
   case RightResidual(y: Space, x: Space) // likely not to be included
   case GroundedPS(p: Path, f: PathValue => SpaceValue)
@@ -390,7 +391,8 @@ enum Space:
     case Space.Iteration(src, symbol, rest, templates) => s"${src.show}.iter(\"${symbol.s}\", \"${rest.s}\", \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
     case Space.Wrap(src, p) => s"(${p.show} x ${src.show})"
     case Space.Unwrap(src, p) => s"${src.show}(${p.show})"
-    case Space.DropHead(src) => s"DropHead(${src.show})"
+    case Space.TailsUnion(src) => s"TailsUnion(${src.show})"
+    case Space.TailsIntersection(src) => s"TailsIntersection(${src.show})"
     case Space.LeftResidual(x, y) => s"(${y.show} /: ${x.show})"
     case Space.RightResidual(y, x) => s"(${y.show} :\\ ${x.show})"
     case Space.GroundedPS(p, f) => s"PS${f.hashCode()}(${p.show})"
@@ -452,7 +454,8 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
       val res = src.collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
 //      println(s"unwrap p=${PathValue(p).show} src=${src.map(_.show)} res=${res.map(_.show)}")
       res
-    case Space.DropHead(src_e) => recs(src_e).collect { case PathValue(_::r) => PathValue(r) }
+    case Space.TailsUnion(src_e) => recs(src_e).collect { case PathValue(_::r) => PathValue(r) }
+    case Space.TailsIntersection(src_e) => recs(src_e).groupMapReduce{ case PathValue(h::_) => h }{ case PathValue(_::t) => Set(PathValue(t)) }(_ union _).values.reduce(_ intersect _)
     case Space.Transformation(src_e, pattern, template) => val transformer = make_transform(PathValue(recp(pattern)), PathValue(recp(template))).unlift; recs(src_e).collect(transformer)
     case Space.Iteration(src_e, symbol, rest, templates) =>
       Set.from(for (h, r) <- recs(src_e).groupMap(x => PathValue(x.items.head::Nil))(x => PathValue(x.items.tail));
@@ -548,8 +551,10 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
         val s = recs(src)
         val v = recp(p)
         g.store(Node("Unwrap", "", "space", Vector(s, v)))
-      case Space.DropHead(src) =>
-        g.store(Node("DropHead", "", "space", Vector(recs(src))))
+      case Space.TailsUnion(src) =>
+        g.store(Node("TailsUnion", "", "space", Vector(recs(src))))
+      case Space.TailsIntersection(src) =>
+        g.store(Node("TailsIntersection", "", "space", Vector(recs(src))))
       case Space.Transformation(src, pattern, template) =>
         val s = recs(src)
         val pv = recp(pattern)
@@ -646,7 +651,8 @@ def exec(rog: RecursiveOpGraph,
           case "Composition" => eval(Space.Composition(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
           case "Wrap" => eval(Space.Wrap(Space.Literal(inputs(0).sget), Path.Constant(inputs(1).pget)))
           case "Unwrap" => eval(Space.Unwrap(Space.Literal(inputs(0).sget), Path.Constant(inputs(1).pget)))
-          case "DropHead" => eval(Space.DropHead(Space.Literal(inputs(0).sget)))
+          case "TailsUnion" => eval(Space.TailsUnion(Space.Literal(inputs(0).sget)))
+          case "TailsIntersection" => eval(Space.TailsIntersection(Space.Literal(inputs(0).sget)))
           case "Transformation" => ??? // we should likely eventually support this
           case "Iteration" => ??? // should've been elided
           case "LeftResidual" => ??? // not worth supporting
@@ -724,7 +730,8 @@ def untranspile(rog: RecursiveOpGraph,
           case "Composition" => Space.Composition(inputs(0).sget, inputs(1).sget)
           case "Wrap" => Space.Wrap(inputs(0).sget, inputs(1).pget)
           case "Unwrap" => Space.Unwrap(inputs(0).sget, inputs(1).pget)
-          case "DropHead" => Space.DropHead(inputs(0).sget)
+          case "TailsUnion" => Space.TailsUnion(inputs(0).sget)
+          case "TailsIntersection" => Space.TailsIntersection(inputs(0).sget)
           case "Transformation" => ??? // we should likely eventually support this
           case "Iteration" => ??? // should've been elided
           case "LeftResidual" => ??? // not worth supporting
@@ -960,7 +967,8 @@ def collect[S, P](s: Space)(spre: PartialFunction[Space, S] = PartialFunction.em
     case Space.Composition(x, y) => Space.Composition(recs(x), recs(y))
     case Space.Wrap(src_e, p_e) =>  Space.Wrap(recs(src_e), recp(p_e))
     case Space.Unwrap(src_e, p_e) => Space.Unwrap(recs(src_e), recp(p_e))
-    case Space.DropHead(src_e) => Space.DropHead(recs(src_e))
+    case Space.TailsUnion(src_e) => Space.TailsUnion(recs(src_e))
+    case Space.TailsIntersection(src_e) => Space.TailsIntersection(recs(src_e))
     case Space.Transformation(src_e, pattern, template) => Space.Transformation(recs(src_e), recp(pattern), recp(template))
     case Space.Iteration(src_e, symbol, rest, templates) => Space.Iteration(recs(src_e), symbol, rest, recs(templates))
     case Space.LeftResidual(x_e, y_e) =>  Space.LeftResidual(recs(x_e), recs(y_e))
@@ -999,7 +1007,8 @@ def subs(s: Space)(spre: PartialFunction[Space, Space] = PartialFunction.empty,
     case Space.Composition(x, y) => Space.Composition(recs(x), recs(y))
     case Space.Wrap(src_e, p_e) =>  Space.Wrap(recs(src_e), recp(p_e))
     case Space.Unwrap(src_e, p_e) => Space.Unwrap(recs(src_e), recp(p_e))
-    case Space.DropHead(src_e) => Space.DropHead(recs(src_e))
+    case Space.TailsUnion(src_e) => Space.TailsUnion(recs(src_e))
+    case Space.TailsIntersection(src_e) => Space.TailsIntersection(recs(src_e))
     case Space.Transformation(src_e, pattern, template) => Space.Transformation(recs(src_e), recp(pattern), recp(template))
     case Space.Iteration(src_e, symbol, rest, templates) => Space.Iteration(recs(src_e), symbol, rest, recs(templates))
     case Space.LeftResidual(x_e, y_e) =>  Space.LeftResidual(recs(x_e), recs(y_e))
@@ -1012,8 +1021,8 @@ def subs(s: Space)(spre: PartialFunction[Space, Space] = PartialFunction.empty,
   recs(s)
 
 object Lower:
-  val DropHead_Iteration = subs(_: Space)(PartialFunction.empty, {
-    case Space.DropHead(src) =>
+  val TailsUnion_Iteration = subs(_: Space)(PartialFunction.empty, {
+    case Space.TailsUnion(src) =>
       val name = SpaceMention("s" + src.hashCode().toHexString)
       Space.Iteration(src, PathRef("_"), name, Space.Mention(name))
   })
@@ -1103,7 +1112,8 @@ def itypes(s: Space): SpaceValue =
     case Space.Composition(x, y) => recs(x) union recs(y)
     case Space.Wrap(src, p) => recs(src) // .incl(recp(p))
     case Space.Unwrap(src, p) => eval(Space.Composition(Space.Literal(SpaceValue(recs(src))), Space.Singleton(Path.Constant(recp(p))))).paths
-    case Space.DropHead(src) => ???
+    case Space.TailsUnion(src) => ???
+    case Space.TailsIntersection(src) => ???
     case Space.Transformation(src, pattern, template) => ??? //recs(src) x pattern
     case Space.Iteration(src, symbol, rest, templates) =>
       val srcs = Space.Literal(SpaceValue(recs(src)))
@@ -1158,7 +1168,8 @@ def otypes(s: Space): SpaceValue =
     case Space.Composition(x, y) => recs(x) union recs(y)
     case Space.Wrap(src, p) => eval(Space.Composition(Space.Singleton(Path.Constant(recp(p))), Space.Literal(SpaceValue(recs(src))))).paths
     case Space.Unwrap(src, p) => recs(src) // .incl(recp(p))
-    case Space.DropHead(src) => ???
+    case Space.TailsUnion(src) => ???
+    case Space.TailsIntersection(src) => ???
     case Space.Transformation(src, pattern, template) => ??? //recs(src) x pattern
     case Space.Iteration(src, symbol, rest, templates) =>
       recs(templates)
@@ -1252,4 +1263,6 @@ object Syntax:
       Space.Singleton(Path.Deref(PathRef(k)))
 
   def Head(s: Space): Space = s.iterh(P"h", sP"h")
+  def \/(s: Space): Space = Space.TailsUnion(s)
+  def /\(s: Space): Space = Space.TailsIntersection(s)
 

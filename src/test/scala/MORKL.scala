@@ -1,9 +1,8 @@
 package morkl
 
-import morkl.Space.DropHead
 import munit.FunSuite
-import morkl.Syntax.{x, *, given}
-
+import morkl.Syntax.{*, given}
+import scala.language.implicitConversions
 
 /*class MORKL2Path extends FunSuite:
   import Path.*
@@ -77,10 +76,10 @@ class MORKL2Space extends FunSuite:
 //    assert(eval(lhs) == eval(rhs))
 //  }
 //
-//  test("drophead") {
+//  test("TailsUnion") {
 //    given PathContext()
 //    given SpaceContext()
-//    val lhs = DropHead(Composition(ss"Foo", Union(
+//    val lhs = TailsUnion(Composition(ss"Foo", Union(
 //      Composition(ss"Bar", Space("1", "2", "3")),
 //      Composition(ss"Baz", Space("A", "B", "C")))))
 //    val rhs = Union(
@@ -203,7 +202,7 @@ class AuntQuery extends FunSuite:
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
     val res = "Sister" x S"people".iter(P"person", S"_",
-      P"person" x ((DropHead(S"family"("parent") <| S"family"("child" x P"person")) /\ S"family"("female")) \ sP"person")
+      P"person" x ((\/(S"family"("parent") <| S"family"("child" x P"person")) /\ S"family"("female")) \ sP"person")
     )
 
     assert(eval(res) == SpaceValue("Sister.Ann.Pat", "Sister.Pat.Ann", "Sister.Bob.Liz"))
@@ -213,7 +212,7 @@ class AuntQuery extends FunSuite:
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
     val res = "Aunt" x S"people".iter(P"person", S"_",
-      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female"))
+      P"person" x ((\/(S"family"("parent") <| \/(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female"))
     )
 
     assert(eval(res) == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
@@ -221,8 +220,8 @@ class AuntQuery extends FunSuite:
 
   val predecessor_helper_routine = R"predecessor_helper"(S"family", S"oldest", S"people") :=
     S"people" \/ R"predecessor_helper"(S"family",
-      DropHead(S"family"("child") <| S"oldest"),
-      S"people" \/ DropHead(S"family"("child") <| S"oldest"))
+      \/(S"family"("child") <| S"oldest"),
+      S"people" \/ \/(S"family"("child") <| S"oldest"))
 
   test("predecessors_query") {
     given PathContext = PathContext.emptyMap
@@ -553,14 +552,14 @@ object Routines:
 
   val aunt_query_routine = R"aunts"(S"family", S"people") :=
     "Aunt" x S"people".iter(P"person", S"_",
-      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
+      P"person" x ((\/(S"family"("parent") <| \/(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
 
   val transitive_routine = R"transitive"(S"edges") :=
-    S"edges" \/ R"transitive"(S"edges" \/ S"edges".iter(P"n", S"nbs", P"n" x DropHead(S"edges" <| S"nbs")))
+    S"edges" \/ R"transitive"(S"edges" \/ S"edges".iter(P"n", S"nbs", P"n" x \/(S"edges" <| S"nbs")))
 
   val reachable_routine = R"reachable"(S"edges", S"nodemask", S"reach") :=
     S"reach" \/ R"reachable"(S"edges", S"nodemask",
-      S"reach" \/ DropHead(S"edges" <| (S"reach" /\ S"nodemask")) /\ S"nodemask")
+      S"reach" \/ \/(S"edges" <| (S"reach" /\ S"nodemask")) /\ S"nodemask")
 
   val scc_routine = R"scc"(P"seed", S"fwd", S"bwd", S"nodes") :=
     sample(Singleton("seed" x P"seed") \/ Singleton("count.1") \/ ("space" x S"nodes")).iter(P"v", S"_", {
@@ -1079,11 +1078,11 @@ class Unification extends FunSuite:
       }
       case RoutinePtr("nextStep") => R"nextStep"(S"field") := "Cell" x ((
         S"field"("Cell").iter(P"x", S"ys", S"ys".iter(P"y", S"_",
-          DropHead((Singleton(card(R"neigh"(P"x" x P"y") /\ S"field"("Cell"))) /\ ss"2") x Singleton(P"x" x P"y"))))
+          \/((Singleton(card(R"neigh"(P"x" x P"y") /\ S"field"("Cell"))) /\ ss"2") x Singleton(P"x" x P"y"))))
         \/
         S"field"("Cell").iter(P"x", S"ys", S"ys".iter(P"y", S"_",
           R"neigh"(P"x" x P"y"))).iter(P"x", S"ys", S"ys".iter(P"y", S"_",
-          DropHead((Singleton(card(R"neigh"(P"x" x P"y") /\ S"field"("Cell"))) /\ ss"3") x Singleton(P"x" x P"y"))))
+          \/((Singleton(card(R"neigh"(P"x" x P"y") /\ S"field"("Cell"))) /\ ss"3") x Singleton(P"x" x P"y"))))
       ): Space)
     }
 
@@ -1213,8 +1212,8 @@ end Unification
 
 
 class Lowering extends FunSuite:
-  test("DropHead iter subs") {
-    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
+  test("TailsUnion iter subs") {
+    val code = Lower.TailsUnion_Iteration(Routines.aunt_query_routine.body)
     assert(code.show == ("Aunt" x S"people".iter(P"person", S"_",
       (P"person" x (((S"family"("parent") <| (S"family"("child") <| S"family"("child" x P"person")).iter(P"_", S"s90ea6c6d", S"s90ea6c6d")).iter(P"_", S"sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
     )).show)
@@ -1223,14 +1222,14 @@ class Lowering extends FunSuite:
   test("aunt query specialize") {
     val literal_people = subs(Routines.aunt_query_routine.body)(spre={ case Space.Mention(SpaceMention("people")) => Space.Literal(SpaceValue("Xeya", "Jim")) })
 //    "Aunt" x Literal(SpaceValue("Jim", "Xeya")).iter(P"person", S"_",
-//      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
+//      P"person" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
     val unrolled_people = Lower.IterateLiteral_Union(literal_people)
-//    "Aunt" x (("Xeya" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x "Xeya"))) \ S"family"("child" x "Xeya")) /\ S"family"("female")))
-//           \/ ("Jim" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x "Jim"))) \ S"family"("child" x "Jim")) /\ S"family"("female"))))
+//    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Xeya"))) \ S"family"("child" x "Xeya")) /\ S"family"("female")))
+//           \/ ("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Jim"))) \ S"family"("child" x "Jim")) /\ S"family"("female"))))
     val folded_people = Lower.Concat_Path(unrolled_people)
-//    "Aunt" x (("Xeya" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female")))
-//           \/ ("Jim" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female"))))
-    assert(folded_people.show == ("Aunt" x (("Xeya" x ((DropHead((S"family"("parent") <| DropHead((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))) \/ ("Jim" x ((DropHead((S"family"("parent") <| DropHead((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))))).show)
+//    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female")))
+//           \/ ("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female"))))
+    assert(folded_people.show == ("Aunt" x (("Xeya" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))) \/ ("Jim" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))))).show)
   }
 end Lowering
 
@@ -1238,7 +1237,7 @@ end Lowering
 class SpacialType extends FunSuite:
 //  R"aunts", "family", "people"),
 //    "Aunt" x S"people".iter(P"person", S"_",
-//      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
+//      P"person" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
 //  )
 
   test("aunt query input type") {
@@ -1246,7 +1245,7 @@ class SpacialType extends FunSuite:
 //      "family" x ("parent" x _ \/
 //                  "child" x _ x _ \/
 //                  "female" x _)
-    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
+    val code = Lower.TailsUnion_Iteration(Routines.aunt_query_routine.body)
     println(code.show)
     println(itypes(code).show)
 
@@ -1259,7 +1258,7 @@ class SpacialType extends FunSuite:
 
   test("aunt query output type") {
 //    OUTPUT TYPE: "Aunt" x $person x _
-//    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
+//    val code = Lower.TailsUnion_Iteration(Routines.aunt_query_routine.body)
     val code = Routines.child_routine.body
     println(code.show)
     println(itypes(code).show)
@@ -1308,10 +1307,10 @@ class Grounded extends FunSuite:
   def transitive(space: Space): Space =
     Space.GroundedSS(space, sv => {
       var otsv = sv
-      var tsv = eval(Literal(sv) \/ Literal(sv).iter(P"x", S"r", P"x" x DropHead(Literal(sv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
+      var tsv = eval(Literal(sv) \/ Literal(sv).iter(P"x", S"r", P"x" x \/(Literal(sv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
       while otsv != tsv do
         otsv = tsv
-        tsv = eval(Literal(otsv) \/ Literal(otsv).iter(P"x", S"r", P"x" x DropHead(Literal(otsv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
+        tsv = eval(Literal(otsv) \/ Literal(otsv).iter(P"x", S"r", P"x" x \/(Literal(otsv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
       tsv
     })
 
@@ -1453,6 +1452,18 @@ class UnionFind extends FunSuite:
 
 end UnionFind
 
+
+class Permutations extends FunSuite:
+  import Space.*
+
+  test("intersection all") {
+    val keys = (Literal(SpaceValue("foo", "bar")) x ss"e0") \/ (Literal(SpaceValue("foo", "cux", "baz")) x ss"e1") \/ (Literal(SpaceValue("cux")) x ss"e2")
+
+    assert(eval(/\(keys <| Literal(SpaceValue("foo", "bar")))).prettyLines == "e0")
+  }
+
+end Permutations
+
 /*
 class IV extends FunSuite:
   import Space.*
@@ -1590,8 +1601,8 @@ class IV extends FunSuite:
     val xs = SpaceValue("0.a", "1.b", "2.c", "3.d", "4.e")
 
     assert(eval(Unwrap(Literal(xs), "1")) == SpaceValue("b"))
-    assert(eval(DropHead(Literal(xs) <| range("1.3.1"))) == SpaceValue("b", "c"))
-    assert(eval(DropHead(Literal(xs) <| range("0.6.2"))) == SpaceValue("a", "c", "e"))
+    assert(eval(TailsUnion(Literal(xs) <| range("1.3.1"))) == SpaceValue("b", "c"))
+    assert(eval(TailsUnion(Literal(xs) <| range("0.6.2"))) == SpaceValue("a", "c", "e"))
   }
 
   test("map") {
