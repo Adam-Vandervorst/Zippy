@@ -97,6 +97,84 @@ infix def intersection(that: BinNode): BinNode =
         case (l, r) => l restriction r)
 */
 
+
+trait Loc:
+  def is_path(segment: PathValue): Boolean
+  def branches(segment: PathValue): Set[PathItem]
+  def descend(segment: PathValue, branch: Int): Loc = this
+
+
+object Loc:
+  case class Const(path: PathValue) extends Loc:
+    def is_path(segment: PathValue): Boolean = segment == path
+    def branches(segment: PathValue): Set[PathItem] = if segment.items.length < path.items.length then Set(path.items(segment.items.length)) else Set.empty
+
+  case class Repeat(alphabet: Set[PathItem], k: Int) extends Loc:
+    def is_path(segment: PathValue): Boolean = segment.items.length == k
+    def branches(segment: PathValue): Set[PathItem] = if segment.items.length < k then alphabet else Set.empty
+
+  case class Full(alphabet: Set[PathItem]) extends Loc:
+    def is_path(segment: PathValue): Boolean = true
+    def branches(segment: PathValue): Set[PathItem] = alphabet
+
+  case object Empty extends Loc:
+    def is_path(segment: PathValue): Boolean = false
+    def branches(segment: PathValue): Set[PathItem] = Set.empty
+
+  case class Trie(space: SpaceValue) extends Loc:
+    def is_path(segment: PathValue): Boolean = space.paths.contains(segment)
+    def branches(segment: PathValue): Set[PathItem] = space.paths.collect { case e if e.items.startsWith(segment.items) => e.items(segment.items.length) }
+
+  case class Union(locs: Set[Loc]) extends Loc:
+    def is_path(segment: PathValue): Boolean = locs.exists(_.is_path(segment))
+    def branches(segment: PathValue): Set[PathItem] = locs.map(_.branches(segment)).reduce(_ union _)
+
+  case class Intersection(locs: Set[Loc]) extends Loc:
+    def is_path(segment: PathValue): Boolean = locs.forall(_.is_path(segment))
+    def branches(segment: PathValue): Set[PathItem] = locs.map(_.branches(segment)).reduce(_ intersect _)
+
+  case class Subtraction(loc: Loc, neg: Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = loc.is_path(segment) && !neg.is_path(segment)
+    def branches(segment: PathValue): Set[PathItem] = loc.branches(segment) removedAll neg.branches(segment)
+
+  case class Restriction(loc: Loc, accepted: Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = loc.is_path(segment) && (0 to segment.items.length).exists(i =>
+      accepted.is_path(PathValue(segment.items.take(i))))
+    def branches(segment: PathValue): Set[PathItem] = if (0 to segment.items.length).exists(i =>
+      accepted.is_path(PathValue(segment.items.take(i)))) then loc.branches(segment) else Set.empty
+
+  case class Raffination(loc: Loc, unaccepted: Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = loc.is_path(segment) && !(0 to segment.items.length).exists(i =>
+      unaccepted.is_path(PathValue(segment.items.take(i))))
+    def branches(segment: PathValue): Set[PathItem] = if !(0 to segment.items.length).exists(i =>
+      unaccepted.is_path(PathValue(segment.items.take(i)))) then loc.branches(segment) else Set.empty
+
+  case class Compose(left: Loc, right: Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = (0 to segment.items.length).exists(i =>
+      val (l, r) = segment.items.splitAt(i)
+      left.is_path(PathValue(l)) && right.is_path(PathValue(r)))
+    def branches(segment: PathValue): Set[PathItem] =
+      (0 to segment.items.length).filter(i =>
+        left.is_path(PathValue(segment.items.take(i)))
+      ).flatMap(i => right.branches(PathValue(segment.items.drop(i)))).toSet
+
+  case class Dep(left: Loc, rightf: PathValue => Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = (0 to segment.items.length).exists(i =>
+      val (l, r) = segment.items.splitAt(i)
+      left.is_path(PathValue(l)) && rightf(PathValue(l)).is_path(PathValue(r)))
+    def branches(segment: PathValue): Set[PathItem] =
+      (0 to segment.items.length).filter(i =>
+        left.is_path(PathValue(segment.items.take(i)))
+      ).flatMap(i => rightf(PathValue(segment.items.take(i))).branches(PathValue(segment.items.drop(i)))).toSet
+
+
+  def uop(src: Loc, pf: PathValue => PathValue) = Dep(src, p => Const(pf(p)))
+
+  def int_to_int(f: Int => Int) = uop(Full((0 to 9).map(k => PathItem.Symbol(k.toString)).toSet),
+    p => PathValue(f(p.items.map(_.show).mkString.toInt).toString.map(c => PathItem.Symbol(c.toString)).toList))
+
+  def sqrt = int_to_int(i => Math.sqrt(i.toDouble).toInt)
+
 enum PathItem:
   case Symbol(n: String)
   case Variable(n: String)
