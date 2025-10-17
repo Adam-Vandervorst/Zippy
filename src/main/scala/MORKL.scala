@@ -1092,7 +1092,7 @@ def itypes(s: Space): SpaceValue =
     case Path.GroundedPP(p, f) => ???
     case Path.GroundedPP(s, f) => ???
 
-  import Syntax.*
+  import Syntax.x
   def recs(x: Space): Set[PathValue] = x match
     case Space.Empty =>  Set.empty
     case Space.Call(r, refs, mentions) =>
@@ -1116,6 +1116,7 @@ def itypes(s: Space): SpaceValue =
     case Space.TailsIntersection(src) => ???
     case Space.Transformation(src, pattern, template) => ??? //recs(src) x pattern
     case Space.Iteration(src, symbol, rest, templates) =>
+      import Syntax.*
       val srcs = Space.Literal(SpaceValue(recs(src)))
       val sv = PathValue(PathItem.Variable(symbol.s)::Nil)
       val sr = PathValue(PathItem.Variable(rest.s)::Nil)
@@ -1148,7 +1149,7 @@ def otypes(s: Space): SpaceValue =
     case Path.GroundedPP(p, f) => ???
     case Path.GroundedPP(s, f) => ???
 
-  import Syntax.*
+  import Syntax.x
   def recs(x: Space): Set[PathValue] = x match
     case Space.Empty =>  Set.empty
     case Space.Call(r, refs, mentions) =>
@@ -1209,7 +1210,7 @@ object Syntax:
     def iterh(h: Path.Deref, run: Space): Space = x.iter(h, S"_", run)
     def itert(t: Space.Mention, run: Space): Space = x.iter(P"_", t, run)
     def tee(run: Space): Space = x.iter(P"_", S"_", run)
-    def on_empty(todo: Space): Space = (Space.Singleton("tobeempty") \ Head("tobeempty" x x)).tee(todo)
+    def on_empty(todo: Space): Space = (ss"tobeempty" \ head(ss"tobeempty" x x)).tee(todo)
     def :=(s: Space) = x match
       case Space.Call(rp, refs, mentions) => Routine(rp, refs.map { case Path.Deref(pr) => pr }, mentions.map { case Space.Mention(sm) => sm }, s)
 
@@ -1262,7 +1263,8 @@ object Syntax:
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Space.Singleton(Path.Deref(PathRef(k)))
 
-  def Head(s: Space): Space = s.iterh(P"h", sP"h")
+  inline def s(inline args: PathValue*): Space = Space.Literal(SpaceValue(Set.from(args)))
+  def head(s: Space): Space = s.iterh(P"h", sP"h")
   def \/(s: Space): Space = Space.TailsUnion(s)
   def /\(s: Space): Space = Space.TailsIntersection(s)
 

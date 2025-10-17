@@ -18,7 +18,7 @@ class MORKL2Space extends FunSuite:
   test("union") {
     given PathContext()
     given SpaceContext()
-    val separate = Union(Union(Literal(SpaceValue("a")), Literal(SpaceValue("b"))), Literal(SpaceValue("c")))
+    val separate = Union(Union(s("a"), s("b")), s("c"))
     assert(eval(separate) == SpaceValue("a", "b", "c"))
   }
 
@@ -27,7 +27,7 @@ class MORKL2Space extends FunSuite:
     given SpaceContext = SpaceContext.constant(Map(SpaceMention("lhS") -> SpaceValue("a", "b", "c"),
                                                    SpaceMention("rhS") -> SpaceValue("a", "c", "e")))
     val abc_ace = Intersection(S"lhS", S"rhS")
-    val ac = Union(Literal(SpaceValue("a")), Literal(SpaceValue("c")))
+    val ac = Union(s("a"), s("c"))
     assert(eval(abc_ace) == eval(ac))
   }
 
@@ -172,10 +172,10 @@ class AuntQuery extends FunSuite:
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
 
-    assert(eval(S"family" <| Literal(SpaceValue("male", "female"))) ==
+    assert(eval(S"family" <| s("male", "female")) ==
       SpaceValue("female.Ann", "female.Liz", "female.Pam", "female.Pat", "male.Bob", "male.Jim", "male.Tom"))
 
-    assert(eval(S"family" <| Literal(SpaceValue("parent.Bob", "child.Bob"))) ==
+    assert(eval(S"family" <| s("parent.Bob", "child.Bob")) ==
       SpaceValue("child.Bob.Pam", "child.Bob.Tom", "parent.Bob.Ann", "parent.Bob.Pat"))
   }
 
@@ -233,11 +233,11 @@ class AuntQuery extends FunSuite:
     )
 
     val rhs = "Predecessor" x (
-      ("Ann" x Literal(SpaceValue("Bob", "Pam", "Tom"))) \/
-      ("Bob" x Literal(SpaceValue("Pam", "Tom"))) \/
-      ("Jim" x Literal(SpaceValue("Bob", "Pam", "Pat", "Tom"))) \/
-      ("Liz" x Literal(SpaceValue("Tom"))) \/
-      ("Pat" x Literal(SpaceValue("Bob", "Pam", "Tom")))
+      ("Ann" x s("Bob", "Pam", "Tom")) \/
+      ("Bob" x s("Pam", "Tom")) \/
+      ("Jim" x s("Bob", "Pam", "Pat", "Tom")) \/
+      ("Liz" x s("Tom")) \/
+      ("Pat" x s("Bob", "Pam", "Tom"))
     )
 
     assert(eval(lhs) == eval(rhs))
@@ -283,10 +283,10 @@ class Poly extends FunSuite:
   import Space.*
 
   test("composition") {
-    val _1 = Literal(SpaceValue("0"))
-    val _2 = Literal(SpaceValue("0", "1"))
-    val _3 = Literal(SpaceValue("0", "1", "2"))
-    val _4 = Literal(SpaceValue("0", "1", "2", "3"))
+    val _1 = s("0")
+    val _2 = s("0", "1")
+    val _3 = s("0", "1", "2")
+    val _4 = s("0", "1", "2", "3")
     val p1 = ("³" x _1 x S"y" x S"y" x S"y") \/ ("¹" x _1 x S"y")  // y^3 + y
     val p2 = ("⁴" x _1 x S"y" x S"y" x S"y" x S"y") \/ ("²" x _1 x S"y" x S"y") \/ ("⁰" x _1 x ss"u")  // y^4 + y^2 + 1
     assert(eval(p1 \/ p2)(using sc=SpaceContextMap(Map(SpaceMention("y") -> SpaceValue("y")))) == SpaceValue("².0.y.y", "³.0.y.y.y", "¹.0.y", "⁰.0.u", "⁴.0.y.y.y.y"))
@@ -502,7 +502,7 @@ class Routines extends FunSuite:
   import Graphs.scc_context
 
   test("eval routine") {
-    val lpeople = Literal(SpaceValue("Tom", "Bob", "Jim"))
+    val lpeople = s("Tom", "Bob", "Jim")
     val e = R"aunts"(S"family", lpeople)
     val result = SpaceValue("Aunt.Jim.Ann")
     assert(eval(e)(using PathContext.emptyMap, context, Map(RoutinePtr("aunts") -> aunt_query_routine)) == result)
@@ -513,9 +513,9 @@ class Routines extends FunSuite:
     given SpaceContext = scc_context
     val graph = S"g1"
     val lhs = "edge" x R"transitive"(graph("edge"))
-    val rhs = "edge" x (("a" x Literal(SpaceValue("b", "d", "c"))) \/
-      ("d" x Literal(SpaceValue("c"))) \/
-      (Literal(SpaceValue("x", "y", "z")) x Literal(SpaceValue("x", "y", "z"))))
+    val rhs = "edge" x (("a" x s("b", "d", "c")) \/
+      ("d" x s("c")) \/
+      (s("x", "y", "z") x s("x", "y", "z")))
     assert(eval(lhs)(using rc = Map(RoutinePtr("transitive") -> transitive_routine)) == eval(rhs))
   }
 
@@ -585,7 +585,7 @@ object Routines:
     S"last" \/ R"step${f.hashCode()}"(S"last" \/ f(S"last"))
 
   val or_else_routine = R"or_else"(S"e", S"backup") :=
-    (ss"E" \ Head("E" x S"e")).tee(S"backup")
+    (ss"E" \ head("E" x S"e")).tee(S"backup")
 
   val union_iter_routine = R"union_iter"(S"xs", S"ys") :=
     S"xs".iter(P"x", S"rx", P"x" x "Left" x S"rx") \/
@@ -763,9 +763,9 @@ class Unification extends FunSuite:
 //      val expr = MQMT(S"s", List("bar.$x", "foo.$x"), List("cux.$x"))
 //      val expr = DQT(S"s", "bar.$x", "foo.$x", "cux.$x") // , "baz.$x"
 
-//      println(eval(Space.Literal(SpaceValue("foo.a", "foo.b"))("foo.a")))
-//      println(eval(Space.Literal(SpaceValue("foo.a", "foo.b"))("foo")("a")))
-//      println(eval(Space.Literal(SpaceValue("foo.a", "foo.b")).iter(P"x", S"ys", S"ys"("a"))))
+//      println(eval(Space.s("foo.a", "foo.b"))("foo.a")))
+//      println(eval(Space.s("foo.a", "foo.b"))("foo")("a")))
+//      println(eval(Space.s("foo.a", "foo.b")).iter(P"x", S"ys", S"ys"("a"))))
 //      val expr = TQT(S"s", "foo.$x", "bar.$x", "baz.$x", "cux.$x")
 //      val expr = TQT(S"s", "foo.$x", "bar.$x", "baz.$y", "cux.$x")
       val expr = TQT(S"s", "$x.foo", "$x.bar", "$y.baz", "cux.$x")
@@ -827,8 +827,8 @@ class Unification extends FunSuite:
     ))
 
 
-    val vars = Space.Literal(SpaceValue("$x", "$y", "$z", "$w", "$s", "$t", "$u", "$v"))
-    val children = Space.Literal(SpaceValue("0", "1", "2", "3", "4"))
+    val vars = s("$x", "$y", "$z", "$w", "$s", "$t", "$u", "$v")
+    val children = s("0", "1", "2", "3", "4")
     given PartialFunction[RoutinePtr, Routine] = {
       case RoutinePtr("subst") => R"subst"(P"v", S"x", S"e") := {
         (S"x" /\ sP"v").iter(P"m", S"_", S"e") \/
@@ -846,7 +846,7 @@ class Unification extends FunSuite:
       case RoutinePtr("unify") => R"descend"(S"x", S"y") := {
         val bind_or_conflict = R"descend"(S"x", S"y")
         (bind_or_conflict.on_empty(S"x") \/ (bind_or_conflict <| ss"conflict")) \/
-        bind_or_conflict("conflict").on_empty(First(1, Head(bind_or_conflict("bind"))).iter(P"v", S"_",
+        bind_or_conflict("conflict").on_empty(First(1, head(bind_or_conflict("bind"))).iter(P"v", S"_",
           R"unify"(
             R"subst"(P"v", S"x", bind_or_conflict("bind")(P"v")),
             R"subst"(P"v", S"y", bind_or_conflict("bind")(P"v"))
@@ -857,9 +857,9 @@ class Unification extends FunSuite:
 
 //    println(eval(S"e0"("L")).prettyLines)
 //    println("---")
-//    println(eval(R"subst"(Vector("$x"), Vector(S"e0", Space.Literal(SpaceValue("L.p", "R.q"))))).prettyLines)
+//    println(eval(R"subst"(Vector("$x"), Vector(S"e0", Space.s("L.p", "R.q"))))).prettyLines)
 //    println("---")
-//    println(eval(R"descend"(Space.Literal(SpaceValue("L.p", "R.L.a", "R.R.$y")), Space.Literal(SpaceValue("L.p", "R.$x"))))).prettyLines)
+//    println(eval(R"descend"(Space.s("L.p", "R.L.a", "R.R.$y")), Space.s("L.p", "R.$x"))))).prettyLines)
     println(eval(R"unify"(S"e0lhs", S"e0rhs")).prettyLines)
     println("---")
     println(eval(R"unify"(S"e1lhs", S"e1rhs")).prettyLines)
@@ -894,10 +894,10 @@ class Unification extends FunSuite:
     ))
 
 
-    val vars = Space.Literal(SpaceValue("$x", "$y", "$z", "$w", "$s", "$t", "$u", "$v"))
-    val children = Space.Literal(SpaceValue("0", "1", "2", "3", "4"))
-    val lhs_ids = Space.Literal(SpaceValue("0"))
-    val rhs_ids = Space.Literal(SpaceValue("1", "2"))
+    val vars = s("$x", "$y", "$z", "$w", "$s", "$t", "$u", "$v")
+    val children = s("0", "1", "2", "3", "4")
+    val lhs_ids = s("0")
+    val rhs_ids = s("1", "2")
 
     given PartialFunction[RoutinePtr, Routine] = {
       case RoutinePtr("substone") => R"subst"(P"v", S"x", S"e") := {
@@ -919,9 +919,9 @@ class Unification extends FunSuite:
         ("conflict" x { // coalesce into single conflict
           val lhs_pc = ((S"lhsm" \| vars) \| children)
           val rhs_pc = ((S"rhsm" \| vars) \| children)
-          val pure_lhs_pc = lhs_pc \| Head(rhs_pc)
-          val pure_rhs_pc = rhs_pc \| Head(lhs_pc)
-          Head(pure_lhs_pc) x Head(pure_rhs_pc) x pure_lhs_pc
+          val pure_lhs_pc = lhs_pc \| head(rhs_pc)
+          val pure_rhs_pc = rhs_pc \| head(lhs_pc)
+          head(pure_lhs_pc) x head(pure_rhs_pc) x pure_lhs_pc
         }) \/
         children.iter(P"c", S"_",
           (S"lhsm" <| sP"c").iter(P"_", S"st", R"descend"(S"st", S"rhsm"(P"c"))))
@@ -944,10 +944,10 @@ class Unification extends FunSuite:
 //a.*.0
     // split superposition
 //    println(eval(S"e0lhs" \/ S"e0rhs").prettyLines)
-    val conflicts = Space.Literal(SpaceValue("conflict.lhs.a.*.0", "conflict.rhs.B.*.2"))
+    val conflicts = s("conflict.lhs.a.*.0", "conflict.rhs.B.*.2")
     println(eval(R"descend"(S"e0lhs", S"e0rhs")).prettyLines)
     println("---")
-    println(eval(R"subst"("$x", S"e0rhs", Space.Literal(SpaceValue("a")))).prettyLines)
+    println(eval(R"subst"("$x", S"e0rhs", s("a"))).prettyLines)
     println("---")
     println(eval( conflicts("conflict")("lhs")  ).prettyLines)
   }
@@ -1018,12 +1018,12 @@ class Unification extends FunSuite:
       case RoutinePtr("remaining") => R"remaining"() := Space.Empty
     }
 
-    val indices = Space.Literal(SpaceValue("0", "1", "2", "3"))
-    val options = Space.Literal(SpaceValue("1", "2", "3", "4"))
-    val blocks = Space.Literal(SpaceValue("0.0.0", "0.0.1", "0.1.0", "0.1.1",
-                                          "1.2.0", "1.2.1", "1.3.0", "1.3.1",
-                                          "2.0.2", "2.0.3", "2.1.2", "2.1.3",
-                                          "3.2.2", "3.2.3", "3.3.2", "3.3.3"))
+    val indices = s("0", "1", "2", "3")
+    val options = s("1", "2", "3", "4")
+    val blocks =  s("0.0.0", "0.0.1", "0.1.0", "0.1.1",
+                    "1.2.0", "1.2.1", "1.3.0", "1.3.1",
+                    "2.0.2", "2.0.3", "2.1.2", "2.1.3",
+                    "3.2.2", "3.2.3", "3.3.2", "3.3.3")
     val all = "Cell" x indices x indices x options
     val initial = (all \| headk(S"p1", 3)) \/ S"p1"
     val column_deductions = indices.iter(P"c", S"_", "Deduction" x "remaining" x "Cell" x P"c" x indices.iter(P"r", S"_", P"r" x "Cell" x P"c" x (indices \ sP"r")))
@@ -1073,7 +1073,7 @@ class Unification extends FunSuite:
     def card(space: Space): Path = Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol(sv.paths.size.toString))))
     given PartialFunction[RoutinePtr, Routine] = {
       case RoutinePtr("neigh") => R"neigh"(P"coord") := {
-        val offsets = Space.Literal(SpaceValue("-1", "0", "1"))
+        val offsets = s("-1", "0", "1")
         (P"coord" `+₂` (offsets x offsets)) \ sP"coord"
       }
       case RoutinePtr("nextStep") => R"nextStep"(S"field") := "Cell" x ((
@@ -1220,8 +1220,8 @@ class Lowering extends FunSuite:
   }
 
   test("aunt query specialize") {
-    val literal_people = subs(Routines.aunt_query_routine.body)(spre={ case Space.Mention(SpaceMention("people")) => Space.Literal(SpaceValue("Xeya", "Jim")) })
-//    "Aunt" x Literal(SpaceValue("Jim", "Xeya")).iter(P"person", S"_",
+    val literal_people = subs(Routines.aunt_query_routine.body)(spre={ case Space.Mention(SpaceMention("people")) => s("Xeya", "Jim") })
+//    "Aunt" x s("Jim", "Xeya")).iter(P"person", S"_",
 //      P"person" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
     val unrolled_people = Lower.IterateLiteral_Union(literal_people)
 //    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Xeya"))) \ S"family"("child" x "Xeya")) /\ S"family"("female")))
@@ -1371,11 +1371,11 @@ class Grounded extends FunSuite:
         ◢           ◢  |
     c  <-  d           z
      */
-    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y"))
+    val graph = s("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y")
     val lhs = "edge" x transitive(graph("edge"))
-    val rhs = "edge" x (("a" x Literal(SpaceValue("b", "d", "c"))) \/
-                        ("d" x Literal(SpaceValue("c"))) \/
-                        (Literal(SpaceValue("x", "y", "z")) x Literal(SpaceValue("x", "y", "z"))))
+    val rhs = "edge" x (("a" x s("b", "d", "c")) \/
+                        ("d" x s("c")) \/
+                        (s("x", "y", "z") x s("x", "y", "z")))
     assert(eval(lhs) == eval(rhs))
   }
 
@@ -1423,7 +1423,7 @@ class Datalog extends FunSuite:
         \ (last("complete.path") \/ last("delta.path")))))
     val r_name = r.name
 
-    val data = Literal(SpaceValue("edge.a.b", "edge.b.c", "edge.c.d", "edge.d.e"))
+    val data = s("edge.a.b", "edge.b.c", "edge.c.d", "edge.d.e")
     val initial = ("delta" x (MQT(data, List("edge.$x.$y"), "path.$x.$y") \/ MQT(data, List("path.$x.$y", "path.$y.$z"), "path.$x.$z"))) \/ ("complete" x data)
     assert(eval(r_name(initial)("complete.path"))(using rc = {case `r_name` => r}) ==
       SpaceValue("a.b", "a.c", "a.d", "a.e", "b.c", "b.d", "b.e", "c.d", "c.e", "d.e"))
@@ -1457,9 +1457,9 @@ class Permutations extends FunSuite:
   import Space.*
 
   test("intersection all") {
-    val keys = (Literal(SpaceValue("foo", "bar")) x ss"e0") \/ (Literal(SpaceValue("foo", "cux", "baz")) x ss"e1") \/ (Literal(SpaceValue("cux")) x ss"e2")
+    val keys = (s("foo", "bar") x ss"e0") \/ (s("foo", "cux", "baz") x ss"e1") \/ (s("cux") x ss"e2")
 
-    assert(eval(/\(keys <| Literal(SpaceValue("foo", "bar")))).prettyLines == "e0")
+    assert(eval(/\(keys <| s("foo", "bar"))).prettyLines == "e0")
   }
 
 end Permutations
