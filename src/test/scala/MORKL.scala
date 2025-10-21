@@ -999,7 +999,7 @@ class Unification extends FunSuite:
 //  }
 
   def headk(space: Space, k: Int): Space =
-    space.iter(Path.Deref(PathRef(s"h$k")), Space.Mention(SpaceMention(s"t$k")),
+    Space.Iteration(space, PathRef(s"h$k"), SpaceMention(s"t$k"),
       if k == 1 then Singleton(Path.Deref(PathRef(s"h$k")))
       else Path.Deref(PathRef(s"h$k")) x headk(Space.Mention(SpaceMention(s"t$k")), k - 1))
 
@@ -1460,6 +1460,43 @@ class Permutations extends FunSuite:
     val keys = (s("foo", "bar") x ss"e0") \/ (s("foo", "cux", "baz") x ss"e1") \/ (s("cux") x ss"e2")
 
     assert(eval(/\(keys <| s("foo", "bar"))).prettyLines == "e0")
+  }
+
+  test("sliding_puzzle states") {
+    // TL TR
+    // BL BR
+    // todo iter-k
+    val initial: Path = "TL.1.2.3"
+    val id_map = s("TL.TL", "TR.TR", "BL.BL", "BR.BR")
+    val moves = (ss"TL.R" x s("TL.TR", "TR.TL")) \/ (ss"TL.D" x s("TL.BL", "BL.TL"))
+             \/ (ss"TR.L" x s("TR.TL", "TL.TR")) \/ (ss"TR.D" x s("TR.BR", "BR.TR"))
+             \/ (ss"BL.R" x s("BL.BR", "BR.BL")) \/ (ss"BL.U" x s("BL.TL", "TL.BL"))
+             \/ (ss"BR.L" x s("BR.BL", "BL.BR")) \/ (ss"BR.U" x s("BR.TR", "TR.BR"))
+    val all_moves = moves.iter(P"loc", S"r", S"r".iter(P"a", S"map", P"loc" x P"a" x ((id_map \| head(S"map")) \/ S"map")))
+    val superpose = R"superpose"(P"loc", S"res") :=
+      (\/(sP"loc" /\ ss"TL") x S"res".iter((P"tr", P"bl", P"br"), S"_", ss"TL._" \/ ("TR" x sP"tr") \/ ("BL" x sP"bl") \/ ("BR" x sP"br"))) \/
+      (\/(sP"loc" /\ ss"TR") x S"res".iter((P"tl", P"bl", P"br"), S"_", ss"TR._" \/ ("TL" x sP"tl") \/ ("BL" x sP"bl") \/ ("BR" x sP"br"))) \/
+      (\/(sP"loc" /\ ss"BL") x S"res".iter((P"tl", P"tr", P"br"), S"_", ss"BL._" \/ ("TR" x sP"tr") \/ ("TL" x sP"tl") \/ ("BR" x sP"br"))) \/
+      (\/(sP"loc" /\ ss"BR") x S"res".iter((P"tl", P"tr", P"bl"), S"_", ss"BR._" \/ ("TR" x sP"tr") \/ ("BL" x sP"bl") \/ ("TL" x sP"tl")))
+    val collapse = R"collapse"(P"loc", S"state") :=
+      ((sP"loc" /\ ss"TL") x S"state"("TR") x S"state"("BL") x S"state"("BR")) \/
+      ((sP"loc" /\ ss"TR") x S"state"("TL") x S"state"("BL") x S"state"("BR")) \/
+      ((sP"loc" /\ ss"BL") x S"state"("TL") x S"state"("TR") x S"state"("BR")) \/
+      ((sP"loc" /\ ss"BR") x S"state"("TL") x S"state"("TR") x S"state"("BL"))
+    val states_routine = R"explore"(S"frontier", S"states") :=
+      S"states" \/ R"explore"(
+        (S"frontier".iter((P"q", P"tr", P"bl", P"br"), S"_",
+          R"superpose"(P"q", Space.Singleton(P"tr" x P"bl" x P"br")).iter(P"l", S"t",
+            all_moves(P"q").iter(P"act", S"map", P"act" x S"map"(P"l") x S"t")
+          ).iter(P"act", S"ass", (all_moves(P"q" x P"act" x P"q")).iterh(P"d", R"collapse"(P"d", S"ass")))
+        ) \ S"states"): Space,
+        (S"frontier" \/ S"states"): Space
+      )
+    given PartialFunction[RoutinePtr, Routine] = mod(superpose, collapse, states_routine)
+//    println(states_routine.show)
+//    println("---")
+//    println(Lower.inline(using mod(superpose, collapse))(states_routine.body).show)
+    println(eval(R"explore"(Space.Singleton(initial), Space.Empty)).prettyLines)
   }
 
 end Permutations

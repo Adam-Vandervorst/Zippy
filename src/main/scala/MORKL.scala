@@ -427,13 +427,16 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
       val Routine(_, refns, mentionns, body) = rc(rp)
       val pctx = PathContextMap(Map.from(refns zip refvs))
       val sctx = SpaceContextMap(Map.from(mentionns zip mentionvs))
-      body match
+//      println(s"calling ${rp.s}(${pctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show)}; ${sctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show)}) >")
+      val res = body match
         case Space.Union(l, Space.Call(`rp`, `refs`, `mentions`)) =>
           if (refs zip refvs).forall((p, pv) => pv == eval(Space.Singleton(p))(using pctx, sctx, rc).paths.head) &&
              (mentions zip mentionvs).forall((s, sv) => sv == eval(s)(using pctx, sctx, rc))
           then eval(l)(using pctx, sctx, rc).paths
           else eval(body)(using pctx, sctx, rc).paths
         case _ => eval(body)(using pctx, sctx, rc).paths
+//      println(s"called ${rp.s}(${pctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show)}; ${sctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show)}) < ${SpaceValue(res).show}")
+      res
     case Space.Mention(p) => sc.resolve(p).paths
     case Space.Singleton(p) => Set(PathValue(recp(p)))
     case Space.Literal(SpaceValue(ps)) => ps
@@ -755,7 +758,7 @@ def untranspile(rog: RecursiveOpGraph,
 
 
 def graphviz_table(g: RecursiveOpGraph, path: Vector[Int] = Vector()): Unit =
-  if path.length == 0 then
+  if path.isEmpty then
     println("digraph G {")
     println("graph [rankdir = \"LR\"];")
   val label = g.nodes.zipWithIndex.map{
@@ -774,11 +777,11 @@ def graphviz_table(g: RecursiveOpGraph, path: Vector[Int] = Vector()): Unit =
   g.nodes.zipWithIndex.collect { case (Right(sg), i) =>
     graphviz(sg, path :+ i)
   }
-  if path.length == 0 then
+  if path.isEmpty then
     println("}")
 
 def graphviz(g: RecursiveOpGraph, path: Vector[Int] = Vector(), show_label: Boolean = false): Unit =
-  if path.length == 0 then { println("digraph G {"); println("graph [rankdir=\"LR\" compound=true];") }
+  if path.isEmpty then { println("digraph G {"); println("graph [rankdir=\"LR\" compound=true];") }
   val indent = "  ".repeat(path.length)
   println(s"${indent}subgraph cluster_${path.map(_.toString).mkString("_")} {")
   println(s"${indent}  label=\"${g.root.operation}[${g.root.constant}]\"")
@@ -808,7 +811,7 @@ def graphviz(g: RecursiveOpGraph, path: Vector[Int] = Vector(), show_label: Bool
     graphviz(sg, path :+ i, show_label)
   }
   println(s"${indent}}")
-  if path.length == 0 then println("}")
+  if path.isEmpty then println("}")
 
 
 def mermaid(g: RecursiveOpGraph, show_label: Boolean = false, vertical: Boolean = true): Unit =
@@ -1002,6 +1005,7 @@ def subs(s: Space)(spre: PartialFunction[Space, Space] = PartialFunction.empty,
     case Space.Literal(sv) => Space.Literal(sv)
     case Space.Union(x, y) => Space.Union(recs(x), recs(y))
     case Space.Intersection(x, y) => Space.Intersection(recs(x), recs(y))
+    case Space.Raffination(x, y) => Space.Raffination(recs(x), recs(y))
     case Space.Subtraction(x, y) => Space.Subtraction(recs(x), recs(y))
     case Space.Restriction(x_e, prefixes_e) => Space.Restriction(recs(x_e), recs(prefixes_e))
     case Space.Composition(x, y) => Space.Composition(recs(x), recs(y))
@@ -1047,31 +1051,40 @@ object Lower:
   val IterUnion_Indep = subs(_: Space)(PartialFunction.empty, {
     case Space.Iteration(src, symbol, rest, Space.Union(lhs, rhs)) if {
       val (soc, poc) = collect(lhs)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
-      soc.size == 0 && poc.size == 0
+      soc.isEmpty && poc.isEmpty
     } => Space.Union(Space.Iteration(src, symbol, rest, rhs), lhs)
     case Space.Iteration(src, symbol, rest, Space.Union(lhs, rhs)) if {
       val (soc, poc) = collect(rhs)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
-      soc.size == 0 && poc.size == 0
+      soc.isEmpty && poc.isEmpty
     } => Space.Union(Space.Iteration(src, symbol, rest, lhs), rhs)
   })
 
   val ConcatSingleton_Iter = subs(_: Space)(PartialFunction.empty, {
     case Space.Iteration(src, symbol, rest, Space.Singleton(Path.Concat(p, q))) if {
       val (soc, poc) = collect(Space.Singleton(p))({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
-      soc.size == 0 && poc.size == 0
+      soc.isEmpty && poc.isEmpty
     } => Space.Wrap(Space.Iteration(src, symbol, rest, Space.Singleton(q)), p)
   })
 
   val Wrap_Iter = subs(_: Space)(PartialFunction.empty, {
     case Space.Iteration(src, symbol, rest, Space.Wrap(s, p)) if {
       val (soc, poc) = collect(Space.Singleton(p))({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
-      soc.size == 0 && poc.size == 0
+      soc.isEmpty && poc.isEmpty
     } => Space.Wrap(Space.Iteration(src, symbol, rest, s), p)
   })
 
   val Iter_Ident = subs(_: Space)(PartialFunction.empty, {
     case Space.Iteration(src, symbol, rest, Space.Wrap(Space.Mention(sm), Path.Deref(pr))) if symbol == pr && sm == rest
     => src
+  })
+
+  val inline = (ctx: PartialFunction[RoutinePtr, Routine]) ?=> subs(_: Space)(PartialFunction.empty, {
+    case Space.Call(ctx(r), refs, mentions) =>
+      val refmap = (r.refs zip refs).toMap
+      val mentionmap = (r.mentions zip mentions).toMap
+      subs(r.body)(PartialFunction.empty,
+        spost = { case Space.Mention(mentionmap(rhs)) => rhs },
+        ppost = { case Path.Deref(refmap(rhs)) => rhs })
   })
 end Lower
 
@@ -1203,7 +1216,24 @@ object Syntax:
     def apply(p: Path) = Space.Unwrap(x, p)
     infix def transform(lhs: Path, rhs: Path): Space = Space.Transformation(x, lhs, rhs)
     infix def iter(h: Path.Deref, t: Space.Mention, rhs: Space): Space = Space.Iteration(x, h.pr, t.variable, rhs)
-    infix def fold(initial: Path, acc: String, symbol: String, rest: String, rhs: Space, update: Path): Space = 
+    infix def iter(h2: (Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
+      val sm = SpaceMention(s"r${h2._2.pr.s}${rhs.hashCode().toHexString}")
+      Space.Iteration(x, h2._1.pr, sm, Space.Iteration(Space.Mention(sm), h2._2.pr, t.variable, rhs))
+    infix def iter(h3: (Path.Deref, Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
+      val sm2 = SpaceMention(s"r${h3._2.pr.s}${rhs.hashCode().toHexString}")
+      val sm3 = SpaceMention(s"r${h3._3.pr.s}${rhs.hashCode().toHexString}")
+      Space.Iteration(x, h3._1.pr, sm2,
+        Space.Iteration(Space.Mention(sm2), h3._2.pr, sm3,
+          Space.Iteration(Space.Mention(sm3), h3._3.pr, t.variable, rhs)))
+    infix def iter(h4: (Path.Deref, Path.Deref, Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
+      val sm2 = SpaceMention(s"r${h4._2.pr.s}${rhs.hashCode().toHexString}")
+      val sm3 = SpaceMention(s"r${h4._3.pr.s}${rhs.hashCode().toHexString}")
+      val sm4 = SpaceMention(s"r${h4._4.pr.s}${rhs.hashCode().toHexString}")
+      Space.Iteration(x, h4._1.pr, sm2,
+        Space.Iteration(Space.Mention(sm2), h4._2.pr, sm3,
+          Space.Iteration(Space.Mention(sm3), h4._3.pr, sm4,
+            Space.Iteration(Space.Mention(sm4), h4._4.pr, t.variable, rhs))))
+    infix def fold(initial: Path, acc: String, symbol: String, rest: String, rhs: Space, update: Path): Space =
       Space.Fold(x, initial, PathRef(acc), PathRef(symbol), SpaceMention(rest), rhs, update)
     def :\(y: Space) = Space.RightResidual(x, y)
     def /:(y: Space) = Space.LeftResidual(x, y)
@@ -1267,4 +1297,4 @@ object Syntax:
   def head(s: Space): Space = s.iterh(P"h", sP"h")
   def \/(s: Space): Space = Space.TailsUnion(s)
   def /\(s: Space): Space = Space.TailsIntersection(s)
-
+  def mod(rs: Routine*): PartialFunction[RoutinePtr, Routine] = ((rp: RoutinePtr) => rs.find(_.name == rp)).unlift
