@@ -1493,9 +1493,12 @@ class Permutations extends FunSuite:
         (S"frontier" \/ S"states"): Space
       )
     given PartialFunction[RoutinePtr, Routine] = mod(superpose, collapse, states_routine)
-//    println(states_routine.show)
-//    println("---")
-//    println(Lower.inline(using mod(superpose, collapse))(states_routine.body).show)
+    println(states_routine.show)
+    println("---")
+    // P"tr" x P"bl" x P"br" known length deconstruction?
+    val f = all_forever(_, List(Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp))
+    println(f(Lower.inline(using mod(superpose, collapse))(states_routine.body)).show)
+
     println(eval(R"explore"(Space.Singleton(initial), Space.Empty)).prettyLines)
   }
 

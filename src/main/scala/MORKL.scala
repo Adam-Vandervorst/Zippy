@@ -1043,6 +1043,25 @@ object Lower:
         .reduce(Space.Union(_, _))
   })
 
+  val SingletonConst_Literal = subs(_: Space)(PartialFunction.empty, {
+    case Space.Singleton(Path.Constant(p)) => Space.Literal(SpaceValue(Set(p)))
+  })
+
+  val LiteralSpaceOps = subs(_: Space)(spost = {
+    case op @ Space.Composition(Space.Literal(x), Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.Union(Space.Literal(x), Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.Intersection(Space.Literal(x), Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.Subtraction(Space.Literal(x), Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.Restriction(Space.Literal(x), Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.Raffination(Space.Literal(x), Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.First(_, Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.Last(_, Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.TailsUnion(Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.TailsIntersection(Space.Literal(y)) => Space.Literal(eval(op))
+    case op @ Space.Wrap(Space.Literal(_), Path.Constant(_)) => Space.Literal(eval(op))
+    case op @ Space.Unwrap(Space.Literal(_), Path.Constant(_)) => Space.Literal(eval(op))
+  })
+
   val Concat_Path = subs(_: Space)(ppost = {
     case Path.Concat(Path.Constant(PathValue(xs)), Path.Constant(PathValue(ys))) =>
       Path.Constant(PathValue(xs ++ ys))
@@ -1057,6 +1076,18 @@ object Lower:
       val (soc, poc) = collect(rhs)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
       soc.isEmpty && poc.isEmpty
     } => Space.Union(Space.Iteration(src, symbol, rest, lhs), rhs)
+  })
+
+  val UnwrapConcat_Unwraps = subs(_: Space)(PartialFunction.empty, {
+    case Space.Unwrap(src, Path.Concat(l, r)) => Space.Unwrap(Space.Unwrap(src, r), l)
+  })
+
+  val SingletonSpaceOp_PathOp = subs(_: Space)(PartialFunction.empty, {
+    case Space.Wrap(Space.Singleton(y), x) => Space.Singleton(Path.Concat(x, y))
+  })
+
+  val SingletonComposition_Wrap = subs(_: Space)(PartialFunction.empty, {
+    case Space.Composition(Space.Singleton(x), y) => Space.Wrap(y, x)
   })
 
   val ConcatSingleton_Iter = subs(_: Space)(PartialFunction.empty, {
@@ -1078,7 +1109,7 @@ object Lower:
     => src
   })
 
-  val inline = (ctx: PartialFunction[RoutinePtr, Routine]) ?=> subs(_: Space)(PartialFunction.empty, {
+  val inline = (ctx: PartialFunction[RoutinePtr, Routine]) ?=> subs(_: Space)(spost = {
     case Space.Call(ctx(r), refs, mentions) =>
       val refmap = (r.refs zip refs).toMap
       val mentionmap = (r.mentions zip mentions).toMap
