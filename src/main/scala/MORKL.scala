@@ -200,7 +200,8 @@ enum Path:
   case GroundedSP(p: Space, f: SpaceValue => PathValue)
 
   def show: String = this match
-    case Path.Deref(pr) => if pr.lengthHint == -1 then s"P\"${pr.s}\"" else s"P\"${pr.s}\"{${pr.lengthHint}}"
+//    case Path.Deref(pr) => if pr.lengthHint == -1 then s"P\"${pr.s}\"" else s"P\"${pr.s}\"{${pr.lengthHint}}"
+    case Path.Deref(pr) => s"P\"${pr.s}\""
     case Path.Constant(pi) => s"\"${pi.show}\""
     case Path.Concat(l, r) => s"${l.show} x ${r.show}"
     case Path.GroundedPP(p, f) => s"PP${f.hashCode()}(${p.show})"
@@ -218,11 +219,12 @@ enum Path:
     case p => p::Nil
 
 object Path:
+  val ZERO = Path.Constant(PathValue(Nil))
   val first: PartialFunction[Path, (Path, List[Path])] =
     case Path.Deref(pr) => Path.Deref(pr) -> Nil
     case Path.Constant(c) => Path.Constant(c) -> Nil
     case c @ Path.Concat(l, r) => c.factors.head -> c.factors.tail
-  def fromFactors(ps: List[Path]): Path = ps.reduce(Path.Concat(_, _))
+  def fromFactors(ps: Iterable[Path]): Path = if ps.isEmpty then Path.Constant(PathValue(Nil)) else ps.iterator.reduce(Path.Concat(_, _))
 
 case class PathValue(items: List[PathItem]):
   def show: String = items.map(_.show).mkString(".")
@@ -402,7 +404,7 @@ enum Space:
     case Space.Restriction(x, y) => s"(${x.show} <| ${y.show})"
     case Space.Composition(x, y) => s"(${x.show} x ${y.show})"
     case Space.Transformation(src, pattern, template) => s"${src.show}.transform(${pattern.show}, ${template.show})"
-    case Space.Iteration(src, symbol, rest, templates) => s"${src.show}.iter(\"${symbol.s}\", \"${rest.s}\", \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
+    case Space.Iteration(src, symbol, rest, templates) => s"${src.show}.iter(P\"${symbol.s}\", S\"${rest.s}\", \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
     case Space.Wrap(src, p) => s"(${p.show} x ${src.show})"
     case Space.Unwrap(src, p) => s"${src.show}(${p.show})"
     case Space.TailsUnion(src) => s"TailsUnion(${src.show})"
@@ -429,6 +431,7 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
     all_forever(Lower.inline(using new PartialFunction {
       override def apply(f: RoutinePtr): Routine = ctx(f)
       override def isDefinedAt(f: RoutinePtr): Boolean = f != name && ctx.isDefinedAt(f)
+//    })(body), List(Lower.ConstantOps, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp)))
     })(body), List(Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp)))
 
 def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
@@ -454,7 +457,7 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
           then eval(l)(using pctx, sctx, rc).paths
           else eval(body)(using pctx, sctx, rc).paths
         case _ => eval(body)(using pctx, sctx, rc).paths
-//      println(s"called ${rp.s}(${pctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show)}; ${sctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show)}) < ${SpaceValue(res).show}")
+//      println(s"called ${rp.s}(${pctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show).mkString(", ")}; ${sctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show).mkString(", ")}) = ${SpaceValue(res).show}")
       res
     case Space.Mention(p) => sc.resolve(p).paths
     case Space.Singleton(p) => Set(PathValue(recp(p)))
@@ -554,7 +557,7 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
         val v = recp(p)
         g.store(Node("Singleton", "", "space", Vector(v)))
       case Space.Literal(sv) =>
-        g.store(Node(s"Literal", sv.show, "space", Vector()))
+        g.store(Node(s"Literal", sv.paths.map(_.show).mkString("\n"), "space", Vector()))
       case Space.Union(x, y) =>
         g.store(Node("Union", "", "space", Vector(recs(x), recs(y))))
       case Space.Intersection(x, y) =>
@@ -665,7 +668,7 @@ def exec(rog: RecursiveOpGraph,
             cstack.top.last.asInstanceOf[SpaceValue]
           case "ExtractSpaceMention" => pos.sget // stack should already prepared
           case "Singleton" => SpaceValue(Set(inputs(0).pget))
-          case "Literal" => ??? // should likely be translated into a union of singletons of constant paths
+          case "Literal" => SpaceValue(constant.linesIterator.map(Syntax.parse(_)).toSet) // should likely be translated into a union of singletons of constant paths
           case "Union" => eval(Space.Union(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
           case "Intersection" => eval(Space.Intersection(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
           case "Restriction" => eval(Space.Restriction(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
@@ -1156,6 +1159,15 @@ object Lower:
     case op @ Space.Unwrap(Space.Literal(_), Path.Constant(_)) => Space.Literal(eval(op))
   })
 
+  val ConstantOps = subs(_: Space)(spost = {
+    case op if {
+      try
+        eval(op)
+        true
+      catch case e => false
+    } => Space.Literal(eval(op))
+  })
+
   val Concat_Path = subs(_: Space)(ppost = {
     case Path.Concat(Path.Constant(PathValue(xs)), Path.Constant(PathValue(ys))) =>
       Path.Constant(PathValue(xs ++ ys))
@@ -1361,6 +1373,21 @@ object Syntax:
           Space.Iteration(Space.Mention(sm3), h4._3.pr.known(1), sm4,
             Space.Iteration(Space.Mention(sm4), h4._4.pr.known(1), t.variable,
               subs(rhs)(ppre = { case Path.Deref(pr) if pr == h4._1.pr || pr == h4._2.pr || pr == h4._3.pr || pr == h4._4.pr => Path.Deref(pr.known(1)) })))))
+    infix def iterk(k: Int, t: Space.Mention, rhs: Path => Space): Space =
+      val rhsh = rhs.hashCode().toHexString
+      val prs = Vector.tabulate(k)(i => PathRef(s"${i}h$rhsh").known(1))
+      val sms = Vector.tabulate(k)(i => if i != k - 1 then SpaceMention(s"r${i}h$rhsh") else t.variable)
+      val ss = Vector.tabulate(k)(i => if i == 0 then x else Space.Mention(sms(i-1)))
+      def rec(i: Int): Space =
+        if i == k then
+          subs(rhs(Path.fromFactors(prs.map(Path.Deref(_): Path.Deref))))(spost = {
+            case Space.Mention(sm) if sm.s == t.variable.s && k == 0 => x
+          })
+        else
+          Space.Iteration(ss(i), prs(i), sms(i), rec(i + 1))
+      val res = rec(0)
+//      if rhs(Path.ZERO) != Space.Empty then println(s"iter${k} wrapper=${Space.Empty.iterk(k, t, {case _ => Space.Empty}).show}")
+      res
     infix def fold(initial: Path, acc: String, symbol: String, rest: String, rhs: Space, update: Path): Space =
       Space.Fold(x, initial, PathRef(acc), PathRef(symbol), SpaceMention(rest), rhs, update)
     def :\(y: Space) = Space.RightResidual(x, y)
@@ -1421,7 +1448,7 @@ object Syntax:
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Space.Singleton(Path.Deref(PathRef(k)))
 
-  inline def s(inline args: PathValue*): Space = Space.Literal(SpaceValue(Set.from(args)))
+  def s(args: PathValue*): Space = Space.Literal(SpaceValue(Set.from(args)))
   def head(s: Space): Space = s.iterh(P"h", sP"h")
   def \/(s: Space): Space = Space.TailsUnion(s)
   def /\(s: Space): Space = Space.TailsIntersection(s)
