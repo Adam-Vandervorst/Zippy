@@ -2,6 +2,7 @@ package morkl
 
 import munit.FunSuite
 import morkl.Syntax.{*, given}
+import scala.collection.mutable.SortedMultiSet
 import scala.language.implicitConversions
 
 /*class MORKL2Path extends FunSuite:
@@ -540,6 +541,25 @@ class Routines extends FunSuite:
     val nodes = graph("edge").iter(P"fwd", S"_1", sP"fwd") \/ transpose.iter(P"bwd", S"_2", sP"bwd")
     val e = R"scc"("42", graph("edge"), transpose, nodes)
     assert(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine), sc = scc_context) == SpaceValue("w.s", "w.t", "w.u", "w.v", "z.x", "z.y"))
+  }
+
+  test("naive-oeis") {
+    val depth = 5
+
+    def index(sequences: Space): Space =
+      sequences.iter(P"x", S"r", P"x" x LazyList.iterate(S"r": Space, depth)(\/(_)).reduce(_ \/ _))
+
+    def query(db: Space, query: Space): Space =
+      db.iter(P"x", S"r", head(P"x" x S"r" <| query))
+
+    val sequences = s("x.0.1.2.3.4.5",
+      "2x.0.2.4.6.8.10",
+      "x2.0.1.4.9.16.25")
+
+    assert(eval(query(index(sequences), s("0.1"))) == eval(s("x", "x2")))
+    assert(eval(query(index(sequences), s("2.4"))) == eval(s("2x")))
+    assert(eval(query(index(sequences), s("4.6"))) == eval(s("2x")))
+    assert(eval(query(index(sequences), s("16.25"))) == eval(s("x2")))
   }
 end Routines
 
@@ -1453,6 +1473,50 @@ class UnionFind extends FunSuite:
 
 end UnionFind
 
+class FuzzerBasic extends FunSuite:
+  import Fuzzer.*
+  test("pi") {
+    val SAMPLES = 1000000
+    given java.util.Random = java.util.Random(42)
+
+    val sx = Uniform(0f, 1f)
+    val sy = Uniform(0f, 1f)
+    val sxy = Pair(sx, sy, (_, _))
+    val spi = Concentrated(sxy, (0, 0), { case ((i, o), (x, y)) =>
+      if i + o > SAMPLES
+      then Right(4d*(i.toDouble/(i + o).toDouble))
+      else Left(if x*x + y*y < 1.0 then (i + 1, o) else (i, o + 1))
+    })
+
+//    val t0 = System.nanoTime()
+    val err_bar = 10d / math.sqrt(SAMPLES.toDouble)
+    for i <- 0 until 10 do
+      val api = spi.sample
+      assert(math.Pi-err_bar <= api && math.Pi+err_bar >= api)
+//    println((System.nanoTime() - t0)/1000)
+  }
+
+  test("categorical") {
+    val SAMPLES = 1000000
+
+    given java.util.Random = java.util.Random(42)
+
+    val expected = Seq(('b', 2), ('a', 10), ('c', 29), ('d', 100))
+    val cd = Categorical.ratios(expected);
+    val hist = SortedMultiSet.from[(Char, Int)](expected)(using Ordering.Int.on(_._2))
+//    val hist = Histogram::from_iter(cd.sample_iter(rng).take(SAMPLES*(10+2+29+100)));
+//    let achieved: Vec<(char, usize)> = hist.iter().map(|(k, c)|
+//      (*k, ((c as f64)/(SAMPLES as f64)).round() as usize)).collect();
+//    assert_eq!(&expected[..], &achieved[..]);
+  }
+end FuzzerBasic
+
+class LocBsaic extends FunSuite:
+  test("instantiate trie") {
+    val space = SpaceValue("foo.bar.baz", "foo.cux", "foo.cuux")
+    assert(Loc.Trie(space).instantiate() == space)
+  }
+end LocBsaic
 
 class Permutations extends FunSuite:
   import Space.*

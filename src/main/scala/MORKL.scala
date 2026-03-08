@@ -3,8 +3,8 @@ package morkl
 import scala.io.AnsiColor.*
 import scala.util.Random
 import scala.collection.mutable.{ArrayBuffer, LongMap, Stack}
+import scala.collection.Searching
 import java.util.Base64
-import scala.collection.mutable
 import scala.language.implicitConversions
 
 
@@ -97,13 +97,100 @@ infix def intersection(that: BinNode): BinNode =
         case (l, null) => null
         case (l, r) => l restriction r)
 */
+object Fuzzer:
+  import java.util.Random
 
+  trait Dist[T]:
+    def sample(using rng: Random): T
+
+  inline def Uniform(inline low: Float, inline high: Float): Dist[Float] = rng ?=> rng.nextFloat(low, high)
+  inline def Uniform(inline low: Double, inline high: Double): Dist[Double] = rng ?=> rng.nextDouble(low, high)
+  inline def Uniform(inline low: Int, inline high: Int): Dist[Int] = rng ?=> rng.nextInt(low, high)
+  inline def Uniform(inline low: Long, inline high: Long): Dist[Long] = rng ?=> rng.nextLong(low, high)
+
+  case class Filtered[T](d: Dist[T], p: T => Boolean) extends Dist[T]:
+    override def sample(using rng: Random): T =
+      while true do
+        val s = d.sample
+        if p(s) then return s
+      throw IllegalStateException()
+
+  case class Mapped[T, S](d: Dist[T], f: T => S) extends Dist[S]:
+    override def sample(using rng: Random): S = f(d.sample)
+
+  case class Collected[T, S](d: Dist[T], pf: PartialFunction[T, S]) extends Dist[S]:
+    override def sample(using rng: Random): S =
+      while true do
+        d.sample match
+          case pf(s) => return s
+      throw IllegalStateException()
+
+  case class Pair[T0, T1, S](d0: Dist[T0], d1: Dist[T1], f: (T0, T1) => S) extends Dist[S]:
+    override def sample(using rng: Random): S = f(d0.sample, d1.sample)
+
+  case class Cond[X, Y, Z](dc: Dist[Boolean], dx: Dist[X], dy: Dist[Y], f: Either[X, Y] => Z) extends Dist[Z]:
+    override def sample(using rng: Random): Z = f(Either.cond(dc.sample, dy.sample, dx.sample))
+
+  case class Dep[X, Y](dx: Dist[X], fdy: X => Dist[Y]) extends Dist[Y]:
+    override def sample(using rng: Random): Y = fdy(dx.sample).sample
+
+  case class Concentrated[X, Y, A](dx: Dist[X], initial: A, fa: (A, X) => Either[A, Y]) extends Dist[Y]:
+    override def sample(using rng: Random): Y =
+      var a = initial
+      while true do
+        fa(a, dx.sample) match
+          case Right(y) => return y
+          case Left(a_) => a = a_
+      throw IllegalStateException()
+
+  case class Diluted[X, Y, A](dx: Dist[X], initial: X => (A, Y), squeeze: A => Option[(A, Y)]) extends Dist[Y]:
+    override def sample(using rng: Random): Y = throw NotImplementedError()
+
+  case class Degenerate[T](t: T) extends Dist[T]:
+    override def sample(using rng: Random): T = t
+
+  case class Categorical[T](di: Dist[Int], ts: Vector[T]) extends Dist[T]:
+    override def sample(using rng: Random): T = ts(di.sample)
+  object Categorical:
+    def uniform[T](ts: Vector[T]): Categorical[T] = Categorical((rng: Random) ?=> rng.nextInt(ts.length), ts)
+    /// Creates a categorical distribution where elements are chosen with probability proportional to their weights.
+    def ratios[T](ep: IterableOnce[(T, Int)]): Categorical[T] =
+      val elements_builder = Vector.newBuilder[T]
+      val cdf_builder = Vector.newBuilder[Int]
+      var sum = 0
+      for (e, r) <- ep.iterator do
+        elements_builder += e
+        cdf_builder += sum
+        sum += r
+      val us = Uniform(0, sum)
+      val cdf = cdf_builder.result()
+      Categorical(Mapped(us, x => cdf.search(x) match {
+        case Searching.Found(i) => i
+        case Searching.InsertionPoint(i) => i - 1
+      }), elements_builder.result())
+
+  case class Repeated[T](dlength: Dist[Int], ditem: Dist[T]) extends Dist[Vector[T]]:
+    override def sample(using rng: Random): Vector[T] =
+      Vector.fill(dlength.sample)(ditem.sample)
+
+  case class Sentinel[T](dsent: Dist[Option[T]]) extends Dist[Vector[T]]:
+    override def sample(using rng: Random): Vector[T] =
+      val b = Vector.newBuilder[T]
+      while true do dsent.sample match
+        case None => return b.result()
+        case Some(t) => b += t
+      throw IllegalStateException()
+end Fuzzer
 
 trait Loc:
   def is_path(segment: PathValue): Boolean
   def branches(segment: PathValue): Set[PathItem]
   def descend(segment: PathValue, branch: Int): Loc = this
 
+  def instantiate(segment: PathValue = PathValue(Nil)): SpaceValue =
+    val rec = branches(segment).flatMap(b => instantiate(PathValue(segment.items appended b)).paths)  
+    if is_path(segment) then SpaceValue(rec.incl(segment))
+    else SpaceValue(rec)
 
 object Loc:
   case class Const(path: PathValue) extends Loc:
@@ -124,7 +211,7 @@ object Loc:
 
   case class Trie(space: SpaceValue) extends Loc:
     def is_path(segment: PathValue): Boolean = space.paths.contains(segment)
-    def branches(segment: PathValue): Set[PathItem] = space.paths.collect { case e if e.items.startsWith(segment.items) => e.items(segment.items.length) }
+    def branches(segment: PathValue): Set[PathItem] = space.paths.collect { case e if (e.items.length > segment.items.length) && e.items.startsWith(segment.items)  => e.items(segment.items.length) }
 
   case class Union(locs: Set[Loc]) extends Loc:
     def is_path(segment: PathValue): Boolean = locs.exists(_.is_path(segment))
@@ -175,6 +262,7 @@ object Loc:
     p => PathValue(f(p.items.map(_.show).mkString.toInt).toString.map(c => PathItem.Symbol(c.toString)).toList))
 
   def sqrt = int_to_int(i => Math.sqrt(i.toDouble).toInt)
+end Loc
 
 enum PathItem:
   case Symbol(n: String)
@@ -431,8 +519,8 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
     all_forever(Lower.inline(using new PartialFunction {
       override def apply(f: RoutinePtr): Routine = ctx(f)
       override def isDefinedAt(f: RoutinePtr): Boolean = f != name && ctx.isDefinedAt(f)
-//    })(body), List(Lower.ConstantOps, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp)))
-    })(body), List(Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp)))
+    })(body), List(Lower.ConstantOps, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
+//    })(body), List(Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
 
 def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
   def recp(x: Path): List[PathItem] = x match
@@ -1194,6 +1282,10 @@ object Lower:
 
   val SingletonComposition_Wrap = subs(_: Space)(PartialFunction.empty, {
     case Space.Composition(Space.Singleton(x), y) => Space.Wrap(y, x)
+  })
+
+  val SingletonRestriction_Unwrap = subs(_: Space)(PartialFunction.empty, {
+    case Space.Restriction(x, Space.Singleton(y)) => Space.Unwrap(x, y)
   })
 
   val ConcatSingleton_Iter = subs(_: Space)(PartialFunction.empty, {
