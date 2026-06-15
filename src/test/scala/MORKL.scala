@@ -1,9 +1,8 @@
 package morkl
 
-import morkl.Space.DropHead
 import munit.FunSuite
-import morkl.Syntax.{x, *, given}
-
+import morkl.Syntax.{*, given}
+import scala.language.implicitConversions
 
 /*class MORKL2Path extends FunSuite:
   import Path.*
@@ -19,7 +18,7 @@ class MORKL2Space extends FunSuite:
   test("union") {
     given PathContext()
     given SpaceContext()
-    val separate = Union(Union(Literal(SpaceValue("a")), Literal(SpaceValue("b"))), Literal(SpaceValue("c")))
+    val separate = Union(Union(s("a"), s("b")), s("c"))
     assert(eval(separate) == SpaceValue("a", "b", "c"))
   }
 
@@ -28,7 +27,7 @@ class MORKL2Space extends FunSuite:
     given SpaceContext = SpaceContext.constant(Map(SpaceMention("lhS") -> SpaceValue("a", "b", "c"),
                                                    SpaceMention("rhS") -> SpaceValue("a", "c", "e")))
     val abc_ace = Intersection(S"lhS", S"rhS")
-    val ac = Union(Literal(SpaceValue("a")), Literal(SpaceValue("c")))
+    val ac = Union(s("a"), s("c"))
     assert(eval(abc_ace) == eval(ac))
   }
 
@@ -43,20 +42,20 @@ class MORKL2Space extends FunSuite:
 //  test("restriction") {
 //    given PathContext()
 //    given SpaceContext()
-//    val lhs = Restriction(Composition(Singleton("Foo"), Union(Union(
-//      Composition(Singleton("Bar"), Space("1", "2", "3")),
-//      Composition(Singleton("Baz"), Space("A", "B", "C"))),
-//      Composition(Singleton("Cux"), Space("Red", "Blue")))), Space("Foo.Bar", "Foo.Baz"))
-//    val rhs = Composition(Singleton("Foo"), Union(
-//      Composition(Singleton("Bar"), Space("1", "2", "3")),
-//      Composition(Singleton("Baz"), Space("A", "B", "C"))))
+//    val lhs = Restriction(Composition(ss"Foo", Union(Union(
+//      Composition(ss"Bar", Space("1", "2", "3")),
+//      Composition(ss"Baz", Space("A", "B", "C"))),
+//      Composition(ss"Cux", Space("Red", "Blue")))), Space("Foo.Bar", "Foo.Baz"))
+//    val rhs = Composition(ss"Foo", Union(
+//      Composition(ss"Bar", Space("1", "2", "3")),
+//      Composition(ss"Baz", Space("A", "B", "C"))))
 //    assert(eval(lhs) == eval(rhs))
 //  }
 //
 //  test("composition") {
 //    given PathContext()
 //    given SpaceContext()
-//    val prefixed = Composition(Singleton("Foo"), Space("bar", "baz", "cux"))
+//    val prefixed = Composition(ss"Foo", Space("bar", "baz", "cux"))
 //    val separated = Space("Foo.bar", "Foo.baz", "Foo.cux")
 //    assert(eval(prefixed) == eval(separated))
 //    val xyz_ab = Composition(Space("x", "y", "z"), Space("a", "b"))
@@ -70,32 +69,32 @@ class MORKL2Space extends FunSuite:
 //  test("subspace") {
 //    given PathContext()
 //    given SpaceContext()
-//    val lhs = Subspace(Composition(Singleton("Foo"), Union(
-//      Composition(Singleton("Bar"), Space("1", "2", "3")),
-//      Composition(Singleton("Baz"), Space("A", "B", "C")))), "Foo.Baz")
+//    val lhs = Subspace(Composition(ss"Foo", Union(
+//      Composition(ss"Bar", Space("1", "2", "3")),
+//      Composition(ss"Baz", Space("A", "B", "C")))), "Foo.Baz")
 //    val rhs = Space("A", "B", "C")
 //    assert(eval(lhs) == eval(rhs))
 //  }
 //
-//  test("drophead") {
+//  test("TailsUnion") {
 //    given PathContext()
 //    given SpaceContext()
-//    val lhs = DropHead(Composition(Singleton("Foo"), Union(
-//      Composition(Singleton("Bar"), Space("1", "2", "3")),
-//      Composition(Singleton("Baz"), Space("A", "B", "C")))))
+//    val lhs = TailsUnion(Composition(ss"Foo", Union(
+//      Composition(ss"Bar", Space("1", "2", "3")),
+//      Composition(ss"Baz", Space("A", "B", "C")))))
 //    val rhs = Union(
-//      Composition(Singleton("Bar"), Space("1", "2", "3")),
-//      Composition(Singleton("Baz"), Space("A", "B", "C")))
+//      Composition(ss"Bar", Space("1", "2", "3")),
+//      Composition(ss"Baz", Space("A", "B", "C")))
 //    assert(eval(lhs) == eval(rhs))
 //  }
 //
 //  test("transformation") {
 //    given PathContext()
 //    given SpaceContext()
-//    val lhs = Transformation(Composition(Singleton("Foo"), Union(Union(
-//      Composition(Singleton("Bar"), Space("1", "2", "3")),
-//      Composition(Singleton("Baz"), Space("A", "B", "C"))),
-//      Composition(Singleton("Cux"), Space("Red", "Blue")))), "$_.Cux.$c", "Result.Color.$c")
+//    val lhs = Transformation(Composition(ss"Foo", Union(Union(
+//      Composition(ss"Bar", Space("1", "2", "3")),
+//      Composition(ss"Baz", Space("A", "B", "C"))),
+//      Composition(ss"Cux", Space("Red", "Blue")))), "$_.Cux.$c", "Result.Color.$c")
 //    val rhs = Space("Result.Color.Red", "Result.Color.Blue")
 //    assert(eval(lhs) == eval(rhs))
 //  }
@@ -105,9 +104,9 @@ class MORKL2Space extends FunSuite:
 //    given SpaceContext()
 //    // all prefixes we can add to y such prefix.y <= x
 //    val x = Composition(Singleton("Test.Foo"), Union(Union(
-//      Composition(Singleton("Bar"), Space("1", "2", "3", "4", "5", "6")),
-//      Composition(Singleton("Baz"), Space("1", "2", "3", "A", "B", "C"))),
-//      Composition(Singleton("Cux"), Space("Red", "Blue"))))
+//      Composition(ss"Bar", Space("1", "2", "3", "4", "5", "6")),
+//      Composition(ss"Baz", Space("1", "2", "3", "A", "B", "C"))),
+//      Composition(ss"Cux", Space("Red", "Blue"))))
 //    val y = Space("1", "2", "3")
 //    val lhs = LeftResidual(x, y)
 //    val rhs = Space("Test.Foo.Bar", "Test.Foo.Baz")
@@ -119,9 +118,9 @@ class MORKL2Space extends FunSuite:
 //    given SpaceContext()
 //    // all postfixes we can add to y such y.postfix <= x
 //    val x = Composition(Singleton("Test.Foo"), Union(Union(
-//      Composition(Singleton("Bar"), Space("1", "2", "3", "4", "5", "6")),
-//      Composition(Singleton("Baz"), Space("1", "2", "3", "A", "B", "C"))),
-//      Composition(Singleton("Cux"), Space("Red", "Blue"))))
+//      Composition(ss"Bar", Space("1", "2", "3", "4", "5", "6")),
+//      Composition(ss"Baz", Space("1", "2", "3", "A", "B", "C"))),
+//      Composition(ss"Cux", Space("Red", "Blue"))))
 //    val y = Space("Test.Foo.Bar", "Test.Foo.Baz")
 //    val lhs = RightResidual(y, x)
 //    val rhs = Space("1", "2", "3")
@@ -163,7 +162,7 @@ class AuntQuery extends FunSuite:
   test("add_index") {
 //    val rhs = S"ifamily" \/ S"ifamily".transform("parent.$x.$y", "child.$y.$x")
     val rhs = S"ifamily"
-      \/ ("child" x S"ifamily"("parent").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x"))))
+      \/ ("child" x S"ifamily"("parent").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(P"y" x P"x"))))
       \/ ("person" x S"ifamily"("female"))
       \/ ("person" x S"ifamily"("male"))
     assert(eval(rhs)(using PathContext.emptyMap, initial_context) == eval(S"family")(using PathContext(), context))
@@ -173,10 +172,10 @@ class AuntQuery extends FunSuite:
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
 
-    assert(eval(S"family" <| Literal(SpaceValue("male", "female"))) ==
+    assert(eval(S"family" <| s("male", "female")) ==
       SpaceValue("female.Ann", "female.Liz", "female.Pam", "female.Pat", "male.Bob", "male.Jim", "male.Tom"))
 
-    assert(eval(S"family" <| Literal(SpaceValue("parent.Bob", "child.Bob"))) ==
+    assert(eval(S"family" <| s("parent.Bob", "child.Bob")) ==
       SpaceValue("child.Bob.Pam", "child.Bob.Tom", "parent.Bob.Ann", "parent.Bob.Pat"))
   }
 
@@ -191,9 +190,9 @@ class AuntQuery extends FunSuite:
   test("mother_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    
-    val res = "Mother" x S"people".iter("person", "_",
-      P"person" x (S"family"("child" x P"person") /\ S"family"("female"))
+
+    val res = "Mother" x S"people".iter(P"person", S"_",
+      sP"person" x (S"family"("child")(P"person") /\ S"family"("female"))
     )
 
     assert(eval(res) == SpaceValue("Mother.Jim.Pat", "Mother.Bob.Pam"))
@@ -202,8 +201,8 @@ class AuntQuery extends FunSuite:
   test("sister_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    val res = "Sister" x S"people".iter("person", "_",
-      P"person" x ((DropHead(S"family"("parent") <| S"family"("child" x P"person")) /\ S"family"("female")) \ Singleton(P"person"))
+    val res = "Sister" x S"people".iter(P"person", S"_",
+      P"person" x ((\/(S"family"("parent") <| S"family"("child" x P"person")) /\ S"family"("female")) \ sP"person")
     )
 
     assert(eval(res) == SpaceValue("Sister.Ann.Pat", "Sister.Pat.Ann", "Sister.Bob.Liz"))
@@ -212,34 +211,33 @@ class AuntQuery extends FunSuite:
   test("aunt_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    val res = "Aunt" x S"people".iter("person", "_",
-      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female"))
+    val res = "Aunt" x S"people".iter(P"person", S"_",
+      P"person" x ((\/(S"family"("parent") <| \/(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female"))
     )
 
     assert(eval(res) == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
   }
 
-  val predecessor_helper_routine = routine("predecessor_helper", Vector(), Vector("family", "oldest", "people"),
-    S"people" \/ R"predecessor_helper"(Vector(), Vector(S"family",
-      DropHead(S"family"("child") <| S"oldest"),
-      S"people" \/ DropHead(S"family"("child") <| S"oldest")))
-  )
+  val predecessor_helper_routine = R"predecessor_helper"(S"family", S"oldest", S"people") :=
+    S"people" \/ R"predecessor_helper"(S"family",
+      \/(S"family"("child") <| S"oldest"),
+      S"people" \/ \/(S"family"("child") <| S"oldest"))
 
   test("predecessors_query") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
     given PartialFunction[RoutinePtr, Routine] = { case RoutinePtr("predecessor_helper") => predecessor_helper_routine }
 
-    val lhs = "Predecessor" x S"people".iter("person", "_",
-      P"person" x R"predecessor_helper"(Vector(), Vector(S"family", Singleton(P"person"), Space.Empty))
+    val lhs = "Predecessor" x S"people".iter(P"person", S"_",
+      P"person" x R"predecessor_helper"(S"family", sP"person", Space.Empty)
     )
 
     val rhs = "Predecessor" x (
-      ("Ann" x Literal(SpaceValue("Bob", "Pam", "Tom"))) \/
-      ("Bob" x Literal(SpaceValue("Pam", "Tom"))) \/
-      ("Jim" x Literal(SpaceValue("Bob", "Pam", "Pat", "Tom"))) \/
-      ("Liz" x Literal(SpaceValue("Tom"))) \/
-      ("Pat" x Literal(SpaceValue("Bob", "Pam", "Tom")))
+      ("Ann" x s("Bob", "Pam", "Tom")) \/
+      ("Bob" x s("Pam", "Tom")) \/
+      ("Jim" x s("Bob", "Pam", "Pat", "Tom")) \/
+      ("Liz" x s("Tom")) \/
+      ("Pat" x s("Bob", "Pam", "Tom"))
     )
 
     assert(eval(lhs) == eval(rhs))
@@ -285,15 +283,15 @@ class Poly extends FunSuite:
   import Space.*
 
   test("composition") {
-    val _1 = Literal(SpaceValue("0"))
-    val _2 = Literal(SpaceValue("0", "1"))
-    val _3 = Literal(SpaceValue("0", "1", "2"))
-    val _4 = Literal(SpaceValue("0", "1", "2", "3"))
+    val _1 = s("0")
+    val _2 = s("0", "1")
+    val _3 = s("0", "1", "2")
+    val _4 = s("0", "1", "2", "3")
     val p1 = ("³" x _1 x S"y" x S"y" x S"y") \/ ("¹" x _1 x S"y")  // y^3 + y
-    val p2 = ("⁴" x _1 x S"y" x S"y" x S"y" x S"y") \/ ("²" x _1 x S"y" x S"y") \/ ("⁰" x _1 x Singleton("u"))  // y^4 + y^2 + 1
+    val p2 = ("⁴" x _1 x S"y" x S"y" x S"y" x S"y") \/ ("²" x _1 x S"y" x S"y") \/ ("⁰" x _1 x ss"u")  // y^4 + y^2 + 1
     assert(eval(p1 \/ p2)(using sc=SpaceContextMap(Map(SpaceMention("y") -> SpaceValue("y")))) == SpaceValue("².0.y.y", "³.0.y.y.y", "¹.0.y", "⁰.0.u", "⁴.0.y.y.y.y"))
-    assert(eval(p1.iter("o1", "r1", S"r1".iter("f1", "ps1",
-                p2.iter("o2", "r2", S"r2".iter("f2", "ps2",
+    assert(eval(p1.iter(P"o1", S"r1", S"r1".iter(P"f1", S"ps1",
+                p2.iter(P"o2", S"r2", S"r2".iter(P"f2", S"ps2",
                   P"o1" x P"o2" x P"f1" x P"f2" x S"ps1" x S"ps2")))))(using sc=SpaceContextMap(Map(SpaceMention("y") -> SpaceValue("$y")))) == SpaceValue("³.².0.0.$y.$y.$y.$y.$y", "³.⁰.0.0.$y.$y.$y.u", "³.⁴.0.0.$y.$y.$y.$y.$y.$y.$y", "¹.².0.0.$y.$y.$y", "¹.⁰.0.0.$y.u", "¹.⁴.0.0.$y.$y.$y.$y.$y"))
     // x.y.z
     // x.0.(y,z)
@@ -354,8 +352,8 @@ class Imperative extends FunSuite:
     val reachable_code = transpile(Routines.reachable_routine, None)
     //    println(code.show)
     val graph = eval(Literal(Graphs.scc_context.resolve(SpaceMention("g2")))("edge"))
-    val transpose = eval(Literal(graph).iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x"))))
-    val nodes = eval(Literal(graph).iter("fwd", "_1", Singleton(P"fwd")) \/ Literal(transpose).iter("bwd", "_2", Singleton(P"bwd")))
+    val transpose = eval(Literal(graph).iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(P"y" x P"x"))))
+    val nodes = eval(Literal(graph).iter(P"fwd", S"_1", sP"fwd") \/ Literal(transpose).iter(P"bwd", S"_2", sP"bwd"))
 
     val stack = collection.mutable.Stack(new Array[PathValue | SpaceValue | Null](code.nodes.length))
     stack.top(0) = graph
@@ -372,9 +370,9 @@ class Imperative extends FunSuite:
 
   test("push out") {
     {
-    val code = transpile(routine("test", Vector("k"), Vector("xs"),
-      S"xs".iter("x", "r",
-        S"r"(P"k" x "test"))))
+    val code = transpile(R"test"(P"k", S"xs") :=
+      S"xs".iter(P"x", S"r",
+        S"r"(P"k" x "test")))
     assert(code.show == """Routine[test](): space
                            |0 ExtractPathRef[k](): path
                            |1 ExtractSpaceMention[xs](): space
@@ -504,8 +502,8 @@ class Routines extends FunSuite:
   import Graphs.scc_context
 
   test("eval routine") {
-    val lpeople = Literal(SpaceValue("Tom", "Bob", "Jim"))
-    val e = R"aunts"(Vector(), Vector(S"family", lpeople))
+    val lpeople = s("Tom", "Bob", "Jim")
+    val e = R"aunts"(S"family", lpeople)
     val result = SpaceValue("Aunt.Jim.Ann")
     assert(eval(e)(using PathContext.emptyMap, context, Map(RoutinePtr("aunts") -> aunt_query_routine)) == result)
   }
@@ -514,37 +512,34 @@ class Routines extends FunSuite:
     given PathContext = PathContext.emptyMap
     given SpaceContext = scc_context
     val graph = S"g1"
-    val lhs = "edge" x R"transitive"(Vector(), Vector(graph("edge")))
-    val rhs = "edge" x (("a" x Literal(SpaceValue("b", "d", "c"))) \/
-      ("d" x Literal(SpaceValue("c"))) \/
-      (Literal(SpaceValue("x", "y", "z")) x Literal(SpaceValue("x", "y", "z"))))
+    val lhs = "edge" x R"transitive"(graph("edge"))
+    val rhs = "edge" x (("a" x s("b", "d", "c")) \/
+      ("d" x s("c")) \/
+      (s("x", "y", "z") x s("x", "y", "z")))
     assert(eval(lhs)(using rc = Map(RoutinePtr("transitive") -> transitive_routine)) == eval(rhs))
   }
 
   test("reachable") {
-    given PathContext = PathContext.emptyMap
-    given SpaceContext = scc_context
     val graph = S"g2"
-    val transpose = graph("edge").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x")))
-    val nodes = graph("edge").iter("fwd", "_1", Singleton(P"fwd")) \/ transpose.iter("bwd", "_2", Singleton(P"bwd"))
-    val fwd_t = R"reachable"(Vector(), Vector(graph("edge"), nodes, Singleton("t")))
-    assert(eval(fwd_t)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("t", "u", "v", "w"))
-    val fwd_s_no_v = R"reachable"(Vector(), Vector(graph("edge"), nodes \ Singleton("v"), Singleton("s")))
-    assert(eval(fwd_s_no_v)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("s", "t", "u"))
-    val bwd_c = R"reachable"(Vector(), Vector(transpose, nodes, Singleton("c")))
-    assert(eval(bwd_c)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("c", "d", "a"))
-    val fwd_a_no_ad = R"reachable"(Vector(), Vector(graph("edge") \ Singleton("a.d"), nodes, Singleton("a")))
-    assert(eval(fwd_a_no_ad)(using rc = Map(RoutinePtr("reachable") -> reachable_routine)) == SpaceValue("a", "b"))
+    val transpose = graph("edge").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(P"y" x P"x")))
+    val nodes = graph("edge").iter(P"fwd", S"_1", sP"fwd") \/ transpose.iter(P"bwd", S"_2", sP"bwd")
+    val fwd_t = R"reachable"(graph("edge"), nodes, ss"t")
+    assert(eval(fwd_t)(using rc = Map(RoutinePtr("reachable") -> reachable_routine), sc = scc_context) == SpaceValue("t", "u", "v", "w"))
+    val fwd_s_no_v = R"reachable"(graph("edge"), nodes \ ss"v", ss"s")
+    assert(eval(fwd_s_no_v)(using rc = Map(RoutinePtr("reachable") -> reachable_routine), sc = scc_context) == SpaceValue("s", "t", "u"))
+    val bwd_c = R"reachable"(transpose, nodes, ss"c")
+    assert(eval(bwd_c)(using rc = Map(RoutinePtr("reachable") -> reachable_routine), sc = scc_context) == SpaceValue("c", "d", "a"))
+    val fwd_a_no_ad = R"reachable"(graph("edge") \ Singleton("a.d"), nodes, ss"a")
+    assert(eval(fwd_a_no_ad)(using rc = Map(RoutinePtr("reachable") -> reachable_routine), sc = scc_context) == SpaceValue("a", "b"))
   }
 
   test("scc") {
     given PathContext = PathContext.emptyMap
-    given SpaceContext = scc_context
     val graph = S"g3"
-    val transpose = graph("edge").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x")))
-    val nodes = graph("edge").iter("fwd", "_1", Singleton(P"fwd")) \/ transpose.iter("bwd", "_2", Singleton(P"bwd"))
-    val e = R"scc"(Vector("42"), Vector(graph("edge"), transpose, nodes))
-    assert(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine)) == SpaceValue("w.s", "w.t", "w.u", "w.v", "z.x", "z.y"))
+    val transpose = graph("edge").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(P"y" x P"x")))
+    val nodes = graph("edge").iter(P"fwd", S"_1", sP"fwd") \/ transpose.iter(P"bwd", S"_2", sP"bwd")
+    val e = R"scc"("42", graph("edge"), transpose, nodes)
+    assert(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine), sc = scc_context) == SpaceValue("w.s", "w.t", "w.u", "w.v", "z.x", "z.y"))
   }
 end Routines
 
@@ -552,58 +547,49 @@ object Routines:
   import Space.*
   import Grounded.sample
 
-  val child_routine = routine("child", Vector(), Vector("family"),
-    ("child" x S"family"("parent").iter("x", "r", S"r".iter("y", "_", Singleton(P"y" x P"x"))))
-  )
+  val child_routine = R"child"(S"family") :=
+    ("child" x S"family"("parent").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(P"y" x P"x"))))
 
-  val aunt_query_routine = routine("aunts", Vector(), Vector("family", "people"),
-    "Aunt" x S"people".iter("person", "_",
-      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
-  )
+  val aunt_query_routine = R"aunts"(S"family", S"people") :=
+    "Aunt" x S"people".iter(P"person", S"_",
+      P"person" x ((\/(S"family"("parent") <| \/(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
 
-  val transitive_routine = routine("transitive", Vector(), Vector("edges"),
-    S"edges" \/ R"transitive"(Vector(), Vector(S"edges" \/ S"edges".iter("n", "nbs", P"n" x DropHead(S"edges" <| S"nbs"))))
-  )
+  val transitive_routine = R"transitive"(S"edges") :=
+    S"edges" \/ R"transitive"(S"edges" \/ S"edges".iter(P"n", S"nbs", P"n" x \/(S"edges" <| S"nbs")))
 
-  val reachable_routine = routine("reachable", Vector(), Vector("edges", "nodemask", "reach"),
-    S"reach" \/ R"reachable"(Vector(), Vector(S"edges", S"nodemask",
-      S"reach" \/ DropHead(S"edges" <| (S"reach" /\ S"nodemask")) /\ S"nodemask"))
-  )
+  val reachable_routine = R"reachable"(S"edges", S"nodemask", S"reach") :=
+    S"reach" \/ R"reachable"(S"edges", S"nodemask",
+      S"reach" \/ \/(S"edges" <| (S"reach" /\ S"nodemask")) /\ S"nodemask")
 
-  val scc_routine = routine("scc", Vector("seed"), Vector("fwd", "bwd", "nodes"),
-    sample(Singleton("seed" x P"seed") \/ Singleton("count.1") \/ ("space" x S"nodes")).iter("v", "_", {
-      val pred: Space = R"reachable"(Vector(), Vector(S"fwd", S"nodes", Singleton(P"v")))
-      val desc: Space = R"reachable"(Vector(), Vector(S"bwd", S"nodes", Singleton(P"v")))
-      (P"v" x ((pred /\ desc) \ Singleton(P"v"))) \/
-        R"scc"(Vector(P"seed" x "0"), Vector(S"fwd", S"bwd", pred \ desc)) \/
-        R"scc"(Vector(P"seed" x "1"), Vector(S"fwd", S"bwd", desc \ pred)) \/
-        R"scc"(Vector(P"seed" x "2"), Vector(S"fwd", S"bwd", (S"nodes" \ pred) \ desc))
+  val scc_routine = R"scc"(P"seed", S"fwd", S"bwd", S"nodes") :=
+    sample(Singleton("seed" x P"seed") \/ Singleton("count.1") \/ ("space" x S"nodes")).iter(P"v", S"_", {
+      val pred: Space = R"reachable"(S"fwd", S"nodes", sP"v")
+      val desc: Space = R"reachable"(S"bwd", S"nodes", sP"v")
+      (P"v" x ((pred /\ desc) \ sP"v")) \/
+        R"scc"(P"seed" x "0", S"fwd", S"bwd", pred \ desc) \/
+        R"scc"(P"seed" x "1", S"fwd", S"bwd", desc \ pred) \/
+        R"scc"(P"seed" x "2", S"fwd", S"bwd", (S"nodes" \ pred) \ desc)
     })
-  )
 
-  val seedless_scc_routine = routine("seedless_scc", Vector(), Vector("fwd", "bwd", "nodes"),
-    Limit(1, S"nodes").iter("v", "_", {
-      val pred: Space = R"reachable"(Vector(), Vector(S"fwd", S"nodes", Singleton(P"v")))
-      val desc: Space = R"reachable"(Vector(), Vector(S"bwd", S"nodes", Singleton(P"v")))
-      (P"v" x ((pred /\ desc) \ Singleton(P"v"))) \/
-        R"scc"(Vector(), Vector(S"fwd", S"bwd", pred \ desc)) \/
-        R"scc"(Vector(), Vector(S"fwd", S"bwd", desc \ pred)) \/
-        R"scc"(Vector(), Vector(S"fwd", S"bwd", (S"nodes" \ pred) \ desc))
+  val seedless_scc_routine = R"seedless_scc"(S"fwd", S"bwd", S"nodes") :=
+    First(1, S"nodes").iterh(P"v", {
+      val pred: Space = R"reachable"(S"fwd", S"nodes", sP"v")
+      val desc: Space = R"reachable"(S"bwd", S"nodes", sP"v")
+      (P"v" x ((pred /\ desc) \ sP"v")) \/
+        R"scc"(S"fwd", S"bwd", pred \ desc) \/
+        R"scc"(S"fwd", S"bwd", desc \ pred) \/
+        R"scc"(S"fwd", S"bwd", (S"nodes" \ pred) \ desc)
     })
-  )
 
-  def fixpoint(f: Space => Space) = routine(s"step${f.hashCode()}", Vector(), Vector("last"),
-    S"last" \/ R"step${f.hashCode()}"(Vector(), Vector(S"last" \/ f(S"last")))
-  )
+  def fixpoint(f: Space => Space) = RoutinePtr(s"step${f.hashCode()}")(S"last") :=
+    S"last" \/ R"step${f.hashCode()}"(S"last" \/ f(S"last"))
 
-  val or_else_routine = routine("or_else", Vector(), Vector("e, backup"),
-    (Singleton("E") \ ("E" x S"e").iter("h", "_", Singleton(P"h"))).iter("_", "_", S"backup")
-  )
+  val or_else_routine = R"or_else"(S"e", S"backup") :=
+    (ss"E" \ head("E" x S"e")).tee(S"backup")
 
-  val union_iter_routine = routine("union_iter", Vector(), Vector("xs", "ys"),
-    S"xs".iter("x", "rx", P"x" x "Left" x S"rx") \/
-      S"ys".iter("y", "ry", P"y" x "Right" x S"ry")
-  )
+  val union_iter_routine = R"union_iter"(S"xs", S"ys") :=
+    S"xs".iter(P"x", S"rx", P"x" x "Left" x S"rx") \/
+      S"ys".iter(P"y", S"ry", P"y" x "Right" x S"ry")
 end Routines
 
 
@@ -712,18 +698,410 @@ class Unification extends FunSuite:
     assert(eval(DQT(S"sequences", "$x.a.$y", "$x.e.$z", "$x.$y.$z")) == SpaceValue("b.a.e.b", "b.a.e.b.b.e.e.b", "b.a.e.p.b.o.o.p", "b.b.e.b", "b.b.e.b.b.e.e.b", "b.b.e.p.b.o.o.p"))
   }
 
+  test("transpile transform") {
+    {
+      // {(foo $x), (bar $y), (baz $z)} => {(cux $x), (cux $y), (cux $z)}
+      val expr = MQMT(S"s", List("foo.$x", "bar.$y", "baz.$z"), List("cux.$x", "cux.$y", "cux.$z"))
+      val f = all_forever(_, List(Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep))
+
+//      R"union_example", "s"), Wrap(Unwrap(S"s", "foo") \/ Unwrap(S"s", "bar") \/ Unwrap(S"s", "baz"), "cux"))
+
+      assert(optimize(transpile(R"union"(S"s") := f(expr))).show
+      == """Routine[union](): space
+           |0 ExtractSpaceMention[s](): space
+           |1 Constant[foo](): path
+           |2 Unwrap[]((0,0), (0,1)): space
+           |3 Iteration[x]((0,2)): space
+           |  0 ExtractPathRef[x](): path
+           |  1 ExtractSpaceMention[x_](): space
+           |  2 Singleton[]((1,0)): space
+           |4 Constant[cux](): path
+           |5 Wrap[]((0,3), (0,4)): space
+           |6 Constant[bar](): path
+           |7 Unwrap[]((0,0), (0,6)): space
+           |8 Iteration[y]((0,7)): space
+           |  0 ExtractPathRef[y](): path
+           |  1 ExtractSpaceMention[y_](): space
+           |  2 Singleton[]((1,0)): space
+           |9 Wrap[]((0,8), (0,4)): space
+           |10 Constant[baz](): path
+           |11 Unwrap[]((0,0), (0,10)): space
+           |12 Iteration[z]((0,11)): space
+           |  0 ExtractPathRef[z](): path
+           |  1 ExtractSpaceMention[z_](): space
+           |  2 Singleton[]((1,0)): space
+           |13 Wrap[]((0,12), (0,4)): space
+           |14 Union[]((0,9), (0,13)): space
+           |15 Union[]((0,5), (0,14)): space""".stripMargin)
+    }/*
+    {
+      val expr = MQT(S"s", List("bar.$x.$y", "foo.$z.$w"), "cux.$y.$w")
+//      println(expr.show)
+      val f = all_forever(_, List(Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident))
+//      println(f(expr).show)
+      assert(optimize(transpile(R"union", "s"), f(expr)))).show
+        == """Routine[union](): space
+             |0 ExtractSpaceMention[s](): space
+             |1 Constant[bar](): path
+             |2 Unwrap[]((0,0), (0,1)): space
+             |3 Constant[foo](): path
+             |4 Unwrap[]((0,0), (0,3)): space
+             |5 Iteration[x]((0,2)): space
+             |  0 ExtractPathRef[x](): path
+             |  1 ExtractSpaceMention[x_](): space
+             |  2 Iteration[y]((1,1)): space
+             |    0 ExtractPathRef[y](): path
+             |    1 ExtractSpaceMention[y_](): space
+             |    2 Iteration[z]((0,4)): space
+             |      0 ExtractPathRef[z](): path
+             |      1 ExtractSpaceMention[z_](): space
+             |    3 Wrap[]((2,2), (2,0)): space
+             |6 Constant[cux](): path
+             |7 Wrap[]((0,5), (0,6)): space""".stripMargin)
+    }*/
+    {
+//      val expr = MQMT(S"s", List("bar.$x", "foo.$x"), List("cux.$x"))
+//      val expr = DQT(S"s", "bar.$x", "foo.$x", "cux.$x") // , "baz.$x"
+
+//      println(eval(Space.s("foo.a", "foo.b"))("foo.a")))
+//      println(eval(Space.s("foo.a", "foo.b"))("foo")("a")))
+//      println(eval(Space.s("foo.a", "foo.b")).iter(P"x", S"ys", S"ys"("a"))))
+//      val expr = TQT(S"s", "foo.$x", "bar.$x", "baz.$x", "cux.$x")
+//      val expr = TQT(S"s", "foo.$x", "bar.$x", "baz.$y", "cux.$x")
+      val expr = TQT(S"s", "$x.foo", "$x.bar", "$y.baz", "cux.$x")
+      println(expr.show)
+    }
+  }
+
+  test("unify") {
+    given SpaceContext = SpaceContextMap(Map(
+      //     [2][2] $ a [2] _1  a  unification
+      //     [2][2] b $ [2]  b _1  ==>
+      //     [2][2] b a [2]  b  a
+      SpaceMention("e0lhs") -> SpaceValue(
+        "0.0.$x",
+        "0.1.a",
+        "1.0.$x",
+        "1.1.a"
+      ),
+      SpaceMention("e0rhs") -> SpaceValue(
+        "0.0.b",
+        "0.1.$y",
+        "1.0.b",
+        "1.1.$y"
+      ),
+      //   [4]  $  $ _1 _2  unification
+      //   [4]  $  $ _2 _1  ==>
+      //   [4]  $ _1 _1 _1
+      SpaceMention("e1lhs") -> SpaceValue(
+        "0.$s",
+        "1.$t",
+        "2.$s",
+        "3.$t"
+      ),
+      SpaceMention("e1rhs") -> SpaceValue(
+        "0.$x",
+        "1.$y",
+        "2.$y",
+        "3.$s"
+      ),
+      // ($z (h $z $w) (f $w))
+      // ((f $x) (h $y (f a)) $y)
+      SpaceMention("e2lhs") -> SpaceValue(
+        "0.$z",
+        "1.0.h",
+        "1.1.$z",
+        "1.2.$w",
+        "2.0.f",
+        "2.1.$w",
+      ),
+      SpaceMention("e2rhs") -> SpaceValue(
+        "0.0.f",
+        "0.1.$x",
+        "1.0.h",
+        "1.1.$y",
+        "1.2.0.f",
+        "1.2.1.a",
+        "2.$y"
+      )
+    ))
+
+
+    val vars = s("$x", "$y", "$z", "$w", "$s", "$t", "$u", "$v")
+    val children = s("0", "1", "2", "3", "4")
+    given PartialFunction[RoutinePtr, Routine] = {
+      case RoutinePtr("subst") => R"subst"(P"v", S"x", S"e") := {
+        (S"x" /\ sP"v").iter(P"m", S"_", S"e") \/
+        ((S"x" \ sP"v") \| children).iter(P"s", S"_", sP"s") \/
+        children.iter(P"c", S"_",
+          (P"c" x (S"x" <| sP"c").iter(P"_", S"st", R"subst"(P"v", S"st", S"e"))))
+      }
+      case RoutinePtr("descend") => R"descend"(S"x", S"y") := {
+        (S"x" /\ vars).iter(P"v", S"_", "bind" x P"v" x (S"y" \ S"x")) \/
+        (S"y" /\ vars).iter(P"v", S"_", "bind" x P"v" x (S"x" \ S"y")) \/
+        (((S"x" \ vars) \| children) \ S"y").iter(P"v", S"_", "conflict" x P"v" x (S"y" \ vars)) \/
+        children.iter(P"c", S"_",
+          (S"x" <| sP"c").iter(P"_", S"st", R"descend"(S"st", S"y"(P"c"))))
+      }
+      case RoutinePtr("unify") => R"descend"(S"x", S"y") := {
+        val bind_or_conflict = R"descend"(S"x", S"y")
+        (bind_or_conflict.on_empty(S"x") \/ (bind_or_conflict <| ss"conflict")) \/
+        bind_or_conflict("conflict").on_empty(First(1, head(bind_or_conflict("bind"))).iter(P"v", S"_",
+          R"unify"(
+            R"subst"(P"v", S"x", bind_or_conflict("bind")(P"v")),
+            R"subst"(P"v", S"y", bind_or_conflict("bind")(P"v"))
+          )
+        ))
+      }
+    }
+
+//    println(eval(S"e0"("L")).prettyLines)
+//    println("---")
+//    println(eval(R"subst"(Vector("$x"), Vector(S"e0", Space.s("L.p", "R.q"))))).prettyLines)
+//    println("---")
+//    println(eval(R"descend"(Space.s("L.p", "R.L.a", "R.R.$y")), Space.s("L.p", "R.$x"))))).prettyLines)
+    println(eval(R"unify"(S"e0lhs", S"e0rhs")).prettyLines)
+    println("---")
+    println(eval(R"unify"(S"e1lhs", S"e1rhs")).prettyLines)
+    println("---")
+    println(eval(R"unify"(S"e2lhs", S"e2rhs")).prettyLines)
+  }
+
+  test("overlap") {
+    // overlap( {(: a2 (A 2)) (: a1 (A 1))}, {(: $a1 (A $v1)) (: $a2 (A $v2))}) = {((: a2 (A 2)))} {(: a1 (A 1)) (: a1 (A 1))} {}
+
+    given SpaceContext = SpaceContextMap(Map(
+      //     overlap( {(: a A)}, {(: $x A), (: (f $x) B)} ) = ({} {(: a A)} {(: (f a) B)})
+      // while lhs /\ rhs not empty
+      //  find binding or conflict
+      //  on binding, apply binding to every term
+      //  on conflict, move the involved terms to their respective sides
+      //  else done
+      SpaceMention("e0lhs") -> SpaceValue(
+        "0.:.*.0",
+        "1.a.*.0",
+        "2.A.*.0"
+      ),
+      SpaceMention("e0rhs") -> SpaceValue(
+        "0.:.*.1",
+        "1.$x.*.1",
+        "2.A.*.1",
+        "0.:.*.2",
+        "1.0.f.*.2",
+        "1.1.$x.*.2",
+        "2.B.*.2"
+      )
+    ))
+
+
+    val vars = s("$x", "$y", "$z", "$w", "$s", "$t", "$u", "$v")
+    val children = s("0", "1", "2", "3", "4")
+    val lhs_ids = s("0")
+    val rhs_ids = s("1", "2")
+
+    given PartialFunction[RoutinePtr, Routine] = {
+      case RoutinePtr("substone") => R"subst"(P"v", S"x", S"e") := {
+        (S"x" <| sP"v").iter(P"m", S"_", S"e") \/
+          ((S"x" \| sP"v") \| children) \/
+          children.iter(P"c", S"_",
+            (P"c" x (S"x" <| sP"c").iter(P"_", S"st", R"subst"(P"v", S"st", S"e"))))
+      }
+      case RoutinePtr("subst") => R"subst"(P"v", S"x", S"e") := {
+        (S"x" <| sP"v").iter(P"m", S"r", S"e" x S"r") \/
+        ((S"x" \| sP"v") \| children) \/
+          children.iter(P"c", S"_",
+            (P"c" x (S"x" <| sP"c").iter(P"_", S"st", R"subst"(P"v", S"st", S"e"))))
+      }
+      case RoutinePtr("descend") => R"descend"(S"lhsm", S"rhsm") := {
+//        ("evaluating" x S"superposition") \/
+        ("bindl" x (S"lhsm" <| vars) x (S"rhsm" \| vars)) \/
+        ("bindr" x (S"rhsm" <| vars) x (S"lhsm" \| vars)) \/
+        ("conflict" x { // coalesce into single conflict
+          val lhs_pc = ((S"lhsm" \| vars) \| children)
+          val rhs_pc = ((S"rhsm" \| vars) \| children)
+          val pure_lhs_pc = lhs_pc \| head(rhs_pc)
+          val pure_rhs_pc = rhs_pc \| head(lhs_pc)
+          head(pure_lhs_pc) x head(pure_rhs_pc) x pure_lhs_pc
+        }) \/
+        children.iter(P"c", S"_",
+          (S"lhsm" <| sP"c").iter(P"_", S"st", R"descend"(S"st", S"rhsm"(P"c"))))
+      }
+//      case RoutinePtr("unify") => R"descend", "lhsm", "rhsm"), {
+//        val bind_ior_conflict = R"descend"(S"lhsm", S"rhsm"))
+//        (bind_ior_conflict.on_empty(S"x") \/ (bind_or_conflict <| ss"conflict")) \/
+//          bind_or_conflict("conflict").on_empty(First(1, Head(bind_or_conflict("bind"))).iter(P"v", S"_",
+//            R"unify"(
+//              R"subst"(Vector(P"v"), Vector(S"x", bind_or_conflict("bind")(P"v"))),
+//              R"subst"(Vector(P"v"), Vector(S"y", bind_or_conflict("bind")(P"v")))
+//            ))
+//          ))
+//      })
+    }
+
+//$a.*.1
+//0.f.*.2
+//1.$a.*.2
+//a.*.0
+    // split superposition
+//    println(eval(S"e0lhs" \/ S"e0rhs").prettyLines)
+    val conflicts = s("conflict.lhs.a.*.0", "conflict.rhs.B.*.2")
+    println(eval(R"descend"(S"e0lhs", S"e0rhs")).prettyLines)
+    println("---")
+    println(eval(R"subst"("$x", S"e0rhs", s("a"))).prettyLines)
+    println("---")
+    println(eval( conflicts("conflict")("lhs")  ).prettyLines)
+  }
+
+  test("division") {
+    given SpaceContext = SpaceContextMap(Map(
+      SpaceMention("DB") -> SpaceValue(
+        "Completed.Fred.Database1",
+        "Completed.Fred.Database2",
+        "Completed.Fred.Compiler1",
+        "Completed.Eugene.Database1",
+        "Completed.Eugene.Compiler1",
+        "Completed.Sarah.Database1",
+        "Completed.Sarah.Database2",
+        "DBProject.Database1",
+        "DBProject.Database2",
+      )))
+
+    def Head(x: Space): Space = x.iter(P"i", S"r", sP"i")
+    val program = R"÷"(S"db") := {
+      val students = Head(S"db"("Completed"))
+      students \ Head((students x S"db"("DBProject")) \ S"db"("Completed"))
+    }
+
+    println(program.show)
+    println(transpile(program).show)
+    println(optimize(transpile(program)).show)
+  }
+
+//  test("sexpr") {
+//    R"sym", "size_data"), {
+//      S"size_data"("1").iter(P"x", S"_", P"x") \/
+//      S"size_data"("2").iter(P"x", S"ys", S"ys".iter(P"y", S"_", P"x" x P"y"))
+//    })
+//
+//    R"var", "data", "bindings"), {
+//      S"data"("$").iter(P"x", S"_", P"x") \/
+//      S"data".iter(P"x", S"ys", R"convert"(S"bindings"(P"x"), S"ys")  )
+//    })
+//
+//    R"convert", "pattern", "rest"), {
+//      (S"data" <| arity)
+//      (S"data" <| symbol_size)
+//      (S"data" <| Singleton("$")).iter(P"_", S"_", R"expr"(S"rest")))
+//
+//      S"data"("$").iter(P"x", S"_", P"x") \/
+//        S"data".iter(P"x", S"ys", R"convert"(S"bindings"(P"x")))
+//    })
+//  }
+
+  def headk(space: Space, k: Int): Space =
+    space.iter(Path.Deref(PathRef(s"h$k")), Space.Mention(SpaceMention(s"t$k")),
+      if k == 1 then Singleton(Path.Deref(PathRef(s"h$k")))
+      else Path.Deref(PathRef(s"h$k")) x headk(Space.Mention(SpaceMention(s"t$k")), k - 1))
+
+  test("sudoku") {
+    // column-row
+    Map((0, 2) -> 3, (1, 1) -> 4, (2, 2) -> 2, (3, 3) -> 1)
+
+    given SpaceContext = SpaceContextMap(Map(
+      SpaceMention("p1") -> SpaceValue(
+        "Cell.0.2.3",
+        "Cell.1.1.4",
+        "Cell.2.2.2",
+        "Cell.3.3.1",
+      )))
+    given PartialFunction[RoutinePtr, Routine] = {
+      case RoutinePtr("remaining") => R"remaining"() := Space.Empty
+    }
+
+    val indices = s("0", "1", "2", "3")
+    val options = s("1", "2", "3", "4")
+    val blocks =  s("0.0.0", "0.0.1", "0.1.0", "0.1.1",
+                    "1.2.0", "1.2.1", "1.3.0", "1.3.1",
+                    "2.0.2", "2.0.3", "2.1.2", "2.1.3",
+                    "3.2.2", "3.2.3", "3.3.2", "3.3.3")
+    val all = "Cell" x indices x indices x options
+    val initial = (all \| headk(S"p1", 3)) \/ S"p1"
+    val column_deductions = indices.iter(P"c", S"_", "Deduction" x "remaining" x "Cell" x P"c" x indices.iter(P"r", S"_", P"r" x "Cell" x P"c" x (indices \ sP"r")))
+    val row_deductions = indices.iter(P"r", S"_", "Deduction" x "remaining" x "Cell" x indices.iter(P"c", S"_", P"c" x P"r" x "Cell" x (indices \ sP"c") x sP"r"))
+    val block_deductions = blocks.iter(P"b", S"locs", "Deduction" x "remaining" x "Cell" x S"locs".iter(P"c", S"rs", P"c" x S"rs".iter(P"r", S"_", P"r" x ("Cell" x (blocks(P"b") \ Singleton(P"c" x P"r"))))))
+    val deductions = column_deductions \/ row_deductions \/ block_deductions
+    val run_deductions = deductions("Deduction").iter(P"d", S"rem", (sP"remaining" /\ sP"d").tee(
+//      R"remaining"(S"r"))
+      S"rem"("Cell").iter(P"cx", S"rx_r", S"rx_r".iter(P"rx", S"other", {
+//      case s if s.size == 1 => inf.bottom - s.head
+        val lvs = initial(P"cx")(P"rx")
+        (First(1, lvs) /\ Last(1, lvs)).iter(P"s", S"_",
+          ("rem" x headk(S"other", 3)) \/ ("add" x headk(S"other", 3) x (options \ sP"s"))
+        )
+      }))
+    ))
+
+
+    println(eval(block_deductions).prettyLines)
+  }
+
+  test("gol") {
+    //   0  1  2  3  4
+    // 0
+    // 1    x
+    // 2 x     x
+    // 3          x
+    // 4
+    // (evolves into square)
+    given SpaceContext = SpaceContextMap(Map(
+      SpaceMention("Living") -> SpaceValue(
+        "Cell.0.2",
+        "Cell.1.1",
+        "Cell.2.2",
+        "Cell.3.3"),
+      SpaceMention("Boundary") -> SpaceValue("0", "1", "2", "3", "4")
+    ))
+    extension (p: Path) def + (s: Space): Space = ("+" x p x s).arithmetic
+    extension (p: Path) def `+₂` (s: Space): Space = ("+₂" x p x s).arithmetic
+    extension (s: Space) def arithmetic: Space = Space.GroundedSS(s, s => SpaceValue(
+      (for case PathValue(PathItem.Symbol("+")::PathItem.Symbol(x)::PathItem.Symbol(y)::Nil) <- s.paths yield
+        PathValue(PathItem.Symbol((x.toInt + y.toInt).toString)::Nil)) union
+      (for case PathValue(PathItem.Symbol("+₂")::PathItem.Symbol(x0)::PathItem.Symbol(x1)::
+                                                 PathItem.Symbol(y0)::PathItem.Symbol(y1)::Nil) <- s.paths yield
+        PathValue(PathItem.Symbol((x0.toInt + y0.toInt).toString)::PathItem.Symbol((x1.toInt + y1.toInt).toString)::Nil))
+    ))
+    def card(space: Space): Path = Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol(sv.paths.size.toString))))
+    given PartialFunction[RoutinePtr, Routine] = {
+      case RoutinePtr("neigh") => R"neigh"(P"coord") := {
+        val offsets = s("-1", "0", "1")
+        (P"coord" `+₂` (offsets x offsets)) \ sP"coord"
+      }
+      case RoutinePtr("nextStep") => R"nextStep"(S"field") := "Cell" x ((
+        S"field"("Cell").iter(P"x", S"ys", S"ys".iter(P"y", S"_",
+          \/((Singleton(card(R"neigh"(P"x" x P"y") /\ S"field"("Cell"))) /\ ss"2") x Singleton(P"x" x P"y"))))
+        \/
+        S"field"("Cell").iter(P"x", S"ys", S"ys".iter(P"y", S"_",
+          R"neigh"(P"x" x P"y"))).iter(P"x", S"ys", S"ys".iter(P"y", S"_",
+          \/((Singleton(card(R"neigh"(P"x" x P"y") /\ S"field"("Cell"))) /\ ss"3") x Singleton(P"x" x P"y"))))
+      ): Space)
+    }
+
+    println(eval(R"nextStep"(S"Living")).prettyLines)
+    assert(eval(R"nextStep"(R"nextStep"(S"Living"))).prettyLines == "Cell.1.1\nCell.1.2\nCell.2.1\nCell.2.2")
+  }
+
 /*  test("multi transform") {
     given SpaceContext = context
 
 //    println(MQT(S"sequences", List("$x", "$y", "$z"), "$z.$y.$x").show)
     assert(eval(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$x"), "$z.$y.$x")) == SpaceValue("x.y.z", "y.z.x", "z.x.y"))
     assert(eval(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")) == SpaceValue("start.s.end.v", "start.t.end.w", "start.x.end.x", "start.x.end.y", "start.x.end.z", "start.y.end.x", "start.y.end.y", "start.z.end.y", "start.z.end.z"))
-//    val code = optimize(transpile(routine("3-paths", Vector(), Vector("graph"),
+//    val code = optimize(transpile(R"3-paths", "graph"),
 //      MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$u", "$u.$v", "$v.$w"), "start.$x.end.$w")
 //    )))
     println(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w").show)
 
-    val code = routine("3-paths", Vector(), Vector("graph"),
+    val code = R"3-paths", "graph"),
       MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$u", "$u.$v", "$v.$w", "$w.$x"), "$w.$v.$u.$z.$y.$x")
     )
 
@@ -734,12 +1112,12 @@ class Unification extends FunSuite:
 //    println(mermaid(code))
 //    println(mermaid())
 //    println(MQT(S"graph"("edge"), List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w").show)
-//    println(transpile(routine("paths-3", Vector(), Vector("g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w"))).show)
-//    println(push_out(transpile(routine("paths-3", Vector(), Vector("g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")))).show)
+//    println(transpile(R"paths-3", "g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w"))).show)
+//    println(push_out(transpile(R"paths-3", "g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")))).show)
   }*/
 
   test("graphviz") {
-//    val program = transpile(routine("paths-3", Vector(), Vector("g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")))
+//    val program = transpile(R"paths-3", "g"), MQT(S"g", List("$x.$y", "$y.$z", "$z.$w"), "start.$x.end.$w")))
 //    graphviz(program)
   }
 
@@ -753,7 +1131,7 @@ class Unification extends FunSuite:
 //                                    (Add ($x $p $y)) }
 //      ($ex \ $r) \/ a
 //     */
-//    val alpha_rule = routine("ɑ-rule", Vector(), Vector("ex"), {
+//    val alpha_rule = R"ɑ-rule", "ex"), {
 //      val t = MQMT(S"ex", List("3.2.ɑ.$i.$q.$y", "3.$x.$p.2.ɑ.$i"),
 //                          List("2.Rem.3.$x.$p.2.ɑ.$i", "2.Rem.3.2.ɑ.$i.$q.$y", "2.Add.3.$x.$p.$y"))
 //      (S"ex" \ t("2.Rem")) \/ t("2.Add")
@@ -810,13 +1188,23 @@ object Unification:
     U(src, p, W(_, t, _))
 
   def DQT(src: Space, p: PathValue, q: PathValue, t: PathValue): Space =
-    U(src, p, (s, b) => U(src, q, W(_, t, _), b))
+    U(src, p, (s, b) => U(src, q, (ss, bb) => W(
+//      U(s, p) /\ ss
+      Space.Empty
+
+      , t, bb), b))
+
+  def TQT(src: Space, p: PathValue, q: PathValue, r: PathValue, t: PathValue): Space = {
+    // W(Space.Empty, t, bbb)
+    U(src, p, (s, b) => U(src, q, (ss, bb) => U(src, r, (sss, bbb) => { println(s"3 $p $q $r $bbb"); W(Space.Empty, t, bbb) }, bb), b))
+  }
 
   // determine maximal sharing, sort `ps` from lowest to highest freedom
   def MQT(src: Space, ps: List[PathValue], t: PathValue, r: Option[Space] = None, bound: Map[String, PathRef] = Map.empty): Space = ps match
     case p :: ps => U(src, p, (s, b) => MQT(src, ps, t, Some(s), b), bound)
     case Nil => W(r.get, t, bound)
 
+  /// uhm, why do we drop (s
   def MQMT(src: Space, ps: List[PathValue], ts: List[PathValue], bound: Map[String, PathRef] = Map.empty): Space = ps match
     case p :: ps => U(src, p, (s, b) => MQMT(src, ps, ts, b), bound)
     case Nil => ts.map(t => Singleton(C(t, bound))).reduceRight(_ \/ _)
@@ -824,32 +1212,32 @@ end Unification
 
 
 class Lowering extends FunSuite:
-  test("DropHead iter subs") {
-    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
-    assert(code.show == ("Aunt" x S"people".iter("person", "_",
-      (P"person" x (((S"family"("parent") <| (S"family"("child") <| S"family"("child" x P"person")).iter("_", "s90ea6c6d", S"s90ea6c6d")).iter("_", "sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
+  test("TailsUnion iter subs") {
+    val code = Lower.TailsUnion_Iteration(Routines.aunt_query_routine.body)
+    assert(code.show == ("Aunt" x S"people".iter(P"person", S"_",
+      (P"person" x (((S"family"("parent") <| (S"family"("child") <| S"family"("child" x P"person")).iter(P"_", S"s90ea6c6d", S"s90ea6c6d")).iter(P"_", S"sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
     )).show)
   }
 
   test("aunt query specialize") {
-    val literal_people = subs(Routines.aunt_query_routine.body)(spre={ case Space.Mention(SpaceMention("people")) => Space.Literal(SpaceValue("Xeya", "Jim")) })
-//    "Aunt" x Literal(SpaceValue("Jim", "Xeya")).iter("person", "_",
-//      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
+    val literal_people = subs(Routines.aunt_query_routine.body)(spre={ case Space.Mention(SpaceMention("people")) => s("Xeya", "Jim") })
+//    "Aunt" x s("Jim", "Xeya")).iter(P"person", S"_",
+//      P"person" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
     val unrolled_people = Lower.IterateLiteral_Union(literal_people)
-//    "Aunt" x (("Xeya" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x "Xeya"))) \ S"family"("child" x "Xeya")) /\ S"family"("female")))
-//           \/ ("Jim" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x "Jim"))) \ S"family"("child" x "Jim")) /\ S"family"("female"))))
+//    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Xeya"))) \ S"family"("child" x "Xeya")) /\ S"family"("female")))
+//           \/ ("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Jim"))) \ S"family"("child" x "Jim")) /\ S"family"("female"))))
     val folded_people = Lower.Concat_Path(unrolled_people)
-//    "Aunt" x (("Xeya" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female")))
-//           \/ ("Jim" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female"))))
-    assert(folded_people.show == ("Aunt" x (("Xeya" x ((DropHead((S"family"("parent") <| DropHead((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))) \/ ("Jim" x ((DropHead((S"family"("parent") <| DropHead((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))))).show)
+//    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female")))
+//           \/ ("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female"))))
+    assert(folded_people.show == ("Aunt" x (("Xeya" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))) \/ ("Jim" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))))).show)
   }
 end Lowering
 
 
 class SpacialType extends FunSuite:
-//  routine("aunts", Vector(), Vector("family", "people"),
-//    "Aunt" x S"people".iter("person", "_",
-//      P"person" x ((DropHead(S"family"("parent") <| DropHead(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
+//  R"aunts", "family", "people"),
+//    "Aunt" x S"people".iter(P"person", S"_",
+//      P"person" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x P"person"))) \ S"family"("child" x P"person")) /\ S"family"("female")))
 //  )
 
   test("aunt query input type") {
@@ -857,20 +1245,20 @@ class SpacialType extends FunSuite:
 //      "family" x ("parent" x _ \/
 //                  "child" x _ x _ \/
 //                  "female" x _)
-    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
+    val code = Lower.TailsUnion_Iteration(Routines.aunt_query_routine.body)
     println(code.show)
     println(itypes(code).show)
 
-    ("Aunt" x S"people".iter("person", "_",
+    ("Aunt" x S"people".iter(P"person", S"_",
       (P"person" x (((S"family"("parent") <|
-        (S"family"("child") <| S"family"("child" x P"person")).iter("_", "s90ea6c6d", S"s90ea6c6d")
-        ).iter("_", "sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
+        (S"family"("child") <| S"family"("child" x P"person")).iter(P"_", S"s90ea6c6d", S"s90ea6c6d")
+        ).iter(P"_", S"sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
     ))
   }
 
   test("aunt query output type") {
 //    OUTPUT TYPE: "Aunt" x $person x _
-//    val code = Lower.DropHead_Iteration(Routines.aunt_query_routine.body)
+//    val code = Lower.TailsUnion_Iteration(Routines.aunt_query_routine.body)
     val code = Routines.child_routine.body
     println(code.show)
     println(itypes(code).show)
@@ -919,17 +1307,17 @@ class Grounded extends FunSuite:
   def transitive(space: Space): Space =
     Space.GroundedSS(space, sv => {
       var otsv = sv
-      var tsv = eval(Literal(sv) \/ Literal(sv).iter("x", "r", P"x" x DropHead(Literal(sv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
+      var tsv = eval(Literal(sv) \/ Literal(sv).iter(P"x", S"r", P"x" x \/(Literal(sv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
       while otsv != tsv do
         otsv = tsv
-        tsv = eval(Literal(otsv) \/ Literal(otsv).iter("x", "r", P"x" x DropHead(Literal(otsv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
+        tsv = eval(Literal(otsv) \/ Literal(otsv).iter(P"x", S"r", P"x" x \/(Literal(otsv) <| S"r")))(using PathContext.emptyMap, SpaceContextMap(Map()))
       tsv
     })
 
   test("PP hash") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
-    val e = S"family"("parent").iter("x", "r", S"r".iter("y", "_", Singleton(hash(P"x" x P"y"))))
+    val e = S"family"("parent").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(hash(P"x" x P"y"))))
 
     assert(eval(e) == SpaceValue("R2606dfba", "R86aea026", "Rc50d6b68", "Re4c8532", "Re59e471", "Re7a6b6e1"))
   }
@@ -939,7 +1327,7 @@ class Grounded extends FunSuite:
     given SpaceContext = context
     given ps: collection.mutable.ArrayBuffer[PathValue] = collection.mutable.ArrayBuffer.empty
 
-    val e = S"family"("parent").iter("x", "r", S"r".iter("y", "_", Singleton(trace(P"x" x P"y"))))
+    val e = S"family"("parent").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(trace(P"x" x P"y"))))
 
     eval(e)
     assert(ps.map(_.show).mkString("; ") == "Tom.Liz; Tom.Bob; Pat.Jim; Bob.Ann; Bob.Pat; Pam.Bob")
@@ -949,7 +1337,7 @@ class Grounded extends FunSuite:
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
 
-    val e = S"family"("parent").iter("x", "r", Singleton(P"x" x "has" x spacesize(S"r") x "children"))
+    val e = S"family"("parent").iter(P"x", S"r", Singleton(P"x" x "has" x spacesize(S"r") x "children"))
 
     assert(eval(e) == SpaceValue("Bob.has.2.children", "Pam.has.1.children", "Pat.has.1.children", "Tom.has.2.children"))
   }
@@ -959,7 +1347,7 @@ class Grounded extends FunSuite:
     given SpaceContext = context
     given ps: collection.mutable.ArrayBuffer[SpaceValue] = collection.mutable.ArrayBuffer.empty
 
-    val e = S"family"("parent").iter("x", "r", Singleton(spaceout(S"r")))
+    val e = S"family"("parent").iter(P"x", S"r", Singleton(spaceout(S"r")))
 
     assert(eval(e) == SpaceValue("unit"))
     assert(ps.toList == List(SpaceValue("Bob", "Liz"), SpaceValue("Jim"), SpaceValue("Ann", "Pat"), SpaceValue("Bob")))
@@ -969,7 +1357,7 @@ class Grounded extends FunSuite:
     given PathContext = PathContext.emptyMap
     given SpaceContext = context
 
-    val e = range("0.10.2").iter("x", "_1", range("1" x P"x" x "1").iter("y", "_2", Singleton("pair" x P"x" x P"y")))
+    val e = range("0.10.2").iter(P"x", S"_1", range("1" x P"x" x "1").iter(P"y", S"_2", Singleton("pair" x P"x" x P"y")))
 
     assert(eval(e) == SpaceValue("pair.2.1", "pair.4.1", "pair.4.2", "pair.4.3", "pair.6.1", "pair.6.2", "pair.6.3", "pair.6.4", "pair.6.5", "pair.8.1", "pair.8.2", "pair.8.3", "pair.8.4", "pair.8.5", "pair.8.6", "pair.8.7"))
   }
@@ -983,11 +1371,11 @@ class Grounded extends FunSuite:
         ◢           ◢  |
     c  <-  d           z
      */
-    val graph = Literal(SpaceValue("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y"))
+    val graph = s("edge.a.b", "edge.a.d", "edge.d.c", "edge.x.y", "edge.y.x", "edge.x.z", "edge.z.y")
     val lhs = "edge" x transitive(graph("edge"))
-    val rhs = "edge" x (("a" x Literal(SpaceValue("b", "d", "c"))) \/
-                        ("d" x Literal(SpaceValue("c"))) \/
-                        (Literal(SpaceValue("x", "y", "z")) x Literal(SpaceValue("x", "y", "z"))))
+    val rhs = "edge" x (("a" x s("b", "d", "c")) \/
+                        ("d" x s("c")) \/
+                        (s("x", "y", "z") x s("x", "y", "z")))
     assert(eval(lhs) == eval(rhs))
   }
 
@@ -1020,7 +1408,7 @@ class Datalog extends FunSuite:
     val r_name = r.name
 
     val initial = SpaceValue("edge.a.b", "edge.b.c", "edge.c.d", "edge.d.e")
-    assert(eval(r_name(Vector(), Vector(Literal(initial)))("path"))(using rc = {case `r_name` => r}) ==
+    assert(eval(r_name(Literal(initial))("path"))(using rc = {case `r_name` => r}) ==
       SpaceValue("a.b", "a.c", "a.d", "a.e", "b.c", "b.d", "b.e", "c.d", "c.e", "d.e"))
   }
 
@@ -1035,9 +1423,9 @@ class Datalog extends FunSuite:
         \ (last("complete.path") \/ last("delta.path")))))
     val r_name = r.name
 
-    val data = Literal(SpaceValue("edge.a.b", "edge.b.c", "edge.c.d", "edge.d.e"))
+    val data = s("edge.a.b", "edge.b.c", "edge.c.d", "edge.d.e")
     val initial = ("delta" x (MQT(data, List("edge.$x.$y"), "path.$x.$y") \/ MQT(data, List("path.$x.$y", "path.$y.$z"), "path.$x.$z"))) \/ ("complete" x data)
-    assert(eval(r_name(Vector(), Vector(initial))("complete.path"))(using rc = {case `r_name` => r}) ==
+    assert(eval(r_name(initial)("complete.path"))(using rc = {case `r_name` => r}) ==
       SpaceValue("a.b", "a.c", "a.d", "a.e", "b.c", "b.d", "b.e", "c.d", "c.e", "d.e"))
   }
 end Datalog
@@ -1047,25 +1435,34 @@ class UnionFind extends FunSuite:
 
   val tree0 = SpaceValue("parent.4.3", "parent.3.0", "parent.0.0", "parent.1.0", "parent.2.5", "parent.5.5")
 
-  val find_routine = routine("find", Vector("x"), Vector("tree"),
-    (S"tree"(P"x") \ Singleton(P"x")).iter("p", "_", R"find"(Vector(P"p"), Vector((S"tree" \ Singleton(P"x" x P"p")) \/ (P"x" x S"tree"(P"p"))))) \/
-      (Singleton("tobeempty") \ ("tobeempty" x (S"tree"(P"x") \ Singleton(P"x")) ).iter("H", "E", Singleton(P"H"))).iter("T", "N",
+  val find_routine = R"find"(P"x", S"tree") :=
+    (S"tree"(P"x") \ sP"x").iter(P"p", S"_", R"find"(P"p", ((S"tree" \ Singleton(P"x" x P"p")) \/ (P"x" x S"tree"(P"p"))))) \/
+    (ss"tobeempty" \ ("tobeempty" x (S"tree"(P"x") \ sP"x") ).iter(P"H", S"E", sP"H")).iter(P"T", S"N",
+      ("res" x sP"x") \/ ("tree" x S"tree"))
 
-        ("res" x Singleton(P"x")) \/ ("tree" x S"tree")
 
-      )
-  )
-
-//  val union_routine = routine("union", Vector("x", "y"), Vector("tree"),
+//  val union_routine = R"union", Vector("x", "y"), Vector("tree"),
 //
 //  )
 
   test("find") {
     given PartialFunction[RoutinePtr, Routine] = { case RoutinePtr("find") => find_routine }
-    println(eval(R"find"(Vector("4"), Vector(Literal(tree0)("parent")))).prettyLines)
+    println(eval(R"find"(P"4", Literal(tree0)("parent"))).prettyLines)
   }
 
 end UnionFind
+
+
+class Permutations extends FunSuite:
+  import Space.*
+
+  test("intersection all") {
+    val keys = (s("foo", "bar") x ss"e0") \/ (s("foo", "cux", "baz") x ss"e1") \/ (s("cux") x ss"e2")
+
+    assert(eval(/\(keys <| s("foo", "bar"))).prettyLines == "e0")
+  }
+
+end Permutations
 
 /*
 class IV extends FunSuite:
@@ -1078,7 +1475,7 @@ class IV extends FunSuite:
     Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).minByOption(_.show).fold(backup)(x => PathValue(List(x))))
 
   def or_else(e: Space, todo: Space): Space = // or
-    e \/ (Singleton("tobeempty") \ ("tobeempty" x e).iter("H", "E", Singleton(P"H"))).iter("T", "N", todo)
+    e \/ (ss"tobeempty" \ ("tobeempty" x e).iter(P"H", S"E", SP"H")).iter(P"T", S"N", todo)
 
   def add(path: Path): Path =
     Path.GroundedPP(path, x => x.items.map { case PathItem.Symbol(s) => s.toIntOption } match
@@ -1104,43 +1501,43 @@ class IV extends FunSuite:
       case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet))
 
   def map(v: Space, f: Space => Space): Space =
-    v.iter("i", "v", P"i" x f(S"v"))
+    v.iter(P"i", S"v", P"i" x f(S"v"))
 
   def flatMap(f: Space => Space): Routine = routine(s"flatMap${f.hashCode()}", Vector("i", "j"), Vector("v"), {
-    (P"i" x S"v"(P"i")).iter("_", "r",
+    (P"i" x S"v"(P"i")).iter(P"_", S"r",
     R"shift_right"(Vector(P"j"), Vector(f(S"r"))) \/
-      or_else(maxsymbol(f(S"r")).iter("ms", "__", Singleton(add(P"ms" x "1"))), Singleton("0")).iter("mss", "___",
+      or_else(maxsymbol(f(S"r")).iter(P"ms", S"__", Singleton(add(P"ms" x "1"))), ss"0").iter(P"mss", S"___",
         RoutinePtr(s"flatMap${f.hashCode()}")(Vector(add(P"i" x "1"), add(P"j" x P"mss")), Vector(S"v")))
     )
   })
 
   // can be done grounded by bit shifting
-  val shift_right_routine = routine("shift_right", Vector("o"), Vector("xs"),
-    S"xs".iter("x", "r", add(P"x" x P"o") x S"r")
+  val shift_right_routine = R"shift_right", Vector("o"), Vector("xs"),
+    S"xs".iter(P"x", S"r", add(P"x" x P"o") x S"r")
   )
 
-  val shift_left_routine = routine("shift_left", Vector("o"), Vector("xs"),
-    S"xs".iter("x", "r", sub(P"x" x P"o") x S"r")
+  val shift_left_routine = R"shift_left", Vector("o"), Vector("xs"),
+    S"xs".iter(P"x", S"r", sub(P"x" x P"o") x S"r")
   )
 
-  val concat_routine = routine("concat", Vector(), Vector("xs", "ys"),
-    or_else(maxsymbol(S"xs").iter("ms", "_",
+  val concat_routine = R"concat", "xs", "ys"),
+    or_else(maxsymbol(S"xs").iter(P"ms", S"_",
       S"xs" \/ R"shift_right"(Vector(add(P"ms" x "1")), Vector(S"ys"))), S"ys")
   )
 
   // [a, b, c, d].drop(2) == [c, d]
-  val drop_routine = routine("concat", Vector("k"), Vector("xs"),
-    maxsymbol(S"xs").iter("ms", "_",
+  val drop_routine = R"concat", Vector("k"), Vector("xs"),
+    maxsymbol(S"xs").iter(P"ms", S"_",
       R"shift_left"(Vector(P"k"), Vector(S"xs" <| range(P"k" x add(P"ms" x "1") x "1"))))
   )
 
   // [a, b, c, d].take(2) == [a, b]
-  val take_routine = routine("concat", Vector("k"), Vector("xs"),
+  val take_routine = R"concat", Vector("k"), Vector("xs"),
     S"xs" <| range("0" x P"k" x "1")
   )
 
-  val copy_routine = routine("copy", Vector(), Vector("xs", "m"),
-    maxsymbol(S"xs").iter("ms", "ms_",
+  val copy_routine = R"copy", "xs", "m"),
+    maxsymbol(S"xs").iter(P"ms", S"ms_",
       range("0" x add(P"ms" x "1") x "1").fold("0", "j", "i", "_",
         range(P"j" x add(P"j" x highest(S"m"(P"i"), "0")) x "1") x S"xs"(P"i"),
         add(P"j" x highest(S"m"(P"i"), "0"))
@@ -1149,7 +1546,7 @@ class IV extends FunSuite:
   )
 
   // index(1 -> a, 100 -> b, 200 -> c) == [a, b, c]
-  val index_routine = routine("index", Vector(), Vector("xs"),
+  val index_routine = R"index", "xs"),
     S"xs".fold("0", "i", "_", "v",
       P"i" x S"v",
       add(P"i" x "1")
@@ -1157,9 +1554,9 @@ class IV extends FunSuite:
   )
 
   // zip_with_f([a, b, c], [foo, bar]) == [f(a, foo), f(b, bar)]
-  def zip_with_routine(combine: (Space, Space) => Space) = routine(s"zip_with${combine.hashCode()}", Vector(), Vector("xs", "ys"),
-    min(highest(maxsymbol(S"xs"), "0") x highest(maxsymbol(S"ys"), "0")).iter("ms", "ms_",
-      range("0" x add(P"ms" x "1") x "1").iter("i", "_",
+  def zip_with_routine(combine: (Space, Space) => Space) = routine(s"zip_with${combine.hashCode()}", "xs", "ys"),
+    min(highest(maxsymbol(S"xs"), "0") x highest(maxsymbol(S"ys"), "0")).iter(P"ms", S"ms_",
+      range("0" x add(P"ms" x "1") x "1").iter(P"i", S"_",
         P"i" x combine(S"xs"(P"i"), S"ys"(P"i"))
       )
     )
@@ -1169,7 +1566,7 @@ class IV extends FunSuite:
     ite(
       P"k" == P"n",
       S"xs",
-      RoutinePtr(s"odd_even_sort${lt.hashCode()}")(Vector(P"n", sub(P"k" x "1")), Vector(range("0" x P"n" x "2").iter("i", "_",
+      RoutinePtr(s"odd_even_sort${lt.hashCode()}")(Vector(P"n", sub(P"k" x "1")), Vector(range("0" x P"n" x "2").iter(P"i", S"_",
         ite(
           lt(S"xs"(P"i"), S"xs"(add(P"i" x "1"))),
           (P"i" x S"xs"(P"i")) \/ (add(P"i" x "1") x S"xs"(add(P"i" x "1"))),
@@ -1180,7 +1577,7 @@ class IV extends FunSuite:
   )
 
   def quick_sort(lt: (Space, Space) => Path): Routine = routine(s"quick_sort${lt.hashCode()}", Vector("lo", "hi"), Vector("xs"),
-    maxsymbol(S"xs").iter("ms", "ms_", {
+    maxsymbol(S"xs").iter(P"ms", S"ms_", {
       val pivot = S"xs"(P"ms")
       val partition = (S"xs" <| range(P"lo" x P"hi" x "1")).fold(P"lo", "i", "j", "x",
         ite(
@@ -1204,15 +1601,15 @@ class IV extends FunSuite:
     val xs = SpaceValue("0.a", "1.b", "2.c", "3.d", "4.e")
 
     assert(eval(Unwrap(Literal(xs), "1")) == SpaceValue("b"))
-    assert(eval(DropHead(Literal(xs) <| range("1.3.1"))) == SpaceValue("b", "c"))
-    assert(eval(DropHead(Literal(xs) <| range("0.6.2"))) == SpaceValue("a", "c", "e"))
+    assert(eval(TailsUnion(Literal(xs) <| range("1.3.1"))) == SpaceValue("b", "c"))
+    assert(eval(TailsUnion(Literal(xs) <| range("0.6.2"))) == SpaceValue("a", "c", "e"))
   }
 
   test("map") {
     val xs = SpaceValue("0.a", "1.b", "2.c", "3.d", "4.e")
     val capital = SpaceValue("a.A", "b.B", "c.C", "d.D", "e.E")
     // [a, b, c, d, e]
-    eval(Literal(xs).iter("i", "vs", P"i" x S"vs".iter("v", "_", Literal(capital)(P"v")))) ==
+    eval(Literal(xs).iter(P"i", S"vs", P"i" x S"vs".iter(P"v", S"_", Literal(capital)(P"v")))) ==
       SpaceValue("0.A", "1.B", "2.C", "3.D", "4.E")
   }
 
@@ -1220,13 +1617,13 @@ class IV extends FunSuite:
     val xs = SpaceValue("0.a", "1.b", "2.c")
     val ys = SpaceValue("0.foo", "1.bar")
 
-    assert(eval(R"concat"(Vector(), Vector(Literal(xs), Literal(ys)))) == SpaceValue("0.a", "1.b", "2.c", "3.foo", "4.bar"))
+    assert(eval(R"concat"(Literal(xs), Literal(ys)))) == SpaceValue("0.a", "1.b", "2.c", "3.foo", "4.bar"))
   }
 
   test("swap_halves") {
     val xs = SpaceValue("0.a", "1.b", "2.c", "3.x", "4.y", "5.z")
 
-    assert(eval(R"concat"(Vector(), Vector(
+    assert(eval(R"concat"(
       R"take"(Vector("3"), Vector(Literal(xs))),
       R"drop"(Vector("3"), Vector(Literal(xs))),
     ))) == SpaceValue("0.a", "1.b", "2.c", "3.x", "4.y", "5.z"))
@@ -1248,8 +1645,8 @@ class IV extends FunSuite:
 
     val xs = SpaceValue("0.a", "1.b", "2.c")
 
-//    routine("flatMap19", Vector("i", "j"), Vector("v"),
-//      (P"i" x (("0" x S"v"(P"i")) \/ ("1" x S"v"(P"i")))).iter("_", "r",
+//    R"flatMap19", Vector("i", "j"), Vector("v"),
+//      (P"i" x (("0" x S"v"(P"i")) \/ ("1" x S"v"(P"i")))).iter(P"_", S"r",
 //       (shift_right(P"j"; S"r") \/ flatMap19(PP13(P"i" x "1"), PP13(P"j" x PP13(SP16(S"r") x "1")); S"v"))
 //      )
 //    )
@@ -1259,7 +1656,7 @@ class IV extends FunSuite:
 
   test("flatMap filter") {
     // if 10 <= e < 100 then [e] else []
-    val fm = flatMap(e => Singleton("0") x (e /\ range("10.100.1")))
+    val fm = flatMap(e => ss"0" x (e /\ range("10.100.1")))
     val fm_name = fm.name
 
     val xs = SpaceValue("0.2", "1.15", "2.8", "3.15", "4.17", "5.9", "6.11")

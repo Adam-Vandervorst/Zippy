@@ -7,6 +7,174 @@ import java.util.Base64
 import scala.collection.mutable
 
 
+/*
+case class BinNode(F: BinNode | Null, T: BinNode | Null)
+
+object Kernels:
+  // SIMT
+  sealed trait Executor
+
+  case object Sequential extends Executor
+  // step through applied kernels in sequence with Chain over AKernels
+
+  case object SIMD extends Executor
+  // Step Kernel over Stacked data
+
+  case object MIMD extends Executor
+  // Step set of AKernels at once
+
+  
+
+  sealed trait Kernel
+  case object Union extends Kernel
+  case class Unwrap(path: Vector[Boolean]) extends Kernel
+  case class Wrap(path: Vector[Boolean]) extends Kernel
+  case object Identity extends Kernel
+
+  sealed trait AppliedKernel
+  case class AUnion(x: BinNode | Null, y: BinNode | Null) extends AppliedKernel
+  case class AUnwrap(node: BinNode | Null, path: Vector[Boolean]) extends AppliedKernel
+  case class AWrap(node: BinNode | Null, path: Vector[Boolean]) extends AppliedKernel
+  case class AIdentity(node: BinNode) extends AppliedKernel
+  case class AForkJoin(T: AppliedKernel, F: AppliedKernel) extends AppliedKernel
+  case class AWQ(todo: Vector[AppliedKernel], done: Vector[AppliedKernel]) extends AppliedKernel
+
+
+  def exec(akernel: AppliedKernel): AppliedKernel =
+    kernel match
+      case AUnion(x, y) =>
+        if x eq null then AIdentity(y)
+        else if y eq null then AIdentity(x)
+        else AForkJoin(
+          (x.F, y.F) match
+            case (null, null) => AIdentity(null)
+            case (null, r) => AIdentity(r)
+            case (l, null) => AIdentity(l)
+            case (l, r) => AUnion(l, r),
+          (x.T, y.T) match
+            case (null, null) => AIdentity(null)
+            case (null, r) => AIdentity(r)
+            case (l, null) => AIdentity(l)
+            case (l, r) => AUnion(l, r))
+      case AUnwrap(node, path) =>
+        if node eq null then AIdentity(node)
+        if path.length == 0 then AIdentity(node)
+        else
+          if path.head then AUnwrap(node.T, path.tail)
+          else AUnwrap(node.F, path.tail)
+      case AWrap(node, path) =>
+        if path.length == 0 then AIdentity(node)
+        else
+          if path.head then AWrap(BinNode(node, null), path.init)
+          else AWrap(BinNode(null, node), path.init)
+      case AIdentity(n) => AIdentity(n)
+
+
+infix def intersection(that: BinNode): BinNode =
+  BinNode(
+    (this.F, that.F) match
+      case (null, null) => null
+      case (null, r) => null
+      case (l, null) => null
+      case (l, r) => l intersection r,
+    (this.T, that.T) match
+      case (null, null) => null
+      case (null, r) => null
+      case (l, null) => null
+      case (l, r) => l intersection r)
+
+  infix def restriction(that: BinNode): BinNode =
+    BinNode(
+      (this.F, that.F) match
+        case (null, null) => null
+        case (null, r) => r
+        case (l, null) => null
+        case (l, r) => l restriction r,
+      (this.T, that.T) match
+        case (null, null) => null
+        case (null, r) => r
+        case (l, null) => null
+        case (l, r) => l restriction r)
+*/
+
+
+trait Loc:
+  def is_path(segment: PathValue): Boolean
+  def branches(segment: PathValue): Set[PathItem]
+  def descend(segment: PathValue, branch: Int): Loc = this
+
+
+object Loc:
+  case class Const(path: PathValue) extends Loc:
+    def is_path(segment: PathValue): Boolean = segment == path
+    def branches(segment: PathValue): Set[PathItem] = if segment.items.length < path.items.length then Set(path.items(segment.items.length)) else Set.empty
+
+  case class Repeat(alphabet: Set[PathItem], k: Int) extends Loc:
+    def is_path(segment: PathValue): Boolean = segment.items.length == k
+    def branches(segment: PathValue): Set[PathItem] = if segment.items.length < k then alphabet else Set.empty
+
+  case class Full(alphabet: Set[PathItem]) extends Loc:
+    def is_path(segment: PathValue): Boolean = true
+    def branches(segment: PathValue): Set[PathItem] = alphabet
+
+  case object Empty extends Loc:
+    def is_path(segment: PathValue): Boolean = false
+    def branches(segment: PathValue): Set[PathItem] = Set.empty
+
+  case class Trie(space: SpaceValue) extends Loc:
+    def is_path(segment: PathValue): Boolean = space.paths.contains(segment)
+    def branches(segment: PathValue): Set[PathItem] = space.paths.collect { case e if e.items.startsWith(segment.items) => e.items(segment.items.length) }
+
+  case class Union(locs: Set[Loc]) extends Loc:
+    def is_path(segment: PathValue): Boolean = locs.exists(_.is_path(segment))
+    def branches(segment: PathValue): Set[PathItem] = locs.map(_.branches(segment)).reduce(_ union _)
+
+  case class Intersection(locs: Set[Loc]) extends Loc:
+    def is_path(segment: PathValue): Boolean = locs.forall(_.is_path(segment))
+    def branches(segment: PathValue): Set[PathItem] = locs.map(_.branches(segment)).reduce(_ intersect _)
+
+  case class Subtraction(loc: Loc, neg: Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = loc.is_path(segment) && !neg.is_path(segment)
+    def branches(segment: PathValue): Set[PathItem] = loc.branches(segment) removedAll neg.branches(segment)
+
+  case class Restriction(loc: Loc, accepted: Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = loc.is_path(segment) && (0 to segment.items.length).exists(i =>
+      accepted.is_path(PathValue(segment.items.take(i))))
+    def branches(segment: PathValue): Set[PathItem] = if (0 to segment.items.length).exists(i =>
+      accepted.is_path(PathValue(segment.items.take(i)))) then loc.branches(segment) else Set.empty
+
+  case class Raffination(loc: Loc, unaccepted: Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = loc.is_path(segment) && !(0 to segment.items.length).exists(i =>
+      unaccepted.is_path(PathValue(segment.items.take(i))))
+    def branches(segment: PathValue): Set[PathItem] = if !(0 to segment.items.length).exists(i =>
+      unaccepted.is_path(PathValue(segment.items.take(i)))) then loc.branches(segment) else Set.empty
+
+  case class Compose(left: Loc, right: Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = (0 to segment.items.length).exists(i =>
+      val (l, r) = segment.items.splitAt(i)
+      left.is_path(PathValue(l)) && right.is_path(PathValue(r)))
+    def branches(segment: PathValue): Set[PathItem] =
+      (0 to segment.items.length).filter(i =>
+        left.is_path(PathValue(segment.items.take(i)))
+      ).flatMap(i => right.branches(PathValue(segment.items.drop(i)))).toSet
+
+  case class Dep(left: Loc, rightf: PathValue => Loc) extends Loc:
+    def is_path(segment: PathValue): Boolean = (0 to segment.items.length).exists(i =>
+      val (l, r) = segment.items.splitAt(i)
+      left.is_path(PathValue(l)) && rightf(PathValue(l)).is_path(PathValue(r)))
+    def branches(segment: PathValue): Set[PathItem] =
+      (0 to segment.items.length).filter(i =>
+        left.is_path(PathValue(segment.items.take(i)))
+      ).flatMap(i => rightf(PathValue(segment.items.take(i))).branches(PathValue(segment.items.drop(i)))).toSet
+
+
+  def uop(src: Loc, pf: PathValue => PathValue) = Dep(src, p => Const(pf(p)))
+
+  def int_to_int(f: Int => Int) = uop(Full((0 to 9).map(k => PathItem.Symbol(k.toString)).toSet),
+    p => PathValue(f(p.items.map(_.show).mkString.toInt).toString.map(c => PathItem.Symbol(c.toString)).toList))
+
+  def sqrt = int_to_int(i => Math.sqrt(i.toDouble).toInt)
+
 enum PathItem:
   case Symbol(n: String)
   case Variable(n: String)
@@ -97,7 +265,7 @@ case class PathContextMap(m: Map[PathRef, PathValue]) extends PathContext:
   override def grown(pv: Map[PathRef, PathValue]): PathContext =
     val n = collection.mutable.Map.from(m)
     pv.foreachEntry((k, v) =>
-      n.updateWith(k)(mov =>
+      if k.s != "_" then n.updateWith(k)(mov =>
         mov.foreach(ov => println(f"at $k, $ov was already present when trying to insert $v"))
         Some(v)
       )
@@ -165,7 +333,7 @@ case class SpaceContextMap(m: Map[SpaceMention, SpaceValue]) extends SpaceContex
   override def grown(pv: Map[SpaceMention, SpaceValue]): SpaceContextMap =
     val n = collection.mutable.Map.from(m)
     pv.foreachEntry((k, v) =>
-      n.updateWith(k)(mov =>
+      if k.s != "_" then n.updateWith(k)(mov =>
         mov.foreach(ov => println(f"at $k, $ov was already present when trying to insert $v"))
         Some(v)
       )
@@ -192,18 +360,21 @@ enum Space:
   case Intersection(x: Space, y: Space)
   case Subtraction(x: Space, y: Space)
   case Restriction(x: Space, y: Space)
+  case Raffination(x: Space, y: Space)
   case Composition(x: Space, y: Space)
   case Transformation(src: Space, pattern: Path, template: Path)
   case Iteration(src: Space, symbol: PathRef, rest: SpaceMention, templates: Space)
   case Fold(src: Space, initial: Path, acc: PathRef, symbol: PathRef, rest: SpaceMention, templates: Space, update: Path)
   case Wrap(src: Space, p: Path)
   case Unwrap(src: Space, p: Path)
-  case DropHead(src: Space)
+  case TailsUnion(src: Space)
+  case TailsIntersection(src: Space)
   case LeftResidual(x: Space, y: Space) // likely not to be included
   case RightResidual(y: Space, x: Space) // likely not to be included
   case GroundedPS(p: Path, f: PathValue => SpaceValue)
   case GroundedSS(p: Space, f: SpaceValue => SpaceValue)
-  case Limit(i: Int, x: Space)
+  case First(i: Int, x: Space)
+  case Last(i: Int, x: Space)
 
   def show(using indent: Int = 0): String = this match
     case Space.Empty => "Empty"
@@ -220,12 +391,15 @@ enum Space:
     case Space.Iteration(src, symbol, rest, templates) => s"${src.show}.iter(\"${symbol.s}\", \"${rest.s}\", \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
     case Space.Wrap(src, p) => s"(${p.show} x ${src.show})"
     case Space.Unwrap(src, p) => s"${src.show}(${p.show})"
-    case Space.DropHead(src) => s"DropHead(${src.show})"
+    case Space.TailsUnion(src) => s"TailsUnion(${src.show})"
+    case Space.TailsIntersection(src) => s"TailsIntersection(${src.show})"
     case Space.LeftResidual(x, y) => s"(${y.show} /: ${x.show})"
     case Space.RightResidual(y, x) => s"(${y.show} :\\ ${x.show})"
     case Space.GroundedPS(p, f) => s"PS${f.hashCode()}(${p.show})"
     case Space.GroundedSS(s, f) => s"SS${f.hashCode()}(${s.show})"
-    case Space.Limit(i, z) => s"Limit($i, ${z.show})"
+    case Space.Raffination(x, y) => s"(${x.show} \\| ${y.show})"
+    case Space.First(i, z) => s"First($i, ${z.show})"
+    case Space.Last(i, z) => s"Last($i, ${z.show})"
 
 
 case class SpaceValue(paths: Set[PathValue]):
@@ -268,9 +442,20 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.Subtraction(x, y) => recs(x) removedAll recs(y)
     case Space.Restriction(x_e, prefixes_e) => val prefixes = recs(prefixes_e); recs(x_e).filter(x => prefixes.exists(p => x.items.startsWith(p.items)))
     case Space.Composition(x, y) => val ys = recs(y); for e1 <- recs(x); e2 <- ys yield PathValue(e1.items ++ e2.items)
-    case Space.Wrap(src_e, p_e) => val p = recp(p_e); recs(src_e).map( sp => PathValue(p ++ sp.items))
-    case Space.Unwrap(src_e, p_e) => val p = recp(p_e); recs(src_e).collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
-    case Space.DropHead(src_e) => recs(src_e).collect { case PathValue(_::r) => PathValue(r) }
+//    case Space.Wrap(src_e, p_e) => val p = recp(p_e); recs(src_e).map( sp => PathValue(p ++ sp.items))
+//    case Space.Unwrap(src_e, p_e) => val p = recp(p_e); recs(src_e).collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
+
+    case Space.Wrap(src_e, p_e) =>
+//      val p = recp(p_e); recs(src_e).map( sp => PathValue(p ++ sp.items))
+      recs(Space.Composition(Space.Singleton(p_e), src_e))
+    case Space.Unwrap(src_e, p_e) =>
+      val p = recp(p_e);
+      val src = recs(src_e);
+      val res = src.collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
+//      println(s"unwrap p=${PathValue(p).show} src=${src.map(_.show)} res=${res.map(_.show)}")
+      res
+    case Space.TailsUnion(src_e) => recs(src_e).collect { case PathValue(_::r) => PathValue(r) }
+    case Space.TailsIntersection(src_e) => recs(src_e).groupMapReduce{ case PathValue(h::_) => h }{ case PathValue(_::t) => Set(PathValue(t)) }(_ union _).values.reduce(_ intersect _)
     case Space.Transformation(src_e, pattern, template) => val transformer = make_transform(PathValue(recp(pattern)), PathValue(recp(template))).unlift; recs(src_e).collect(transformer)
     case Space.Iteration(src_e, symbol, rest, templates) =>
       Set.from(for (h, r) <- recs(src_e).groupMap(x => PathValue(x.items.head::Nil))(x => PathValue(x.items.tail));
@@ -278,9 +463,11 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
       yield p)
     case Space.LeftResidual(x_e, y_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.prefixes; if ys.forall(g => xs.contains(PathValue(r.items ++ g.items))) yield r
     case Space.RightResidual(y_e, x_e) => val ys = recs(y_e); val xs = recs(x_e); for e <- xs; r <- e.postfixes; if ys.forall(g => xs.contains(PathValue(g.items ++ r.items))) yield r
+    case Space.Raffination(x_e, y_e) => recs(Space.Subtraction(x_e, Space.Restriction(x_e, y_e)))
     case Space.GroundedPS(p, f) => f(PathValue(recp(p))).paths
     case Space.GroundedSS(s, f) => f(SpaceValue(recs(s))).paths
-    case Space.Limit(i, x) => recs(x).take(i)
+    case Space.First(i, x) => recs(x).take(i)
+    case Space.Last(i, x) => recs(x).takeRight(i)
   SpaceValue(recs(s))
 
 case class Node[R](operation: String, constant: String, kind: "path" | "space", inputs: Vector[R]):
@@ -364,8 +551,10 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
         val s = recs(src)
         val v = recp(p)
         g.store(Node("Unwrap", "", "space", Vector(s, v)))
-      case Space.DropHead(src) =>
-        g.store(Node("DropHead", "", "space", Vector(recs(src))))
+      case Space.TailsUnion(src) =>
+        g.store(Node("TailsUnion", "", "space", Vector(recs(src))))
+      case Space.TailsIntersection(src) =>
+        g.store(Node("TailsIntersection", "", "space", Vector(recs(src))))
       case Space.Transformation(src, pattern, template) =>
         val s = recs(src)
         val pv = recp(pattern)
@@ -389,8 +578,10 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
         throw NotImplementedError("grounded functions WIP")
       case Space.GroundedPS(s, f) =>
         throw NotImplementedError("grounded functions WIP")
-      case Space.Limit(i, x) =>
-        g.store(Node(s"Limit", i.toString, "space", Vector(recs(x))))
+      case Space.First(i, x) =>
+        g.store(Node(s"First", i.toString, "space", Vector(recs(x))))
+      case Space.Last(i, x) =>
+        g.store(Node(s"Last", i.toString, "space", Vector(recs(x))))
 
   r.body match
 //    case Space.Union(x, Space.Call(name, refs, mentions)) if name.s == r.name.s =>
@@ -460,12 +651,15 @@ def exec(rog: RecursiveOpGraph,
           case "Composition" => eval(Space.Composition(Space.Literal(inputs(0).sget), Space.Literal(inputs(1).sget)))
           case "Wrap" => eval(Space.Wrap(Space.Literal(inputs(0).sget), Path.Constant(inputs(1).pget)))
           case "Unwrap" => eval(Space.Unwrap(Space.Literal(inputs(0).sget), Path.Constant(inputs(1).pget)))
-          case "DropHead" => eval(Space.DropHead(Space.Literal(inputs(0).sget)))
+          case "TailsUnion" => eval(Space.TailsUnion(Space.Literal(inputs(0).sget)))
+          case "TailsIntersection" => eval(Space.TailsIntersection(Space.Literal(inputs(0).sget)))
           case "Transformation" => ??? // we should likely eventually support this
           case "Iteration" => ??? // should've been elided
           case "LeftResidual" => ??? // not worth supporting
           case "RightResidual" => ??? // not worth supporting
-          case "Limit" => eval(Space.Limit(constant.toInt, Space.Literal(inputs(0).sget)))) // should be optimized to be integrated in Iteration
+          case "First" => eval(Space.First(constant.toInt, Space.Literal(inputs(0).sget))) // should be optimized to be integrated in Iteration
+          case "Last" => eval(Space.Last(constant.toInt, Space.Literal(inputs(0).sget))) // should be optimized to be integrated in Iteration
+          )
       case Right(sg: RecursiveOpGraph) =>
         val Node(op, constant, kind, inputs) = sg.root
         op match
@@ -497,6 +691,68 @@ def exec(rog: RecursiveOpGraph,
               s(c) = SpaceValue(pos.sget.paths union stack.pop().last.asInstanceOf[SpaceValue].paths)
     c += 1
   end while
+
+
+def untranspile(rog: RecursiveOpGraph,
+         stack: Stack[Array[Path | Space | Null]], index: PartialFunction[String, RecursiveOpGraph] = PartialFunction.empty): Unit =
+  val l = rog.level
+  var c = 0
+  val s = stack.top
+
+  inline def pos = (l, c)
+
+  extension (p: (Int, Int)) inline def sget = stack(stack.length - 1 - p._1)(p._2).asInstanceOf[Space]
+  extension (p: (Int, Int)) inline def pget = stack(stack.length - 1 - p._1)(p._2).asInstanceOf[Path]
+  while c < rog.nodes.length do
+    rog.nodes(c) match
+      case Left(Node(op, constant, kind, inputs)) => kind match
+        case "path" => s(c) = (op match
+          case "ExtractPathRef" => Path.Deref(PathRef(constant)) // stack should already prepared
+          case "Constant" => Path.Constant(Syntax.parse(constant)) // stack should already be prepared
+          case "Concat" => Path.Concat(inputs(0).pget, inputs(1).pget))
+        case "space" => s(c) = (op match
+          case "Empty" => Space.Empty
+          case "Call" =>
+            //            println(s"call ${constant} ${inputs}")
+            //              val code = index(constant)
+            //              val cstack = collection.mutable.Stack(new Array[PathValue | SpaceValue | Null](code.nodes.length))
+            //              for (arg, i) <- inputs.zipWithIndex do cstack.top(i) = stack(stack.length - 1 - arg._1)(arg._2)
+            //              exec(code, cstack, index)
+            //              cstack.top.last.asInstanceOf[SpaceValue]
+            throw RuntimeException("not implemented call")
+          case "ExtractSpaceMention" => Space.Mention(SpaceMention(constant)) // stack should already prepared
+          case "Singleton" => Space.Singleton(inputs(0).pget)
+          case "Literal" => ??? // should likely be translated into a union of singletons of constant paths
+          case "Union" => Space.Union(inputs(0).sget, inputs(1).sget)
+          case "Intersection" => Space.Intersection(inputs(0).sget, inputs(1).sget)
+          case "Restriction" => Space.Restriction(inputs(0).sget, inputs(1).sget)
+          case "Subtraction" => Space.Subtraction(inputs(0).sget, inputs(1).sget)
+          case "Composition" => Space.Composition(inputs(0).sget, inputs(1).sget)
+          case "Wrap" => Space.Wrap(inputs(0).sget, inputs(1).pget)
+          case "Unwrap" => Space.Unwrap(inputs(0).sget, inputs(1).pget)
+          case "TailsUnion" => Space.TailsUnion(inputs(0).sget)
+          case "TailsIntersection" => Space.TailsIntersection(inputs(0).sget)
+          case "Transformation" => ??? // we should likely eventually support this
+          case "Iteration" => ??? // should've been elided
+          case "LeftResidual" => ??? // not worth supporting
+          case "RightResidual" => ??? // not worth supporting
+          case "First" => Space.First(constant.toInt, inputs(0).sget) // should be optimized to be integrated in Iteration
+          case "Last" => Space.Last(constant.toInt, inputs(0).sget) // should be optimized to be integrated in Iteration
+          )
+      case Right(sg: RecursiveOpGraph) =>
+        val Node(op, constant, kind, inputs) = sg.root
+        op match
+          case "Routine" => ???
+          case "Iteration" =>
+//            println(s"constant ${constant} ${kind} ${inputs}")
+//            println(s"sg ${sg.nodes} ")
+            stack.push(new Array(sg.nodes.length))
+            untranspile(sg, stack, index)
+            val popped = stack.pop()
+            s(c) = Space.Iteration(inputs(0).sget, popped(0).asInstanceOf[Path.Deref].pr, popped(1).asInstanceOf[Space.Mention].variable, popped.last.asInstanceOf[Space])
+    c += 1
+  end while
+
 
 def graphviz_table(g: RecursiveOpGraph, path: Vector[Int] = Vector()): Unit =
   if path.length == 0 then
@@ -613,7 +869,7 @@ def optimize_sharing(g: RecursiveOpGraph, stack: ArrayBuffer[(LongMap[(Int, Int)
         c += 1
       else
         stack.last._1.update(j, l2 -> i)
-    case Right(sg) =>
+    case Right(sg) => // todo share subgraphs (via meaning propagation and structural hashing)
       r.store(optimize_sharing(sg, stack))
       stack(l)._2.update(j, l -> c)
       c += 1
@@ -674,11 +930,56 @@ def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = Arra
   stack.dropRightInPlace(1)
   r
 
+def all_forever(s: Space, mappings: List[Space => Space] = Nil): Space =
+  val s_ = mappings.foldLeft(s)((s, f) => f(s))
+  if s.show == s_.show then s
+  else all_forever(s_, mappings)
 
 def optimize(g: RecursiveOpGraph): RecursiveOpGraph =
   val g_ = optimize_sharing(push_out(g))
   if g.show == g_.show then g
   else optimize(g_)
+
+
+def collect[S, P](s: Space)(spre: PartialFunction[Space, S] = PartialFunction.empty,
+                   ppre: PartialFunction[Path, P] = PartialFunction.empty): (Vector[(Space, S)], Vector[(Path, P)]) =
+  var ss = Vector.newBuilder[(Space, S)]
+  var pp = Vector.newBuilder[(Path, P)]
+  def recp(x: Path): Path = x match
+    case ppre(p) => pp addOne (x, p); x
+    case Path.Deref(pr) => Path.Deref(pr)
+    case Path.Constant(pi) => Path.Constant(pi)
+    case Path.Concat(l, r) => Path.Concat(recp(l), recp(r))
+    case Path.GroundedPP(p, f) => ???
+    case Path.GroundedSP(s, f) => ???
+    case x => x
+  def recs(x: Space): Space = x match
+    case spre(s) => ss addOne (x, s); x
+    case Space.Empty => Space.Empty
+    case Space.Call(rp, refs, mentions) => Space.Call(rp, refs.map(recp), mentions.map(recs))
+    case Space.Mention(p) => Space.Mention(p)
+    case Space.Singleton(p) => Space.Singleton(recp(p))
+    case Space.Literal(sv) => Space.Literal(sv)
+    case Space.Union(x, y) => Space.Union(recs(x), recs(y))
+    case Space.Intersection(x, y) => Space.Intersection(recs(x), recs(y))
+    case Space.Subtraction(x, y) => Space.Subtraction(recs(x), recs(y))
+    case Space.Restriction(x_e, prefixes_e) => Space.Restriction(recs(x_e), recs(prefixes_e))
+    case Space.Composition(x, y) => Space.Composition(recs(x), recs(y))
+    case Space.Wrap(src_e, p_e) =>  Space.Wrap(recs(src_e), recp(p_e))
+    case Space.Unwrap(src_e, p_e) => Space.Unwrap(recs(src_e), recp(p_e))
+    case Space.TailsUnion(src_e) => Space.TailsUnion(recs(src_e))
+    case Space.TailsIntersection(src_e) => Space.TailsIntersection(recs(src_e))
+    case Space.Transformation(src_e, pattern, template) => Space.Transformation(recs(src_e), recp(pattern), recp(template))
+    case Space.Iteration(src_e, symbol, rest, templates) => Space.Iteration(recs(src_e), symbol, rest, recs(templates))
+    case Space.LeftResidual(x_e, y_e) =>  Space.LeftResidual(recs(x_e), recs(y_e))
+    case Space.RightResidual(y_e, x_e) => Space.RightResidual(recs(y_e), recs(x_e))
+    case Space.GroundedPS(p, f) => ???
+    case Space.GroundedSS(s, f) => ???
+    case Space.First(i, x) => Space.First(i, recs(x))
+    case Space.Last(i, x) => Space.Last(i, recs(x))
+    case x => x
+  recs(s)
+  (ss.result(), pp.result())
 
 
 def subs(s: Space)(spre: PartialFunction[Space, Space] = PartialFunction.empty,
@@ -706,19 +1007,22 @@ def subs(s: Space)(spre: PartialFunction[Space, Space] = PartialFunction.empty,
     case Space.Composition(x, y) => Space.Composition(recs(x), recs(y))
     case Space.Wrap(src_e, p_e) =>  Space.Wrap(recs(src_e), recp(p_e))
     case Space.Unwrap(src_e, p_e) => Space.Unwrap(recs(src_e), recp(p_e))
-    case Space.DropHead(src_e) => Space.DropHead(recs(src_e))
+    case Space.TailsUnion(src_e) => Space.TailsUnion(recs(src_e))
+    case Space.TailsIntersection(src_e) => Space.TailsIntersection(recs(src_e))
     case Space.Transformation(src_e, pattern, template) => Space.Transformation(recs(src_e), recp(pattern), recp(template))
     case Space.Iteration(src_e, symbol, rest, templates) => Space.Iteration(recs(src_e), symbol, rest, recs(templates))
     case Space.LeftResidual(x_e, y_e) =>  Space.LeftResidual(recs(x_e), recs(y_e))
     case Space.RightResidual(y_e, x_e) => Space.RightResidual(recs(y_e), recs(x_e))
     case Space.GroundedPS(p, f) => ???
     case Space.GroundedSS(s, f) => ???
-    case Space.Limit(i, x) => Space.Limit(i, recs(x)), x => x)
+    case Space.First(i, x) => Space.First(i, recs(x))
+    case Space.Last(i, x) => Space.Last(i, recs(x)),
+    x => x)
   recs(s)
 
 object Lower:
-  val DropHead_Iteration = subs(_: Space)(PartialFunction.empty, {
-    case Space.DropHead(src) =>
+  val TailsUnion_Iteration = subs(_: Space)(PartialFunction.empty, {
+    case Space.TailsUnion(src) =>
       val name = SpaceMention("s" + src.hashCode().toHexString)
       Space.Iteration(src, PathRef("_"), name, Space.Mention(name))
   })
@@ -739,6 +1043,36 @@ object Lower:
     case Path.Concat(Path.Constant(PathValue(xs)), Path.Constant(PathValue(ys))) =>
       Path.Constant(PathValue(xs ++ ys))
   })
+
+  val IterUnion_Indep = subs(_: Space)(PartialFunction.empty, {
+    case Space.Iteration(src, symbol, rest, Space.Union(lhs, rhs)) if {
+      val (soc, poc) = collect(lhs)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
+      soc.size == 0 && poc.size == 0
+    } => Space.Union(Space.Iteration(src, symbol, rest, rhs), lhs)
+    case Space.Iteration(src, symbol, rest, Space.Union(lhs, rhs)) if {
+      val (soc, poc) = collect(rhs)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
+      soc.size == 0 && poc.size == 0
+    } => Space.Union(Space.Iteration(src, symbol, rest, lhs), rhs)
+  })
+
+  val ConcatSingleton_Iter = subs(_: Space)(PartialFunction.empty, {
+    case Space.Iteration(src, symbol, rest, Space.Singleton(Path.Concat(p, q))) if {
+      val (soc, poc) = collect(Space.Singleton(p))({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
+      soc.size == 0 && poc.size == 0
+    } => Space.Wrap(Space.Iteration(src, symbol, rest, Space.Singleton(q)), p)
+  })
+
+  val Wrap_Iter = subs(_: Space)(PartialFunction.empty, {
+    case Space.Iteration(src, symbol, rest, Space.Wrap(s, p)) if {
+      val (soc, poc) = collect(Space.Singleton(p))({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
+      soc.size == 0 && poc.size == 0
+    } => Space.Wrap(Space.Iteration(src, symbol, rest, s), p)
+  })
+
+  val Iter_Ident = subs(_: Space)(PartialFunction.empty, {
+    case Space.Iteration(src, symbol, rest, Space.Wrap(Space.Mention(sm), Path.Deref(pr))) if symbol == pr && sm == rest
+    => src
+  })
 end Lower
 
 
@@ -758,7 +1092,7 @@ def itypes(s: Space): SpaceValue =
     case Path.GroundedPP(p, f) => ???
     case Path.GroundedPP(s, f) => ???
 
-  import Syntax.*
+  import Syntax.x
   def recs(x: Space): Set[PathValue] = x match
     case Space.Empty =>  Set.empty
     case Space.Call(r, refs, mentions) =>
@@ -778,9 +1112,11 @@ def itypes(s: Space): SpaceValue =
     case Space.Composition(x, y) => recs(x) union recs(y)
     case Space.Wrap(src, p) => recs(src) // .incl(recp(p))
     case Space.Unwrap(src, p) => eval(Space.Composition(Space.Literal(SpaceValue(recs(src))), Space.Singleton(Path.Constant(recp(p))))).paths
-    case Space.DropHead(src) => ???
+    case Space.TailsUnion(src) => ???
+    case Space.TailsIntersection(src) => ???
     case Space.Transformation(src, pattern, template) => ??? //recs(src) x pattern
     case Space.Iteration(src, symbol, rest, templates) =>
+      import Syntax.*
       val srcs = Space.Literal(SpaceValue(recs(src)))
       val sv = PathValue(PathItem.Variable(symbol.s)::Nil)
       val sr = PathValue(PathItem.Variable(rest.s)::Nil)
@@ -801,7 +1137,8 @@ def itypes(s: Space): SpaceValue =
     case Space.RightResidual(y, x) => recs(y) union recs(x)
     case Space.GroundedPS(p, f) => ???
     case Space.GroundedPS(s, f) => ???
-    case Space.Limit(i, x) => recs(x)
+    case Space.First(i, x) => recs(x)
+    case Space.Last(i, x) => recs(x)
   SpaceValue(recs(s))
 
 def otypes(s: Space): SpaceValue =
@@ -812,7 +1149,7 @@ def otypes(s: Space): SpaceValue =
     case Path.GroundedPP(p, f) => ???
     case Path.GroundedPP(s, f) => ???
 
-  import Syntax.*
+  import Syntax.x
   def recs(x: Space): Set[PathValue] = x match
     case Space.Empty =>  Set.empty
     case Space.Call(r, refs, mentions) =>
@@ -832,7 +1169,8 @@ def otypes(s: Space): SpaceValue =
     case Space.Composition(x, y) => recs(x) union recs(y)
     case Space.Wrap(src, p) => eval(Space.Composition(Space.Singleton(Path.Constant(recp(p))), Space.Literal(SpaceValue(recs(src))))).paths
     case Space.Unwrap(src, p) => recs(src) // .incl(recp(p))
-    case Space.DropHead(src) => ???
+    case Space.TailsUnion(src) => ???
+    case Space.TailsIntersection(src) => ???
     case Space.Transformation(src, pattern, template) => ??? //recs(src) x pattern
     case Space.Iteration(src, symbol, rest, templates) =>
       recs(templates)
@@ -840,7 +1178,8 @@ def otypes(s: Space): SpaceValue =
     case Space.RightResidual(y, x) => recs(y) union recs(x)
     case Space.GroundedPS(p, f) => ???
     case Space.GroundedPS(s, f) => ???
-    case Space.Limit(i, x) => recs(x)
+    case Space.First(i, x) => recs(x)
+    case Space.Last(i, x) => recs(x)
   SpaceValue(recs(s))
 
 object Syntax:
@@ -863,25 +1202,49 @@ object Syntax:
     infix def x(y: Space) = Space.Composition(x, y)
     def apply(p: Path) = Space.Unwrap(x, p)
     infix def transform(lhs: Path, rhs: Path): Space = Space.Transformation(x, lhs, rhs)
-    infix def iter(symbol: String, rest: String, rhs: Space): Space = Space.Iteration(x, PathRef(symbol), SpaceMention(rest), rhs)
+    infix def iter(h: Path.Deref, t: Space.Mention, rhs: Space): Space = Space.Iteration(x, h.pr, t.variable, rhs)
     infix def fold(initial: Path, acc: String, symbol: String, rest: String, rhs: Space, update: Path): Space = 
       Space.Fold(x, initial, PathRef(acc), PathRef(symbol), SpaceMention(rest), rhs, update)
     def :\(y: Space) = Space.RightResidual(x, y)
     def /:(y: Space) = Space.LeftResidual(x, y)
+    def iterh(h: Path.Deref, run: Space): Space = x.iter(h, S"_", run)
+    def itert(t: Space.Mention, run: Space): Space = x.iter(P"_", t, run)
+    def tee(run: Space): Space = x.iter(P"_", S"_", run)
+    def on_empty(todo: Space): Space = (ss"tobeempty" \ head(ss"tobeempty" x x)).tee(todo)
+    def :=(s: Space) = x match
+      case Space.Call(rp, refs, mentions) => Routine(rp, refs.map { case Path.Deref(pr) => pr }, mentions.map { case Space.Mention(sm) => sm }, s)
 
   extension (st: SpaceValue.type)
     def apply(ps: PathValue*): SpaceValue = SpaceValue(Set.from(ps))
 
   extension (rp: RoutinePtr)
-    def apply(refs: Vector[Path], mentions: Vector[Space]) = Space.Call(rp, refs, mentions)
+    def apply() = Space.Call(rp, Vector(), Vector())
+    def apply(r0: Path) = Space.Call(rp, Vector(r0), Vector())
+    def apply(r0: Path, r1: Path) = Space.Call(rp, Vector(r0, r1), Vector())
+    def apply(r0: Path, r1: Path, r2: Path) = Space.Call(rp, Vector(r0, r1, r2), Vector())
+    def apply(m0: Space) = Space.Call(rp, Vector(), Vector(m0))
+    def apply(m0: Space, m1: Space) = Space.Call(rp, Vector(), Vector(m0, m1))
+    def apply(m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(), Vector(m0, m1, m2))
+
+    def apply(r0: Path, m0: Space) = Space.Call(rp, Vector(r0), Vector(m0))
+    def apply(r0: Path, m0: Space, m1: Space) = Space.Call(rp, Vector(r0), Vector(m0, m1))
+    def apply(r0: Path, m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(r0), Vector(m0, m1, m2))
+
+    def apply(r0: Path, r1: Path, m0: Space) = Space.Call(rp, Vector(r0, r1), Vector(m0))
+    def apply(r0: Path, r1: Path, m0: Space, m1: Space) = Space.Call(rp, Vector(r0, r1), Vector(m0, m1))
+    def apply(r0: Path, r1: Path, m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(r0, r1), Vector(m0, m1, m2))
+
+    def apply(r0: Path, r1: Path, r2: Path, m0: Space) = Space.Call(rp, Vector(r0, r1, r2), Vector(m0))
+    def apply(r0: Path, r1: Path, r2: Path, m0: Space, m1: Space) = Space.Call(rp, Vector(r0, r1, r2), Vector(m0, m1))
+    def apply(r0: Path, r1: Path, r2: Path, m0: Space, m1: Space, m2: Space) = Space.Call(rp, Vector(r0, r1, r2), Vector(m0, m1, m2))
 
   extension (inline sc: StringContext)
-    inline def S(inline args: Any*): Space =
+    inline def S(inline args: Any*): Space.Mention =
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Space.Mention(SpaceMention(k))
 
   extension (inline sc: StringContext)
-    inline def P(inline args: Any*): Path =
+    inline def P(inline args: Any*): Path.Deref =
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       Path.Deref(PathRef(k))
 
@@ -890,4 +1253,18 @@ object Syntax:
       val k = StringContext.standardInterpolator(identity, args, sc.parts)
       RoutinePtr(k)
 
-  def routine(name: String, refs: Vector[String], mentions: Vector[String], space: Space) = Routine(RoutinePtr(name), refs.map(PathRef(_)), mentions.map(SpaceMention(_)), space)
+  extension (inline sc: StringContext)
+    inline def ss(inline args: Any*): Space.Singleton =
+      val k = StringContext.standardInterpolator(identity, args, sc.parts)
+      Space.Singleton(Path.Constant(parse(k)))
+
+  extension (inline sc: StringContext)
+    inline def sP(inline args: Any*): Space.Singleton =
+      val k = StringContext.standardInterpolator(identity, args, sc.parts)
+      Space.Singleton(Path.Deref(PathRef(k)))
+
+  inline def s(inline args: PathValue*): Space = Space.Literal(SpaceValue(Set.from(args)))
+  def head(s: Space): Space = s.iterh(P"h", sP"h")
+  def \/(s: Space): Space = Space.TailsUnion(s)
+  def /\(s: Space): Space = Space.TailsIntersection(s)
+
