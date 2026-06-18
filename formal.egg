@@ -1,0 +1,121 @@
+(datatype Path
+  (Eps)
+  (Item String)
+  (Concat Path Path)
+  (Neg Path))
+
+(datatype Space
+  (Empty)
+  (Singleton Path)
+  (Union Space Space)
+  (Intersection Space Space)
+  (Subtraction Space Space)
+  (Restriction Space Space)
+  (Wrap Path Space)
+  (Unwrap Space Path)
+  (Product Space Space)
+  (Head Space)
+  (TailsUnion Space)
+  (TailsIntersection Space))
+
+; expr1 = a | b
+(let expr1 (Union (Singleton (Item "a")) (Singleton (Item "b"))))
+; expr2 = i x (a | b)
+(let expr2 (Wrap (Item "i") expr1))
+; expr3 = (ia | ib)
+(let expr3 (Union (Singleton (Concat (Item "i") (Item "a"))) (Singleton (Concat (Item "i") (Item "b")))))
+; expr4 = (ia | ib)(i)
+(let expr4 (Unwrap expr3 (Item "i")))
+(let expr_qi (Concat (Item "q") (Item "i")))
+(let expr_qi_cancel (Concat (Neg expr_qi) expr_qi))
+(let expr_qi_unwrap (Unwrap (Wrap expr_qi expr1) expr_qi))
+(let expr1_ (Union (Singleton (Item "x")) (Singleton (Item "y"))))
+(let expr_prod (Product expr1_ expr1))
+(let expr_prod_expanded (Union (Union (Singleton (Concat (Item "x") (Item "a")))
+                                      (Singleton (Concat (Item "x") (Item "b"))))
+                               (Union (Singleton (Concat (Item "y") (Item "a")))
+                                      (Singleton (Concat (Item "y") (Item "b"))))))
+(let expr_tailsunion1 (TailsUnion expr_prod_expanded))
+(let expr_tailsintersection1 (TailsIntersection expr_prod_expanded))
+(let expr1_head (Head expr1))
+(let expr3_head (Head expr3))
+(let expr_prod_head (Head expr_prod_expanded))
+;test("intersection all") {
+;  val keys =
+;    (s("a", "b") x ss"0") \/
+;    (s("a", "c", "d") x ss"1") \/
+;    (s("c") x ss"2")
+;
+;  assert(eval(/\(keys <| s("a", "b"))).prettyLines == "0")
+;}
+(let expr_s0 (Singleton (Item "0")))
+(let expr_restriction_keys
+  (Union
+    (Union
+      (Product expr1 (Singleton (Item "0")))
+      (Product (Union (Singleton (Item "a")) (Union (Singleton (Item "c")) (Singleton (Item "d")))) (Singleton (Item "1"))))
+    (Product (Singleton (Item "c")) (Singleton (Item "2")))))
+(let expr_restriction (Restriction expr_restriction_keys expr1))
+(let expr_restriction_tailsintersection (TailsIntersection expr_restriction))
+(let expr_restriction_res1
+  (Union (Union (Singleton (Concat (Item "a") (Item "0")))
+                (Singleton (Concat (Item "a") (Item "1"))))
+         (Singleton (Concat (Item "b") (Item "0")))))
+
+
+
+(rewrite (Union x x) x)
+(rewrite (Intersection x x) x)
+
+(rewrite (Subtraction x x) (Empty))
+
+(rewrite (Union x y) (Union y x))
+(rewrite (Intersection x y) (Intersection y x))
+
+(rewrite (Neg (Concat x y)) (Concat (Neg y) (Neg x)))
+(rewrite (Concat (Neg x) x) (Eps))
+(rewrite (Concat x (Eps)) x)
+(rewrite (Concat (Eps) x) x)
+
+(birewrite (Concat x (Concat y z)) (Concat (Concat x y) z))
+(birewrite (Union x (Union y z)) (Union (Union x y) z))
+(birewrite (Intersection x (Intersection y z)) (Intersection (Intersection x y) z))
+
+(birewrite (Wrap x (Singleton p)) (Singleton (Concat x p)))
+(birewrite (Wrap x (Union s t)) (Union (Wrap x s) (Wrap x t)))
+
+(rewrite (Unwrap (Singleton p) x) (Singleton (Concat (Neg x) p)))
+(rewrite (Unwrap (Union s t) x) (Union (Unwrap s x) (Unwrap t x)))
+
+(rewrite (Product (Union (Singleton p) s) t) (Union (Wrap p t) (Product s t)))
+(rewrite (Product (Singleton p) t) (Wrap p t))
+
+(rewrite (TailsUnion (Union (Wrap (Item p) s) t)) (Union s (TailsUnion t)))
+(rewrite (TailsUnion (Wrap (Item p) s)) s)
+
+(rewrite (TailsIntersection (Union (Wrap (Item p) s) t)) (Intersection s (TailsIntersection t)))
+(rewrite (TailsIntersection (Wrap (Item p) s)) s)
+
+(rewrite (Restriction (Union (Wrap p s) t) (Singleton p)) (Wrap p s))
+(rewrite (Restriction (Wrap p s) (Singleton p)) (Wrap p s))
+(rewrite (Restriction (Union (Wrap p s) t) (Union (Singleton p) r)) (Wrap p s))
+(rewrite (Restriction (Wrap p s) (Union (Singleton p) r)) (Wrap p s))
+
+(rewrite (Head (Union x y)) (Union (Head x) (Head y)))
+(rewrite (Head (Singleton (Concat (Item h) t))) (Singleton (Item h)))
+(rewrite (Head (Singleton (Item h))) (Singleton (Item h)))
+
+(run 6)
+
+(check (= expr2 expr3))
+(check (= expr1 expr4))
+(check (= expr_qi_cancel (Eps)))
+(check (= expr_qi_unwrap expr1))
+(check (= expr_prod expr_prod_expanded))
+(check (= expr_tailsunion1 expr1))
+(check (= expr_tailsintersection1 expr1))
+(check (= expr_restriction expr_restriction_res1))
+(check (= expr_restriction_tailsintersection expr_s0))
+(check (= expr1_head expr1))
+(check (= expr3_head (Singleton (Item "i"))))
+(check (= expr_prod_head expr1_))
