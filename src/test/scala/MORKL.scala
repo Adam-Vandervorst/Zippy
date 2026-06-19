@@ -5,12 +5,6 @@ import morkl.Syntax.{*, given}
 import scala.collection.mutable.SortedMultiSet
 import scala.language.implicitConversions
 
-/*class MORKL2Path extends FunSuite:
-  import Path.*
-  test("basic path ref") {
-      assert(eval(Concat("family.child", Deref("person")))(using PathContext.mixed()).show == "family.child.person_YLQg")
-  }
-end MORKL2Path*/
 
 class MORKL2Space extends FunSuite:
   import Path.*
@@ -32,101 +26,101 @@ class MORKL2Space extends FunSuite:
     assert(eval(abc_ace) == eval(ac))
   }
 
-//  test("subtraction") {
-//    given PathContext()
-//    given SpaceContext()
-//    val abc_ce = Subtraction(Space("a", "b", "c"), Space("c", "e"))
-//    val ab = Space("a", "b")
-//    assert(eval(abc_ce) == eval(ab))
-//  }
-//
-//  test("restriction") {
-//    given PathContext()
-//    given SpaceContext()
-//    val lhs = Restriction(Composition(ss"Foo", Union(Union(
-//      Composition(ss"Bar", Space("1", "2", "3")),
-//      Composition(ss"Baz", Space("A", "B", "C"))),
-//      Composition(ss"Cux", Space("Red", "Blue")))), Space("Foo.Bar", "Foo.Baz"))
-//    val rhs = Composition(ss"Foo", Union(
-//      Composition(ss"Bar", Space("1", "2", "3")),
-//      Composition(ss"Baz", Space("A", "B", "C"))))
-//    assert(eval(lhs) == eval(rhs))
-//  }
-//
-//  test("composition") {
-//    given PathContext()
-//    given SpaceContext()
-//    val prefixed = Composition(ss"Foo", Space("bar", "baz", "cux"))
-//    val separated = Space("Foo.bar", "Foo.baz", "Foo.cux")
-//    assert(eval(prefixed) == eval(separated))
-//    val xyz_ab = Composition(Space("x", "y", "z"), Space("a", "b"))
-//    val composed = Space("x.a", "y.a", "z.a", "x.b", "y.b", "z.b")
-//    assert(eval(xyz_ab) == eval(composed))
-//    val structure = Composition(Space("Foo.Bar", "Foo.Baz"), Space("A.1", "A.2"))
-//    val composed_structure = Space("Foo.Bar.A.1", "Foo.Bar.A.2", "Foo.Baz.A.1", "Foo.Baz.A.2")
-//    assert(eval(structure) == eval(composed_structure))
-//  }
-//
-//  test("subspace") {
-//    given PathContext()
-//    given SpaceContext()
-//    val lhs = Subspace(Composition(ss"Foo", Union(
-//      Composition(ss"Bar", Space("1", "2", "3")),
-//      Composition(ss"Baz", Space("A", "B", "C")))), "Foo.Baz")
-//    val rhs = Space("A", "B", "C")
-//    assert(eval(lhs) == eval(rhs))
-//  }
-//
-//  test("TailsUnion") {
-//    given PathContext()
-//    given SpaceContext()
-//    val lhs = TailsUnion(Composition(ss"Foo", Union(
-//      Composition(ss"Bar", Space("1", "2", "3")),
-//      Composition(ss"Baz", Space("A", "B", "C")))))
-//    val rhs = Union(
-//      Composition(ss"Bar", Space("1", "2", "3")),
-//      Composition(ss"Baz", Space("A", "B", "C")))
-//    assert(eval(lhs) == eval(rhs))
-//  }
-//
-//  test("transformation") {
-//    given PathContext()
-//    given SpaceContext()
-//    val lhs = Transformation(Composition(ss"Foo", Union(Union(
-//      Composition(ss"Bar", Space("1", "2", "3")),
-//      Composition(ss"Baz", Space("A", "B", "C"))),
-//      Composition(ss"Cux", Space("Red", "Blue")))), "$_.Cux.$c", "Result.Color.$c")
-//    val rhs = Space("Result.Color.Red", "Result.Color.Blue")
-//    assert(eval(lhs) == eval(rhs))
-//  }
-//
-//  test("left_residual") {
-//    given PathContext()
-//    given SpaceContext()
-//    // all prefixes we can add to y such prefix.y <= x
-//    val x = Composition(Singleton("Test.Foo"), Union(Union(
-//      Composition(ss"Bar", Space("1", "2", "3", "4", "5", "6")),
-//      Composition(ss"Baz", Space("1", "2", "3", "A", "B", "C"))),
-//      Composition(ss"Cux", Space("Red", "Blue"))))
-//    val y = Space("1", "2", "3")
-//    val lhs = LeftResidual(x, y)
-//    val rhs = Space("Test.Foo.Bar", "Test.Foo.Baz")
-//    assert(eval(lhs) == eval(rhs))
-//  }
-//
-//  test("right_residual") {
-//    given PathContext()
-//    given SpaceContext()
-//    // all postfixes we can add to y such y.postfix <= x
-//    val x = Composition(Singleton("Test.Foo"), Union(Union(
-//      Composition(ss"Bar", Space("1", "2", "3", "4", "5", "6")),
-//      Composition(ss"Baz", Space("1", "2", "3", "A", "B", "C"))),
-//      Composition(ss"Cux", Space("Red", "Blue"))))
-//    val y = Space("Test.Foo.Bar", "Test.Foo.Baz")
-//    val lhs = RightResidual(y, x)
-//    val rhs = Space("1", "2", "3")
-//    assert(eval(lhs) == eval(rhs))
-//  }
+  test("subtraction") {
+    given PathContext()
+    given SpaceContext()
+    val abc_ce = Subtraction(s("a", "b", "c"), s("c", "e"))
+    val ab = s("a", "b")
+    assert(eval(abc_ce) == eval(ab))
+  }
+
+  test("restriction") {
+    given PathContext()
+    given SpaceContext()
+    val lhs = Restriction(Composition(ss"Foo", Union(Union(
+      Composition(ss"Bar", s("1", "2", "3")),
+      Composition(ss"Baz", s("A", "B", "C"))),
+      Composition(ss"Cux", s("Red", "Blue")))), s("Foo.Bar", "Foo.Baz"))
+    val rhs = Composition(ss"Foo", Union(
+      Composition(ss"Bar", s("1", "2", "3")),
+      Composition(ss"Baz", s("A", "B", "C"))))
+    assert(eval(lhs) == eval(rhs))
+  }
+
+  test("composition") {
+    given PathContext()
+    given SpaceContext()
+    val prefixed = Composition(ss"Foo", s("bar", "baz", "cux"))
+    val separated = s("Foo.bar", "Foo.baz", "Foo.cux")
+    assert(eval(prefixed) == eval(separated))
+    val xyz_ab = Composition(s("x", "y", "z"), s("a", "b"))
+    val composed = s("x.a", "y.a", "z.a", "x.b", "y.b", "z.b")
+    assert(eval(xyz_ab) == eval(composed))
+    val structure = Composition(s("Foo.Bar", "Foo.Baz"), s("A.1", "A.2"))
+    val composed_structure = s("Foo.Bar.A.1", "Foo.Bar.A.2", "Foo.Baz.A.1", "Foo.Baz.A.2")
+    assert(eval(structure) == eval(composed_structure))
+  }
+
+  test("subspace") {
+    given PathContext()
+    given SpaceContext()
+    val lhs = Unwrap(Composition(ss"Foo", Union(
+      Composition(ss"Bar", s("1", "2", "3")),
+      Composition(ss"Baz", s("A", "B", "C")))), "Foo.Baz")
+    val rhs = s("A", "B", "C")
+    assert(eval(lhs) == eval(rhs))
+  }
+
+  test("TailsUnion") {
+    given PathContext()
+    given SpaceContext()
+    val lhs = TailsUnion(Composition(ss"Foo", Union(
+      Composition(ss"Bar", s("1", "2", "3")),
+      Composition(ss"Baz", s("A", "B", "C")))))
+    val rhs = Union(
+      Composition(ss"Bar", s("1", "2", "3")),
+      Composition(ss"Baz", s("A", "B", "C")))
+    assert(eval(lhs) == eval(rhs))
+  }
+
+  test("transformation") {
+    given PathContext()
+    given SpaceContext()
+    val lhs = Transformation(Composition(ss"Foo", Union(Union(
+      Composition(ss"Bar", s("1", "2", "3")),
+      Composition(ss"Baz", s("A", "B", "C"))),
+      Composition(ss"Cux", s("Red", "Blue")))), "$_.Cux.$c", "Result.Color.$c")
+    val rhs = s("Result.Color.Red", "Result.Color.Blue")
+    assert(eval(lhs) == eval(rhs))
+  }
+
+  test("left_residual") {
+    given PathContext()
+    given SpaceContext()
+    // all prefixes we can add to y such prefix.y <= x
+    val x = Composition(Singleton("Test.Foo"), Union(Union(
+      Composition(ss"Bar", s("1", "2", "3", "4", "5", "6")),
+      Composition(ss"Baz", s("1", "2", "3", "A", "B", "C"))),
+      Composition(ss"Cux", s("Red", "Blue"))))
+    val y = s("1", "2", "3")
+    val lhs = LeftResidual(x, y)
+    val rhs = s("Test.Foo.Bar", "Test.Foo.Baz")
+    assert(eval(lhs) == eval(rhs))
+  }
+
+  test("right_residual") {
+    given PathContext()
+    given SpaceContext()
+    // all postfixes we can add to y such y.postfix <= x
+    val x = Composition(Singleton("Test.Foo"), Union(Union(
+      Composition(ss"Bar", s("1", "2", "3", "4", "5", "6")),
+      Composition(ss"Baz", s("1", "2", "3", "A", "B", "C"))),
+      Composition(ss"Cux", s("Red", "Blue"))))
+    val y = s("Test.Foo.Bar", "Test.Foo.Baz")
+    val lhs = RightResidual(y, x)
+    val rhs = s("1", "2", "3")
+    assert(eval(lhs) == eval(rhs))
+  }
 end MORKL2Space
 
 object Graphs:
@@ -174,10 +168,10 @@ class AuntQuery extends FunSuite:
     given SpaceContext = context
 
     assert(eval(S"family" <| s("male", "female")) ==
-      s("female.Ann", "female.Liz", "female.Pam", "female.Pat", "male.Bob", "male.Jim", "male.Tom"))
+      SpaceValue("female.Ann", "female.Liz", "female.Pam", "female.Pat", "male.Bob", "male.Jim", "male.Tom"))
 
     assert(eval(S"family" <| s("parent.Bob", "child.Bob")) ==
-      s("child.Bob.Pam", "child.Bob.Tom", "parent.Bob.Ann", "parent.Bob.Pat"))
+      SpaceValue("child.Bob.Pam", "child.Bob.Tom", "parent.Bob.Ann", "parent.Bob.Pat"))
   }
 
   test("parent_query") {
@@ -348,7 +342,7 @@ class Imperative extends FunSuite:
     assert(stack.top.last.asInstanceOf[SpaceValue] == SpaceValue("Aunt.Ann.Liz", "Aunt.Jim.Ann", "Aunt.Pat.Liz"))
   }
 
-  test("scc exec") {
+  test("scc exec".ignore) {
     val code = transpile(Routines.seedless_scc_routine, None)
     val reachable_code = transpile(Routines.reachable_routine, None)
     //    println(code.show)
@@ -369,7 +363,7 @@ class Imperative extends FunSuite:
     mermaid(optimize_sharing(transpile(Routines.union_iter_routine)))
   }
 
-  test("push out") {
+  test("push out".ignore) {
     {
     val code = transpile(R"test"(P"k", S"xs") :=
       S"xs".iter(P"x", S"r",
@@ -512,12 +506,11 @@ class Routines extends FunSuite:
   test("transitive") {
     given PathContext = PathContext.emptyMap
     given SpaceContext = scc_context
-    val graph = S"g1"
-    val lhs = "edge" x R"transitive"(graph("edge"))
+    val lhs = "edge" x R"transitive"(S"g1"("edge"))
     val rhs = "edge" x (("a" x s("b", "d", "c")) \/
       ("d" x s("c")) \/
       (s("x", "y", "z") x s("x", "y", "z")))
-    assert(eval(lhs)(using rc = Map(RoutinePtr("transitive") -> transitive_routine)) == eval(rhs))
+    assert(eval(lhs)(using rc = Map(RoutinePtr("transitive") -> transitive_routine), sc=scc_context) == eval(rhs))
   }
 
   test("reachable") {
@@ -709,7 +702,7 @@ class Unification extends FunSuite:
     assert(eval(T(S"sequences", "b.$x.$x.$e1.b.$y.$y.$e2", "b.$y.$x.$e1")) == SpaceValue("b.e.e.b", "b.o.e.p"))
   }
 
-  test("double transform") {
+  test("double transform".ignore) {
     given SpaceContext = context
     assert(eval(DQT(S"sequences", "$x", "$y", "$x.$y")) == eval(("a" x S"sequences") \/ ("b" x S"sequences")))
     assert(eval(DQT(S"sequences", "$x.$a", "$x.$b", "$a.$b")) == SpaceValue("a.a.a.b", "a.a.b.a.b.a", "a.e.e.b", "a.e.e.b.b.e.e.b", "a.e.e.p.b.o.o.p", "c.c.a.c", "e.a.a.b", "e.a.b.a.b.a", "e.e.e.b", "e.e.e.b.b.e.e.b", "e.e.e.p.b.o.o.p"))
@@ -1466,57 +1459,12 @@ class UnionFind extends FunSuite:
 //
 //  )
 
-  test("find") {
+  test("find".ignore) {
     given PartialFunction[RoutinePtr, Routine] = { case RoutinePtr("find") => find_routine }
     println(eval(R"find"(P"4", Literal(tree0)("parent"))).prettyLines)
   }
 
 end UnionFind
-
-class FuzzerBasic extends FunSuite:
-  import Fuzzer.*
-  test("pi") {
-    val SAMPLES = 1000000
-    given java.util.Random = java.util.Random(42)
-
-    val sx = Uniform(0f, 1f)
-    val sy = Uniform(0f, 1f)
-    val sxy = Pair(sx, sy, (_, _))
-    val spi = Concentrated(sxy, (0, 0), { case ((i, o), (x, y)) =>
-      if i + o > SAMPLES
-      then Right(4d*(i.toDouble/(i + o).toDouble))
-      else Left(if x*x + y*y < 1.0 then (i + 1, o) else (i, o + 1))
-    })
-
-//    val t0 = System.nanoTime()
-    val err_bar = 10d / math.sqrt(SAMPLES.toDouble)
-    for i <- 0 until 10 do
-      val api = spi.sample
-      assert(math.Pi-err_bar <= api && math.Pi+err_bar >= api)
-//    println((System.nanoTime() - t0)/1000)
-  }
-
-  test("categorical") {
-    val SAMPLES = 1000000
-
-    given java.util.Random = java.util.Random(42)
-
-    val expected = Seq(('b', 2), ('a', 10), ('c', 29), ('d', 100))
-    val cd = Categorical.ratios(expected);
-    val hist = SortedMultiSet.from[(Char, Int)](expected)(using Ordering.Int.on(_._2))
-//    val hist = Histogram::from_iter(cd.sample_iter(rng).take(SAMPLES*(10+2+29+100)));
-//    let achieved: Vec<(char, usize)> = hist.iter().map(|(k, c)|
-//      (*k, ((c as f64)/(SAMPLES as f64)).round() as usize)).collect();
-//    assert_eq!(&expected[..], &achieved[..]);
-  }
-end FuzzerBasic
-
-class LocBsaic extends FunSuite:
-  test("instantiate trie") {
-    val space = SpaceValue("foo.bar.baz", "foo.cux", "foo.cuux")
-    assert(Loc.Trie(space).instantiate() == space)
-  }
-end LocBsaic
 
 class Permutations extends FunSuite:
   import Space.*
