@@ -2,6 +2,7 @@ package morkl
 
 import munit.FunSuite
 import morkl.Syntax.{*, given}
+import scala.collection.mutable.SortedMultiSet
 import scala.language.implicitConversions
 
 /*class MORKL2Path extends FunSuite:
@@ -173,10 +174,10 @@ class AuntQuery extends FunSuite:
     given SpaceContext = context
 
     assert(eval(S"family" <| s("male", "female")) ==
-      SpaceValue("female.Ann", "female.Liz", "female.Pam", "female.Pat", "male.Bob", "male.Jim", "male.Tom"))
+      s("female.Ann", "female.Liz", "female.Pam", "female.Pat", "male.Bob", "male.Jim", "male.Tom"))
 
     assert(eval(S"family" <| s("parent.Bob", "child.Bob")) ==
-      SpaceValue("child.Bob.Pam", "child.Bob.Tom", "parent.Bob.Ann", "parent.Bob.Pat"))
+      s("child.Bob.Pam", "child.Bob.Tom", "parent.Bob.Ann", "parent.Bob.Pat"))
   }
 
   test("parent_query") {
@@ -541,6 +542,25 @@ class Routines extends FunSuite:
     val e = R"scc"("42", graph("edge"), transpose, nodes)
     assert(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine), sc = scc_context) == SpaceValue("w.s", "w.t", "w.u", "w.v", "z.x", "z.y"))
   }
+
+  test("naive-oeis") {
+    val depth = 5
+
+    def index(sequences: Space): Space =
+      sequences.iter(P"x", S"r", P"x" x LazyList.iterate(S"r": Space, depth)(\/(_)).reduce(_ \/ _))
+
+    def query(db: Space, query: Space): Space =
+      db.iter(P"x", S"r", head(P"x" x S"r" <| query))
+
+    val sequences = s("x.0.1.2.3.4.5",
+      "2x.0.2.4.6.8.10",
+      "x2.0.1.4.9.16.25")
+
+    assert(eval(query(index(sequences), s("0.1"))) == eval(s("x", "x2")))
+    assert(eval(query(index(sequences), s("2.4"))) == eval(s("2x")))
+    assert(eval(query(index(sequences), s("4.6"))) == eval(s("2x")))
+    assert(eval(query(index(sequences), s("16.25"))) == eval(s("x2")))
+  }
 end Routines
 
 object Routines:
@@ -843,7 +863,7 @@ class Unification extends FunSuite:
         children.iter(P"c", S"_",
           (S"x" <| sP"c").iter(P"_", S"st", R"descend"(S"st", S"y"(P"c"))))
       }
-      case RoutinePtr("unify") => R"descend"(S"x", S"y") := {
+      case RoutinePtr("unify") => R"unify"(S"x", S"y") := {
         val bind_or_conflict = R"descend"(S"x", S"y")
         (bind_or_conflict.on_empty(S"x") \/ (bind_or_conflict <| ss"conflict")) \/
         bind_or_conflict("conflict").on_empty(First(1, head(bind_or_conflict("bind"))).iter(P"v", S"_",
@@ -999,7 +1019,7 @@ class Unification extends FunSuite:
 //  }
 
   def headk(space: Space, k: Int): Space =
-    space.iter(Path.Deref(PathRef(s"h$k")), Space.Mention(SpaceMention(s"t$k")),
+    Space.Iteration(space, PathRef(s"h$k"), SpaceMention(s"t$k"),
       if k == 1 then Singleton(Path.Deref(PathRef(s"h$k")))
       else Path.Deref(PathRef(s"h$k")) x headk(Space.Mention(SpaceMention(s"t$k")), k - 1))
 
@@ -1408,6 +1428,7 @@ class Datalog extends FunSuite:
     val r_name = r.name
 
     val initial = SpaceValue("edge.a.b", "edge.b.c", "edge.c.d", "edge.d.e")
+    println(r.body.show)
     assert(eval(r_name(Literal(initial))("path"))(using rc = {case `r_name` => r}) ==
       SpaceValue("a.b", "a.c", "a.d", "a.e", "b.c", "b.d", "b.e", "c.d", "c.e", "d.e"))
   }
@@ -1422,7 +1443,7 @@ class Datalog extends FunSuite:
        MQT(last, List("delta.path.$x.$y", "delta.path.$y.$z"), "$x.$z"))
         \ (last("complete.path") \/ last("delta.path")))))
     val r_name = r.name
-
+    println(r.body.show)
     val data = s("edge.a.b", "edge.b.c", "edge.c.d", "edge.d.e")
     val initial = ("delta" x (MQT(data, List("edge.$x.$y"), "path.$x.$y") \/ MQT(data, List("path.$x.$y", "path.$y.$z"), "path.$x.$z"))) \/ ("complete" x data)
     assert(eval(r_name(initial)("complete.path"))(using rc = {case `r_name` => r}) ==
@@ -1452,6 +1473,50 @@ class UnionFind extends FunSuite:
 
 end UnionFind
 
+class FuzzerBasic extends FunSuite:
+  import Fuzzer.*
+  test("pi") {
+    val SAMPLES = 1000000
+    given java.util.Random = java.util.Random(42)
+
+    val sx = Uniform(0f, 1f)
+    val sy = Uniform(0f, 1f)
+    val sxy = Pair(sx, sy, (_, _))
+    val spi = Concentrated(sxy, (0, 0), { case ((i, o), (x, y)) =>
+      if i + o > SAMPLES
+      then Right(4d*(i.toDouble/(i + o).toDouble))
+      else Left(if x*x + y*y < 1.0 then (i + 1, o) else (i, o + 1))
+    })
+
+//    val t0 = System.nanoTime()
+    val err_bar = 10d / math.sqrt(SAMPLES.toDouble)
+    for i <- 0 until 10 do
+      val api = spi.sample
+      assert(math.Pi-err_bar <= api && math.Pi+err_bar >= api)
+//    println((System.nanoTime() - t0)/1000)
+  }
+
+  test("categorical") {
+    val SAMPLES = 1000000
+
+    given java.util.Random = java.util.Random(42)
+
+    val expected = Seq(('b', 2), ('a', 10), ('c', 29), ('d', 100))
+    val cd = Categorical.ratios(expected);
+    val hist = SortedMultiSet.from[(Char, Int)](expected)(using Ordering.Int.on(_._2))
+//    val hist = Histogram::from_iter(cd.sample_iter(rng).take(SAMPLES*(10+2+29+100)));
+//    let achieved: Vec<(char, usize)> = hist.iter().map(|(k, c)|
+//      (*k, ((c as f64)/(SAMPLES as f64)).round() as usize)).collect();
+//    assert_eq!(&expected[..], &achieved[..]);
+  }
+end FuzzerBasic
+
+class LocBsaic extends FunSuite:
+  test("instantiate trie") {
+    val space = SpaceValue("foo.bar.baz", "foo.cux", "foo.cuux")
+    assert(Loc.Trie(space).instantiate() == space)
+  }
+end LocBsaic
 
 class Permutations extends FunSuite:
   import Space.*
@@ -1462,6 +1527,144 @@ class Permutations extends FunSuite:
     assert(eval(/\(keys <| s("foo", "bar"))).prettyLines == "e0")
   }
 
+  test("intersection all") {
+    // GOL region:
+    // a/TL b/TR
+    // | |x|x| |
+    // | |x| |x|
+    // | | |x| |
+    // | | | |x|
+    // a/BL b/BR
+
+    // |TL|TR|
+    // |BL|BR|
+
+    // |x| |  b,d
+    // | |x|
+    // | |x|  a
+    // | |x|
+    val keys = (s("TL", "BR") x s("b", "d")) \/
+               (s("TR", "BR") x s("a"))
+
+    // exec (, (active $c) (keys $c $loc))
+    //      (O (meet (found $loc) $loc))
+//    assert(eval(keys("BR")).prettyLines == "b\nd\na")
+    assert(eval(/\(keys <| s("TL", "BR"))).prettyLines == "b\nd")
+  }
+
+  test("sliding_puzzle states") {
+    // TL TR
+    // BL BR
+    // todo iter-k
+    val initial: Path = "TL.1.2.3"
+    val id_map = s("TL.TL", "TR.TR", "BL.BL", "BR.BR")
+    val moves = (ss"TL.R" x s("TL.TR", "TR.TL")) \/ (ss"TL.D" x s("TL.BL", "BL.TL"))
+             \/ (ss"TR.L" x s("TR.TL", "TL.TR")) \/ (ss"TR.D" x s("TR.BR", "BR.TR"))
+             \/ (ss"BL.R" x s("BL.BR", "BR.BL")) \/ (ss"BL.U" x s("BL.TL", "TL.BL"))
+             \/ (ss"BR.L" x s("BR.BL", "BL.BR")) \/ (ss"BR.U" x s("BR.TR", "TR.BR"))
+    val all_moves = moves.iter(P"loc", S"r", S"r".iter(P"a", S"map", P"loc" x P"a" x ((id_map \| head(S"map")) \/ S"map")))
+    val superpose = R"superpose"(P"loc", S"res") :=
+      (\/(sP"loc" /\ ss"TL") x S"res".iter((P"tr", P"bl", P"br"), S"_", ss"TL._" \/ ("TR" x sP"tr") \/ ("BL" x sP"bl") \/ ("BR" x sP"br"))) \/
+      (\/(sP"loc" /\ ss"TR") x S"res".iter((P"tl", P"bl", P"br"), S"_", ss"TR._" \/ ("TL" x sP"tl") \/ ("BL" x sP"bl") \/ ("BR" x sP"br"))) \/
+      (\/(sP"loc" /\ ss"BL") x S"res".iter((P"tl", P"tr", P"br"), S"_", ss"BL._" \/ ("TR" x sP"tr") \/ ("TL" x sP"tl") \/ ("BR" x sP"br"))) \/
+      (\/(sP"loc" /\ ss"BR") x S"res".iter((P"tl", P"tr", P"bl"), S"_", ss"BR._" \/ ("TR" x sP"tr") \/ ("BL" x sP"bl") \/ ("TL" x sP"tl")))
+    val collapse = R"collapse"(P"loc", S"state") :=
+      ((sP"loc" /\ ss"TL") x S"state"("TR") x S"state"("BL") x S"state"("BR")) \/
+      ((sP"loc" /\ ss"TR") x S"state"("TL") x S"state"("BL") x S"state"("BR")) \/
+      ((sP"loc" /\ ss"BL") x S"state"("TL") x S"state"("TR") x S"state"("BR")) \/
+      ((sP"loc" /\ ss"BR") x S"state"("TL") x S"state"("TR") x S"state"("BL"))
+    val states_routine = R"explore"(S"frontier", S"states") :=
+      S"states" \/ R"explore"(
+        (S"frontier".iter((P"q", P"tr", P"bl", P"br"), S"_",
+          R"superpose"(P"q", Space.Singleton(P"tr" x P"bl" x P"br")).iter(P"l", S"t",
+            all_moves(P"q").iter(P"act", S"map", P"act" x S"map"(P"l") x S"t")
+          ).iter(P"act", S"ass", (all_moves(P"q" x P"act" x P"q")).iterh(P"d", R"collapse"(P"d", S"ass")))
+        ) \ S"states"): Space,
+        (S"frontier" \/ S"states"): Space
+      )
+
+    println(Reflect.code_to_space(states_routine.optimized(using mod(superpose, collapse)).body).prettyLines)
+//    println(eval(R"explore"(Space.Singleton(initial), Space.Empty))(using rc = mod(superpose, collapse, states_routine)).prettyLines)
+//    println(eval(R"explore"(Space.Singleton(initial), Space.Empty))(using rc = mod(superpose, collapse, states_routine.optimized)).prettyLines)
+  }
+
+  test("nqueens") {
+    // q 2 3
+    //   1  2  3  4
+    // 1    x  x  x
+    // 2 x  x  x  x
+    // 3    x  x  x
+    // 4 x     x
+    val add = s((1 to 8).flatMap(i => (1 to 8).map(j => Syntax.parse(s"${i}.${j}.${i+j}"))): _*)
+    val sub = s((1 to 8).flatMap(i => (1 to i).map(j => Syntax.parse(s"${i}.${j}.${i-j}"))): _*)
+    val upto: Space = s((1 to 8).flatMap(i => (1 to i).map(j => Syntax.parse(s"${i}.${j}"))): _*)
+    val pred = s((1 to 8).map(i => Syntax.parse(s"${i}.${i-1}")): _*)
+    val aoe_routine = R"aoe"(P"r", P"c", P"n") := upto(P"n").iterh(P"i",
+        (P"c" x sP"i") \/
+        (P"i" x sP"r") \/
+        (add(P"c")(P"i") x add(P"r")(P"i")) \/
+        (add(P"c")(P"i") x sub(P"r")(P"i")) \/
+        (sub(P"c")(P"i") x add(P"r")(P"i")) \/
+        (sub(P"c")(P"i") x sub(P"r")(P"i"))
+    )  /\ (upto(P"n") x upto(P"n"))
+    def place_routine(k: Int, n: Int): Space =
+      if k == 0 then Space.Empty
+      else
+        val kp = Path.Constant(PathValue(PathItem.Symbol(k.toString)::Nil))
+        val np = Path.Constant(PathValue(PathItem.Symbol(n.toString)::Nil))
+        place_routine(k-1, n).iterk(k-1, S"taken", qs =>
+          (upto(np) \ S"taken"(kp)).iterh(P"q",
+            P"q" x (qs x (R"aoe"(P"q", kp, np) \/ S"taken"))
+          )
+        )
+
+//    assert(eval(R"place"())(using rc = mod(aoe_routine, R"place"() := place_routine(8, 8).iterk(8, S"_", qs => Space.Singleton(qs))  )).paths.size == 92)
+//    val opt = mod(aoe_routine, (R"place"() := place_routine(8, 8).iterk(8, S"_", qs => Space.Singleton(qs))).optimized(using mod(aoe_routine))  )
+//    println(aoe_routine.body.show)
+//    println("---")
+    val place_rog = optimize_sharing(transpile((R"place"() := place_routine(8, 8).iterk(8, S"_", qs => Space.Singleton(qs))).optimized(using mod(aoe_routine))))
+//    println(place_rog.show)
+//    println(optimize(transpile(aoe_routine.optimized)).show)
+    val stack = collection.mutable.Stack(new Array[PathValue | SpaceValue | Null](place_rog.nodes.length))
+    exec(place_rog, stack)
+    println(stack.top.last.asInstanceOf[SpaceValue].prettyLines.linesIterator.length)
+//    val t0 = System.nanoTime()
+//    assert(eval(R"place"())(using rc = opt).paths.size == 92)
+//    println((System.nanoTime() - t0).toString)
+//    println((R"place"() := place_routine(8, 8).iterk(8, S"_", qs => Space.Singleton(qs))).optimized(using mod(aoe_routine)).body.show)
+  }
+
+//  test("nqueens optimized".ignore) {
+//    //   1  2  3  4
+//    // 1    x  x  x
+//    // 2 x  x  x  x
+//    // 3    x  x  x
+//    // 4 x     x
+//    val add = s("1.1.2", "1.2.3", "1.3.4", "1.4.5", "1.5.6", "2.1.3", "2.2.4", "2.3.5", "2.4.6", "2.5.7", "3.1.4", "3.2.5", "3.3.6", "3.4.7", "3.5.8", "4.1.5", "4.2.6", "4.3.7", "4.4.8", "4.5.9", "5.1.6", "5.2.7", "5.3.8", "5.4.9", "5.5.10")
+//    val sub = s("1.1.0", "2.1.1", "2.2.0", "3.1.2", "3.2.1", "3.3.0", "4.1.3", "4.2.2", "4.3.1", "4.4.0", "5.1.4", "5.2.3", "5.3.2", "5.4.1", "5.5.0")
+//    val upto: Space = ("1" x s("1")) \/ ("2" x s("1", "2")) \/ ("3" x s("1", "2", "3")) \/ ("4" x s("1", "2", "3", "4")) \/ ("5" x s("1", "2", "3", "4", "5"))
+//    val pred = s("5.4", "4.3", "3.2", "2.1", "1.0")
+//    // k.. -> available index
+//    // no need for straight/diagonal into placed area
+//    val aoe_routine = R"aoe"(P"r", P"c", P"n") := upto(P"n").iterh(P"i",
+//      (P"i" x sP"c") \/
+//      (P"r" x sP"i") \/
+//      (add(P"r")(P"i") x add(P"c")(P"i")) \/
+//      (sub(P"r")(P"i") x add(P"c")(P"i")) \/
+//      (add(P"r")(P"i") x sub(P"c")(P"i")) \/
+//      (sub(P"r")(P"i") x sub(P"c")(P"i"))
+//    ) /\ (upto(P"n") x upto(P"n"))
+//    val place_routine = R"place"(S"rem", S"Q") := {
+//      Space.First(1, S"rem").iter((P"r", P"r"), "_", {
+//        val T = R"aoe"(P"r", P"c", P"n");
+//        (/\(S"Q" \ T) : Space)
+//
+//      })
+//    }
+//
+//    //    println(eval(R"aoe"("2", "3", "4"))(using rc = mod(aoe_routine, place_routine)).prettyLines)
+//    println(eval(R"place"((upto(P"n") x upto(P"n")), "4"))(using rc = mod(aoe_routine, place_routine)).prettyLines)
+//  }
 end Permutations
 
 /*
