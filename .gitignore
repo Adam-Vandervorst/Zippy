@@ -3,6 +3,12 @@
 /project/target/
 /target/
 /target/scala-3.4.1/classes/
+/output/
+/fuzzer_full_backend_verify_zipper_20x20/
+fuzzer_full_backend_verify_zipper_20x20_after/
 
 .idea
 .bsp
+.scala-build
+
+.DS_Store

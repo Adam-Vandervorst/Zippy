@@ -1,0 +1,55 @@
+kind	name	expected	artifact	note
+egg	aunt:egg-equivalence	exit-0	proofs/examples/egg/aunt.egg	Aunt graph query over the committed tiny family graph.
+z3	aunt:trie_vs_reference	unsat	proofs/examples/smt2/aunt_trie_vs_reference.smt2	Trie evaluator output equals reference set evaluator output.
+vampire	aunt:trie_vs_reference	Theorem	proofs/examples/vampire/aunt_trie_vs_reference.p	Trie evaluator output equals reference set evaluator output.
+z3	aunt:space_optimized	unsat	proofs/examples/smt2/aunt_space_optimized.smt2	Default source optimizer output equals original Space/term output.
+vampire	aunt:space_optimized	Theorem	proofs/examples/vampire/aunt_space_optimized.p	Default source optimizer output equals original Space/term output.
+z3	aunt:zipper_vs_space	unsat	proofs/examples/smt2/aunt_zipper_vs_space.smt2	Scala zipper program materialization equals eager Space/Trie evaluation.
+vampire	aunt:zipper_vs_space	Theorem	proofs/examples/vampire/aunt_zipper_vs_space.p	Scala zipper program materialization equals eager Space/Trie evaluation.
+z3	aunt:graph_execT_vs_space	unsat	proofs/examples/smt2/aunt_graph_execT_vs_space.smt2	Scala operation graph execT output equals eager Space/Trie evaluation.
+vampire	aunt:graph_execT_vs_space	Theorem	proofs/examples/vampire/aunt_graph_execT_vs_space.p	Scala operation graph execT output equals eager Space/Trie evaluation.
+egg	semi-naive-datalog:egg-equivalence	exit-0	proofs/examples/egg/semi-naive-datalog.egg	Semi-naive transitive closure over a six-edge chain.
+z3	semi-naive-datalog:trie_vs_reference	unsat	proofs/examples/smt2/semi-naive-datalog_trie_vs_reference.smt2	Trie evaluator output equals reference set evaluator output.
+vampire	semi-naive-datalog:trie_vs_reference	Theorem	proofs/examples/vampire/semi-naive-datalog_trie_vs_reference.p	Trie evaluator output equals reference set evaluator output.
+z3	semi-naive-datalog:space_optimized	unsat	proofs/examples/smt2/semi-naive-datalog_space_optimized.smt2	Default source optimizer output equals original Space/term output.
+vampire	semi-naive-datalog:space_optimized	Theorem	proofs/examples/vampire/semi-naive-datalog_space_optimized.p	Default source optimizer output equals original Space/term output.
+z3	semi-naive-datalog:zipper_vs_space	unsat	proofs/examples/smt2/semi-naive-datalog_zipper_vs_space.smt2	Scala zipper program materialization equals eager Space/Trie evaluation.
+vampire	semi-naive-datalog:zipper_vs_space	Theorem	proofs/examples/vampire/semi-naive-datalog_zipper_vs_space.p	Scala zipper program materialization equals eager Space/Trie evaluation.
+z3	semi-naive-datalog:graph_execT_vs_space	unsat	proofs/examples/smt2/semi-naive-datalog_graph_execT_vs_space.smt2	Scala operation graph execT output equals eager Space/Trie evaluation.
+vampire	semi-naive-datalog:graph_execT_vs_space	Theorem	proofs/examples/vampire/semi-naive-datalog_graph_execT_vs_space.p	Scala operation graph execT output equals eager Space/Trie evaluation.
+egg	gol:egg-equivalence	exit-0	proofs/examples/egg/gol.egg	Pure Game-of-Life step using the MORKL neighbor and Range cardinality encoding.
+z3	gol:trie_vs_reference	unsat	proofs/examples/smt2/gol_trie_vs_reference.smt2	Trie evaluator output equals reference set evaluator output.
+vampire	gol:trie_vs_reference	Theorem	proofs/examples/vampire/gol_trie_vs_reference.p	Trie evaluator output equals reference set evaluator output.
+z3	gol:space_optimized	unsat	proofs/examples/smt2/gol_space_optimized.smt2	Default source optimizer output equals original Space/term output.
+vampire	gol:space_optimized	Theorem	proofs/examples/vampire/gol_space_optimized.p	Default source optimizer output equals original Space/term output.
+z3	gol:zipper_vs_space	unsat	proofs/examples/smt2/gol_zipper_vs_space.smt2	Scala zipper program materialization equals eager Space/Trie evaluation.
+vampire	gol:zipper_vs_space	Theorem	proofs/examples/vampire/gol_zipper_vs_space.p	Scala zipper program materialization equals eager Space/Trie evaluation.
+z3	gol:graph_execT_vs_space	unsat	proofs/examples/smt2/gol_graph_execT_vs_space.smt2	Scala operation graph execT output equals eager Space/Trie evaluation.
+vampire	gol:graph_execT_vs_space	Theorem	proofs/examples/vampire/gol_graph_execT_vs_space.p	Scala operation graph execT output equals eager Space/Trie evaluation.
+egg	15-puzzle:egg-equivalence	exit-0	proofs/examples/egg/15-puzzle.egg	One legal 15-puzzle frontier expansion from the solved 4x4 state.
+z3	15-puzzle:trie_vs_reference	unsat	proofs/examples/smt2/15-puzzle_trie_vs_reference.smt2	Trie evaluator output equals reference set evaluator output.
+vampire	15-puzzle:trie_vs_reference	Theorem	proofs/examples/vampire/15-puzzle_trie_vs_reference.p	Trie evaluator output equals reference set evaluator output.
+z3	15-puzzle:space_optimized	unsat	proofs/examples/smt2/15-puzzle_space_optimized.smt2	Default source optimizer output equals original Space/term output.
+vampire	15-puzzle:space_optimized	Theorem	proofs/examples/vampire/15-puzzle_space_optimized.p	Default source optimizer output equals original Space/term output.
+z3	15-puzzle:zipper_vs_space	unsat	proofs/examples/smt2/15-puzzle_zipper_vs_space.smt2	Scala zipper program materialization equals eager Space/Trie evaluation.
+vampire	15-puzzle:zipper_vs_space	Theorem	proofs/examples/vampire/15-puzzle_zipper_vs_space.p	Scala zipper program materialization equals eager Space/Trie evaluation.
+z3	15-puzzle:graph_execT_vs_space	unsat	proofs/examples/smt2/15-puzzle_graph_execT_vs_space.smt2	Scala operation graph execT output equals eager Space/Trie evaluation.
+vampire	15-puzzle:graph_execT_vs_space	Theorem	proofs/examples/vampire/15-puzzle_graph_execT_vs_space.p	Scala operation graph execT output equals eager Space/Trie evaluation.
+egg	temperature:egg-equivalence	exit-0	proofs/examples/egg/temperature.egg	Small prefix-coded spatial temperature slice shaped like the NOAA query.
+z3	temperature:trie_vs_reference	unsat	proofs/examples/smt2/temperature_trie_vs_reference.smt2	Trie evaluator output equals reference set evaluator output.
+vampire	temperature:trie_vs_reference	Theorem	proofs/examples/vampire/temperature_trie_vs_reference.p	Trie evaluator output equals reference set evaluator output.
+z3	temperature:space_optimized	unsat	proofs/examples/smt2/temperature_space_optimized.smt2	Default source optimizer output equals original Space/term output.
+vampire	temperature:space_optimized	Theorem	proofs/examples/vampire/temperature_space_optimized.p	Default source optimizer output equals original Space/term output.
+z3	temperature:zipper_vs_space	unsat	proofs/examples/smt2/temperature_zipper_vs_space.smt2	Scala zipper program materialization equals eager Space/Trie evaluation.
+vampire	temperature:zipper_vs_space	Theorem	proofs/examples/vampire/temperature_zipper_vs_space.p	Scala zipper program materialization equals eager Space/Trie evaluation.
+z3	temperature:graph_execT_vs_space	unsat	proofs/examples/smt2/temperature_graph_execT_vs_space.smt2	Scala operation graph execT output equals eager Space/Trie evaluation.
+vampire	temperature:graph_execT_vs_space	Theorem	proofs/examples/vampire/temperature_graph_execT_vs_space.p	Scala operation graph execT output equals eager Space/Trie evaluation.
+egg	nqueens:egg-equivalence	exit-0	proofs/examples/egg/nqueens.egg	Pure MORKL 4-queens search; the benchmark suite scales this definition higher.
+z3	nqueens:trie_vs_reference	unsat	proofs/examples/smt2/nqueens_trie_vs_reference.smt2	Trie evaluator output equals reference set evaluator output.
+vampire	nqueens:trie_vs_reference	Theorem	proofs/examples/vampire/nqueens_trie_vs_reference.p	Trie evaluator output equals reference set evaluator output.
+z3	nqueens:space_optimized	unsat	proofs/examples/smt2/nqueens_space_optimized.smt2	Default source optimizer output equals original Space/term output.
+vampire	nqueens:space_optimized	Theorem	proofs/examples/vampire/nqueens_space_optimized.p	Default source optimizer output equals original Space/term output.
+z3	nqueens:zipper_vs_space	unsat	proofs/examples/smt2/nqueens_zipper_vs_space.smt2	Scala zipper program materialization equals eager Space/Trie evaluation.
+vampire	nqueens:zipper_vs_space	Theorem	proofs/examples/vampire/nqueens_zipper_vs_space.p	Scala zipper program materialization equals eager Space/Trie evaluation.
+z3	nqueens:graph_execT_vs_space	unsat	proofs/examples/smt2/nqueens_graph_execT_vs_space.smt2	Scala operation graph execT output equals eager Space/Trie evaluation.
+vampire	nqueens:graph_execT_vs_space	Theorem	proofs/examples/vampire/nqueens_graph_execT_vs_space.p	Scala operation graph execT output equals eager Space/Trie evaluation.

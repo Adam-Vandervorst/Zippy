@@ -1,0 +1,228 @@
+
+// ==================== TRANSITIVE CLOSURE — NAIVE ====================
+Routine(RoutinePtr("tc"), Vector(), Vector(SpaceMention("e"), SpaceMention("acc")),
+  Space.Union(
+    Space.Mention(SpaceMention("acc")),
+    Space.Call(RoutinePtr("tc"), Vector(), Vector(
+      Space.Mention(SpaceMention("e")),
+      Space.Union(
+        Space.Mention(SpaceMention("e")),
+        Space.Iteration(
+          Space.Mention(SpaceMention("acc")),
+          PathRef("n").known(1), SpaceMention("nbs"),
+          Space.Wrap(
+            Space.TailsUnion(
+              Space.Restriction(
+                Space.Mention(SpaceMention("e")),
+                Space.Mention(SpaceMention("nbs")))),
+            Path.Deref(PathRef("n").known(1)))))))))
+// invoke:
+Space.Call(RoutinePtr("tc"), Vector(), Vector(
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("b"))), PathValue(List(PathItem.Symbol("b"), PathItem.Symbol("c"))), PathValue(List(PathItem.Symbol("c"), PathItem.Symbol("d"))), PathValue(List(PathItem.Symbol("z"), PathItem.Symbol("z")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("b"))), PathValue(List(PathItem.Symbol("b"), PathItem.Symbol("c"))), PathValue(List(PathItem.Symbol("c"), PathItem.Symbol("d"))), PathValue(List(PathItem.Symbol("z"), PathItem.Symbol("z"))))))))
+
+// ==================== TRANSITIVE CLOSURE — SEMI-NAIVE ====================
+Routine(RoutinePtr("tc_sn"), Vector(), Vector(SpaceMention("e"), SpaceMention("all"), SpaceMention("delta")),
+  Space.Union(
+    Space.Mention(SpaceMention("all")),
+    Space.Call(RoutinePtr("tc_sn"), Vector(), Vector(
+      Space.Mention(SpaceMention("e")),
+      Space.Union(
+        Space.Mention(SpaceMention("all")),
+        Space.Subtraction(
+          Space.Iteration(
+            Space.Mention(SpaceMention("delta")),
+            PathRef("n").known(1), SpaceMention("nbs"),
+            Space.Wrap(
+              Space.TailsUnion(
+                Space.Restriction(
+                  Space.Mention(SpaceMention("e")),
+                  Space.Mention(SpaceMention("nbs")))),
+              Path.Deref(PathRef("n").known(1)))),
+          Space.Mention(SpaceMention("all")))),
+      Space.Subtraction(
+        Space.Iteration(
+          Space.Mention(SpaceMention("delta")),
+          PathRef("n").known(1), SpaceMention("nbs"),
+          Space.Wrap(
+            Space.TailsUnion(
+              Space.Restriction(
+                Space.Mention(SpaceMention("e")),
+                Space.Mention(SpaceMention("nbs")))),
+            Path.Deref(PathRef("n").known(1)))),
+        Space.Mention(SpaceMention("all")))))))
+// invoke:
+Space.Call(RoutinePtr("tc_sn"), Vector(), Vector(
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("b"))), PathValue(List(PathItem.Symbol("b"), PathItem.Symbol("c"))), PathValue(List(PathItem.Symbol("c"), PathItem.Symbol("d"))), PathValue(List(PathItem.Symbol("z"), PathItem.Symbol("z")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("b"))), PathValue(List(PathItem.Symbol("b"), PathItem.Symbol("c"))), PathValue(List(PathItem.Symbol("c"), PathItem.Symbol("d"))), PathValue(List(PathItem.Symbol("z"), PathItem.Symbol("z")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("b"))), PathValue(List(PathItem.Symbol("b"), PathItem.Symbol("c"))), PathValue(List(PathItem.Symbol("c"), PathItem.Symbol("d"))), PathValue(List(PathItem.Symbol("z"), PathItem.Symbol("z"))))))))
+
+// ==================== REVERSE SAME-GENERATION — NAIVE ====================
+Routine(RoutinePtr("rsg"), Vector(), Vector(SpaceMention("up"), SpaceMention("flat"), SpaceMention("down"), SpaceMention("rsg")),
+  Space.Union(
+    Space.Mention(SpaceMention("rsg")),
+    Space.Call(RoutinePtr("rsg"), Vector(), Vector(
+      Space.Mention(SpaceMention("up")),
+      Space.Mention(SpaceMention("flat")),
+      Space.Mention(SpaceMention("down")),
+      Space.Union(
+        Space.Mention(SpaceMention("flat")),
+        Space.Iteration(
+          Space.Iteration(
+            Space.Mention(SpaceMention("up")),
+            PathRef("n").known(1), SpaceMention("nbs"),
+            Space.Wrap(
+              Space.TailsUnion(
+                Space.Restriction(
+                  Space.Iteration(
+                    Space.Mention(SpaceMention("rsg")),
+                    PathRef("b").known(1), SpaceMention("as"),
+                    Space.Iteration(
+                      Space.Mention(SpaceMention("as")),
+                      PathRef("a").known(1), SpaceMention("_"),
+                      Space.Singleton(Path.Concat(Path.Deref(PathRef("a").known(1)), Path.Deref(PathRef("b").known(1)))))),
+                  Space.Mention(SpaceMention("nbs")))),
+              Path.Deref(PathRef("n").known(1)))),
+          PathRef("n").known(1), SpaceMention("nbs"),
+          Space.Wrap(
+            Space.TailsUnion(
+              Space.Restriction(
+                Space.Mention(SpaceMention("down")),
+                Space.Mention(SpaceMention("nbs")))),
+            Path.Deref(PathRef("n").known(1)))))))))
+// invoke:
+Space.Call(RoutinePtr("rsg"), Vector(), Vector(
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("e"))), PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("f"), PathItem.Symbol("m"))), PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("h"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("i"), PathItem.Symbol("o"))), PathValue(List(PathItem.Symbol("j"), PathItem.Symbol("o")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("o"))), PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("m")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("b"))), PathValue(List(PathItem.Symbol("h"), PathItem.Symbol("c"))), PathValue(List(PathItem.Symbol("i"), PathItem.Symbol("d"))), PathValue(List(PathItem.Symbol("l"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("k")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("o"))), PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("m"))))))))
+
+// ==================== REVERSE SAME-GENERATION — SEMI-NAIVE ====================
+Routine(RoutinePtr("rsg_sn"), Vector(), Vector(SpaceMention("up"), SpaceMention("flat"), SpaceMention("down"), SpaceMention("all"), SpaceMention("delta")),
+  Space.Union(
+    Space.Mention(SpaceMention("all")),
+    Space.Call(RoutinePtr("rsg_sn"), Vector(), Vector(
+      Space.Mention(SpaceMention("up")),
+      Space.Mention(SpaceMention("flat")),
+      Space.Mention(SpaceMention("down")),
+      Space.Union(
+        Space.Mention(SpaceMention("all")),
+        Space.Subtraction(
+          Space.Iteration(
+            Space.Iteration(
+              Space.Mention(SpaceMention("up")),
+              PathRef("n").known(1), SpaceMention("nbs"),
+              Space.Wrap(
+                Space.TailsUnion(
+                  Space.Restriction(
+                    Space.Iteration(
+                      Space.Mention(SpaceMention("delta")),
+                      PathRef("b").known(1), SpaceMention("as"),
+                      Space.Iteration(
+                        Space.Mention(SpaceMention("as")),
+                        PathRef("a").known(1), SpaceMention("_"),
+                        Space.Singleton(Path.Concat(Path.Deref(PathRef("a").known(1)), Path.Deref(PathRef("b").known(1)))))),
+                    Space.Mention(SpaceMention("nbs")))),
+                Path.Deref(PathRef("n").known(1)))),
+            PathRef("n").known(1), SpaceMention("nbs"),
+            Space.Wrap(
+              Space.TailsUnion(
+                Space.Restriction(
+                  Space.Mention(SpaceMention("down")),
+                  Space.Mention(SpaceMention("nbs")))),
+              Path.Deref(PathRef("n").known(1)))),
+          Space.Mention(SpaceMention("all")))),
+      Space.Subtraction(
+        Space.Iteration(
+          Space.Iteration(
+            Space.Mention(SpaceMention("up")),
+            PathRef("n").known(1), SpaceMention("nbs"),
+            Space.Wrap(
+              Space.TailsUnion(
+                Space.Restriction(
+                  Space.Iteration(
+                    Space.Mention(SpaceMention("delta")),
+                    PathRef("b").known(1), SpaceMention("as"),
+                    Space.Iteration(
+                      Space.Mention(SpaceMention("as")),
+                      PathRef("a").known(1), SpaceMention("_"),
+                      Space.Singleton(Path.Concat(Path.Deref(PathRef("a").known(1)), Path.Deref(PathRef("b").known(1)))))),
+                  Space.Mention(SpaceMention("nbs")))),
+              Path.Deref(PathRef("n").known(1)))),
+          PathRef("n").known(1), SpaceMention("nbs"),
+          Space.Wrap(
+            Space.TailsUnion(
+              Space.Restriction(
+                Space.Mention(SpaceMention("down")),
+                Space.Mention(SpaceMention("nbs")))),
+            Path.Deref(PathRef("n").known(1)))),
+        Space.Mention(SpaceMention("all")))))))
+// invoke:
+Space.Call(RoutinePtr("rsg_sn"), Vector(), Vector(
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("e"))), PathValue(List(PathItem.Symbol("a"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("f"), PathItem.Symbol("m"))), PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("h"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("i"), PathItem.Symbol("o"))), PathValue(List(PathItem.Symbol("j"), PathItem.Symbol("o")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("o"))), PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("m")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("b"))), PathValue(List(PathItem.Symbol("h"), PathItem.Symbol("c"))), PathValue(List(PathItem.Symbol("i"), PathItem.Symbol("d"))), PathValue(List(PathItem.Symbol("l"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("k")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("o"))), PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("m")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("g"), PathItem.Symbol("f"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("n"))), PathValue(List(PathItem.Symbol("m"), PathItem.Symbol("o"))), PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("m"))))))))
+
+// ==================== ANDERSEN POINTS-TO — NAIVE ====================
+Routine(RoutinePtr("pt"), Vector(), Vector(SpaceMention("addressOf"), SpaceMention("assign"), SpaceMention("pt")),
+  Space.Union(
+    Space.Mention(SpaceMention("pt")),
+    Space.Call(RoutinePtr("pt"), Vector(), Vector(
+      Space.Mention(SpaceMention("addressOf")),
+      Space.Mention(SpaceMention("assign")),
+      Space.Union(
+        Space.Mention(SpaceMention("addressOf")),
+        Space.Iteration(
+          Space.Mention(SpaceMention("assign")),
+          PathRef("n").known(1), SpaceMention("nbs"),
+          Space.Wrap(
+            Space.TailsUnion(
+              Space.Restriction(
+                Space.Mention(SpaceMention("pt")),
+                Space.Mention(SpaceMention("nbs")))),
+            Path.Deref(PathRef("n").known(1)))))))))
+// invoke:
+Space.Call(RoutinePtr("pt"), Vector(), Vector(
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("h1"))), PathValue(List(PathItem.Symbol("q"), PathItem.Symbol("h2")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("q"))), PathValue(List(PathItem.Symbol("r"), PathItem.Symbol("p"))), PathValue(List(PathItem.Symbol("s"), PathItem.Symbol("r")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("h1"))), PathValue(List(PathItem.Symbol("q"), PathItem.Symbol("h2"))))))))
+
+// ==================== ANDERSEN POINTS-TO — SEMI-NAIVE ====================
+Routine(RoutinePtr("pt_sn"), Vector(), Vector(SpaceMention("addressOf"), SpaceMention("assign"), SpaceMention("all"), SpaceMention("delta")),
+  Space.Union(
+    Space.Mention(SpaceMention("all")),
+    Space.Call(RoutinePtr("pt_sn"), Vector(), Vector(
+      Space.Mention(SpaceMention("addressOf")),
+      Space.Mention(SpaceMention("assign")),
+      Space.Union(
+        Space.Mention(SpaceMention("all")),
+        Space.Subtraction(
+          Space.Iteration(
+            Space.Mention(SpaceMention("assign")),
+            PathRef("n").known(1), SpaceMention("nbs"),
+            Space.Wrap(
+              Space.TailsUnion(
+                Space.Restriction(
+                  Space.Mention(SpaceMention("delta")),
+                  Space.Mention(SpaceMention("nbs")))),
+              Path.Deref(PathRef("n").known(1)))),
+          Space.Mention(SpaceMention("all")))),
+      Space.Subtraction(
+        Space.Iteration(
+          Space.Mention(SpaceMention("assign")),
+          PathRef("n").known(1), SpaceMention("nbs"),
+          Space.Wrap(
+            Space.TailsUnion(
+              Space.Restriction(
+                Space.Mention(SpaceMention("delta")),
+                Space.Mention(SpaceMention("nbs")))),
+            Path.Deref(PathRef("n").known(1)))),
+        Space.Mention(SpaceMention("all")))))))
+// invoke:
+Space.Call(RoutinePtr("pt_sn"), Vector(), Vector(
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("h1"))), PathValue(List(PathItem.Symbol("q"), PathItem.Symbol("h2")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("q"))), PathValue(List(PathItem.Symbol("r"), PathItem.Symbol("p"))), PathValue(List(PathItem.Symbol("s"), PathItem.Symbol("r")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("h1"))), PathValue(List(PathItem.Symbol("q"), PathItem.Symbol("h2")))))),
+  Space.Literal(SpaceValue(Set(PathValue(List(PathItem.Symbol("p"), PathItem.Symbol("h1"))), PathValue(List(PathItem.Symbol("q"), PathItem.Symbol("h2"))))))))
