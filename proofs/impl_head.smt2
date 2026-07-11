@@ -1,0 +1,12 @@
+; IMPLEMENTATION CHARACTERIZATION (head): memT(head(t), p) ⟺ ∃h. p = [h] ∧ present(h, t).
+(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
+(declare-sort FT 0)
+(declare-fun memT (FT Path) Bool)
+(declare-fun headT (FT) FT)
+(assert (forall ((t FT)) (not (memT (headT t) nil))))
+(assert (forall ((t FT) (h Int) (q Path))
+  (= (memT (headT t) (cons h q)) (and (= q nil) (exists ((r Path)) (memT t (cons h r)))))))
+(assert (not (forall ((t FT) (p Path))
+  (= (memT (headT t) p)
+     (exists ((h Int)) (and (= p (cons h nil)) (exists ((r Path)) (memT t (cons h r)))))))))
+(check-sat)

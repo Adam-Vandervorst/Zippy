@@ -1,0 +1,33 @@
+; AUTO-GENERATED — selective (A∪B)∩C over small literals — a virtual fused cursor
+; Coincidence is checked PURELY BY MOVEMENT — the result trie is NEVER materialised here.
+; A CURSOR (Root $prog) is moved by Descend: for every member the focus is a member
+; (TermAt = T); for every boundary non-member it is not (TermAt = F); an absent key's focus
+; is the empty subspace.  Ascend inverts Descend (the zipper contract), checked per file.
+; For virtual cursors the Sub rules move LOCALLY through the operators — no operand is built.
+
+(include "prelude.egg")
+(let $prog (Intersection (Union (Union (Wrap1 166 (Eps)) (Wrap1 167 (Eps))) (Union (Wrap1 167 (Eps)) (Wrap1 169 (Eps)))) (Wrap1 166 (Eps))))
+(let $root (TermAt (Root $prog)))
+(let $mem0 (TermAt (Descend 166 (Root $prog))))
+(let $non0 (TermAt (Descend 167 (Root $prog))))
+(let $non1 (TermAt (Descend 169 (Root $prog))))
+(let $non2 (TermAt (Descend 166 (Descend 166 (Root $prog)))))
+(let $non3 (TermAt (Descend 167 (Descend 166 (Root $prog)))))
+(let $non4 (TermAt (Descend 169 (Descend 166 (Root $prog)))))
+(let $absent (IsEmpty (FocusOf (Descend 999998 (Root $prog)))))
+(let $zipup (FocusOf (Ascend (Descend 166 (Root $prog)))))
+
+(run 300)
+
+; ε is NOT a member
+(check (= $root (F)))
+; 1 member path(s): each reachable by movement (focus TermAt = T)
+(check (= $mem0 (T)))
+; 5 boundary non-member(s): each UNreachable (focus TermAt = F)
+(check (= $non0 (F)))
+(check (= $non1 (F)))
+(check (= $non2 (F)))
+(check (= $non3 (F)))
+(check (= $non4 (F)))
+(check (= $absent (T)))
+(check (= $zipup $prog))

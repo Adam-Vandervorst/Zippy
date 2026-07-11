@@ -1,0 +1,11 @@
+; AUTO-GENERATED — aunt query: recursive trie ops compute the same aunts
+; egglog RUNS the modelled recursive set-operation implementation on the transpiled zipper
+; ($impl) and checks it reduces to exactly the trie the Scala implementation computed ($want).
+
+(include "impl-prelude.egg")
+(let $impl (TrW 227 (Node (F) (CC 216 (Node (F) (CC 223 (Node (T) (CNil)) (CNil))) (CC 217 (Node (F) (CC 226 (Node (T) (CNil)) (CNil))) (CC 226 (Node (F) (CC 223 (Node (T) (CNil)) (CNil))) (CNil)))))))
+(let $want (Node (F) (CC 227 (Node (F) (CC 216 (Node (F) (CC 223 (Node (T) (CNil)) (CNil))) (CC 217 (Node (F) (CC 226 (Node (T) (CNil)) (CNil))) (CC 226 (Node (F) (CC 223 (Node (T) (CNil)) (CNil))) (CNil))))) (CNil))))
+
+(run 400)
+
+(check (= $impl $want))

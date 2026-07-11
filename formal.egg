@@ -1,8 +1,26 @@
+; ================================================================================================
+; THE CORE SET LANGUAGE, illustrated: Scala's `exec` modelled in egglog — EAGER "set of paths"
+; evaluation of the Space algebra.  A space is (a term denoting) a finite set of paths; every
+; operator REWRITES EAGERLY to a normal form (unions of singletons), exactly how the eager
+; evaluators compute.  This file is the reference semantics AND its tour: the rule set first
+; (every rule carries its machine-checked obligation — see proofs/laws/ and proofs/STATUS.tsv),
+; then one worked example per operator family, each gated by a (check).
+;
+; NO zipper logic lives here: zippers are an OPTIMIZATION and must be observationally equivalent
+; to this reference — see zipper.egg (the illustrative zipper extension over THIS prelude) and
+; zipper-spec.egg (the certified per-key movement calculus).  The equivalence is tested three
+; ways: randomized differentials (zipper-egg-tests/generated/), the automated program pipeline
+; (zipper-egg-tests/pipeline/), and the z3/vampire proofs (proofs/threeway_*.smt2).
+;
+; Items are interned i64 (letters a..z map to 10..35); `Composition` is the op formerly named
+; `Product`; `IterC` is the invariant-body iteration (the head-dependent Iter lives in the
+; movement spec).  Run from the repo root:  egglog formal.egg
+; ================================================================================================
+
 (datatype Path
   (Eps)
-  (Item String)
-  (Concat Path Path)
-  (Neg Path))
+  (Item i64)
+  (Concat Path Path))
 
 (datatype Space
   (Empty)
@@ -13,28 +31,187 @@
   (Restriction Space Space)
   (Wrap Path Space)
   (Unwrap Space Path)
-  (Product Space Space)
+  (Composition Space Space)
   (Head Space)
   (TailsUnion Space)
-  (TailsIntersection Space))
+  (TailsIntersection Space)
+  (Raffination Space Space)
+  (IterC Space Space))      ; Iter src b: union of a loop-INVARIANT body b over the heads of src
 
+(relation drop-prefix (Path Path Space))
+(relation tails-intersection (Space Space Space))
+(relation tails-intersection-acc (Space Space Space Space))
+
+; ================================================================================================
+; THE RULES (each line carries its obligation annotation; checked by scripts/check_obligations.py)
+; ================================================================================================
+; NEGATION-AS-FAILURE, HANDLED SOUNDLY: the two rules below compare PATH E-CLASSES with (!=),
+; which is only meaningful at saturation (two still-unmerged but denotationally equal paths would
+; otherwise fire them and bake in a wrong fact — observed live as {a·0, b·1} <| {a,b} collapsing).
+; They live in ruleset `neg` and the schedule interleaves: space step, path saturation, neg pass.
+; The (!= a b) guards over PRIMITIVE i64 items elsewhere are always sound and stay in the default set.
+(ruleset neg)
+(ruleset paths)
+
+; ---- membership judgment: ElemP p s — structural, needs NO ACU closure (the eager rules already
+; normalise every op to unions of singletons); the singleton disequality case is negation-as-failure
+; and lives in `neg` (sound at path saturation, like the set-level != rules).
+(datatype EB (ET) (EF) (EOr EB EB) (EAnd EB EB) (EAndNot EB EB) (ElemP Path Space))
+(rewrite (EOr (ET) b) (ET)) (rewrite (EOr b (ET)) (ET)) (rewrite (EOr (EF) b) b) (rewrite (EOr b (EF)) b)   ; definitional (truth tables: the defining equations of the membership flag algebra)
+(rewrite (EAnd (EF) b) (EF)) (rewrite (EAnd b (EF)) (EF)) (rewrite (EAnd (ET) b) b) (rewrite (EAnd b (ET)) b)   ; definitional (truth tables: the defining equations of the membership flag algebra)
+(rewrite (EAndNot a (ET)) (EF)) (rewrite (EAndNot a (EF)) a) (rewrite (EAndNot (EF) b) (EF))   ; definitional (truth tables: the defining equations of the membership flag algebra)
+(rewrite (ElemP p (Empty)) (EF))   ; definitional (membership in the empty set)
+(rewrite (ElemP p (Singleton p)) (ET))   ; definitional (singleton membership, positive case)
+(rule ((= e (ElemP p (Singleton q))) (!= p q)) ((union e (EF))) :ruleset neg)   ; definitional (singleton membership, negative case; negation-as-failure — sound at path saturation, see header)
+(rewrite (ElemP p (Union a b)) (EOr (ElemP p a) (ElemP p b)))   ; definitional (pointwise membership: the defining semantics of union)
+(rewrite (ElemP p (Intersection a b)) (EAnd (ElemP p a) (ElemP p b)))   ; definitional (pointwise membership: the defining semantics of intersection)
+(rewrite (ElemP p (Subtraction a b)) (EAndNot (ElemP p a) (ElemP p b)))   ; definitional (pointwise membership: the defining semantics of subtraction)
+
+(rewrite (Union x x) x)   ; proof: proofs/laws/law_union_idem.smt2
+(rewrite (Intersection x x) x)   ; proof: proofs/laws/law_inter_idem.smt2
+
+(rewrite (Subtraction x x) (Empty))   ; proof: proofs/laws/law_sub_self.smt2
+
+(ruleset acu)
+(rewrite (Union x y) (Union y x) :ruleset acu)   ; proof: proofs/laws/law_union_comm.smt2
+(rewrite (Intersection x y) (Intersection y x) :ruleset acu)   ; proof: proofs/laws/law_inter_comm.smt2
+
+(rewrite (Union x (Empty)) x)   ; proof: proofs/laws/law_union_unit.smt2
+(rewrite (Union (Empty) x) x)   ; proof: proofs/laws/law_union_unit.smt2
+(rewrite (Intersection x (Empty)) (Empty))   ; proof: proofs/laws/law_inter_empty.smt2
+(rewrite (Intersection (Empty) x) (Empty))   ; proof: proofs/laws/law_inter_empty.smt2
+(rewrite (Intersection (Union x y) z) (Union (Intersection x z) (Intersection y z)))   ; proof: proofs/laws/law_inter_distrib.smt2
+(rewrite (Intersection x (Union y z)) (Union (Intersection x y) (Intersection x z)))   ; proof: proofs/laws/law_inter_distrib.smt2
+(rewrite (Subtraction (Empty) x) (Empty))   ; proof: proofs/laws/law_sub_empty.smt2
+(rewrite (Subtraction x (Empty)) x)   ; proof: proofs/laws/law_sub_empty.smt2
+(rewrite (Subtraction (Union x y) z) (Union (Subtraction x z) (Subtraction y z)))   ; proof: proofs/laws/law_sub_distrib.smt2
+(rewrite (Subtraction x (Union y z)) (Subtraction (Subtraction x y) z))   ; proof: proofs/laws/law_demorgan_sub.smt2
+(rewrite (Subtraction (Singleton p) (Singleton q)) (Singleton p) :when ((!= p q)) :ruleset neg)   ; proof: proofs/laws/law_singleton_disq.smt2
+(rewrite (Intersection (Singleton p) (Singleton q)) (Empty) :when ((!= p q)) :ruleset neg)   ; proof: proofs/laws/law_singleton_disq.smt2
+
+(rewrite (Concat x (Eps)) x :ruleset paths)   ; proof: proofs/lemma_append_nil.smt2
+(rewrite (Concat (Eps) x) x :ruleset paths)   ; definitional (the defining left-unit equation of path append)
+
+(rewrite (Concat (Concat x y) z) (Concat x (Concat y z)) :ruleset paths)   ; DIRECTED right-rotation (canonical form; the closure birewrite is Catalan in path length)   ; proof: proofs/laws/law_append_assoc.smt2
+(rewrite (Union (Union x y) z) (Union x (Union y z)))   ; DIRECTED right-rotation (canonical; assoc closure dropped)   ; proof: proofs/laws/law_union_assoc.smt2
+(rewrite (Intersection (Intersection x y) z) (Intersection x (Intersection y z)))   ; proof: proofs/laws/law_inter_assoc.smt2
+
+(rewrite (Wrap x (Empty)) (Empty))   ; proof: proofs/laws/law_wrap_set.smt2
+(rewrite (Wrap (Eps) s) s)   ; proof: proofs/laws/law_wrap_set.smt2
+(rewrite (Wrap x (Singleton p)) (Singleton (Concat x p)))   ; DIRECTED fusion (the reverse un-fuses every singleton at every split — combinatorial)   ; proof: proofs/laws/law_wrap_set.smt2
+(rewrite (Wrap x (Union s t)) (Union (Wrap x s) (Wrap x t)))   ; DIRECTED distribution   ; proof: proofs/laws/law_wrap_set.smt2
+
+(rewrite (Unwrap (Empty) p) (Empty))   ; proof: proofs/laws/law_unwrap_set.smt2
+(rewrite (Unwrap s (Eps)) s)   ; proof: proofs/laws/law_unwrap_set.smt2
+(rewrite (Unwrap (Wrap p s) p) s)   ; proof: proofs/laws/law_unwrap_set.smt2
+(rewrite (Unwrap (Wrap (Concat p q) s) p) (Wrap q s))   ; proof: proofs/laws/law_unwrap_set.smt2
+(rewrite (Unwrap (Wrap p s) (Concat p q)) (Unwrap s q))   ; proof: proofs/laws/law_unwrap_set.smt2
+(rewrite (Unwrap (Union s t) x) (Union (Unwrap s x) (Unwrap t x)))   ; proof: proofs/laws/law_unwrap_set.smt2
+
+(rule ((= out (Unwrap (Singleton whole) prefix)))   ; demand-materialisation (creates the drop-prefix demand for unwrap-on-singleton)
+      ((drop-prefix prefix whole out)))
+
+(rule ((drop-prefix (Eps) whole out))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, ε case)
+      ((union out (Singleton whole))))
+(rule ((drop-prefix p p out))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, exact case)
+      ((union out (Singleton (Eps)))))
+(rule ((drop-prefix p (Concat p rest) out))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, proper-prefix case)
+      ((union out (Singleton rest))))
+(rule ((drop-prefix (Concat p q) (Concat p r) out))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, descend case)
+      ((drop-prefix q r out)))
+(rule ((drop-prefix (Item a) (Eps) out))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, miss cases)
+      ((union out (Empty))))
+(rule ((drop-prefix (Concat (Item a) p) (Eps) out))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, miss cases)
+      ((union out (Empty))))
+(rule ((drop-prefix (Item a) (Item b) out) (!= a b))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, miss cases)
+      ((union out (Empty))))
+(rule ((drop-prefix (Item a) (Concat (Item b) r) out) (!= a b))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, miss cases)
+      ((union out (Empty))))
+(rule ((drop-prefix (Concat (Item a) p) (Item b) out) (!= a b))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, miss cases)
+      ((union out (Empty))))
+(rule ((drop-prefix (Concat (Item a) p) (Concat (Item b) r) out) (!= a b))   ; proof: proofs/laws/law_unwrap_set.smt2 (singleton-unwrap characterization, miss cases)
+      ((union out (Empty))))
+
+(rewrite (Composition (Empty) t) (Empty))   ; proof: proofs/laws/law_comp_set.smt2
+(rewrite (Composition s (Empty)) (Empty))   ; proof: proofs/laws/law_comp_set.smt2
+(rewrite (Composition (Union s t) u) (Union (Composition s u) (Composition t u)))   ; proof: proofs/laws/law_comp_set.smt2
+(rewrite (Composition s (Union t u)) (Union (Composition s t) (Composition s u)))   ; proof: proofs/laws/law_comp_set.smt2
+(rewrite (Composition (Union (Singleton p) s) t) (Union (Wrap p t) (Composition s t)))   ; proof: proofs/laws/law_comp_set.smt2
+(rewrite (Composition (Singleton p) t) (Wrap p t))   ; proof: proofs/laws/law_comp_set.smt2
+
+(rewrite (TailsUnion (Empty)) (Empty))   ; proof: proofs/laws/law_tailsu_set.smt2
+; totality cases the randomized differential exposed (ε / length-1 / general union distribution):
+(rewrite (TailsUnion (Singleton (Eps))) (Empty))   ; proof: proofs/laws/law_tailsu_set.smt2
+(rewrite (TailsUnion (Singleton (Item h))) (Singleton (Eps)))   ; proof: proofs/laws/law_tailsu_set.smt2
+(rewrite (TailsUnion (Singleton (Concat (Item h) t))) (Singleton t))   ; proof: proofs/laws/law_tailsu_set.smt2
+(rewrite (TailsUnion (Union s t)) (Union (TailsUnion s) (TailsUnion t)))   ; proof: proofs/laws/law_tailsu_set.smt2
+(rewrite (TailsUnion (Union (Wrap (Item p) s) t)) (Union s (TailsUnion t)))   ; proof: proofs/laws/law_tailsu_set.smt2
+(rewrite (TailsUnion (Wrap (Item p) s)) s)   ; proof: proofs/laws/law_tailsu_set.smt2
+
+(rule ((= out (TailsIntersection x)))   ; demand-materialisation (creates the head-fold demand for tails-intersection)
+      ((tails-intersection (Head x) x out)))
+(rule ((tails-intersection (Empty) x out))   ; proof: proofs/laws/law_tailsi_set.smt2
+      ((union out (Empty))))
+(rule ((tails-intersection (Singleton h) x out))   ; proof: proofs/laws/law_tailsi_set.smt2
+      ((union out (Unwrap x h))))
+(rule ((tails-intersection (Union (Singleton h) rest) x out))   ; proof: proofs/laws/law_tailsi_set.smt2
+      ((tails-intersection-acc rest x (Unwrap x h) out)))
+(rule ((tails-intersection-acc (Singleton h) x acc out))   ; proof: proofs/laws/law_tailsi_set.smt2
+      ((union out (Intersection acc (Unwrap x h)))))
+(rule ((tails-intersection-acc (Union (Singleton h) rest) x acc out))   ; proof: proofs/laws/law_tailsi_set.smt2
+      ((tails-intersection-acc rest x (Intersection acc (Unwrap x h)) out)))
+
+(rewrite (Restriction (Empty) p) (Empty))   ; proof: proofs/laws/law_restrict_set.smt2
+(rewrite (Restriction x (Empty)) (Empty))   ; proof: proofs/laws/law_restrict_set.smt2
+(rewrite (Restriction x (Singleton (Eps))) x)   ; proof: proofs/laws/law_restrict_set.smt2
+(rewrite (Restriction x (Union p q)) (Union (Restriction x p) (Restriction x q)))   ; proof: proofs/laws/law_restrict_set.smt2
+(rewrite (Restriction x (Singleton p)) (Wrap p (Unwrap x p)))   ; proof: proofs/laws/law_restrict_set.smt2
+
+(rewrite (Head (Empty)) (Empty))   ; proof: proofs/laws/law_head_set.smt2
+(rewrite (Head (Singleton (Eps))) (Empty))   ; proof: proofs/laws/law_head_set.smt2
+(rewrite (Head (Union x y)) (Union (Head x) (Head y)))   ; proof: proofs/laws/law_head_set.smt2
+(rewrite (Head (Singleton (Concat (Item h) t))) (Singleton (Item h)))   ; proof: proofs/laws/law_head_set.smt2
+(rewrite (Head (Singleton (Item h))) (Singleton (Item h)))   ; proof: proofs/laws/law_head_set.smt2
+
+; --- additional laws being implemented in the supercompiler (this turn) ---
+(rewrite (Restriction x x) x)                                          ; every path of x has itself (in x) as a prefix   ; proof: proofs/laws/law_restrict_self.smt2
+(rewrite (Raffination x y) (Subtraction x (Restriction x y)))         ; definition; => (Raffination x x) = Empty   ; definitional (raffination is DEFINED as x \ (x <| y))
+(rewrite (Unwrap (Unwrap s p) q) (Unwrap s (Concat p q)))             ; merge adjacent unwraps   ; proof: proofs/laws/law_unwrap_merge.smt2
+(rewrite (Unwrap (Wrap (Item p) s) (Item q)) (Empty) :when ((!= p q))) ; wrap then unwrap an incomparable head   ; proof: proofs/laws/law_unwrap_set.smt2 (incomparable-head case)
+
+; --- Iter model: union of a loop-INVARIANT body b over the heads of src.  Over a source with no
+; head it is Empty; over a one-head source it is b.  Source-union distributes (b is idempotent). ---
+(rewrite (IterC (Empty) b) (Empty))   ; proof: proofs/laws/law_iterc_set.smt2
+(rewrite (IterC (Singleton (Eps)) b) (Empty))   ; proof: proofs/laws/law_iterc_set.smt2 (a {ε} source has NO heads — the prover-caught case)
+(rewrite (IterC (Singleton (Item h)) b) b)   ; proof: proofs/laws/law_iterc_set.smt2
+(rewrite (IterC (Singleton (Concat (Item h) t)) b) b)   ; proof: proofs/laws/law_iterc_set.smt2
+(rewrite (IterC (Union s t) b) (Union (IterC s b) (IterC t b)))   ; proof: proofs/laws/law_iterc_set.smt2
+; the singleton case is split on head shape: a {ε} source has NO heads, so iterating over it is
+; EMPTY — stating laws/law_iterc_set.smt2 exposed the unguarded (Singleton p) → b as false at p=ε.
+
+; ================================================================================================
+; THE TOUR — example spaces (wrap/unwrap, composition, tails, restriction, head, iteration);
+; every (check) below must pass under the standard schedule.
+; ================================================================================================
 ; expr1 = a | b
-(let expr1 (Union (Singleton (Item "a")) (Singleton (Item "b"))))
+(let expr1 (Union (Singleton (Item 10)) (Singleton (Item 11))))
 ; expr2 = i x (a | b)
-(let expr2 (Wrap (Item "i") expr1))
+(let expr2 (Wrap (Item 18) expr1))
 ; expr3 = (ia | ib)
-(let expr3 (Union (Singleton (Concat (Item "i") (Item "a"))) (Singleton (Concat (Item "i") (Item "b")))))
+(let expr3 (Union (Singleton (Concat (Item 18) (Item 10))) (Singleton (Concat (Item 18) (Item 11)))))
 ; expr4 = (ia | ib)(i)
-(let expr4 (Unwrap expr3 (Item "i")))
-(let expr_qi (Concat (Item "q") (Item "i")))
-(let expr_qi_cancel (Concat (Neg expr_qi) expr_qi))
+(let expr4 (Unwrap expr3 (Item 18)))
+(let expr_qi (Concat (Item 26) (Item 18)))
 (let expr_qi_unwrap (Unwrap (Wrap expr_qi expr1) expr_qi))
-(let expr1_ (Union (Singleton (Item "x")) (Singleton (Item "y"))))
-(let expr_prod (Product expr1_ expr1))
-(let expr_prod_expanded (Union (Union (Singleton (Concat (Item "x") (Item "a")))
-                                      (Singleton (Concat (Item "x") (Item "b"))))
-                               (Union (Singleton (Concat (Item "y") (Item "a")))
-                                      (Singleton (Concat (Item "y") (Item "b"))))))
+(let expr_unwrap_prefix (Unwrap (Singleton (Concat (Item 10) (Item 11))) (Item 10)))
+(let expr_unwrap_exact (Unwrap (Singleton (Concat (Item 10) (Item 11))) (Concat (Item 10) (Item 11))))
+(let expr_unwrap_miss (Unwrap (Singleton (Item 10)) (Item 11)))
+(let expr1_ (Union (Singleton (Item 33)) (Singleton (Item 34))))
+(let expr_prod (Composition expr1_ expr1))
+(let expr_prod_expanded (Union (Union (Singleton (Concat (Item 33) (Item 10)))
+                                      (Singleton (Concat (Item 33) (Item 11))))
+                               (Union (Singleton (Concat (Item 34) (Item 10)))
+                                      (Singleton (Concat (Item 34) (Item 11))))))
 (let expr_tailsunion1 (TailsUnion expr_prod_expanded))
 (let expr_tailsintersection1 (TailsIntersection expr_prod_expanded))
 (let expr1_head (Head expr1))
@@ -48,74 +225,84 @@
 ;
 ;  assert(eval(/\(keys <| s("a", "b"))).prettyLines == "0")
 ;}
-(let expr_s0 (Singleton (Item "0")))
+(let expr_s0 (Singleton (Item 0)))
 (let expr_restriction_keys
   (Union
     (Union
-      (Product expr1 (Singleton (Item "0")))
-      (Product (Union (Singleton (Item "a")) (Union (Singleton (Item "c")) (Singleton (Item "d")))) (Singleton (Item "1"))))
-    (Product (Singleton (Item "c")) (Singleton (Item "2")))))
+      (Composition expr1 (Singleton (Item 0)))
+      (Composition (Union (Singleton (Item 10)) (Union (Singleton (Item 12)) (Singleton (Item 13)))) (Singleton (Item 1))))
+    (Composition (Singleton (Item 12)) (Singleton (Item 2)))))
 (let expr_restriction (Restriction expr_restriction_keys expr1))
 (let expr_restriction_tailsintersection (TailsIntersection expr_restriction))
 (let expr_restriction_res1
-  (Union (Union (Singleton (Concat (Item "a") (Item "0")))
-                (Singleton (Concat (Item "a") (Item "1"))))
-         (Singleton (Concat (Item "b") (Item "0")))))
+  (Union (Union (Singleton (Concat (Item 10) (Item 0)))
+                (Singleton (Concat (Item 10) (Item 1))))
+         (Singleton (Concat (Item 11) (Item 0)))))
+(let expr_restriction_multi
+  (Restriction
+    (Union (Wrap (Item 10) (Singleton (Item 0)))
+           (Wrap (Item 11) (Singleton (Item 1))))
+    (Union (Singleton (Item 10)) (Singleton (Item 11)))))
+(let expr_restriction_multi_res
+  (Union (Singleton (Concat (Item 10) (Item 0)))
+         (Singleton (Concat (Item 11) (Item 1)))))
+(let expr_restriction_multi_only_a
+  (Singleton (Concat (Item 10) (Item 0))))
+
+(let expr_tailsintersection_duplicate_heads
+  (TailsIntersection
+    (Union
+      (Union (Wrap (Item 10) (Singleton (Item 0)))
+             (Wrap (Item 10) (Singleton (Item 1))))
+      (Wrap (Item 11) (Singleton (Item 0))))))
 
 
 
-(rewrite (Union x x) x)
-(rewrite (Intersection x x) x)
+(let $restr_self (Restriction expr1 expr1))
+(let $raff_self (Raffination expr1 expr1))
+(let $unwrap_chain (Unwrap (Unwrap (Singleton (Concat (Item 10) (Concat (Item 11) (Item 12)))) (Item 10)) (Item 11)))
+(let $wrap_unwrap_miss (Unwrap (Wrap (Item 32) expr1) (Item 10)))
+(let $tails_single (TailsUnion (Singleton (Concat (Item 10) (Item 11)))))
 
-(rewrite (Subtraction x x) (Empty))
 
-(rewrite (Union x y) (Union y x))
-(rewrite (Intersection x y) (Intersection y x))
+(let iu_body (Union (Singleton (Item 21)) (Singleton (Item 27))))
+(let iu_orig_empty (IterC (Empty) iu_body))
+(let iu_distr_empty (Union (IterC (Empty) (Singleton (Item 21))) (IterC (Empty) (Singleton (Item 27)))))
+(let iu_hoist_empty (Union (Singleton (Item 21)) (IterC (Empty) (Singleton (Item 27)))))
+(let iu_orig_ne (IterC (Singleton (Item 17)) iu_body))
 
-(rewrite (Neg (Concat x y)) (Concat (Neg y) (Neg x)))
-(rewrite (Concat (Neg x) x) (Eps))
-(rewrite (Concat x (Eps)) x)
-(rewrite (Concat (Eps) x) x)
+(let iu_hoist_ne (Union (Singleton (Item 21)) (IterC (Singleton (Item 17)) (Singleton (Item 27)))))
 
-(birewrite (Concat x (Concat y z)) (Concat (Concat x y) z))
-(birewrite (Union x (Union y z)) (Union (Union x y) z))
-(birewrite (Intersection x (Intersection y z)) (Intersection (Intersection x y) z))
+(let wi_hoist_empty (Wrap (Item 25) (IterC (Empty) (Singleton (Item 28)))))
 
-(birewrite (Wrap x (Singleton p)) (Singleton (Concat x p)))
-(birewrite (Wrap x (Union s t)) (Union (Wrap x s) (Wrap x t)))
-
-(rewrite (Unwrap (Singleton p) x) (Singleton (Concat (Neg x) p)))
-(rewrite (Unwrap (Union s t) x) (Union (Unwrap s x) (Unwrap t x)))
-
-(rewrite (Product (Union (Singleton p) s) t) (Union (Wrap p t) (Product s t)))
-(rewrite (Product (Singleton p) t) (Wrap p t))
-
-(rewrite (TailsUnion (Union (Wrap (Item p) s) t)) (Union s (TailsUnion t)))
-(rewrite (TailsUnion (Wrap (Item p) s)) s)
-
-(rewrite (TailsIntersection (Union (Wrap (Item p) s) t)) (Intersection s (TailsIntersection t)))
-(rewrite (TailsIntersection (Wrap (Item p) s)) s)
-
-(rewrite (Restriction (Union (Wrap p s) t) (Singleton p)) (Wrap p s))
-(rewrite (Restriction (Wrap p s) (Singleton p)) (Wrap p s))
-(rewrite (Restriction (Union (Wrap p s) t) (Union (Singleton p) r)) (Wrap p s))
-(rewrite (Restriction (Wrap p s) (Union (Singleton p) r)) (Wrap p s))
-
-(rewrite (Head (Union x y)) (Union (Head x) (Head y)))
-(rewrite (Head (Singleton (Concat (Item h) t))) (Singleton (Item h)))
-(rewrite (Head (Singleton (Item h))) (Singleton (Item h)))
-
-(run 6)
+(run-schedule (repeat 8 (run) (run acu) (saturate paths) (run neg)))
 
 (check (= expr2 expr3))
 (check (= expr1 expr4))
-(check (= expr_qi_cancel (Eps)))
 (check (= expr_qi_unwrap expr1))
+(check (= expr_unwrap_prefix (Singleton (Item 11))))
+(check (= expr_unwrap_exact (Singleton (Eps))))
+(check (= expr_unwrap_miss (Empty)))
 (check (= expr_prod expr_prod_expanded))
 (check (= expr_tailsunion1 expr1))
 (check (= expr_tailsintersection1 expr1))
 (check (= expr_restriction expr_restriction_res1))
 (check (= expr_restriction_tailsintersection expr_s0))
+(check (= expr_restriction_multi expr_restriction_multi_res))
+(fail (check (= expr_restriction_multi expr_restriction_multi_only_a)))
+(check (= expr_tailsintersection_duplicate_heads expr_s0))
+(fail (check (= expr_tailsintersection_duplicate_heads (Empty))))
+; --- new-law checks ---
+(check (= $restr_self expr1))
+(check (= $raff_self (Empty)))
+(check (= $unwrap_chain (Singleton (Item 12))))
+(check (= $wrap_unwrap_miss (Empty)))
+(check (= $tails_single (Singleton (Item 11))))
 (check (= expr1_head expr1))
-(check (= expr3_head (Singleton (Item "i"))))
+(check (= expr3_head (Singleton (Item 18))))
 (check (= expr_prod_head expr1_))
+; --- IterUnion: DISTRIBUTING a body-union over the iteration is sound; HOISTING a branch out is not.
+;     This is exactly the fix to the SC's IterUnion_Indep (gate the hoisted branch by re-iterating). ---
+(check (= iu_orig_empty (Empty)))
+(check (= iu_orig_empty iu_distr_empty))            ; distribute preserves semantics on an EMPTY source
+(fail (check (= iu_orig_empty iu_hoist_empty)))     ; bare hoist does NOT (it leaks {l})

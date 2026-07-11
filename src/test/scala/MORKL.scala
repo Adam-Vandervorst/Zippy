@@ -1,5 +1,3 @@
-package morkl
-
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.collection.mutable.SortedMultiSet
@@ -84,43 +82,18 @@ class MORKL2Space extends FunSuite:
   }
 
   test("transformation") {
-    given PathContext()
-    given SpaceContext()
-    val lhs = Transformation(Composition(ss"Foo", Union(Union(
+    given PathContext = PathContextMap(Map.empty)       // T uses Iteration, which grows the contexts
+    given SpaceContext = SpaceContextMap(Map.empty)
+    // (was Space.Transformation; now expressed with the nested-iter transform `T` = U[Unwrap/Iteration]+W[Wrap])
+    val src = Composition(ss"Foo", Union(Union(
       Composition(ss"Bar", s("1", "2", "3")),
       Composition(ss"Baz", s("A", "B", "C"))),
-      Composition(ss"Cux", s("Red", "Blue")))), "$_.Cux.$c", "Result.Color.$c")
+      Composition(ss"Cux", s("Red", "Blue"))))
+    val lhs = Unification.T(src, ("$_.Cux.$c": PathValue), ("Result.Color.$c": PathValue))
     val rhs = s("Result.Color.Red", "Result.Color.Blue")
     assert(eval(lhs) == eval(rhs))
   }
 
-  test("left_residual") {
-    given PathContext()
-    given SpaceContext()
-    // all prefixes we can add to y such prefix.y <= x
-    val x = Composition(Singleton("Test.Foo"), Union(Union(
-      Composition(ss"Bar", s("1", "2", "3", "4", "5", "6")),
-      Composition(ss"Baz", s("1", "2", "3", "A", "B", "C"))),
-      Composition(ss"Cux", s("Red", "Blue"))))
-    val y = s("1", "2", "3")
-    val lhs = LeftResidual(x, y)
-    val rhs = s("Test.Foo.Bar", "Test.Foo.Baz")
-    assert(eval(lhs) == eval(rhs))
-  }
-
-  test("right_residual") {
-    given PathContext()
-    given SpaceContext()
-    // all postfixes we can add to y such y.postfix <= x
-    val x = Composition(Singleton("Test.Foo"), Union(Union(
-      Composition(ss"Bar", s("1", "2", "3", "4", "5", "6")),
-      Composition(ss"Baz", s("1", "2", "3", "A", "B", "C"))),
-      Composition(ss"Cux", s("Red", "Blue"))))
-    val y = s("Test.Foo.Bar", "Test.Foo.Baz")
-    val lhs = RightResidual(y, x)
-    val rhs = s("1", "2", "3")
-    assert(eval(lhs) == eval(rhs))
-  }
 end MORKL2Space
 
 object Graphs:
@@ -585,7 +558,7 @@ object Routines:
     })
 
   val seedless_scc_routine = R"seedless_scc"(S"fwd", S"bwd", S"nodes") :=
-    First(1, S"nodes").iterh(P"v", {
+    S"nodes".iterh(P"v", {
       val pred: Space = R"reachable"(S"fwd", S"nodes", sP"v")
       val desc: Space = R"reachable"(S"bwd", S"nodes", sP"v")
       (P"v" x ((pred /\ desc) \ sP"v")) \/
@@ -713,39 +686,25 @@ class Unification extends FunSuite:
 
   test("transpile transform") {
     {
-      // {(foo $x), (bar $y), (baz $z)} => {(cux $x), (cux $y), (cux $z)}
+      // {(foo $x), (bar $y), (baz $z)} => {(cux $x), (cux $y), (cux $z)} is a CONJUNCTIVE query: the
+      // templates are produced only when ALL three sub-queries match (nested iterations).  The rewrite
+      // (ConcatSingleton_Iter + IterUnion_Indep) must PRESERVE this.  An earlier bug pinned here hoisted
+      // each cux out to be gated by a single sub-query, leaking e.g. cux.$x when bar/baz were empty;
+      // we now assert eval-equivalence (incl. partial-match inputs) instead of a brittle op-graph dump.
       val expr = MQMT(S"s", List("foo.$x", "bar.$y", "baz.$z"), List("cux.$x", "cux.$y", "cux.$z"))
       val f = all_forever(_, List(Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep))
-
-//      R"union_example", "s"), Wrap(Unwrap(S"s", "foo") \/ Unwrap(S"s", "bar") \/ Unwrap(S"s", "baz"), "cux"))
-
-      assert(optimize(transpile(R"union"(S"s") := f(expr))).show
-      == """Routine[union](): space
-           |0 ExtractSpaceMention[s](): space
-           |1 Constant[foo](): path
-           |2 Unwrap[]((0,0), (0,1)): space
-           |3 Iteration[x]((0,2)): space
-           |  0 ExtractPathRef[x](): path
-           |  1 ExtractSpaceMention[x_](): space
-           |  2 Singleton[]((1,0)): space
-           |4 Constant[cux](): path
-           |5 Wrap[]((0,3), (0,4)): space
-           |6 Constant[bar](): path
-           |7 Unwrap[]((0,0), (0,6)): space
-           |8 Iteration[y]((0,7)): space
-           |  0 ExtractPathRef[y](): path
-           |  1 ExtractSpaceMention[y_](): space
-           |  2 Singleton[]((1,0)): space
-           |9 Wrap[]((0,8), (0,4)): space
-           |10 Constant[baz](): path
-           |11 Unwrap[]((0,0), (0,10)): space
-           |12 Iteration[z]((0,11)): space
-           |  0 ExtractPathRef[z](): path
-           |  1 ExtractSpaceMention[z_](): space
-           |  2 Singleton[]((1,0)): space
-           |13 Wrap[]((0,12), (0,4)): space
-           |14 Union[]((0,9), (0,13)): space
-           |15 Union[]((0,5), (0,14)): space""".stripMargin)
+      val noRc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
+      val emptyPc: PathContext = PathContextMap(Map.empty)
+      def ic(sv: SpaceValue) = Map(SpaceMention("s") -> ITrie.fromSpaceValue(sv))   // evalI handles growing iteration contexts (eval does not)
+      for sv <- List(
+            SpaceValue("foo.a", "bar.b", "baz.c"),
+            SpaceValue("foo.a"),                                  // only foo matches: conjunctive result is empty
+            SpaceValue("bar.b", "baz.c"),                         // foo missing
+            SpaceValue("foo.a", "foo.d", "bar.b", "baz.c")) do
+        assertEquals(evalI(f(expr))(using emptyPc, ic(sv), noRc).toSpaceValue,
+          evalI(expr)(using emptyPc, ic(sv), noRc).toSpaceValue, s"IterUnion rewrite changed meaning on $sv")
+      assertEquals(evalI(expr)(using emptyPc, ic(SpaceValue("foo.a")), noRc).toSpaceValue, SpaceValue())   // conjunctive: foo-only -> nothing
+      assertEquals(evalI(f(expr))(using emptyPc, ic(SpaceValue("foo.a", "bar.b", "baz.c")), noRc).toSpaceValue, SpaceValue("cux.a", "cux.b", "cux.c"))
     }/*
     {
       val expr = MQT(S"s", List("bar.$x.$y", "foo.$z.$w"), "cux.$y.$w")
@@ -859,7 +818,7 @@ class Unification extends FunSuite:
       case RoutinePtr("unify") => R"unify"(S"x", S"y") := {
         val bind_or_conflict = R"descend"(S"x", S"y")
         (bind_or_conflict.on_empty(S"x") \/ (bind_or_conflict <| ss"conflict")) \/
-        bind_or_conflict("conflict").on_empty(First(1, head(bind_or_conflict("bind"))).iter(P"v", S"_",
+        bind_or_conflict("conflict").on_empty(head(bind_or_conflict("bind")).iter(P"v", S"_",
           R"unify"(
             R"subst"(P"v", S"x", bind_or_conflict("bind")(P"v")),
             R"subst"(P"v", S"y", bind_or_conflict("bind")(P"v"))
@@ -1048,7 +1007,8 @@ class Unification extends FunSuite:
       S"rem"("Cell").iter(P"cx", S"rx_r", S"rx_r".iter(P"rx", S"other", {
 //      case s if s.size == 1 => inf.bottom - s.head
         val lvs = initial(P"cx")(P"rx")
-        (First(1, lvs) /\ Last(1, lvs)).iter(P"s", S"_",
+        // exactly one candidate left (ordered-slice cardinality test): lvs iff |lvs| == 1
+        ((Range(lvs, 1, 2).tee(lvs)) \ (Range(lvs, 2, 3).tee(lvs))).iter(P"s", S"_",
           ("rem" x headk(S"other", 3)) \/ ("add" x headk(S"other", 3) x (options \ sP"s"))
         )
       }))

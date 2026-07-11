@@ -1,0 +1,11 @@
+; AUTO-GENERATED — op-raffination: recursive trie implementation in egg = Scala
+; egglog RUNS the modelled recursive set-operation implementation on the transpiled zipper
+; ($impl) and checks it reduces to exactly the trie the Scala implementation computed ($want).
+
+(include "impl-prelude.egg")
+(let $impl (TrS (Node (F) (CC 166 (Node (F) (CC 167 (Node (T) (CNil)) (CNil))) (CC 169 (Node (T) (CNil)) (CNil)))) (TrR (Node (F) (CC 166 (Node (F) (CC 167 (Node (T) (CNil)) (CNil))) (CC 169 (Node (T) (CNil)) (CNil)))) (Node (F) (CC 166 (Node (T) (CNil)) (CNil))))))
+(let $want (Node (F) (CC 169 (Node (T) (CNil)) (CNil))))
+
+(run 400)
+
+(check (= $impl $want))

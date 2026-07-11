@@ -1,0 +1,79 @@
+; ================================================================================================
+; THE ZIPPER EXTENSION, illustrated — over the SAME PRELUDE as the core set language.
+;
+; This file is the illustrative companion to formal.egg: it includes the core Path/Space
+; datatypes and eager set-of-paths rules (auto-extracted from formal.egg, so the prelude is
+; byte-identical) and adds the zipper on top.  A zipper is a CURSOR into a space:
+;
+;   zipper      = (context, focus)                       (Zipper c s)
+;   Descend p   = push a frame, focus the subspace under prefix p — the core's own Unwrap
+;   Ascend      = pop the frame, restoring the parent focus EXACTLY
+;   FocusOf     = observe the focus, which is always a core Space TERM
+;
+; Because the focus stays a term of the core algebra, a zipper can sit over a VIRTUAL space (an
+; unevaluated operator tree): moving it distributes navigation through the operators by the core
+; rules themselves (Unwrap over Union, unwrap-merge for consecutive descents, …) — the zipper
+; materializes nothing that navigation does not touch.
+;
+; This file shows the IDEA on worked examples.  The certified engineering artifact — the per-key
+; movement calculus with exact key enumeration (Keys), emptiness search (IsEmpty),
+; defunctionalised iteration bodies, and constant-frame moves, every rule carrying a
+; machine-checked obligation — is zipper-spec.egg (mirrored as zipper-egg-tests/prelude.egg for
+; the test corpus), with certificates under proofs/ (see proofs/STATUS.tsv, proofs/laws/).
+;
+; Run from the repo root:  egglog zipper.egg
+; ================================================================================================
+
+(include "zipper-egg-tests/formal-prelude.egg")
+
+; ---- the zipper --------------------------------------------------------------------------------
+(datatype Ctx (Top) (Frame Path Space Ctx))   ; a frame: the prefix we went down + the parent focus
+(datatype Zip (Zipper Ctx Space))
+(constructor Descend (Path Zip) Zip)
+(constructor Ascend (Zip) Zip)
+(constructor FocusOf (Zip) Space)
+
+(rewrite (Descend p (Zipper c s)) (Zipper (Frame p s c) (Unwrap s p)))   ; definitional (move down: focus the subspace under p; the frame remembers the parent)
+(rewrite (Ascend (Zipper (Frame p s c) f)) (Zipper c s))                 ; definitional (move up: restore the parent focus exactly)
+(rewrite (FocusOf (Zipper c s)) s)                                       ; definitional (observation: the focus is a core Space term)
+
+; ================================================================================================
+; THE TOUR.  A miniature family database; item names for readability:
+;   1 = child   3 = female        10 = Bob   11 = Tom   12 = Pam   13 = Liz
+; facts: child.Bob.Tom, child.Bob.Pam, child.Liz.Tom, female.Pam, female.Liz
+; ================================================================================================
+(let $family
+  (Union (Singleton (Concat (Item 1) (Concat (Item 10) (Item 11))))
+  (Union (Singleton (Concat (Item 1) (Concat (Item 10) (Item 12))))
+  (Union (Singleton (Concat (Item 1) (Concat (Item 13) (Item 11))))
+  (Union (Singleton (Concat (Item 3) (Item 12)))
+         (Singleton (Concat (Item 3) (Item 13))))))))
+
+(let $z0 (Zipper (Top) $family))
+
+; descend by a two-item prefix in one move: focus becomes Bob's parents {Tom, Pam}
+(let $zBob (Descend (Concat (Item 1) (Item 10)) $z0))
+(let $bobParents (FocusOf $zBob))
+
+; ascend restores the parent zipper EXACTLY (the frame kept it)
+(let $back (Ascend $zBob))
+
+; consecutive descents fuse: down `child` then down `Bob` = down `child.Bob` (unwrap-merge)
+(let $twoStep (FocusOf (Descend (Item 10) (Descend (Item 1) $z0))))
+
+; a query AT the cursor: Bob's mothers = focus ∩ (the female set, another navigation)
+(let $bobMothers (Intersection $bobParents (Unwrap $family (Item 3))))
+
+; a VIRTUAL cursor: the zipper sits over an unevaluated union of two sub-databases;
+; navigation distributes through the union by the core rules — nothing is materialized first
+(let $dbA (Singleton (Concat (Item 1) (Concat (Item 10) (Item 11)))))   ; child.Bob.Tom
+(let $dbB (Singleton (Concat (Item 1) (Concat (Item 10) (Item 12)))))   ; child.Bob.Pam
+(let $virtualFocus (FocusOf (Descend (Concat (Item 1) (Item 10)) (Zipper (Top) (Union $dbA $dbB)))))
+
+(run-schedule (repeat 8 (run) (run acu) (saturate paths) (run neg)))
+
+(check (= $bobParents (Union (Singleton (Item 11)) (Singleton (Item 12)))))   ; {Tom, Pam}
+(check (= $back $z0))                                                         ; ascend∘descend = id
+(check (= $twoStep $bobParents))                                              ; unwrap-merge, via moves
+(check (= $bobMothers (Singleton (Item 12))))                                 ; {Pam}
+(check (= $virtualFocus (Union (Singleton (Item 11)) (Singleton (Item 12))))) ; virtual = eager

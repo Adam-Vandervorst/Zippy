@@ -1,0 +1,57 @@
+# law	kind	certificates	note
+constant-ops	GROUND	threeway_*.smt2,impl_*.smt2	ground per-op evaluation; eval-gated + differentials
+algebraic-identities	FILE	laws/law_union_unit.smt2,laws/law_inter_empty.smt2,laws/law_sub_empty.smt2,laws/law_union_idem.smt2,laws/law_inter_idem.smt2,laws/law_sub_self.smt2	the set-algebra identity family
+iterate-singleton-deref	SCHEMATIC	keyfold_iter.smt2	head-dependent iteration over a singleton source
+literal-space-ops	GROUND	threeway_*.smt2,impl_*.smt2	ground per-op evaluation; eval-gated + differentials
+singleton-const-literal	DEFINITIONAL	-	representation change (singleton constant as literal)
+concat-singleton-iter	SCHEMATIC	keyfold_iter.smt2	iteration body concat with the head singleton
+iter-union-indep	FILE	laws/law_guard_hoist.smt2	gated hoist; the bare-hoist unsoundness is documented in formal.egg (fail-check)
+unwrap-merge	FILE	laws/law_unwrap_merge.smt2	adjacent unwraps merge
+wrap-iter	FILE	laws/law_guard_hoist.smt2	invariant wrap hoisted out of iteration
+iter-ident	SCHEMATIC	keyfold_iter.smt2	identity iteration
+concat-path	DEFINITIONAL	laws/law_append_assoc.smt2	path constant folding (canonical right rotation)
+iterate-literal-union	SCHEMATIC	keyfold_iter.smt2	iteration over exact ground keys = union of body instances
+unwrap-concat-unwraps	FILE	laws/law_unwrap_merge.smt2	unwrap chains as one concat unwrap
+singleton-composition-wrap	FILE	laws/law_wrap_as_comp.smt2	singleton composition IS wrap
+singleton-space-op-path-op	FILE	laws/law_wrap_set.smt2,laws/law_unwrap_set.smt2	singleton space ops as path ops
+restriction-singleton-unwrap	FILE	laws/law_restrict_set.smt2	restriction by a singleton = wrap of unwrap
+iter-tails	FILE	laws/law_tailsu_set.smt2,keyfolds.smt2	iteration realizing tails-union
+tailsunion-singleton	FILE	laws/law_tailsu_set.smt2	tails of singleton sources
+range-singleton	GROUND	-	trusted positional boundary (fallbacks.md); executor-evaluated
+unwrap-wrap	FILE	laws/law_unwrap_set.smt2	unwrap of a wrap (all comparability cases)
+union-idem	FILE	laws/law_union_idem.smt2	formal.egg
+inter-idem	FILE	laws/law_inter_idem.smt2	formal.egg
+sub-self	FILE	laws/law_sub_self.smt2	formal.egg
+union-comm	FILE	laws/law_union_comm.smt2	formal.egg (acu)
+inter-comm	FILE	laws/law_inter_comm.smt2	formal.egg (acu)
+union-assoc	FILE	laws/law_union_assoc.smt2	formal.egg (directed rotation)
+inter-assoc	FILE	laws/law_inter_assoc.smt2	formal.egg (directed rotation)
+union-unit	FILE	laws/law_union_unit.smt2	formal.egg
+inter-empty	FILE	laws/law_inter_empty.smt2	formal.egg
+sub-empty	FILE	laws/law_sub_empty.smt2	formal.egg
+inter-distrib	FILE	laws/law_inter_distrib.smt2	formal.egg
+sub-distrib	FILE	laws/law_sub_distrib.smt2	formal.egg
+demorgan-sub	FILE	laws/law_demorgan_sub.smt2	formal.egg + the De Morgan family
+singleton-disq	FILE	laws/law_singleton_disq.smt2	formal.egg (neg ruleset)
+append-assoc	FILE	laws/law_append_assoc.smt2	path monoid (schema instance)
+append-inj	FILE	laws/law_append_inj.smt2	lemma: left cancellation (schema instance)
+isprefix-append	FILE	laws/law_isprefix_append.smt2	lemma: prefix characterization (schema instance)
+wrap-set	FILE	laws/law_wrap_set.smt2	formal.egg wrap rules
+unwrap-set	FILE	laws/law_unwrap_set.smt2	formal.egg unwrap + drop-prefix rules
+comp-set	FILE	laws/law_comp_set.smt2	formal.egg composition rules
+tailsu-set	FILE	laws/law_tailsu_set.smt2	formal.egg tails-union rules
+tailsi-set	FILE	laws/law_tailsi_set.smt2	formal.egg tails-intersection fold
+restrict-set	FILE	laws/law_restrict_set.smt2	formal.egg restriction rules
+head-set	FILE	laws/law_head_set.smt2	formal.egg head rules
+restrict-self	FILE	laws/law_restrict_self.smt2	formal.egg
+unwrap-merge-set	FILE	laws/law_unwrap_merge.smt2	formal.egg
+iterc-set	FILE	laws/law_iterc_set.smt2	formal.egg IterC rules (incl. the ε-singleton fix)
+comp-assoc	FILE	laws/law_comp_assoc.smt2	composition associativity
+comp-rdistrib	FILE	laws/law_comp_rdistrib.smt2	composition right (and left) distributivity over ∪
+absorption	FILE	laws/law_absorption.smt2	absorption laws
+wrap-as-comp	FILE	laws/law_wrap_as_comp.smt2	Wrap1 k x = {k}·x
+restrict-idem	FILE	laws/law_restrict_idem.smt2	restriction idempotence and chains
+raffination-partition	FILE	laws/law_raffination_partition.smt2	(x\|y) ∪ (x<|y) = x, disjoint
+head-tails-cover	FILE	laws/law_head_tails_cover.smt2	head(x)·tails∪(x) ⊇ x on ε-free x (subset as ∀-implication)
+guard-hoist	FILE	laws/law_guard_hoist.smt2	invariant guard/wrap/composition hoisting
+iter-fusion	FILE	laws/law_iter_fusion.smt2	nested invariant iterations fuse/commute

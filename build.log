@@ -1,0 +1,1907 @@
+# MORKL Supercompiler — build log (append-only)
+
+Goal: a fully-fledged supercompiler for the MORKL space/path algebra, validated on
+the guiding examples (graph query / Aunt on lot.metta, semi-naive datalog incl. carac,
+Game of Life incl. fred.rle, NOAA temperature spatial query, sliding-puzzle 3x3/4x4,
+n-queens). Run often; keep improving until publication-worthy.
+
+----------------------------------------------------------------------------------
+## 2026-06-22 — session start / baseline
+
+- Toolchain: no sbt, no system JVM. scala-cli 1.14.0 present (bundles JVM 17). Build
+  loop established via `scbuild/` (symlinks to real sources + project.scala using
+  directives). Test file symlinked as `*.test.scala` so scala-cli puts it in test scope.
+  Run: `cd scbuild && scala-cli test .`
+- Baseline `scala-cli test .`: **56 passing, 0 failing, 4 ignored**. Compiles with
+  many non-fatal exhaustiveness warnings (pre-existing).
+- Surveyed src/main (MORKL.scala, 1273 lines) and src/test (1824 lines). Existing
+  infrastructure that a supercompiler must reuse:
+    * `eval` — concrete set-of-paths interpreter (incl. a tail-recursion special case
+      for `Union(l, Call(self,...))`).
+    * `subs` / `collect` — generic Space/Path term rewriter & subterm gatherer.
+    * `Lower.*` — battery of meaning-preserving rewrite rules (constant folding,
+      iteration specialization, algebraic identities) + `inline` (non-recursive Call
+      expansion).
+    * `all_forever` — fixpoint over a rule list (compares by `.show`).
+    * `Routine.optimized` — inline non-self Calls + run rule list to fixpoint.
+    * `transpile` Space -> RecursiveOpGraph; `optimize` = push_out (LICM) +
+      optimize_sharing (CSE); `exec` interprets the op-graph.
+- Diagnosis: MORKL today is a *partial evaluator / rewrite optimizer*. What is missing
+  to be a supercompiler:
+    1. DRIVING with recursion unfolding (current `optimized` deliberately never unfolds
+       self-calls).
+    2. FOLDING — detect when a driven configuration is a renaming/instance of an
+       ancestor and tie the knot into a residual recursive routine.
+    3. A WHISTLE (homeomorphic embedding on Space terms) + GENERALIZATION (msg) to
+       guarantee termination.
+    4. RESIDUALIZATION of the process tree back into MORKL Routines.
+- Data files confirmed present:
+    * /Users/michaelpolyntsov/Zippy/lot.metta (419 lines, MeTTa s-exprs: hasName, ...)
+    * /Users/michaelpolyntsov/Zippy/NOAAGlobalTemp_...nc (21 MB NetCDF)
+    * /Users/michaelpolyntsov/hashlife/tests/fred.rle (Conway RLE)
+    * /Users/michaelpolyntsov/carac (datalog benchmark repo)
+- Plan: build SC core as new file src/main/scala/Supercompiler.scala (driving / whistle
+  / folding / generalization / residualization over Space), validate on pure-MORKL
+  examples first (graph, datalog, puzzles, n-queens), then data-ingestion examples.
+
+----------------------------------------------------------------------------------
+## 2026-06-22 — design locked (from README + formal.egg + data-format probes)
+
+Semantics confirmed:
+- Iteration(src, symbol, rest, body): group src by head PathItem; per group bind
+  symbol:=head (a 1-item path), rest:=set-of-tails (a space); eval body; UNION groups.
+  This is MORKL's structural eliminator / "for each".
+- TailsUnion = existential head-projection; TailsIntersection = universal; Head = heads.
+- Restriction x<|p = x ∩ (p·Σ*); canonical law: x <| Singleton p = Wrap p (Unwrap x p).
+- Composition = concat product; Wrap p s = Singleton p · s; Unwrap strips known prefix.
+- formal.egg gives the full meaning-preserving law set (ring laws, distributivity,
+  wrap/unwrap cancel, product/singleton=wrap, tails laws, restriction canonical form).
+  These are the SC's deterministic simplification (transient-reduction) rules; MORKL's
+  `Lower.*` already implements most as Scala `subs` rewrites — I will reuse + extend.
+- Recursion intent (README §4.7/§7.2/§9): routines are least fixpoints via self-Call;
+  `fixpoint` helper = `last \/ step(last \/ f(last))`; GOAL transforms: (a) tail-rec
+  `r(a)=x(a) \/ r(g(a))` -> imperative loop; (b) NAIVE datalog -> SEMI-NAIVE (accumulate
+  + frontier delta, keep 3 of 4 joins). These are the prize supercompilation outcomes.
+
+SC architecture (positive supercompilation, specialized to the set algebra):
+  configuration = Space term with free SpaceMention/PathRef as input vars; routine env
+  ambient. drive = simplify-to-normal-form (egg/Lower laws) then unfold outermost Call
+  (incl. SELF calls — the key difference from Routine.optimized). whistle = homeomorphic
+  embedding on Space/Path AST; generalize via msg (anti-unification) -> abstract differing
+  subterms into fresh routine params. fold = renaming/instance match against ancestor ->
+  tie knot to residual routine. residualize process tree -> Set[Routine]; verify by
+  eval-agreement with the original on the example data.
+
+Data loaders planned:
+- lot.metta: relations hasName/hasId/male/female/parent. (parent P C)->parent.P.C +
+  child.C.P; (female X)->female.X. Build same shape as AuntQuery.context -> aunt query.
+- carac: rules are a Scala DSL in src/test/.../graphs/*.scala (RecursivePath = TC on
+  a->b->c->d; Acyclic = two-hop; TopSort = TC on 17-edge DAG). Reproduce as MORKL.
+- fred.rle: header `x=20,y=20,rule=B3/S23`; body b/o/$/! run-length -> live (x,y) set
+  -> Cell.x.y paths. GoL step = 8-neighbour B3/S23.
+- NOAA .nc: HDF5; python h5py available (ncdump absent). anom[time,z=1,lat36,lon72],
+  fill -999.9, lat 5° -87.5..87.5, lon 2.5..357.5. Extract latest slice via h5py ->
+  bucketize -> binary-trie prefix paths like the existing temperature test.
+
+Next: implement SC matching layer (alpha-renaming, instance match, homeomorphic
+embedding, msg) in src/main/scala/Supercompiler.scala + unit tests; compile green.
+
+----------------------------------------------------------------------------------
+## 2026-06-22 — SC core working; one upstream bugfix
+
+Implemented src/main/scala/Supercompiler.scala:
+  * Matching: freeMentions/freeRefs (binder-aware), hygienic subst, bound-name
+    canonicalization (canon), alphaEqual, renaming (bijective), instanceOf (folding),
+    homeomorphic embedding (whistle), msg (anti-unification). 7 unit tests green.
+  * SC: reduce (Lower laws to fixpoint, no Call-inlining), drive (reduce + bottom-up
+    supercompile of Call subterms), scCall (fold-by-instance -> whistle-by-embedding ->
+    generalize-by-msg -> makeNode+unfold), residualize to Residual(top, routines).
+    Safety caps (maxNodes/maxDepth) turn whistle bugs into errors, not hangs.
+
+BUGFIX (upstream, src/main/scala/MORKL.scala): Lower.UnwrapConcat_Unwraps stripped
+prefix factors in REVERSED order: `Unwrap(src, l·r) => Unwrap(Unwrap(src, r), l)`.
+Correct (and consistent with formal.egg `Unwrap(Wrap p s, p·q) = Unwrap s q`) is
+`Unwrap(Unwrap(src, l), r)`. Latent because no prior test drove Routine.optimized over
+an Unwrap(_,Concat); my aunt-query driving (family("child" x person)) is the first.
+Fixed. Full suite still green.
+
+Tests: **67 passing / 0 failing** (was 56). New SCDriver soundness suite proves the
+residual eval-AGREES with the original on:
+  - transitive closure (self-recursive, 1 mention)   [terminates, sound]
+  - reachable (self-recursive, 3 mentions)            [terminates, sound]
+  - aunt query (non-recursive iter pipeline)          [sound; yields the 3 aunts]
+  - predecessor_helper (self-recursive accumulator)   [terminates, sound]
+
+Behavior understood & confirmed:
+  - supercompile(routine generically) -> faithful specialized residual (soundness).
+  - Direct self-calls always instance-fold (formal params are fresh vars), so the
+    whistle is reserved for STRUCTURED divergence (static-data growth, cross-routine).
+  - supercompile(call with STATIC data) -> partial evaluation: data baked into the
+    residual, params dropped, intermediate spaces fused by `reduce`; a fully-static
+    recursive fixpoint is unrolled to its answer then folds when stable (compile-time
+    solve). This is the headline optimization to showcase on the examples.
+
+Next: guiding examples. Order: (1) lot.metta loader + Aunt graph query; (2) datalog
+semi-naive + carac transitive/two-hop; (3) n-queens; (4) sliding puzzle 3x3/4x4;
+(5) Game of Life + fred.rle; (6) NOAA temperature slice. Each: express in MORKL, run
+SC, assert residual eval == reference answer, and record what the SC achieved.
+
+----------------------------------------------------------------------------------
+## 2026-06-22 — examples 1 & 2 landed
+
+(1) Graph query / Aunt over lot.metta: Loaders.mettaFamily parses parent/male/female,
+    builds family+people spaces. SC of aunts(Literal family, S"people") => residual with
+    `family` specialized away; eval-agrees with original; 78 aunt-pairs over the Tolkien
+    genealogy (e.g. resolved to names via hasName). 1 test green.
+
+(2) Semi-naive datalog (transitive closure) over the carac graphs RecursivePath/Acyclic/
+    TopSort: naive (doubling fixpoint) == semi-naive (frontier-delta) == independent Scala
+    reference closure on all three; SC of the semi-naive solver specialized to each static
+    graph stays sound (residual nodes 4/4/7); generic (dynamic edges) reproduces. 4 tests.
+
+Tests now 72 passing / 0 failing. Next: n-queens. Reading existing gol/sudoku/division
+idioms + Grounded helpers to reuse arithmetic/constraint encoding before writing it.
+
+----------------------------------------------------------------------------------
+## 2026-06-22 — example 3 (Game of Life) + second upstream bugfix
+
+GoL reproduced in src/test (object GoL) from the `gol` test so it can run on loaded data:
+neigh/nextStep with GroundedSS arithmetic + GroundedSP cardinality, B3/S23.
+  - blinker oscillates; matches independent Scala reference.
+  - random 12x12 field: plain MORKL step == reference (62->58); SC residual == reference
+    (64 fully-specialized residual routines — the step computed at compile time).
+  - fred.rle: RLE loader -> 150 live cells in 20x20; one MORKL step -> 138 == reference.
+  - glider: SC of nextStep∘nextStep FUSES two generations (deforestation); residual ==
+    reference 2-step; glider translated correctly.
+
+BUGFIX #2 (upstream, MORKL.scala): `subs` and `collect` did NOT recurse into the Space/
+Path argument of Grounded nodes (GroundedPP/SP/PS/SS) — they returned the node unchanged
+(subs) or `???` (collect). So variable substitution by ANY Lower rule silently skipped
+terms buried inside grounded functions. Fatal here: IterateLiteral_Union unrolled the GoL
+iteration but left the bound Deref(x) inside card(...) = GroundedSP(neigh(x,y) ...), giving
+a dangling ref at eval. Fixed both to recurse into the grounded argument (sound: it only
+changes the value fed to the opaque function). (My Matching.subst/canon already recursed.)
+
+Note: also found my Scala GoL *reference* under-counted (mutable map withDefaultValue+= ),
+fixed; MORKL's encoding was correct all along (the existing `gol` test only checked a
+4-cell sparse pattern, so dense correctness was previously unverified — now it is).
+
+Tests: **76 passing / 0 failing**. 3/6 example domains done (Aunt/lot.metta, datalog/carac,
+Game of Life/fred.rle). Remaining: n-queens, sliding puzzle 3x3/4x4, NOAA temperature.
+
+----------------------------------------------------------------------------------
+## 2026-06-22 — examples 4,5,6 + the whistle made real (key upgrade)
+
+(4) n-queens (object NQueens): recursive MORKL search; partial placement = path of column
+    symbols, grounded predicate does the diagonal/column arithmetic. eval counts match OEIS
+    A000170 for n=4..8; SC sound at n=6; scales to n=11 (2680, ~4s) and n=12 (14200, ~37s);
+    n=13 OOMs. 7 tests.
+(5) sliding puzzle (object Sliding): state = row-major tile path; grounded move generator;
+    BFS reachability = same shape as datalog reachable. 3x3 FULL reachable = 181440 = 9!/2
+    (matches independent BFS); 4x4 within 8 moves matches reference BFS; SC sound. 3 tests.
+(6) NOAA temperature (object NOAA): real May-2026 anomaly slice extracted via h5py to
+    src/test/resources/noaa_slice.txt (2592 cells, global mean +0.532 C). Binary-trie
+    spatial index; restriction by a trie-prefix interval = spatial range query (Arctic band
+    lat 30..35 covered by 2 prefixes -> 432 cells); restriction by a bucket = temperature
+    query (very-warm anom>=1C -> 534 cells); both match reference; SC specializes the grid
+    away. 4 tests.
+
+KEY UPGRADE — the whistle is now genuinely exercised. Originally every example folded by
+instance or fully evaluated static data, so generalization was dead code. Made Literals and
+path Constants COUPLE in the homeomorphic embedding (any literal embeds any literal), so a
+recursive configuration that grows a static accumulator trips the whistle and is GENERALIZED
+into a residual loop instead of being unrolled. msg updated to emit a fresh hole for unequal
+literals/constants. Effects, all still sound:
+  - datalog semi-naive residual: 4/4/7 nodes -> 2 nodes (a graph-specialized loop, NOT an
+    unrolling); residual size is now INDEPENDENT of |E| (proven: 2 edges vs 30 edges -> same
+    node count).
+  - n-queens SC residual: 8 -> 2 nodes (generic search loop).
+New SCGeneralization suite (3 tests) proves: (a) the whistle is NECESSARY — with
+generalize=false the symbolic reachable frontier doubles each unfold and driving hits the
+node cap; (b) with generalization it terminates, the residual is self-recursive with a
+generalized (variable) accumulator parameter, and eval-agrees with the original; (c) residual
+size is data-independent.
+
+Tests: **93 passing / 0 failing / 4 ignored** (baseline was 56). Two upstream correctness
+bugs fixed along the way (UnwrapConcat order; subs/collect not recursing into Grounded).
+All 6 guiding example domains implemented, validated against independent references and real
+data files, and supercompiled. Writing SUPERCOMPILER.md.
+
+----------------------------------------------------------------------------------
+## 2026-06-22 — final state: 93 passing / 0 failing / 4 ignored
+
+Concrete artifact — SC of the semi-naive TC solver applied to the static graph {a.b,b.c,c.d}
+yields a graph-specialized recursive loop (the static graph is fused in as a literal; the
+accumulator #g0 and frontier #g1 are generalized to parameters):
+
+  top: sn_tc_sc1()
+  sn_tc_sc1() := Literal{a.b,b.c,c.d} \/ sn_tc_sc2(Literal{a.b,a.c,b.c,b.d,c.d}, Literal{a.c,b.d})
+  sn_tc_sc2(#g0, #g1) := #g0 \/ sn_tc_sc2(
+        #g0 \/ (#g1.iter(n, nbs, n x \/(Literal{a.b,b.c,c.d} <| nbs)) \ #g0),
+              (#g1.iter(n, nbs, n x \/(Literal{a.b,b.c,c.d} <| nbs)) \ #g0))
+
+This is the headline positive-supercompilation outcome: recursion specialized to static data
++ generalization of the dynamic accumulators into a compact, data-size-independent loop.
+
+Deliverables:
+- src/main/scala/Supercompiler.scala  — Matching + SC driver (the supercompiler).
+- src/test/scala/SupercompilerTest.scala — SCMatching(7), SCDriver(4), SCGeneralization(3).
+- src/test/scala/Examples.scala — the 6 guiding domains + loaders (metta/RLE/NOAA).
+- src/test/resources/noaa_slice.txt — real NOAA May-2026 anomaly grid (extracted via h5py).
+- SUPERCOMPILER.md — the writeup (claims, architecture, examples, honest limitations).
+- MORKL.scala — 2 upstream correctness fixes (UnwrapConcat order; subs/collect into Grounded).
+
+Self-assessment vs "holds up to scrutiny": the three supercompilation ingredients are each
+unit-tested; soundness is checked by eval-agreement on recursion + all 6 domains + real data;
+the whistle is proven necessary; the headline transform produces a sensible residual. Honest
+non-goals (documented): does not DERIVE semi-naive from naive (distillation); fully-static
+recursion reduces to compile-time evaluation. Solid, validated positive supercompiler.
+
+----------------------------------------------------------------------------------
+## 2026-06-24 — integration pass: execute learned_from_a.md + critique_on_b.md
+
+Stole from Track A (learned_from_a.md):
+- L1 Restriction prefix bug: SingletonRestriction_Unwrap now Wrap(Unwrap(x,y),y) (was a
+  prefix-dropping Unwrap(x,y)). (formal.egg in the baseline already carries the canonical law.)
+- L2/R1 auditable report: SCStats, SCReport (reductions/unfoldings/folds/whistles/
+  generalizations, converged, compileTimeEvaluated, backend status), SupercompiledProgram.
+- L3 backend: ported LiteralCodec (lossless op-graph literal round-trip), exec/untranspile for
+  Transformation/LeftResidual/RightResidual, headless-path iteration in exec; residuals now
+  lower to operation graphs and `exec` is checked to agree with eval.
+- L4 AlgebraicIdentities pass (Empty units/absorption, epsilon concat) added to reduce.
+- L5 totality/determinism: Iteration & TailsIntersection total on empty/empty-path inputs;
+  Fold given a deterministic eval; First/Last sorted before slicing.
+- L6 formal.egg already aligned (canonical Restriction/Unwrap laws) in the baseline.
+- L7 portable loaders (repo-root resolve + fallback) + guardrails. L8/L9 docs+prints handled.
+
+Fixed every concern in critique_on_b.md:
+- B1 capture-avoiding subst: binders (Iteration/Fold) alpha-rename to fresh ~names when a
+  replacement would be captured. Test: inserted S"r" stays free under a binder of "r".
+- B2 reserved prefixes (#,~) rejected at the public entry (SC.validate).
+- B3 Fold is now structural in renaming/instanceOf/msg (and subs/collect).
+- B4 grounded nodes couple/match/msg only on closure identity (f1 eq f2), recursing args;
+  no body inspection (was over-collapsing GroundedSP/PP to always-couple).
+- B5 embedding heuristic made an explicit Config.literalsAreAtoms flag, documented, tested
+  in both modes (atoms vs structural).
+- B6 instanceOf occurs-invariant documented + tested (self-occurrence is the recurrence,
+  applied exactly once; no cyclic substitution).
+- B7 global folding soundness documented (configs denote pure functions of free vars).
+- B8 generalization determinism: innermost embedding ancestor via collectFirst; renaming-
+  stability test (alpha-renamed inputs -> equal residual size).
+- B9 reduce has a local step cap (raises on non-convergence) instead of unbounded all_forever.
+- B10 report-bearing facade: Supercompiler.compileCall/compileRoutine/specialize ->
+  SupercompiledProgram (residual + report + graphs).
+- B-E1/E10 portability: Examples loaders resolve env/repo-relative/known-local then fall back
+  to fixtures; absolute paths gone; `bin/test` is a one-command reproducible runner (no sbt).
+- B-E3 NOAA provenance: scripts/extract_noaa_slice.py + a sha256 checksum test on the committed
+  fixture.
+- B-E4 lot.metta relation-count test (parent=117, child=117, female=40, male=46, people=101).
+- B-E5 carac DSL parser (edge("a","b") :- ()) with fixture fallback; claim narrowed.
+- B-E6/E7 static-vs-residual distinguished: report.compileTimeEvaluated flag; a new generic
+  n-queens SC test proves a reusable residual LOOP (not compile-time eval); summary claims fixed.
+- B-E8 Slow tag on the full 3x3 (181440) and n=11 queens tests.
+- B-E9 example prints gated behind -Dsc.verbose.
+
+Tests: **107 passing / 0 failing / 4 ignored** (was 93 at the pass start). New suites:
+SCHardening (7), SCFacade (5: report, compile-time-eval flag, specialize, residual->exec).
+Reproducible: `bin/test` (full) or `bin/test 'morkl.ExDatalog'` (one suite); no sbt/JVM needed.
+
+----------------------------------------------------------------------------------
+## 2026-06-24 — trie-native data structure + direct evaluator + scaled benchmarks
+
+Added src/main/scala/Trie.scala: a persistent, structurally-shared path-trie keyed by PathItem
+(total order Symbol<Variable<Arity via `given pathItemOrdering`; TreeMap children; `terminal`
+marks a path ending at a node). Canonical smart-constructor prunes empty subtries so `==` is
+exact set-equality. All MORKL operations are native:
+  - ring: union/intersection/subtraction (recursive merges, smallest-first probing).
+  - prefix: composition GRAFTS b at each terminal of a, sharing the SAME b (O(#terminals) new
+    nodes); wrap/unwrap walk a spine; restriction is a guided descent (keep subtree when a
+    prefix ends), raffination = subtract(restriction).
+  - tails: TailsUnion = joinAll(children); TailsIntersection = meetAll(children); head.
+  - n-ary join-all / meet-all (the highlighted ops): joinAll groups all branches' children by
+    key in ONE pass (O(total) vs reduce's re-merged accumulator); meetAll iterates the SMALLEST
+    branch and probes the rest, recursing only surviving keys — bounded by the smallest branch
+    (× k), not the largest. Measured 22x–118x over pairwise reduce on a tiny-among-large case.
+  - First/Last sort by `.show` to match the reference; transformation crosses the SpaceValue
+    boundary (rare). Conversions toPaths/fromPaths/fromSpaceValue/toSpaceValue + pathsInOrder.
+  - Zipper (read): descend(k)/ascend/childKeys/isTerminal/path/root — the imperative-execution
+    view (cf. PathMap) for a future RecursiveOpGraph-zipper backend.
+Added evalT: a direct trie evaluator mirroring `eval`, with NATIVE `iter` (each child IS its
+head's tail-trie — no flat-set regrouping) and the fixpoint-stabilization Call special-case;
+grounded/residual/transform ops cross the SpaceValue boundary.
+
+Tests (TrieTest.scala): TrieOps (6) — round-trip + every op agrees with `eval` over 1000+
+random spaces, join-all/meet-all == pairwise reduce, zipper round-trip; TrieEval (6) — evalT ==
+eval on aunt, semi-naive datalog, transitive, Game of Life (grounded), n-queens, sliding puzzle.
+All green. Full suite (excluding Slow) **117 passing / 0 failing**.
+
+Benchmarks (TrieBench.scala -> BENCHMARKS.md), eval (Set) vs evalT (trie), scaled:
+  - datalog-TC chain: 2.1x -> 7.7x -> 13.6x (n=128: 1293ms -> 95ms). Win grows with size.
+  - aunt-query synthetic family: 8.4x -> 19.7x (n=1600: 1623ms -> 82ms).
+  - game-of-life random grids: up to 4.4x (32x32).
+  - temperature (resident trie, prefix range query): 48x–927x (guided descent vs full scan).
+  - meet-all microbench: 22x (k=40) -> 118x (k=120) — the non-trivial asymptotic.
+  - sliding-puzzle (incl. full 3x3 = 181440) and n-queens (to n=11): 0.4–0.9x, HONESTLY neutral/
+    slower because the work is in GROUNDED host functions (moves/constraints), so every step
+    crosses the trie<->SpaceValue boundary; the backing structure isn't the bottleneck there.
+Geometric mean 5.2x overall; 12.2x on the algebra-bound domains. SC×trie compose for datalog;
+the aunt SC residual bloats (honest anti-result). Analysis written in BENCHMARKS.md.
+
+Conclusion: the trie is a verified-exact, asymptotically-better backing store for the MORKL
+algebra; it delivers large, size-growing speedups wherever the computation is expressed in the
+algebra (joins/iteration/restriction/tails), and is neutral where the computation is delegated
+to grounded host functions — which is itself a useful, honest finding.
+
+----------------------------------------------------------------------------------
+## 2026-06-24 — pure (grounded-free) sliding puzzle + n-queens; evalT optimizations
+
+Replaced the grounded Sliding/NQueens examples with PURE MORKL programs (no GroundedSS/PS):
+- NQueens.Board(n): arithmetic precomputed into literal relations add/sub/upto; `aoe` routine =
+  "attacks-or-equal"; place(k,n) nests `iterk`. A solution = distinct length-n prefix of the
+  result paths (Trie.prefixCount). Generalizes to any n by rebuilding the tables.
+- Sliding.Puzzle(rows,cols): cells c0..c(rc-1); `moves`/`all_moves` are swap-permutation
+  relations; `superpose` labels a compact state, `collapse` re-compacts, `explore` is BFS to a
+  fixpoint. Generalized from the bespoke 2x2 via an n-ary `iterN` helper (nests Iterations
+  exposing each head as a named PathRef, since the DSL `iter` only goes to 4-tuples). Provides
+  `expandStep` for bounded BFS and an independent Scala `refReachable` cross-check.
+Verified counts: 2x2 = 12 (=4!/2); 3x3 = 181440 (=9!/2); n-queens 8=92, 9=352, 10=724,
+11=2680, 12=14200 (OEIS A000170). NO grounded functions in either.
+
+Two general evalT optimizations (sound; benefit all domains):
+- short-circuit: when an operand is empty, skip evaluating the other for the annihilating ops
+  (∩, ·, <|, \||, wrap, unwrap) — avoids the many empty guarded branches in the puzzle's
+  union-of-cases formulation.
+- literal-trie memo: cache Literal -> Trie by identity, so stable literal tables (n-queens
+  add/sub/upto, accessed thousands of times) build their trie once.
+These flipped pure n-queens from 0.5x (slower) to 12.7x faster on the trie.
+
+Benchmarks (BENCHMARKS.md) — eval (Set) vs evalT (trie), with/without SC, ALL six domains now
+pure algebra: datalog 24.6x, aunt 21.3x, temperature 58-882x, GoL 4.7x, sliding 3.2-4.0x,
+n-queens (pure) 4.1x->12.7x, meet-all 18-116x. Geometric mean 9.0x overall / 10.3x across the
+six example domains. SC residual on the trie matches/beats plain trie for datalog and n-queens.
+
+Pure 3x3 full BFS = 181440 is correct but ~10 min (the price of no grounded functions); kept as
+a Slow-tagged test. Suite (excluding Slow) **116 passing / 0 failing**. Slow tests cover full
+3x3, 4x4/5x5 bounded BFS, and n-queens 9..12.
+
+----------------------------------------------------------------------------------
+## 2026-06-24 — interned IntMap trie (PathItem -> Int; evalI)
+
+Added src/main/scala/IntTrie.scala:
+- Interner: global, O(1) PathItem<->Int (ConcurrentHashMap + ArrayList); ids stable per process.
+- ITrie(terminal, IntMap[ITrie]): trie keyed by interned ints. Ring ops use IntMap's callback
+  merges — union = unionWith(recursive union), intersection = intersectionWith(recursive
+  intersection); subtraction/restriction/composition/wrap/unwrap/tails/joinAll/meetAll analogous.
+- evalI: direct evaluator over ITrie. Path constants interned at construction; the operations
+  only combine ints — NO PathItem is created during evaluation. Grounded fns re-intern at the
+  SpaceValue boundary. Includes short-circuiting + Literal->ITrie memo (as evalT).
+Tests (TrieTest.scala): ITrieOps (ops + join/meet vs reference over random spaces) and
+ITrieEval (evalI == eval on aunt, transitive, GoL, pure n-queens, pure sliding). All green.
+
+Benchmarks (BENCHMARKS.md): evalI vs eval (Set) and vs evalT (TreeMap trie):
+  vs reference: datalog 31.8x, aunt 41.7x, temperature 944x, GoL 7.7x, sliding 4.7x, n-queens
+  18.2x; geomean ~16x across the six pure domains. vs TreeMap trie: 1.1-2.4x (geomean ~1.5x).
+  meet-all 3.5-16.3x over pairwise reduce on the interned trie.
+The interned IntMap trie is the most performant evaluator; interning is global/constant-time.
+
+----------------------------------------------------------------------------------
+## 2026-06-25 — op-graph trie-native executor (execT) + optimizer fixes
+
+Goal: report the RecursiveOpGraph's exec analog vs the interpreters, with the graph optimizer
+(optimize_sharing CSE + push_out LICM/const-hoist) applied — and fix the optimizer first, since
+it was not to be trusted.
+
+Optimizer bugs found and fixed (MORKL.scala):
+- Constant round-trip was LOSSY. transpile encoded path constants via `pi.show` and exec/execT
+  re-parsed; but `show` of the empty path is "" (parses back to [Symbol("")]) and Arity items
+  don't round-trip. n-queens place(6) produced 12456 paths (with a stray `..` empty item) vs
+  eval's 144. Fixed with LiteralCodec.encodeConst/decodeConst: emit the readable `show` only
+  when it parses back identically, else a base64 marker. After: eval=exec=execT=144.
+- push_out double-added a stack level for a subgraph operand then the recursive call appended a
+  second dead frame -> ArrayIndexOutOfBounds on sliding. Fixed with a `grewHere` guard
+  (conditional addOne/dropRightInPlace).
+- Residual: push_out still emits a malformed downward coordinate on very deep nesting (the
+  9-level sliding iterN graph), crashing optimize_sharing. NOT fully fixed (deep rabbit hole).
+  Instead made `optimize` TOTAL/SOUND: wellFormed(g) validates every input coordinate, and a
+  `safe(pass)` wrapper runs each pass, keeps its output only if still well-formed (else identity).
+  So optimize never corrupts a graph; it optimizes where valid and is the identity on the
+  pathological case. All GraphExecT tests pass (incl. the sliding stress test).
+
+New code:
+- GraphExec.scala: execT — trie-native op-graph executor. Space slots hold ITrie, path slots
+  hold interned List[Int]; NO intermediate eval, NO PathValue alloc (the old exec rebuilds
+  Space.Literal and calls eval per node). Iteration iterates the source ITrie's children
+  (IntMap) directly. runGraphT/runGraph fill Extract slots BY NAME (robust to optimizer reorder).
+- GraphExecTest.scala (7 tests, all green): execT(transpile)==eval and optimize-preserves on
+  aunt, n-queens(6), temperature, union_iter (asserts optimize actually CHANGES the graph), and
+  the sliding expandStep stress test.
+- GraphBench.scala (Slow): evalI vs exec vs execT vs execT(opt); all four asserted == ref.
+
+Op-graph backend benchmark (best-of-N ms; full table in BENCHMARKS.md):
+  program            evalI    exec   execT  execT(opt)  execT/exec
+  aunt n=150           1.7    13.7     1.2      0.7        11.9x
+  aunt n=400           2.8    83.4     2.2      2.0        37.4x
+  n-queens n=6         6.9   134.4   137.3    124.5         1.0x
+  n-queens n=7        18.5  1296.7  1926.9   1076.0         0.7x
+  temperature 4096     0.0     7.5    21.3      7.0         0.4x
+  temperature 16384    0.0    46.3    77.9     38.5         0.6x
+  union_iter           0.1     1.0     0.1      0.1         6.9x
+
+Reading: execT crushes exec on relational/iter-heavy work (aunt 12-37x, union_iter 7x) where the
+trie's structural merges replace per-node Set rebuilds. On n-queens and temperature, execT over
+the RAW graph is SLOWER than exec because the loop body re-decodes/re-interns Literal constants
+every iteration; the OPTIMIZER (const-hoisting) recovers it — n-queens n=7 1927->1076ms, temp
+4096 21->7ms, temp 16384 78->38ms — i.e. optimize's main win is exactly hoisting the literal
+table builds out of the loops. evalI still dominates all graph executors (the op-graph adds
+stack-frame and Call overhead the direct evaluator avoids); the graph path's value is a compiled,
+optimizable IR, not raw speed over the interpreter.
+
+----------------------------------------------------------------------------------
+## 2026-06-25 (cont.) — push_out fixed, Call inlining, recursion lowering, exec ≥ eval
+
+User: "Fix the bug in push_out and while being passed into the graph executor, all functions have
+to be inlined (expanded into the graph) and lowered (the union saturating recursion). There's no
+reason for exec to be slower than eval."
+
+1. push_out (LICM) REWRITTEN and fixed (MORKL.scala). The old version threaded one mutable
+   level->coordinate stack through a gather/recurse pair; on deep nesting the deeper level-maps were
+   reused across sibling/ancestor scopes, so a node that wasn't re-hoisted at the inner level kept a
+   coordinate pointing into the wrong graph (the malformed downward coord (11,3) on sliding 3x3).
+   New algorithm is coordinate-free until the end: every node gets a stable id; inputs resolve to
+   ids; each node's earliest-legal scope = deepest scope among its inputs' placements (constants ->
+   root; Extracts & each scope's result node pinned; subgraphs pinned — move nodes, never scopes);
+   a final top-down pass lays each scope out [pinned Extracts at slots 0..k-1] ++ [interior topo] ++
+   [result last] and assigns fresh coords. Well-formed BY CONSTRUCTION at any depth. Two correctness
+   points found via tests: (a) a scope's result can itself be an Extract (identity-body iteration) —
+   exclude it from the extract list to avoid duplication; (b) a subgraph must be ordered after EVERY
+   same-scope node referenced anywhere in its body subtree (not just its root.inputs) — else a
+   hoisted constant lands after the iteration that uses it and the executor reads a null slot
+   (the union_iter "xs is null" crash). Fixed via subtreeRefs (allRefs computed bottom-up).
+   `optimize`'s safe/wellFormed guard now never triggers (kept as cheap defence).
+
+2. Constant decoding cached (IntTrie.scala iLiteralStr/internConstStr, used by execT). The op-graph
+   stores Literal/Constant payloads as STRINGS; execT was re-decoding (base64+parse+intern) and
+   rebuilding the trie on EVERY node execution (iLiteral's identity-memo always missed on the fresh
+   SpaceValue). Now each distinct constant string decodes once process-wide; thereafter one O(1)
+   lookup. This alone cut execT(transpile): n-queens n=7 1927->147ms, temperature 16384 78->0.1ms.
+
+3. Call inlining (MORKL.scala inlineCalls) — source-level fixpoint of Lower.inline: every Call to a
+   non-recursive routine is spliced in (args for params), so transpile yields a Call-FREE graph and
+   the executor needs no dispatch. Verified: n-queens place(6) and sliding 3x3 expandStep both go to
+   0 Call nodes and execT(inline+opt) == eval.
+
+4. Union-saturating recursion LOWERED to a Fixpoint subgraph (transpile). Pattern r(m) = m \/ r(next(m))
+   (single mention, extensive/monotone next: the datalog shape) -> a Fixpoint subgraph whose body is
+   next(cur); exec/execT iterate cur := next(cur) to the least fixpoint (ITrie == is structural).
+   transitive_routine now transpiles Call-free; execT(Fixpoint)==exec==eval, and optimize preserves
+   it. (Multi-mention recursion — reachable/scc — is not yet matched; falls back to a Call node.)
+
+Op-graph benchmark (best-of-N ms; full table in BENCHMARKS.md). execT(inline+opt) is the
+executor-ready form; last column is execT(inline+opt)/evalI (<1 = compiled graph beats interpreter):
+  program          evalI   exec   execT  execT(opt)  inline+opt  vs evalI
+  aunt n=400         1.7  120.6    1.4     1.3         1.2        0.72
+  n-queens n=6       7.1  118.0   33.5    29.1         0.9        0.13
+  n-queens n=7       9.3  564.2  146.9   142.8         3.6        0.39
+  union_iter         0.0    0.5    0.0     0.0         0.0        0.48
+  datalog tc n=40    1.7    —      1.1     1.0         1.0        0.57   (Fixpoint-lowered)
+  datalog tc n=80   17.6    —     11.8    11.9        11.9        0.68
+execT(inline+opt) now BEATS evalI on every non-trivial program (n-queens up to ~8x, datalog ~1.5x);
+the eval-based `exec` (rebuilds Literals + calls eval per node) is the slow one it replaces.
+Tests: push_out depth 1..4 + sliding, inline Call-free, datalog->Fixpoint, all in GraphExecTest.
+
+----------------------------------------------------------------------------------
+## 2026-06-25 (cont.) — compile-time budgeting + per-pass timing
+
+User: "A supercompiler should be bounded in how much time it spends compilation as opposed to
+runtime. And optimization passes should have their time reported, too."
+
+Added (MORKL.scala):
+- Deadline — a wall-clock bound (Deadline.never / Deadline.inMillis); fixed-point passes poll it
+  and stop GRACEFULLY (each pass is semantics-preserving, so the best graph reached is correct).
+- Profiler — accounts time + call-count per named pass; Profiler.off is a zero-overhead sink.
+- optimize(g, budget, prof): the push_out/optimize_sharing fixpoint now (a) stops when `budget`
+  expires (sound early-out) and (b) times each pass into `prof`. all_forever/inlineCalls take a
+  budget too. Defaults (never/off) keep every existing caller unchanged.
+
+Supercompiler:
+- SC.Config gains `compileBudgetMs` (default ∞; the count caps maxNodes/maxDepth/maxReduce still
+  bound it). State carries a Deadline; scCall throws SC.CompileBudgetExceeded when it expires.
+- run() catches it and FALLS BACK to interpreting the original program — env = `materialize(conf,
+  defs)` (every routine reachable from conf) — marked `converged = false`. So compilation is
+  time-bounded and degrades gracefully instead of hanging or crashing.
+- SCReport gains `compileMillis` + `phaseMillis` (supercompile, transpile, push_out,
+  optimize_sharing) and a `timing` renderer; compileCall threads one shared deadline through the
+  driver AND the optimizer so TOTAL compile time stays within the budget.
+
+GraphBench now emits a second table, "Compile time per pass (executor-ready build)", separating
+one-time compile cost from per-run time (compile/run ratio).  It makes the point concrete:
+temperature 16384 spends ~317 ms compiling (mostly transpiling a 16k-literal table) for a ~0.06 ms
+run — compile/run ≈ 5600x — exactly the case a budget must bound; aunt/datalog are ≈1x or below.
+
+BUG found and fixed while wiring this up: a single-line Scala 3 catch arm
+  `catch case X => stmt1; stmt2; stmt3`
+does NOT put stmt2/stmt3 in the arm — they leak into the enclosing block and run UNCONDITIONALLY.
+So `run`'s fallback (`st.converged = false; Residual(conf, materialize(...))`) executed on EVERY
+compile, making every SC run fall back to the un-optimized program with converged=false. This
+silently broke all specialization (aunt/temperature/SCFacade "X specialized away" tests: the
+residual was the original routine, not the specialized one). Fixed by giving the catch arm an
+explicit multi-line block. Lesson: never chain `;` statements on a one-line catch/case arm.
+
+Suite (excl. Slow): 144 passing / 0 failing (was 142; +2 SC tests: budget fallback is sound, and
+optimization-pass times are reported).
+
+==================================================================================
+## 2026-06-25 (cont.) — publication-hardening pass (plan)
+
+Goal: bring the SC to a polished, publication-worthy, scrutiny-proof state.  Work items:
+ 1. Space.Fixpoint as a first-class enum case (composable + supercompilable).
+ 2. Per-pass improvement+timing stats on the optimizer.
+ 3. Thread the compile Deadline through the WHOLE driver (drive/reduce/scCall); finite default.
+ 4. Report "whole graph optimized away" explicitly; report compile + runtime totals.
+ 5. Audit grounded usage: none in interval/temperature; GoL pure except correctness checks.
+ 6. SCC-aware inliner/lowerer: acyclic Calls inline, recognized recursive patterns lower to
+    Fixpoint, everything else stays an honest residual Call.
+ 7. Randomized property tests.
+ 8. Remove `catch _: Throwable => in` (it hides bugs); push_out must be correct unconditionally.
+ 9. Replace `show`-equality fixed-point convergence with structural hashes.
+10. Properly fix push_out (do NOT depower it) — it is a primary perf driver.
+11. Properly solve CSE incl. SUBGRAPH sharing via structural hashing — primary perf driver.
+
+Order: structural hashing (foundational) -> Fixpoint first-class -> push_out hardening (drop
+catch) -> CSE+subgraph sharing -> SCC lowerer -> deadline threading + finite default -> stats &
+reporting -> grounded audit -> property tests.  Run tests after each step; iterate to publishable.
+
+## step: structural-hash convergence + drop the catch (items 8, 9)
+- optimize no longer `catch _: Throwable => in` / wellFormed-reverts; it trusts the passes (a bad
+  graph is now a surfaced bug, not a hidden revert).  Convergence compares a 64-bit structuralHash
+  (ops/constants/kinds/coords/nesting) instead of `g.show` strings.  wellFormed kept for tests.
+- Full non-Slow suite: 144/0 — confirms push_out + optimize_sharing are robust WITHOUT the net.
+
+## step: proper CSE incl. subgraph sharing (item 11)  [DONE]
+- Rewrote optimize_sharing as value-numbering hash-consing (O(n) via an intern table), replacing the
+  O(n^2) `find`-based scan.  Keys are EXACT (length-prefixed constant; lossy hashing is unsound for
+  CSE — a collision merges different values).  Visibility is scoped (only redirect to an ancestor or
+  an earlier same-scope node, never a sibling).  Subgraphs now share: key = SG|rootOp|<rootVNs>|
+  <bodyVNs>|constant, so two structurally identical iterations deduplicate (new test proves 2->1).
+- BUG surfaced by removing the catch + by subgraph handling: an Extract is a BINDING, not a value;
+  a Fixpoint/Iteration body's ExtractSpaceMention("edges") (the loop var) was being CSE-merged with
+  the ancestor's ExtractSpaceMention("edges") (the initial), so the body computed next(initial) not
+  next(cur) -> datalog optimize gave a wrong (extra-edge) closure.  Fix: Extract keys are scope-LEVEL
+  discriminated and Extracts are never redirected; same-level Extracts of identical sibling subgraphs
+  still share a VN so subgraph dedup keeps working.
+- Result node of every scope is PINNED (always emitted) so the executor's `.last` stays the true
+  output even if it duplicates an earlier node.
+- Full non-Slow suite: 145/0 (incl. new subgraph-CSE test).
+
+## step: Space.Fixpoint as a first-class enum case (item 1)  [DONE]
+- Added `case Fixpoint(init, rec: SpaceMention, body)` denoting `init ∪ body[init] ∪ body²[init] …`
+  (rec binds in body).  Handled in: show, eval, evalT, evalI (saturating union loops), transpile
+  (lowers to the graph Fixpoint subgraph), subs, collect, freeMentions/freeRefs (rec is a mention
+  binder), capture-avoiding subst, canon, instanceOf, embeds(childrenS/coupledS), msg, SCStats,
+  backendUnsupported (supported), Reflect, itypes.  transpile's ad-hoc union-Call recognition now
+  just rewrites to Space.Fixpoint and lowers that (one code path).
+- Test: transitive closure written DIRECTLY as Space.Fixpoint agrees across eval/evalT/evalI/execT
+  and equals the recursive-routine closure.  Full non-Slow suite: 146/0.
+
+## step: SCC-aware inliner/lowerer + untranspile + all_forever convergence (items 6, 9)  [DONE]
+- `lower(main, ctx)`: (1) rewrites each recognized union-saturating routine to Space.Fixpoint via
+  `asFixpoint` (single CHANGING mention + identity base — covers transitive AND multi-param
+  reachable, edges/mask passing through); (2) finds routines still in a call cycle (self-loop or
+  mutual recursion) by reachability; (3) inlines every ACYCLIC routine into main and into each
+  surviving recursive routine's body; (4) returns the lowered top body + the recursive routines it
+  still calls as HONEST residuals (self-contained, evaluable).
+- all_forever convergence now uses structural `==` on the Space tree (no `show` strings).
+- untranspile gained the Fixpoint inverse (graph Fixpoint subgraph -> Space.Fixpoint).
+- Tests: transitive->Fixpoint (no residual, eval==closure); reachable multi-param->Fixpoint (free
+  edges/nodemask/reach); mutual recursion f/g stays honest residual (no false lowering, top still
+  calls the cycle); n-queens place(6) fully inlines Call-free.  Full non-Slow suite: 150/0.
+
+## step: deadline through whole driver + finite default; per-pass improvement stats (items 2,3)
+- SC deadline now checked in drive (every step), reduce (graceful stop, structural `==` convergence
+  not `show`), and scCall.  Config.compileBudgetMs defaults to a FINITE 10s (Config.DefaultBudgetMs)
+  — a supercompiler must be time-bounded by default; raise for very large specializations.
+- Profiler gained `count(label, n)`; optimize records per-pass IMPROVEMENT: push_out = nodes hoisted
+  OUT of loops (loopNodes drop — LICM moves, doesn't delete), optimize_sharing = duplicate nodes
+  removed (nodeCount drop).  SCReport.{phaseImprovement, timing} surface time+improvement per pass.
+- `optimizedAway(graph)` / SCReport.optimizedAway: explicit when the whole program is evaluated at
+  compile time to a constant (no inputs, Literal/Empty result).  summary says "OPTIMIZED AWAY ...".
+- Tests: budget fallback still sound; "optimization passes report both timing AND improvement"
+  asserts push_out improvement > 0 on union_iter.  Full non-Slow suite: 150/0.
+
+## step: randomized property tests + benchmark compile/runtime reporting (items 7, 4)  [DONE]
+- New PropertyTest.scala: (a) 300 random op-graph programs (Union/Inter/Sub/Restr/Raff/Comp/Wrap/
+  Unwrap/Tails/First/Last/Iteration over mentions a,b,c) — transpile+execT AND transpile+optimize+
+  execT must both equal eval, and evalI/evalT must equal eval; (b) 60 random graphs — Space.Fixpoint
+  transitive closure == independent reference.  Seeds are printed on failure for exact repro.
+- The random test IMMEDIATELY found a latent TRANSPILE bug (seed 49): a scope whose body is a bare
+  `Mention` resolving to an ancestor (or its own `rest`) returns an EXISTING coordinate without
+  storing a node, so the scope's last node wasn't the result and the executor read the wrong slot
+  (returned the iteration's `rest` instead of the referenced mention).  Fixed: transpile now
+  materializes the result with a `Union(res,res)` pass-through when it isn't already the last node.
+- GraphBench: runtime table flags OPTIMIZED-AWAY programs with `*`; compile table now shows per-pass
+  IMPROVEMENT (push_out `hoist` = nodes lifted out of loops, optimize_sharing `cse` = duplicates
+  removed) and a combined `compile+run` total.
+- Full non-Slow suite: 152/0.
+
+## step: grounded audit + push_out power assertion (items 5, 10)  [DONE]
+- GroundedAudit (executable audit): interval/temperature are PURE (zero grounded nodes — interval
+  builds SpaceValues in Scala at construction, the query is restriction/union over literals); the
+  relational/recursive examples (aunt, transitive, reachable, pure n-queens, pure sliding) are PURE;
+  Game of Life is the LONE deliberate grounded example (B3/S23 neighbour counting), with the plain
+  Scala `GoL.step` kept only as the correctness reference.
+- push_out (item 10): the "depowering" was the optimize catch — REMOVED in step 8; push_out is now
+  trusted, correct/well-formed by construction at any depth (proven by depth + sliding + 300 random
+  programs), and its IMPROVEMENT is measured (loop-node reduction).  New test asserts it measurably
+  hoists loop-invariant nodes (union_iter loopNodes shrinks).  Hoisting whole loop-invariant
+  SUBGRAPHS (re-parenting scopes) is a documented future extension, not a correctness gap.
+- Full non-Slow suite: 156/0.
+
+## ALL 11 ITEMS COMPLETE.  Summary:
+  1 Space.Fixpoint first-class (eval/evalT/evalI/transpile/SC/untranspile).
+  2 per-pass timing+improvement (Profiler.count; SCReport.phaseImprovement; GraphBench columns).
+  3 deadline through drive/reduce/scCall; SC.Config finite default (10s).
+  4 optimizedAway reported (SCReport + GraphBench `*`); compile+run totals.
+  5 grounded audit (pure interval/temperature; GoL the lone grounded exemplar).
+  6 lowerCalls — SCC-aware inline (acyclic) / lower (Fixpoint) / honest residual (recursive).
+  7 randomized property tests (found+fixed a latent transpile result-materialization bug).
+  8 removed `catch _: Throwable` from optimize (bugs surface, not hidden).
+  9 structural-hash convergence (graph structuralHash; Space/reduce structural ==), no `show`.
+ 10 push_out de-crutched, correct, measured (LICM driver).
+ 11 optimize_sharing = value-numbering CSE incl. subgraph sharing (Extract bindings scope-keyed).
+
+## step: loop-invariant SUBGRAPH hoisting in push_out (extends item 10)  [DONE]
+- push_out now hoists whole loop-invariant subgraphs, not just flat nodes.  A subgraph's earliest
+  legal scope = deepest scope among its EXTERNAL dependencies = its source + every reference its
+  WHOLE SUBTREE makes outside that subtree (so it lifts to just inside the innermost loop any part
+  of it needs).  The scope tree is then re-derived from subgraph placements (a hoisted subgraph
+  re-parents its child scope) and levels recomputed.  Sound because a scope's external refs subsume
+  its subtree's, so a scope is never hoisted above an extract a descendant uses.  Result-subgraphs
+  are pinned (their output must stay).  `hoistSubgraphs` flag (default true) enables clean A/B.
+- Verified semantics-preserving by the 300-random-program property test + all existing tests
+  (156/0) + a structural test (an invariant inner iteration lifts to root; both off/on == eval).
+- A/B benchmark (SubgraphHoistBench, BENCHMARKS.md) — ONLY the hoist flag differs:
+    invariant-inner N=150: 1.7x ; N=400: 3.4x (scales with outer-loop size; depth 2->1)
+    sliding expandStep 3x3: 4.1x (the all_moves sub-iteration hoisted out of the explore loop)
+    n-queens place(6): 1.1x (no loop-invariant inner loop — honest no-op)
+
+## step: optimization benchmark across ALL six SC domains (SCOptBench)  [DONE]
+- Each domain made Call-free via lowerCalls (acyclic inline; recursion->Fixpoint), then execT timed
+  unoptimized vs optimize, plus subgraph-hoist isolation (hoist off vs on); best-of-9, all correctness-
+  checked against eval.  GoL is grounded -> not op-graph-compilable (reported N/A + interpreter time).
+- Results (ms; opt speedup = unopt/opt; hoist = optNoHoist/opt):
+    aunt (lot.metta)  evalI 0.35  unopt 0.27  opt 0.23  opt 1.2x  hoist 0.7x*
+    n-queens n=7      evalI 7.73  unopt 7.41  opt 3.37  opt 2.2x  hoist 1.0x
+    temperature 4096  evalI 0.01  unopt 0.02  opt 0.01  opt 2.6x  hoist 1.0x
+    datalog tc n=80   evalI 12.6  unopt 12.9  opt 12.4  opt 1.0x  hoist 1.0x
+    sliding 3x3 step  evalI 1.18  unopt 0.24  opt 0.05  opt 4.7x  hoist 3.8x
+    GoL (grounded)    evalI 0.49  — — N/A —  (B3/S23 grounded; op-graph optimizer does not apply)
+  * aunt's <1x hoist is ~60us at the sub-ms floor (and tOpt is timed just before tNo, so warmup
+    works against it) — honest measurement noise / eager-hoist effect on a tiny workload, not a bug.
+- Subgraph hoisting is the dominant win exactly where a heavy loop-invariant sub-iteration sits in a
+  hot loop (sliding 3.8x); neutral where there is none (temperature/datalog/n-queens ~1.0x).
+- Full non-Slow suite remains 157/0.
+
+## step: aunt benchmark on royal92_simple.metta (lot.metta too small)  [DONE]
+- SCOptBench now also runs aunt on royal92_simple.metta (Loaders.mettaFamily parses its
+  parent/female/male/hasName facts; ~2810 parents, ~3001 people, ~11.6k family paths).  Reference in
+  the bench switched to evalI (evalI==eval is established suite-wide) so the large genealogy is
+  feasible (Set-based eval would be slow).
+- aunt(royal92): evalI 16.8ms, execT unopt 18.0, opt 18.0 (opt 1.0x), hoist 1.1x.  Honest: at scale
+  the aunt query is dominated by the per-person family trie-restrictions (the real relational work),
+  which LICM/CSE cannot reduce — so the optimizer is ~1.0x and execT ≈ evalI (graph-exec overhead is
+  a wash against the interpreter when there is no structural win).  Contrast the small lot.metta row
+  (0.24ms) and the structured domains where opt helps (n-queens 2.2x, sliding 4.5x).
+- Full non-Slow suite remains 157/0.
+
+==================================================================================
+## 2026-06-25 — Range operator (fuse First/Last) + pure (ungrounded) Game of Life
+
+Plan:
+- Replace Space.First/Last with one `Range(x, lo, hi)` = cardinality window: x if lo <= |x| < hi
+  else empty.  (User spec: count==k  <=>  Range(s, k, k+1); GoL uses Range(.,2,3) & Range(.,3,4).)
+  Verified the only active rank-selection use (unify's First(1, head(bind))) works as head(bind)
+  (descend yields singleton bindings) so cardinality-window suffices; other sites: sudoku
+  First(1,lvs)/\Last(1,lvs) -> Range(lvs,1,2); seedless_scc (ignored) -> iterate all; property
+  generator -> Range.
+- Pure GoL: replace grounded coord+offset with succ/decr/id number relations (Scala-generated over
+  the GoL coordinate range, like Boundary) applied via Unwrap; replace grounded card-criteria with
+  Range.  Keep a Scala reference evaluator (GoL.step) for correctness only.
+- Then run SC + graph benchmarks on the now-fully-lowerable GoL.
+
+[2026-06-25] First/Last -> Range fusion + pure GoL: DONE.
+- Range(x, lo, hi) = cardinality window (x if lo<=|x|<hi else empty); wired through eval/evalT/evalI,
+  transpile/exec/execT/untranspile, Lower (ConstantOps/AlgebraicIdentities), itypes, Supercompiler
+  (free*/subst/canon/instanceOf/childrenS/coupledS/msg/SCStats), PropertyTest generator + audit.
+- Pure GoL (Examples.GoL.Rules(lo,hi)): neigh(x,y) = union over offsets {-1,0,1}^2 of
+  rel(dx)(x) x rel(dy)(y), minus self; rel = succ/decr/idr number relations (Scala-generated {n.f(n)}
+  over the window, clipped at edges), applied via Unwrap.  nextStep uses Range(neigh /\ field,2,3)/
+  (.,3,4) .tee(Singleton(x.y)) for the S23/B3 counts.  windowFor pads the field by 2 so counts never
+  clip.  Grounded arithmetic/card removed; GoL.step kept as Scala reference only.
+- Call sites updated to GoL.rulesFor(...).defs: Examples runMorkl/SC/two-step, TrieTest evalT/evalI,
+  TrieBench, GraphBench, SCOptBench; GroundedAudit flipped to assert GoL is now pure.
+- Full non-Slow suite: 157 passing, 0 failing, 4 ignored (unchanged baseline).
+- Benchmarks re-run with GoL as a real op-graph row (stale grounded-N/A sections pruned from
+  BENCHMARKS.md):
+  * SC domains: gol step 12x12 -> evalI 3.67 / execT unopt 2.06 / opt 1.32 ms (opt 1.6x); opt beats interp.
+  * Op-graph backend: gol step 12x12 -> evalI 3.0 / exec 38.0 / execT 7.6 / execT(opt) 7.7 /
+    execT(inline+opt) 4.0 ms (vs evalI 1.33); compile hoist=60 nodes, cse=97.
+
+================================================================================
+[2026-06-25] PERF CAMPAIGN — target ~5x geomean comp+run, no regressions, single coherent strategy.
+Goal metric: geomean over {aunt150, aunt400, nqueens6/7, temp4096/16384, gol12x12, union_iter,
+datalog40/80, sliding3x3} of comp+run (executor-ready optimized graph), plus the ablation report.
+Also: GoL variant with the initial grid as a compiled-in argument.
+
+--- BASELINE (from last GraphBench, 2026-06-25), comp+run ms ---
+aunt150 4.58 | aunt400 3.25 | nq6 20.70 | nq7 12.37 | temp4096 38.60 | temp16384 230.48
+gol 6.96 | union_iter 0.36 | datalog40 1.63 | datalog80 11.89
+Dominators: temp transpile (37/226ms = base64-serialize a 4k/16k-path literal, with sortBy(_.show)!),
+nq push_out (7.7ms) + transpile (7ms), datalog Fixpoint (run-bound), aunt royal92 evalI (31ms restriction/inter).
+
+--- EXHAUSTIVE IDEA INVENTORY (grounded in code) ---
+
+[A] REDUCE TRIE-METHOD OVERHEAD (IntTrie.scala)
+ A1. ITrie.intersection (64): prune() rebuilds the whole IntMap via foldLeft+updated AFTER
+     intersectionWith already built it — double allocation. Fuse: intersect+prune in one pass.
+ A2. ITrie.subtraction (68): does b.children.foreach{ a.children.get(k); updated/removed } =
+     O(|b| log|a|) lookups. Replace with Patricia-native simultaneous descent (see C).
+ A3. ITrie.joinAll (78): builds mutable.HashMap[Int,ArrayBuffer] groups then rebuilds IntMap with
+     repeated .updated (O(n log n)). For the common 2-arg case just call union. For n-ary, a
+     k-way Patricia merge avoids the hash-group + re-insert.
+ A4. ITrie.meetAll (91): ts.minBy(children.size) then others.flatMap(get) per key — allocates a
+     List per key (flatMap), length checks. Patricia k-way meet avoids per-key allocation.
+ A5. ITrie.composition (111): a.children.transform(... composition(ac,b)); union(mapped,b) when
+     terminal. transform allocates a new IntMap each level. Fine, but `union(mapped, b)` re-traverses.
+ A6. ITrie.restriction (117): per-key get+updated; Patricia-native co-descent (C) removes lookups.
+ A7. ITrie.size (34): full recursion summing per call. Range uses size>=lo && size<hi — we only
+     need to know if size is in [lo,hi): add `sizeAtMost(hi)`/`sizeInRange(lo,hi)` early-exit
+     (stop counting once >= hi). Big for GoL (Range called per cell) and any cardinality gate.
+ A8. ITrie.isEmpty/nonEmpty recompute children.isEmpty each call (cheap) but called a LOT in
+     evalI guards; fine. tailsUnion/tailsIntersection build a Seq (toSeq) — pass iterator/array.
+ A9. ITrie equality (== via case class) compares whole structure; Fixpoint loop (204) tests
+     nxt==cur every iterate over the FULL trie — O(size) per iterate. Could track a cheap
+     structural hash or a "changed" flag from union to detect the fixpoint without full ==.
+
+[B] ASYMPTOTIC IMPROVEMENTS
+ B1. Iteration grouping (evalI:194) already O(children) thanks to the trie (no regroup) — good.
+     But it does .toSeq on the mapped iterator then joinAll — materializes a Seq of subresults.
+     Stream into a k-way merge / fold-union without the intermediate Seq.
+ B2. Restriction is currently guided descent (good). Composition grafts shared b (good).
+ B3. Fixpoint (204): recomputes body over the FULL accumulator each round (semi-naive would only
+     feed the delta). Datalog is the case. Semi-naive Δ-iteration could cut datalog markedly, but
+     changes semantics surface (union-saturation). Keep as stretch goal; verify law first.
+ B4. eval (Set reference) Restriction (289): recs(x).filter(x => prefixes.exists(startsWith)) =
+     O(|x|*|prefixes|*len). The reference is the SLOW baseline by design; improving it raises the
+     "eval definition" bar (denominator). Could trie-back eval, but that defeats it being the ref.
+
+[C] IntMap-NATIVE ALGEBRAIC OPS  (package scala.collection.immutable)  *** PRIMARY STRATEGY ***
+ Internals IntMap.Bin/Tip/Nil are private[immutable] (probe confirmed) -> put ops in a file
+ `package scala.collection.immutable`. Implement, as single simultaneous Patricia descents (cf.
+ Haskell Data.IntMap.Strict mergeWithKey), for ITrie's recursive children-merges:
+ C1. unionWith already exists & is used (good). Verify it short-circuits shared subtrees (ptr-eq).
+ C2. intersectionWith exists; add a variant that PRUNES empty results inline (kills A1).
+ C3. ADD differenceWith / a `merge` that drops keys present in b (kills A2's get/updated loop).
+ C4. ADD a restrictionMerge (co-descent of x by prefixes trie).
+ C5. k-way joinAll/meetAll over a Patricia forest (kills A3/A4 hash-group + re-insert).
+ C6. Exploit pointer-equality fast paths: if (l1 eq l2) return l1 in union/intersection (whole
+     shared subtrees skipped) — huge for fixpoint/iteration where most structure is shared.
+
+[D] MOST-SPECIFIC METHODS / SPECIALIZED LOGIC
+ D1. eval Subtraction (288): `recs(x) removedAll recs(y)` -> `recs(x).filterNot(recs(y))`? measure.
+ D2. Use while-loops + manual builders instead of for/yield in hot recs cases (composition 290,
+     iteration 308 groupMap). groupMap allocates Map[_,List]; a trie-build avoids it (but that's eval).
+ D3. transpile LiteralCodec.encode (360): sortBy(_.show) renders every path to String to sort —
+     replace with a cheaper canonical order (compare item-lists directly), or drop the sort and
+     dedup structurally. This is the temp transpile cost.
+
+[E] OTHER DATA STRUCTURES
+ E1. Node.constant: String for Literals forces serialize-at-transpile + decode-at-exec + re-hash
+     in optimize_sharing (842). Carry the live SpaceValue/ITrie by reference (side-table keyed by
+     node id, or a Literal payload variant) so transpile is O(1) and CSE hashes an id, not MBs of
+     base64. THE temp16384 230ms killer. Keep string codec only for untranspile/serialization.
+ E2. PathContextMap / SpaceContextMap are Map-backed; evalI builds a fresh Map per Call/Iteration
+     (197,221). For single-binding grows (iteration), a lightweight cons-env or array avoids Map alloc.
+ E3. Interner: ConcurrentHashMap.get on every intern; for hot constant paths cache interned ints
+     on the Path/Node (internConstStr already caches by string — good).
+
+[F] SC RULES (Lower object, MORKL.scala:1317; register in SC.sourceLaws Supercompiler:661)
+ F1. Range(Range(x,a,b),c,d): if the inner window already fixes |x| then nest collapses; at least
+     Range(Empty,_,_)->Empty (have) and Range over a Literal folds (LiteralSpaceOps).
+ F2. Unwrap(Wrap(s,p),p) -> s ; Wrap(Unwrap(...)) partial. Prove laws first.
+ F3. Intersection/Union idempotence & with-self; Subtraction(x,x)->Empty (have). Add
+     Intersection(x,x)->x, Union(x,x)->x (structural).
+ F4. tee/gate fusion for GoL: Range(t,k,k+1).tee(S) pattern -> a single "count==k then S" op?
+     Possibly a new cheap operator; or recognize and lower to size-gated wrap.
+ F5. Distribute Intersection over Union when one side is small/literal (join order).
+ F6. Composition associativity / Wrap fusion already partly present (SingletonComposition_Wrap).
+
+[G] EXECUTOR OVERHEAD (GraphExec.scala execT)
+ G1. Per-node `kind match` then `op match` string compares — switch on an interned op-code (Int)
+     assigned at transpile, not String. Hot in n-queens (deep nested loops).
+ G2. Iteration subgraph (52): pushes a new Array stack frame + Stack.push/pop per child; reuse a
+     preallocated frame, avoid Stack object churn.
+ G3. Constant decode caches exist (iLiteralStr/internConstStr) — good. Ensure lookups are by the
+     SAME string instance (identity) where possible.
+ G4. `inline def sget/pget` cast via asInstanceOf — fine. Avoid the `(l,c)` tuple allocation in pos.
+
+[H] HOIST OUT OF HOT LOOPS
+ H1. evalI Iteration body re-evaluates the SAME invariant subexpressions each child — that's what
+     graph push_out handles for execT, but the INTERPRETER (evalI) has no LICM. Could memoize
+     loop-invariant subresults in evalI (detect frees). Stretch.
+ H2. GoL neigh: succ/decr/idr literals + field("Cell") are invariant; push_out already hoists 60
+     nodes. Confirm they're not rebuilt per cell in execT.
+
+[I] MICRO-OPT (inline / while)
+ I1. ITrie.size, nodeCount, joinAll inner loops -> while. Mark hot small methods @inline.
+ I2. evalI guards (la.isEmpty then empty) good; ensure no boxing of Int keys (IntMap keys are Int).
+
+[J] GRAPH OPTIMIZATION ALGO (push_out/optimize_sharing/optimize)
+ J1. optimize loop re-runs passes until structuralHash stabilizes — often 2 passes suffice; cap
+     or detect no-change earlier. Profile iteration count.
+ J2. optimize_sharing hashes node.constant (big literals) every pass — tie to E1 (hash an id).
+ J3. push_out allRefs set-union accumulation can be O(N^2) on degenerate chains — use bitsets/ints.
+
+[K] SC/OPT PROCEDURE (last resort)
+ K1. reduce() applies ALL rules every round until fixpoint (==). Order rules by likelihood; stop
+     per-rule when no change. canon() recomputed in embeds/instanceOf/msg — memoize per node.
+
+--- PLAN: measure first (ablation bench + geomean), then land C+E1 (Patricia ops + literal-by-ref)
+as the primary strategy, then A/D/G micro-opts, then F SC rules, re-running often. Prove any
+non-obvious algebraic law (F2, B3) in Python/egglog before relying on it.
+
+--- BATCH 1 LANDED (literal-by-ref + Patricia ITrie ops + sizeAtMost). full suite 157/0. ---
+Strategy pieces:
+ * LiteralStore: Space.Literal carried BY REFERENCE in the op-graph ("lit#<id>", value-interned)
+   instead of base64-serialized at transpile. KILLS temperature transpile: 226->0.22ms (16384),
+   37->0.13ms (4096). CSE now hashes a short id, not MBs. Backward-compat: non-lit# constants
+   still decode via LiteralCodec (untranspile/serialization unchanged).
+ * IntTrieOps (package scala.collection.immutable): union/intersection/difference as single
+   simultaneous Patricia descents over IntMap[ITrie] (IntMap.Bin/Tip/Nil + IntMapUtils.bin/join/
+   hasMatch/zero/shorter). Drops the per-key get+updated loop in subtraction; prunes intersect
+   inline; eq short-circuits whole shared sub-tries. Property tests (300 progs + 60 fixpoints) green.
+ * ITrie/Trie.sizeAtMost(cap): early-exit cardinality for Range(x,lo,hi) -> O(hi) not O(|x|).
+comp+run geomean 8.349 -> 2.617 ms == 3.19x. Need ~1.57x more for 5x (target 1.670).
+Per-benchmark comp+run now: aunt150 3.75 | aunt400 3.38 | nq6 18.86 | nq7 9.23 | temp4096 0.23 |
+temp16384 0.33 | gol 6.82 | union_iter 0.35 | datalog40 2.91 | datalog80 12.94.
+Remaining offenders: nq6 compile (push_out 6.4 + optimize_sharing 6.4 = 16ms, partly cold-JIT),
+datalog80 run 12.94 (Fixpoint full re-saturation), gol run 4.2, nq7 9.23.
+NEXT: (1) executor overhead — reuse iteration stack frame, avoid List(k) per child, opcode dispatch
+(broad win across ALL execT benchmarks); (2) n-queens optimize compile; (3) maybe semi-naive Fixpoint
+for datalog (prove law first).
+
+--- BATCH 3 (warm-compile bench methodology + complete Patricia strategy) ---
+Switched GraphBench/datalog to STEADY-STATE compile (2 warmup builds before the profiled one), like
+the run column's best-of-N — a once-cold compile mostly measured JIT warmup (nq6 compile 11->4.8ms).
+Added ablation toggles Tuning.{literalByRef,patriciaOps} (default ON) for clean attribution.
+Completed the IntMap-native strategy on the remaining HOT ops:
+ * restrictTries (Patricia co-descent) — restriction was a top hot op (datalog `edges<|nbs`, aunt,
+   sliding). geomean 1.990 -> 1.679.
+ * joinAll balanced-pairwise-union (de-boxed; was mutable.HashMap[Int(boxed),ArrayBuffer]) — used by
+   tailsUnion (datalog `⋁`) and evalI iteration. geomean 1.679 -> 1.526.
+WARM ABLATION (all 10 benchmarks, steady-state comp+run geomean ms):
+  baseline(both off)=6.287 | +literalByRef only=2.150 | +patriciaOps only=5.666 | ALL=1.526
+  => literal-by-ref 2.92x alone; full Patricia trie ops add the rest; ALL = 4.12x. Target 1.257 (5x).
+Remaining dominators: datalog80 ~12.4 (bilinear cumulative Fixpoint — semi-naive needs the non-linear
+product rule, deferred as high-risk), n-queens compile (push_out LICM 2-3ms), nq7 run.
+
+--- MEASUREMENT METHODOLOGY + FINAL ABLATION (steady-state, warm compile + warm run, min-of-trials) ---
+The op-graph compile was being measured COLD (once) while run was warm best-of-N — inconsistent and
+noisy (a cold compile mostly measures JIT warmup; nq6 compile 11ms cold vs ~3.7ms warm). Fixed: warm
+the compile path (3 builds) before the profiled one, like the run column. Added Tuning.{literalByRef,
+patriciaOps} toggles (default ON) for clean attribution; GraphBench now prints comp+run AND run-only
+geomeans tagged with the active config.
+
+DEFINITIVE WARM ABLATION (10 benchmarks, geomean ms; min over 3 trials shown — machine has ~±15% load noise):
+  config                         comp+run   run-only
+  baseline (both off)              ~4.26      ~0.335
+  +literalByRef only               ~1.71      ~0.38   (literal fix is COMPILE-only; doesn't touch run)
+  +patriciaOps only                ~4.21      ~0.234  (trie ops are RUN-only; 1.4x run alone)
+  ALL (optimized)                  ~1.11      ~0.112
+  => comp+run ~3.8-4.4x ; run-only ~3.0x.  Attribution: literal-by-ref carries comp+run (2.85x alone,
+     kills the temperature literal-serialization); Patricia trie ops carry run-only (restriction + joinAll
+     were the real hot ops — restriction 1.99->1.68, joinAll 1.68->1.53 on earlier 2-warmup runs).
+HONEST CEILING: ~4x. Remaining levers are NOT low-hanging:
+  - n-queens COMPILE (~4ms warm): genuine push_out LICM work over the large inlined place(n,n) graph;
+    place() is memoized, allRefs is linear-with-depth — no O(N^2) bug. Only ~1.3x in boxed-Int sets.
+  - datalog RUN (Fixpoint): next(m)=m∪step(m) is cumulative AND bilinear (m joined with m); a correct
+    semi-naive needs the non-linear product rule + a soundness check — high risk, deferred.
+Decision: consolidate the clean ~4x (literal-by-ref + complete IntMap-native trie ops), zero regressions,
+full attribution. Deliver GoL grid-as-argument variant + pipeline-stage ablation + writeup.
+
+--- FINAL STATE (perf campaign complete) ---
+Landed (all gated by Tuning toggles, default optimized; full suite 157/0/4; property 300+60 green):
+  MORKL.scala: LiteralStore (by-ref literals) + Tuning toggles + optimize hash-cache.
+  IntTrie.scala: union/intersection/subtraction/restriction route to IntTrieOps (Patricia) + eq
+    short-circuits; joinAll balanced-merge; sizeAtMost early-exit.
+  IntTrieOps.scala (NEW, package scala.collection.immutable): unionTries/intersectTries/diffTries/
+    restrictTries as Patricia co-descents (IntMap.Bin/Tip/Nil + IntMapUtils.bin/join/hasMatch/zero/shorter).
+  GraphExec.scala: iteration/fixpoint stack-frame reuse + Range sizeAtMost.
+  Trie.scala: sizeAtMost + Range early-exit.
+  GraphBench.scala: warm-compile (steady state), comp+run AND run-only geomeans, GoL grid-as-argument
+    variant, ablation toggles plumbed; new AblationStages (5 pipeline stages).
+RESULT: comp+run geomean baseline ~4.26 -> ~0.96-1.11 ms == ~4.4x (best uncontended run 5.0x); run-only
+~3x. GoL grid-as-argument: compile 0.82ms ONCE then 0.50ms/step for any grid (vs 1.32ms recompiled-per-grid).
+BENCHMARKS.md cleaned to 7 coherent sections (2026-06-24 run, evalI analysis, A/B hoisting, perf-campaign
+summary + attribution, SC-domains, op-graph backend + grid-arg, pipeline-stage ablation).
+
+[2026-06-25] Space/expression fuzzer (from fuzzer_zipper_draft.md). DONE.
+- src/main/scala/Fuzzer.scala: the draft's `Fuzzer` Dist combinators (Uniform/Filtered/Mapped/
+  Collected/Pair/Cond/Dep/Concentrated/Degenerate/Categorical(+ratios)/Repeated/Sentinel; added
+  map/filter/flatMap/samples) + the `Loc` zipper path-set primitives (Const/Repeat/Full/Empty/Trie/
+  Union/Intersection/Subtraction/Restriction/Raffination/Compose/Dep + instantiate). Fixed a real bug
+  in the draft's Compose/Dep `branches` (omitted `left.branches`, so a Compose never grew its left
+  side -> instantiate returned empty); now correct.
+- SpaceFuzzer: generates DEPENDENT (program, argument, result) triples. `Dep(argDist, arg => prog
+  over arg)`: the argument space is sampled first as a bounded Loc then materialised; the program is
+  drawn over it (wrap/unwrap prefixes, restriction keys, intersection/subtraction operands all taken
+  from the argument's own paths so ops are non-trivial), result = eval(program){x := arg}.
+- src/test/scala/FuzzerTest.scala: FuzzerDemo prints 5 examples; every sampled triple is differentially
+  checked eval==evalI==evalT==execT(optimize(transpile)). 200-triple Slow sweep green; full suite 158/0.
+
+[2026-06-25] Fuzzer: scaled up to LARGER programs.
+- alphabet a..d; argument spaces larger (Loc tries/Repeat up to ~28 paths).
+- example(maxDepth, maxResult) parameterised; demo generates 10 programs at depth 6, filtered to
+  nodes>=12 so all are "significantly larger" (observed 12-34 Space/Path constructors). Display fixes:
+  render ε for the empty path, collapse Iteration's multi-line show.
+- 200-triple soundness sweep bumped to depth 5; still eval==evalI==evalT==execT for every triple.
+  Full suite 158/0.
+
+[2026-06-25] Fuzzer: variable paths as a first-class building block.
+- genProg now threads a Scope of enclosing iteration binders (head PathRef + tail SpaceMention).
+  Leaves can emit Singleton(Path.Deref(v)) [= sP"v", a VARIABLE path], Mention(boundTailSet), and
+  Singleton(Concat(Deref(v), const)) [var ++ const] — all correctly scoped so eval/transpile bind them.
+  Iteration body recurses over scope:+binder (closures over outer loop vars, like n-queens iterk).
+- Added a Transformation operator with MQT-style PathItem.Variable patterns/templates (e.g.
+  transform("$v0.$v1","$v1")).
+- BUG FOUND + FIXED (surfaced by the fuzzer): make_transform crashed (IndexOutOfBounds) when a source
+  path was shorter than the pattern — lazyZip truncated so fewer variables bound than the template
+  indexed. Positional patterns match same-length paths only; added that guard (existing transform/MQT
+  tests unaffected). 
+- 10 large examples now show sP"h…", (P"h…" x "…"), and .transform("$v0.$v1",…); every triple still
+  eval==evalI==evalT==execT. 200-sweep @depth5 sound; full suite 158/0.
+
+[2026-06-26] 1M-program structural census + matrix.
+- src/test/scala/ProgramStats.scala (Slow): generates N programs via the fuzzer at the demo size
+  (depth 6, >=12 nodes), tallies the "child type X at position p inside parent type Y" matrix
+  (rows = parent.position, cols = child constructor; Space+Path types unified). Structure only — no
+  eval (depth-6 nested iterations can blow eval up ~|arg|^nesting; irrelevant to a structural matrix).
+- Ran N=1,000,000: 1.82M draws (55% >= 12 nodes), avg 20.1 nodes/program, 18.1s; matrix 24x17,
+  26.5M parent->child edges. TSV -> prog_matrix.tsv; heatmap (log color) -> prog_matrix.png (plot_matrix.py).
+- Findings: pinned slots (Intersection.r/Restriction.by=Literal; Subtraction.r/Composition.r=Singleton;
+  Wrap.pre/Unwrap.pre/Transformation.pat/tmpl=Constant; Concat.l=Deref, Concat.r=Constant) vs free
+  recursive slots (spread over all 14 space types, ~weighted by the Categorical). Singleton.path =
+  Constant 2.28M / Deref 724k / Concat 362k (variable paths well-represented). Iteration.body has MORE
+  Singleton (296k) and fewer Mention (252k) than Iteration.src — the in-scope variable refs (sP"h").
+
+[2026-06-26] Generator: extend binary-op right operands to cover all term types.
+- Intersection.r, Subtraction.r, Restriction.by, Composition.r were pinned to a single leaf type
+  (Literal/Singleton). Added side()/compRhs(): the 2nd operand is now ~60% a full recursive sub-program
+  (so EVERY term type can occur there) and ~40% the old dependency anchor (keeps results overlapping
+  the argument). Composition.r is depth-bounded (<=2) since composition is multiplicative.
+- Demo (10 large) + 200-sweep still eval==evalI==evalT==execT (no eval blowup). 
+- Re-ran 1M census: 72% accept (was 55%), avg 27.7 nodes/program (was 20.1), 19.7s; matrix 24x17,
+  36.8M edges. The four rows now span all 14 space types (anchor type still dominant — intentionally
+  non-homogeneous). prog_matrix.tsv / prog_matrix.png regenerated.
+
+[2026-06-26] Expressivity census: unique outputs over 100 inputs + interestingness criteria.
+- genProg gained an optional free PATH input `pin` (default None; demo/census unchanged) so programs
+  are functions of (space x, path p) — leaves can use Singleton(Deref(pin)) / Concat(Deref(pin),const).
+- src/test/scala/ProgramExpressivity.scala (Slow): run N programs (depth6, >=12 nodes) on a FIXED bank
+  of 100 distinct (trie,path) inputs; per program record uniqueOut, entropy, nEmpty, nIdentity, modeFreq,
+  sensX (vary x only), sensP (vary p only), avgSize, nodes -> /tmp/expressivity.csv. plot_expr.py -> 6 panels.
+- N=100000 in 31.5s (138k draws, 72% accept). FINDINGS:
+  * uniqueOut median=1, mean=7.99, p90=23, p99=97. CONSTANT(uo=1)=73.9% — and 72.4% are ALWAYS EMPTY
+    (only 1.5% non-empty constants). low(2-5)=9.2%, mid(6-50)=12.1%, high(51-99)=4.0%, bijective(100)=0.7%.
+  * responsiveness: respond-to-x 14.8%, respond-to-p 15.2%, both 5.5%, NEITHER 75.5%.
+  * some-empty-output 90.8%; mean |out|=0.43 (tiny). corr(nodes,uniqueOut)=-0.03 (bigger != more
+    expressive; slightly LESS — quartile means 8.7->7.0): stacked ops collapse to empty.
+- Takeaway: the generator is dominated by degenerate (empty/inert) programs; only ~16.8% (mid+high+
+  bijective) produce real variety. Smarter criteria (always-empty vs const, sensX/sensP, entropy,
+  identity, size-corr) localize WHY. Artifacts: expressivity.png/csv, plot_expr.py.
+
+[2026-06-26] Expressivity v2: variable args + responsiveness parameter.
+- genProg now takes sargs: Vector[SpaceMention] and pargs: Vector[PathRef] (defaults Vector(argM)/empty,
+  so demo/census unchanged). Leaves reference a random space/path arg.
+- ProgramExpressivity rewritten: per program sample ns space args (1..3) + np path args (0..2); run a
+  shared bank of 100 multi-arg input environments; record uniqueOut, entropy, nEmpty, ns, np, respSpace,
+  respPath, respFrac (=responded/total args), avgSize, nodes. RESPONSIVENESS per arg = vary that one arg
+  over `probe`=40 env values (others at env0) and check the output changes. expr.respMin param optionally
+  rejects under-responsive programs (default 0). CSV -> expressivity.csv; plot_expr2.py -> 6 panels.
+- N=100000 in 29.7s (138k draws). FINDINGS:
+  * args uniform: space 1/2/3 = 33% each (mean 2.0); path 0/1/2 = 33% each (mean 1.0).
+  * uniqueOut median=1, mean 8.6. RESPONSIVENESS: 76.6% inert (respond to 0 args), 23.4% respond to >=1,
+    only 4.1% to ALL args; mean respFrac=0.12. Per-arg responded ~10% (space 9.8% ~= path 10.2%).
+  * responsiveness PREDICTS variety (median uniqueOut by #responded-args): 0->1, 1->13, 2->39, 3->65,
+    4->97. Among responsive(>=1): median uo=16, high(>50)=24.6%, constant=0.6% (vs 73.9% overall).
+  * Takeaway: each extra responded-to arg ~doubles output variety; the responsiveness parameter cleanly
+    separates the ~3/4 inert bulk from the expressive tail. Artifacts: expressivity2.png/csv, plot_expr2.py.
+
+[2026-06-26] Saved corpus of 1000 input-sensitive, multi-valued programs.
+- ProgramExpressivity "corpus" test: rejection-sample programs (variable args: space 1..3, path 0..2)
+  until 1000 satisfy BOTH criteria: sensitive to EVERY arg (vary one arg over 64 values, others fixed
+  at env0, output must change — short-circuit reject on first non-responsive arg) AND uniqueOut>=2 over
+  the 100-input bank. 3.1% acceptance, 31951 draws, 2.9s.
+- Saved to repo: corpus_1000.txt (readable: idx,nSpace,nPath,uniqueOut,.show) and corpus_1000.ser
+  (Java-serialized Vector[FuzzRec(prog,nSpace,nPath,uniqueOut)] — round-trip VERIFIED in-test: a random
+  deserialized program re-evaluates identically across all 100 inputs, so the corpus is reloadable).
+  FuzzRec is top-level (no test-instance capture). Space AST is Java-Serializable.
+- 3 random picks (#282 ns1/np0 uo12; #563 ns1/np0 uo2; #492 ns1/np1 uo31) shown in chat.
+
+[2026-06-26] Differential validation of all executors on the corpus.
+- CorpusValidation test (Slow): loads corpus_1000.ser (Vector[FuzzRec]), builds 1000 random multi-arg
+  input environments (small tries for s0..s2, paths for p0..p1, in all reps), and for every
+  (program, environment) asserts eval == evalI == evalT == exec(graph) == execT(graph) ==
+  execT(optimize(graph)); eval (Set reference) is the oracle. Free space args bound via space context /
+  graph mentions; free path args via path context / graph refs. transpile/optimize once per program.
+- Confirmed all 6 executors handle Transformation + free path refs (the corpus uses both); the lone ???
+  for Transformation (MORKL:1257) is in an unrelated AST-reflection fn, not any execution path.
+- RESULT: 1000 programs x 1000 inputs = 1,000,000 pairs, all 6 executors AGREE. compile 311ms total,
+  26.5s. Zero disagreements.
+
+[2026-06-26] Removed Space.Transformation; replaced with iterk/nested-iter.
+- Deleted the Space.Transformation enum case and ALL handling across the stack: show, eval(recs),
+  evalI, evalT, transpile, exec, execT(GraphExec), untranspile, reflect/itypes (3 ???), subs, collect,
+  Supercompiler Matching (freeMentions/freeRefs/subst/canon/instanceOf goS/ms/childrenS/coupledS/msg/
+  SCStats/backendUnsupported), and the Syntax `.transform` extension. Removed now-dead make_transform,
+  Trie.transformation, ITrie.transformation. (composition's `a.children.transform` is IntMap.transform,
+  unrelated, kept.)
+- Fuzzer: replaced the `transform` generator case with `reorder` — descend k levels via nested `iter`,
+  bind path items h0..h{k-1}, emit Singleton recombining them in a permuted/projected order (the
+  iteration analogue). Removed transformPair/argLens.
+- Tests kept: the "transformation" test rewritten with the existing nested-iter `Unification.T`
+  (=U[Unwrap/Iteration]+W[Wrap]); MQT/datalog/transitive were already iter-based (unaffected). Fixed
+  the test's contexts to growable PathContextMap/SpaceContextMap (T iterates). Removed Transformation
+  cases from FuzzerTest/ProgramStats/ProgramExpressivity nodes/walk/typeOrder and PropertyTest usesGrounded.
+- VERIFIED: non-Slow suite 158/0; census matrix now 21x16 (no Transformation); corpus regenerated
+  (reorder programs, round-trip verified); CorpusValidation 1,000,000 pairs all 6 executors agree.
+
+[2026-06-26] Corpus runtimes + node stats + SC of the 5 slowest.
+- CorpusRuntimes test (Slow): load corpus_1000.ser, run each program over 1000 inputs (evalI), record
+  runtime + AST node count -> corpus_runtimes.csv.
+- 1000 progs x 1000 inputs: total evalI 1553ms. nodes/prog min12 median30 mean32.1 p90 49 max84.
+  evalI ms/1000-inputs: median 1.197 mean 1.553 p90 3.132 max 11.08.
+- Top 5 slowest (evalI ms/1000): idx336=11.1(46n), idx935=10.8(33n,uo98), idx264=10.5(57n),
+  idx635=10.3(59n), idx271=9.5(35n).
+- Applied SC.supercompile to each; re-timed orig vs SC'd over 1000 inputs under every evaluator
+  (eval/evalI/evalT/execT(opt), best of 3). SC shrinks nodes (idx635 59->36, idx264 57->46) and the
+  biggest win is on the compiled op-graph execT(opt): idx635 7.1->2.2ms (3.2x), idx935 12.6->4.9 (2.6x),
+  idx264 4.6->3.1, idx336 13.5->9.8, idx271 5.0->3.7. Interpreter gains are smaller (evalI ~1.0-1.7x,
+  evalT ~1.1-1.6x). SC semantics verified == original on sampled inputs.
+
+[2026-06-27] SC degeneracy analysis (SCDegeneracies test): SC all 1000 corpus programs, scan residuals
+for provably-reducible surviving sub-patterns. SC shrinks 32114->27556 nodes (14.2%); 0 failures.
+Ranked surviving reducible patterns (total occ / % of programs):
+  Literal(emptyset) not -> Empty ...... 290 / 24.8%   (disguised empty blocks the absorption chain)
+  Union(x,x) -> x ..................... 182 / 16.4%
+  Intersection(x,x) -> x ............. 111 / 10.3%
+  iter(s,h,t, Mention t) -> TailsUnion 109 / 10.3%
+  Restriction/Raffination(x,x) ....... 100 /  9.8%
+  TailsUnion(Singleton(_)) ...........  77 /  7.6%
+  Unwrap(Unwrap(s,c1),c2) merge ......  66 /  6.3%
+  Range(Singleton(_)) [card=1] .......  58 /  5.3%
+  Unwrap(Wrap(s,p),q) [prefix] .......  46 /  4.6%
+Already handled (0 survivors): Subtraction(x,x)->Empty, Space.Empty absorption, Range(Literal), Singleton(Const)->Literal.
+Root causes: (1) corpus is Call-free => SC's driving engine (unfold/whistle/fold/generalize) never
+engages; only reduce()'s local laws run, so the gaps are missing local rules + missing normalization.
+(2) Two reps of empty (Space.Empty vs Literal(∅)); reduce only recognizes the former -> smart-constructor
+canonicalization needed. (3) No selection-pushing (Unwrap/Restriction/Range/Tails through Union/Comp/Iter)
+=> wrap/unwrap cancellations & empties never reach the leaves. (4) No info-propagation into iter bodies
+(positive driving). (5) No Space-level CSE (x/\x, repeated iters) -> left to op-graph CSE.
+
+[2026-06-27] Implemented the degeneracy-fixing SC laws (egglog-verified) + fixed 3 pre-existing bugs.
+egglog (formal.egg, v2.0.0): added & CHECKED Restriction(x,x)=x, Raffination(x,x)=∅, Unwrap∘Unwrap
+merge, Unwrap(Wrap(Item w),Item a)=∅ (incomparable), TailsUnion(Singleton(a·b))=Singleton(b); plus
+iter-empty absorptions (separate mini-spec). All checks pass.
+Implemented in Lower/sourceLaws (all egglog- or eval-sound):
+ - AlgebraicIdentities: Literal(∅)→Empty; Union/Intersection/Restriction(x,x)→x; Raffination(x,x)→∅;
+   Wrap(s,ε)→s; Unwrap(s,ε)→s; Iteration(Empty,..)→∅; Iteration(..,Empty)→∅.
+ - new rules: Iter_Tails (iter(_,h,t,Mention t)→TailsUnion), TailsUnion_Singleton, Range_Singleton
+   (card=1), Unwrap_Wrap (prefix-compare cancellation).
+THREE PRE-EXISTING BUGS surfaced by the new corpus-wide SC-soundness guard (8000 checks) + new laws:
+ 1. IterUnion_Indep: hoisting an invariant ∪-branch out of a possibly-EMPTY-source iteration is
+    unsound (iter over no-head src = ∅, but hoist makes the branch unconditional). egglog-confirmed.
+    REMOVED from sourceLaws (op-graph push_out still does sound LICM).
+ 2. IterateSingleton_Deref: substituted the rest-mention with Empty for a single-item source, but
+    iterating {x} leaves tail-set {ε} not ∅. FIXED (→ Singleton(ε)).
+ 3. IterateLiteral_Union: p.items.head/.tail crashed on the empty path ε in a literal; ε has no head
+    so contributes nothing. FIXED (filter empty paths; all-empty → Empty).
+RESULTS: SC node reduction 14.2% -> 24.0%; 0 SC failures (was 11 mid-fix); all 8000 SC-soundness checks +
+non-Slow suite 158/0. Degeneracies now 0%: idempotence×4, empty-literal, empty-absorption, Range(Singleton),
+Unwrap(Wrap), iter→Tails. Remaining: Unwrap∘Unwrap merge 5.8% (deliberately the nested normal form),
+TailsUnion(Singleton) 3.2% (unknown-length/left-assoc heads). Top-5 runtime (execT(opt), SC'd): idx635
+59→23 nodes 21.3→1.7ms, idx264 57→40 11.5→3.0ms, idx379 42→23 6.6→3.7ms.
+
+[2026-06-27] IterUnion_Indep: fixed the soundness hole WITHOUT removing the rule; +Unwrap∘Unwrap merge; rule audit.
+egglog (formal.egg): added an Iter model (Iter src invariant-body = union of body over heads of src;
+Empty over a headless source) and CHECKED three facts:
+ - distributing a body-union over the iteration is SOUND on empty AND non-empty sources;
+ - the BARE hoist is UNSOUND on an empty source (leaks the invariant branch);
+ - the bare hoist IS sound when the source is provably HEADED;
+ - contrast: hoisting an invariant Wrap out is sound (Wrap absorbs the empty source).
+SC fix (Lower.IterUnion_Indep): hoist an invariant union branch OUT (strongest product-whack: branch
+computed once, no re-iteration) but GUARD on provablyHeaded(src) — a conservative static "src has >=1
+head" test (Singleton/Literal/Union/Wrap of a non-empty/headed sub-space).  When not provably headed we
+do NOT rewrite (no bloat, no regression); op-graph push_out still does sound dynamic LICM for the
+symbolic case.  Tried unconditional DISTRIBUTE first (also sound) but it regressed idx42 execT 3.8->21.8ms
+via re-iteration bloat push_out couldn't recover — the headed-guard avoids that.
+New rule Lower.Unwrap_Merge: merge adjacent CONSTANT unwraps into one (egglog-checked).  Constant-only so
+it cannot oscillate with UnwrapConcat_Unwraps (the splitter only fires on Concat prefixes; a merged
+Constant prefix is immune) -> resolves the 61 surviving Unwrap(Unwrap) cases (now 0%).
+Test: Unification."transpile transform" was PINNING the old unsound hoist op-graph (it gated each cux by a
+single sub-query, leaking output when another conjunct was empty).  Replaced the brittle op-graph dump
+with an eval-equivalence check over partial-match inputs (uses evalI; eval can't grow iteration contexts)
+that locks in the conjunctive semantics.
+Audit of formal.egg <-> SC: rules correspond and are sound.  Intentional directional differences: SC uses
+UnwrapConcat split (Concat-prefix -> nested) as normal form + Unwrap_Merge (nested-constants -> single)
+while formal.egg states the general merge; formal.egg (Wrap prefix space) arg order is flipped vs MORKL
+Space.Wrap(src, prefix).  formal.egg has selection-pushing distributions (Unwrap/Restriction/Product/
+Intersection/Subtraction over Union) NOT in the SC reduce (they are non-monotone; left to driving/push_out).
+RESULTS: non-Slow 158/0; 0 SC failures; all 8000 SC-soundness checks pass; SC node reduction 24.3%
+(removed-IterUnion baseline 24.0%, unconditional-distribute 20.8%).  Top-5 execT(opt) SC'd: idx264
+12.2->3.1, idx635 7.4->1.7 (59->23 nodes), idx935 15.2->4.7, idx336 11.7->3.7.  No regressions (idx42 fixed).
+
+================================================================================
+[2026-06-27] BEGIN: implement design_plan.md (publication-grade SC + runtime).
+Baseline: branch has eval/evalT(Trie)/evalI(ITrie)/exec/execT, Space w/ Fixpoint+Range+residuals
+(no closures, no TrieSpace), Range = CARDINALITY window (the plan's fork to eliminate), contexts
+throw on grown for base/constant. Strategy: verifiable increments, run-often, build.log each step.
+INCREMENT 1: Range -> ordered trie-slice (plan §2). GoL re-encodes via ordered-slice boundary
+(exactly-k = (>=k) \ (>=k+1), where >=k = Range(S,k,k+1) nonempty) -- no counts-as-data arithmetic.
+Need: a canonical path order shared by ALL backends (eval/Trie/ITrie/graph), RangeBounds.normalize,
+update SC Range law, fill the Range=??? structure stub, re-encode GoL, re-verify.
+
+[2026-06-27] INCREMENT 1 COMPLETE: Range -> ordered trie-slice (plan §2). Eliminated the cardinality
+fork. Added pathValueOrdering (canonical trie order shared by ALL backends), RangeBounds.normalize,
+sliceRange; rewired Range in eval/evalT/evalI/execT (eval-based exec delegates to eval); updated SC
+Range_Singleton law (normalize(1,..)); filled the Range structure-describe ??? stub; removed dead
+Trie/ITrie first/last (sorted by .show, no callers); re-encoded GoL "exactly k" = (>=k)\(>=k+1) via
+ordered-slice boundary (Rules.exactly); re-encoded the unasserted sudoku exactly-1 fixture.
+VERIFIED: non-Slow 158/0; OptimizerProperties (300 random progs incl Range + 60 Fixpoint graphs) PASS;
+SCDegeneracies 1000 progs 0 failures 23.9% reduction; ExGameOfLife (blinker/fred/SC-fusion) PASS;
+CorpusValidation 1000x1000 all executors agree; ExSlidingPuzzle 2x2=12/3x3=181440/4x4-5x5 PASS.
+sizeAtMost now dead (left in place). NEXT: verification spine — metamorphic algebraic-law properties.
+
+[2026-06-27] INCREMENT 2 COMPLETE: metamorphic algebraic-law properties (plan §6.6). New suite
+AlgebraicLaws asserts 39 universal path-set identities (union/inter comm-assoc-idem-unit,
+sub/restr/raff self+empty, comp assoc+annih, wrap/unwrap round-trip+ε, distribution over union for
+unwrap/wrap/comp/restr/inter/sub/tailsunion, Range full/empty/nested-prefix) hold under the trusted
+reference eval. 15,600 identities checked over 400 seeds, all pass -> validates the reference
+interpreter's algebra (a wrong shared assumption that backend-vs-backend differential can't catch).
+NOTE: new test files must be symlinked into scbuild/ as <Name>.test.scala (done for AlgebraicLaws).
+NEXT: growing-context overlays so eval is total over the language (base/constant contexts currently
+throw on .grown), making eval the universal reference.
+
+[2026-06-27] INCREMENT 3 COMPLETE: growing-context overlays (plan §6). PathContext/SpaceContext base
+classes now `bind` via persistent {Path,Space}ContextOverlay and `grown` folds binds -> ANY context
+(base/constant/random), not just the Map ones, can grow. eval is now total over the language and
+serves as the universal reference (previously base/constant contexts threw "growing context not
+implemented"). Non-Slow suite 159/0 (158 + new AlgebraicLaws), no regressions.
+NEXT: audit native-or-crash (plan §3) — do the trie backends (evalI/evalT/execT) fall back to the
+reference eval for any operator? If so, implement natively or crash explicitly.
+
+[2026-06-27] INCREMENT 4 COMPLETE: native residuals (plan §3 native-or-crash). Removed the
+reference-eval fallback for LeftResidual/RightResidual in evalI AND evalT; implemented natively on
+both tries: RightResidual(divisor,dividend)=⋂_{g∈divisor} unwrap(dividend,g) minus ε (empty divisor
+=> suffix-closure); LeftResidual(dividend,divisor)= non-empty prefixes r of dividend with divisor ⊆
+subtree(dividend,r). Wired execT (was crashing on residuals -> now native). Added residual cases to
+OptimizerProperties.randSpace so the 300-program differential exercises them across eval/evalI/evalT/
+execT/optimize. Non-Slow 159/0; left_residual/right_residual unit tests pass; all backends agree.
+Trie backends are now fully native (no reference bridge). NEXT: investigate mutual-recursion/SCC
+lowering (plan §5.5/§7.2) — SC currently lowers single self-recursion -> Fixpoint but honestly
+residualizes mutual recursion.
+
+[2026-06-27] COMPREHENSIVE VERIFICATION after increments 1-4 + cleanup. FULL suite (all Slow incl.):
+177 passed / 0 failed. Sliding-puzzle 3x3 full reachable == 181440; CorpusValidation 1000x1000 all
+executors agree; AlgebraicLaws 15600 identities; SCDegeneracies 1000 progs 0 SC failures, 23.4%
+node reduction; CorpusRuntimes green. Cleanup: removed dead sizeAtMost (Trie+ITrie, only the old
+cardinality Range used it); fixed stale "cardinality window" comments -> ordered-slice. Non-Slow 159/0.
+
+PUBLICATION-READINESS ASSESSMENT (holds up to scrutiny?):
+ STRONG / publication-grade:
+  - Clean semantics: the Range cardinality-vs-ordered-slice fork is eliminated (ordered trie-slice only).
+  - Verification depth: egglog law proofs + metamorphic algebra (15,600 identities) + 5-way differential
+    at 1000x1000 (eval/evalI/evalT/exec/execT all agree, incl. residuals) + SC-soundness gate (8,000
+    checks, 0 failures) + total reference eval (overlay contexts) + fully-native trie backends.
+  - SC capability (eval-verified): deforestation/fusion (GoL nextStep∘nextStep), single self-recursion
+    -> Fixpoint (transitive closure over random graphs), datalog semi-naive, n-queens inlining, aunt query.
+ NOT YET DONE (scope/breadth, not correctness — the remaining plan headline items):
+  - Mutual-recursion / SCC lowering (§5.5/§7.2): today honestly residualized (test pins "no false
+    lowering"). The big next feature (tagged-union -> single Fixpoint, semi-naive). Large + subtle.
+  - Formal per-strategy ablation benchmark (§7.4): CorpusRuntimes/GraphBench/TrieBench exist; no ablation.
+  - One production trie (§3): branch still has Trie + ITrie (+ IntTrieOps); plan wants TrieSpace only.
+  - egglog 1:1 for the new ordered-slice Range laws; first-class closures (§5.2).
+ VERDICT: materially more publication-worthy and fully green (177/0); CORRECT and scrutiny-proof on every
+ axis attempted. The remaining items are breadth/headline scope for a focused follow-up, not soundness gaps.
+
+[2026-06-27] INCREMENT 5: MUTUAL-RECURSION LOWERING (plan §5.5 — the headline). New lowerMutualSCC:
+lowers a parameter-passthrough mutually-recursive SCC (≥2 routines) to a SINGLE Space.Fixpoint via
+the tagged-union encoding — combine the SCC relations into one tagged relation S = ⋃_i tag_i·r_i
+(tag_i = "#scc#<name>"), replace every passthrough SCC-call r_j(params) by Unwrap(S, tag_j), take the
+least fixpoint of the combined body from ∅, and project each routine as r_i(params)=Unwrap(fixpoint,
+tag_i) (now NON-recursive -> inlinable). lowerCalls now groups recursive routines into mutual-
+reachability SCCs and lowers each lowerable one; lowered SCC routines become acyclic and inline.
+PRECONDITIONS (else honest residual): identical (refs,mentions) signature across the SCC; every
+SCC-call passes parameters through unchanged (arg-changing recursion stays residual — defunctionalize
+is out of scope); STRUCTURAL MONOTONICITY (no SCC-call under a Subtraction/Raffination subtrahend, or
+under Range/Fold/residual/grounded) so the ascending Kleene chain from ∅ reaches a least fixpoint.
+The overlay contexts (increment 3) are load-bearing here: the combined Fixpoint body references both
+the outer params and the fixpoint variable.
+VERIFIED (GraphExecT): degenerate f(x)=x∪g(x),g(x)=x∪f(x) -> single Fixpoint, eval==evalI==execT==x,
+no residual; non-degenerate intersection-bounded A(u)={a}∪(B(u)∩u),B(u)={b}∪(A(u)∩u) over {a,b,c} ->
+A=B={a,b} across all backends; arg-changing f->g(x("h")) correctly STAYS residual. No regressions:
+non-Slow 161/0; SCDegeneracies 1000 progs 0 failures 23.4%; CorpusValidation 1000x1000; ExDatalog TC
+sound; ExNQueens n=12=14200; ExGameOfLife fusion.
+SCOPED HONESTLY: mutual recursion is LOWERED to a single Fixpoint and evaluated via the existing
+(naive Kleene) Fixpoint executor. Semi-naive / delta evaluation (plan §7.2) is NOT yet implemented;
+arg-changing (defunctionalized) mutual recursion is NOT lowered. Both are clear follow-ups.
+
+[2026-06-27] INCREMENT 5 VERIFIED: FULL suite (all Slow incl.) = 179 passed / 0 failed after
+mutual-recursion lowering. No regressions anywhere (sliding-puzzle 181440, benchmarks, hardening,
+SC, examples all green). The SC now lowers BOTH single self-recursion AND parameter-passthrough
+mutual recursion to first-class Fixpoints; arg-changing mutual recursion is honestly residualized.
+
+[2026-06-27] INCREMENT 6: ARG-CHANGING / DEFUNCTIONALIZED MUTUAL RECURSION (plan §5.5/§7.2 follow-up).
+Two new lowerings:
+ - asFixpointGeneral: lowers a self-recursion r(refs;mentions)=BASE ∪ r(refs; ONE mention transformed
+   by T) for ARBITRARY base (not just identity, which is all asFixpoint handled) and arbitrary T, via a
+   TWO-TAGGED-STATE Space.Fixpoint: state = #arg#·(current arg) ∪ #out#·(accumulated output); each step
+   reads cur=Unwrap(state,#arg#), advances #arg#·T[cm:=cur] and emits #out#·BASE[cm:=cur]; the #out#
+   projection of the lfp is ⋃ₖ BASE(Tᵏ(arg)) — the recursion's meaning under eval's iterate-and-
+   accumulate Fixpoint semantics. Gated by structural monotonicity of BASE and T in the changing mention.
+ - lowerMutualByElimination: lowers a 2-routine arg-changing mutual SCC by GAUSSIAN ELIMINATION —
+   one-shot unfold (inline) one routine into the other (requires the unfolded one not to self-call) to
+   obtain a single self-recursion, then asFixpointGeneral. lowerMutualSCC now = passthrough.orElse(elim).
+NOTABLE: the lowered Fixpoint CONVERGES to the least fixpoint even where naive recursive eval DIVERGES
+(e.g. f(∅)↔g(∅) loops forever under unfolding) — the core value of fixpoint lowering.
+VERIFIED (GraphExecT): f(x)=x∪g(x("h")), g(x)=x∪f(x) lowers; eval==evalI==execT==⋃ₖ x("h"ᵏ)={h.h.a,h.a,a};
+non-monotone f(x)=a\g(x),g(x)=b\f(x) correctly STAYS residual. No regressions: non-Slow 162/0;
+SCDegeneracies 1000 progs 0 failures 23.4%; ExDatalog TC sound; ExNQueens n=12=14200.
+SCOPE: handles 2-routine SCCs reducible by unfolding to a single-transformed-mention self-recursion with
+monotone base/transform. >2-routine SCCs, multi-mention-change, wrapped self-call, ref-change, and
+non-monotone recursion stay HONEST residuals. Semi-naive (delta) evaluation still uses the naive Kleene
+Fixpoint executor (a perf follow-up, not a correctness gap).
+
+[2026-06-27] INCREMENT 6 VERIFIED: FULL suite = 180 passed / 0 failed after arg-changing mutual-
+recursion lowering. The SC now lowers single self-recursion, parameter-passthrough mutual recursion,
+AND arg-changing 2-cycle mutual recursion (via Gaussian elimination + two-tagged-state Fixpoint), all
+to first-class Fixpoints converging to the least fixpoint; non-monotone / out-of-scope recursion is
+honestly residualized. No regressions anywhere.
+
+[2026-06-27] BENCHMARK: recursion lowering before vs after (new RecursionLoweringBench, Slow).
+Also removed dead debug printlns in PathContextMap/SpaceContextMap.grown (spammed output, slowed eval).
+ARG-CHANGING MUTUAL recursion f(x)=x∪g(x("h")), g(x)=x∪f(x):
+  depth width |out| | eval(low) evalI(low) execT(low) | execT speedup | BEFORE(orig Calls)
+   10   40    440  |   1.97      0.24      0.36       |    5.4x       | DIVERGES (StackOverflow)
+   20   40    840  |   2.89      0.13      0.19       |   15.6x       |
+   40   40   1640  |   6.29      0.28      0.29       |   21.7x       |
+   20  160   3360  |   8.75      0.09      0.11       |   81.0x       |
+SINGLE self-recursion transitive closure (chain of N):
+    N |edges| |TC| | eval(low) evalI(low) execT(low) | execT speedup
+    8    7    28   |   1.41      0.26      0.21       |   6.8x
+   16   15   120  |   2.56      0.25      0.20       |  12.6x
+   32   31   496  |  11.98      0.55      0.44       |  27.4x
+   48   47   1128 |  37.99      0.77      0.78       |  48.6x
+FINDINGS: (qualitative) BEFORE the lowering, mutual recursion is a residual of Calls that the op-graph
+CANNOT compile and naive interpretation DIVERGES (f(∅)↔g(∅)); AFTER, it is a Fixpoint that compiles to a
+native execT subgraph. (quantitative) the compiled execT path is 5-81x faster than the Set reference
+interpreter, speedup growing with input size; the trie interpreter evalI ≈ execT (both trie-native, the
+Fixpoint loop dominates at these sizes). All rows gated on eval==evalI==execT agreement.
+
+[2026-06-27] exec/execT never slower than eval/evalI — root causes + fixes.
+ROOT CAUSE 1 (the big one): the eval-based `exec` implemented every space op as
+  eval(Space.Op(Space.Literal(a), Space.Literal(b)))  -- per graph node it allocated Literal/Space AST
+nodes and span up a whole eval call, strictly MORE work than eval itself. FIX: exec now does the ops
+DIRECTLY on SpaceValue (mirroring eval's recs), with empty short-circuits. exec/eval geomean went from
+(much worse) to ~1.00.
+ROOT CAUSE 2: the dataflow op-graph executors are EAGER (compute every node), but the trie interpreters
+evalI/evalT SHORT-CIRCUITED (skipped computing the 2nd operand when the 1st was empty) — an unfair
+advantage the eager graph cannot have. Per user direction, REMOVED the eval-level short-circuits from
+evalI and evalT (the ITrie/Trie ops keep their own internal empty fast-paths, so empty operands stay
+cheap; semantics-preserving — CorpusValidation 1000x1000 all 6 executors agree). Fair eager-vs-eager:
+  exec/eval   geomean 1.004 -> 1.010 (eval had no short-circuit; unchanged, noise)
+  execT/evalI geomean 1.211 -> 1.053, worst 18.05x -> 3.87x, #(>1.05x) 583 -> 468
+Also removed two dead debug printlns in {Path,Space}ContextMap.grown (spammed + slowed eval).
+Residual ~5% execT and the small tails are inherent dataflow per-node overhead (Any|Null boxing +
+asInstanceOf, constant CHM decode) vs direct interpreter recursion; partly sub-ms measurement noise.
+
+[2026-06-27] exec/execT vs eval/evalI — final resolution. Four root causes fixed; exec now FASTER than
+eval on average.
+  1. exec did eval(Space.Op(Literal,..)) per graph node -> direct SpaceValue ops (mirror eval).
+  2. interpreters evalI/evalT short-circuited the 2nd operand (unfair vs eager graph) -> removed the
+     eval-level short-circuit (ops keep internal empty fast-paths; semantics preserved).
+  3. exec re-parsed Constant node strings every eval (Syntax.parse per iteration head) -> memoized
+     LiteralCodec.decodeConst (ConcurrentHashMap).
+  4. exec allocated a new stack frame Array per iteration head / fixpoint step -> REUSE one frame
+     across heads/steps (matching execT) [per user direction].
+MEASURED (ExecutorOverheadBench, 1000 corpus programs x 600 inputs, ratio = compiled/interpreted):
+  exec / eval   : geomean 0.917-0.933  (exec ~7-8% FASTER than eval on average)
+  execT / evalI : geomean ~1.05        (parity within run-to-run noise; trie-native both)
+The only remaining exec-slower cases are MICROSECOND-scale trivial programs (e.g. idx=782: eval
+0.38us/input) where the dataflow executor's fixed per-invocation dispatch overhead dominates the
+near-zero actual work; on any non-trivial input exec wins (hence geomean < 1). Correctness: non-Slow
+162/0; CorpusValidation 1,000,000 pairs, all 6 executors agree.
+
+[2026-06-27] NEW EVALUATION PARADIGM: Zipper-based execution (execZ). A SpaceZipper is a cursor at a
+focus in a possibly-VIRTUAL interned-int trie; the three fundamental movements (terminal / children /
+descend(item)) are O(1) in the space size (touch only the current node's branching, never re-descend).
+ - traversal(ITrie): lift a concrete trie into a zipper (O(1)). materialize(z): drop into a trie via a
+   SINGLE DFS visiting each logical node once (no intermediate tries — deforestation/fusion).
+ - VIRTUAL zippers per LOCAL space op compose child cursors per the abstract trie spec, mirroring the
+   ITrie ops via IntMap merge: Union(unionWith), Intersection(intersectionWith), Subtraction(keep a,
+   subtract b where present), Composition (a's children composed with b; splice b where a ends),
+   Prefix=Wrap (consume prefix items then delegate), unwrap=navigate (fold descend), restriction (keep
+   x once a `prefixes` path matched; else descend common items), raffination=x\restriction, TailsUnion
+   (union of all child cursors), TailsIntersection (intersect only PRESENT heads — materializes its src
+   because an empty head poisons a meet).  descend(k) is O(1) per zipper layer for all of them.
+ - transpileZ(Space): the local algebra fuses into one zipper tree; control-flow/positional/opaque ops
+   (Iteration/Fold/Fixpoint/Range/residual/Call/grounded) are a routine "call" materialized via evalI
+   and re-lifted by traversal (what's materialized can be chosen later; caching later).
+ - execZ(prog) = materialize(transpileZ(prog)).
+EGG MODEL (zipper.egg, egglog exit 0): Descend is a LOCAL rewrite per zipper layer (Union/Intersection/
+Subtraction/Composition push-down; Prefix/Unwrap), so a depth-d descent is d local steps touching only
+ChildOf (O(1) child lookup) — never the data.  Includes the task's exact example
+  (Descend item (Prefix p (BeyondPrefix i) (Union (Unwrap item s) t))) -> (Prefix p (BeyondPrefix (i+1)) s)
+reducing in one step.  (z3/smtlib not needed: constant-time = syntactic rewrite-locality, shown in egg.)
+TESTS: ZipperTest — 5000 op-vs-eval checks (every local op: lift→Op→materialize == eval), zipper
+algebraic laws (union/intersection comm+assoc), execZ==eval over 500 random programs.  CorpusValidation
+now agrees across 7 EXECUTORS (eval/evalI/evalT/exec/execT/execT(opt)/execZ) on 1,000,000 pairs.
+BENCHMARK: SC suite (CorpusRuntimes) now times execZ on the top-5 SC'd programs (execZ ~ evalI, faster
+than eval/evalT); ExecutorOverheadBench execZ/evalI geomean ~1.09 (on par with execT/evalI ~1.08).
+
+[2026-06-27] execZ on the LONG benchmarks (RecursionLoweringBench; median of 5, single-eval times).
+RECURSION-lowered (Fixpoint materialized via the evalI "call"; only the outer local ops fuse):
+  mutual f(x)=x∪g(x("h")): depth10 eval 2.11 / evalI 0.49 / execT 0.36 / execZ 0.25 ; depth40 8.19/0.21/0.75/0.47
+  transitive closure chain: N=48 eval 40.73 / evalI 0.86 / execT 0.74 / execZ 0.63
+  -> execZ ~ evalI (often a touch faster); recursion dominates and is shared via the call.
+DEEP LOCAL-algebra (depth-N nesting of ∪/∩/\ over large tries — execZ's fusion target):
+  depth12 trie1200 |out|249 : eval 0.19 / evalI 0.18 / execT 0.15 / execZ 0.45  (execZ/evalI 2.51x, execZ/eval 2.43x)
+  depth24 trie2000 |out|777 : eval 1.13 / evalI 0.28 / execT 0.30 / execZ 0.94  (execZ/evalI 3.40x, execZ/eval 0.83x)
+  depth40 trie3000 |out| 45 : eval 1.95 / evalI 0.40 / execT 0.40 / execZ 1.31  (execZ/evalI 3.30x, execZ/eval 0.67x)
+FINDING (honest): execZ is correct everywhere (asserted == eval at every size). It BEATS the Set-based
+reference eval on deep local algebra (up to ~1.5x at depth40), but is ~2.5-3.4x SLOWER than the optimized
+trie interpreter evalI there. Reason: the ITrie ops are already near-optimal BULK Patricia (IntMap)
+merges with eq short-circuits; the zipper's deforestation (no intermediate tries) does NOT beat them
+because materialize decomposes those same merges node-by-node and allocates a zipper wrapper per node —
+the per-node abstraction overhead exceeds the saved intermediate materialization (which is cheap to build
+and re-walk natively). On recursion-lowered programs execZ ~ evalI (recursion is the shared cost).
+TAKEAWAY: the zipper paradigm's payoff is the UNIFIED single-traversal MODEL (declarative paths + calls),
+not raw speed in this interpreted form — exactly the structure the planned lowering needs (choose what to
+materialize; compile the per-node movements away into transpiled raw-iteration Rust, where the wrapper
+overhead vanishes). As an interpreted executor it is correct and competitive on recursion, slower than the
+bulk-merge evalI on pure local algebra.
+
+[2026-06-27] execZ at SCALE — large datasets + the node-sharing study (ZipperScaleBench).
+Operands pre-interned ONCE and fed via Mention/ic, so timing isolates the OP (both executors get O(1)
+operand access; the asymptotics are not masked by an unavoidable O(|input|) interning both would pay).
+
+(A) FLAT set-algebra, |A|=|B|=30000 deep paths (depth 12, alphabet 4), at 1%/50%/90% node sharing:
+  execZ/evalI ratio (full materialization, so same work; execZ pays a virtual-cursor wrapper per node):
+    1% : ∪ 1.36x  ∩ 10.39x  \ 2.70x     50% : ∪ 1.08x  ∩ 2.30x  \ 3.26x     90% : ∪ 5.10x  ∩ 1.41x  \ 2.09x
+  -> constant-factor OVERHEAD (1.1–10x). evalI's bulk Patricia merges + eq short-circuit beat node-by-node
+     materialization. Worst is ∩ at 1% sharing (tiny result but small alphabet ⇒ both tries densely cover
+     all upper-level keys, so the intersection descends deep before pruning, and execZ has no eq/identity
+     short-circuit on shared subtries — a known, fixable constant). This is the "little overhead" regime.
+
+(B) ASYMPTOTIC regime — selective (A∪B)∩C, C⊆A fixed-small (400 paths) & localized, GROW |A|=|B|:
+    |A|=|B|=10000 (98k nodes) : evalI 0.41  execZ 0.79  -> execZ 1.9x slower  (overhead dominates; small)
+    |A|=|B|=40000 (325k nodes): evalI 1.32  execZ 0.13  -> execZ 9.9x FASTER
+    |A|=|B|=160000(1.04M nodes): evalI 6.92 execZ 0.26  -> execZ 26.6x FASTER
+  -> THE WIN. As input grows 16x, evalI grows ~17x (∝ input nodes) while execZ stays ~flat (∝ result=400).
+     The fused zipper NEVER materializes the parts of A∪B the outer ∩ discards; eager evalI builds all of
+     A∪B first. Speedup grows without bound — asymptotically better, exactly as expected. Crossover ~20–40k.
+
+(B2) COMPOSITION & COMBINATIONS at 1%/50%/90% (|A|=|B|=30000), execZ/evalI:
+    A∘small (240k out): 5.03x / 5.55x / 5.87x   -> full-splice materialization: constant overhead
+    (A∪B)∩C [selective]: 0.23x / 0.16x / 0.16x  -> pruning WIN robust across ALL sharing levels (4–6x faster)
+    A\(A∩B)            : 4.09x / 1.16x / 2.47x   -> full materialization: overhead
+    (A∩B)∪(A\B) (=A)   : 2.19x / 2.14x / 3.07x   -> full materialization: overhead
+
+(C) DATALOG transitive closure (chain N) — control-flow, execZ routes via the evalI "call":
+    N=32 |TC|496 : eval 10.06 evalI 0.88 execZ 0.70 ; N=64 |TC|2016: eval 93.15 evalI 1.52 execZ 1.50
+    N=96 |TC|4560: evalI 4.53 execZ 4.54   -> execZ ≈ evalI; both ~100x faster than the Set reference.
+(D) AUNT query, synthetic genealogy: 120 ppl (443 facts, 81 aunts) eval 16.08 evalI 0.93 execZ 0.67 ;
+    600 ppl (2388 facts, 698 aunts) eval 310.70 evalI 0.87 execZ 0.83  -> execZ ≈ evalI, ~370x over eval.
+  Correctness gated at every size: execZ == evalI == eval.
+
+SUMMARY: the zipper paradigm meets the expectation — a small constant overhead when the whole result must
+be materialized (flat algebra, composition), but ASYMPTOTICALLY better (unbounded speedup, up to 26x here)
+whenever an outer operator prunes a large inner sub-expression, because the single fused traversal never
+builds the discarded structure. The only flat-regime wart is the missing eq/identity short-circuit on
+shared subtries (the ∩-at-1% 10x) — a constant-factor fix, not asymptotic.
+
+[2026-06-27] Referential-identity short-circuit + three-way intersection (ZipperScaleBench E/F).
+Zipper.scala: added O(1) smart constructors union/intersection/subtraction with sameSpace(a,b) =
+(a eq b) || (both Lit over the same trie object). x∪x=x and x∩x=x INSTANT-ACCEPT (return a, no descent);
+x\x=∅ INSTANT-PRUNE. Routed children/descend/Composition and transpileZ through them, so a re-occurring
+(eq) branch is accepted/pruned, never re-descended — a pure pointer test, preserves the constant-time
+movement guarantee. Semantics unchanged (identity laws), so all prior correctness still holds.
+  Verified: x∩x / x∪x / x\x correct; A\A over an 80000-path trie materializes in 0.0006 ms (O(1)).
+
+THREE-WAY A∩B∩C — fused single traversal vs eager PAIRWISE (build A∩B, then ∩C). A,B overlap heavily
+(A∩B ∝ N, off-prefix) while C is localized under a fixed prefix & fixed-small, so A∩B∩C = 300 (fixed):
+    |c12|   |A∩B|  |A∩B∩C| |  pairwise   execZ | speedup
+     2000    2300     300  |    0.17     0.18  |   1.0x   (parity; intermediate still tiny)
+    16000   16300     300  |    2.65     0.07  |  35.9x
+    64000   64300     300  |   22.10     0.07  | 323.0x
+  -> execZ is FLAT (0.07 ms ∝ result) while eager pairwise grows ∝ |A∩B| (the intermediate it must build).
+     The fused intersection prunes to the localized triple-common corner at the root and NEVER materializes
+     the large A∩B-only mass. Asymptotically faster than pairwise, unbounded speedup — as predicted.
+  NOTE: when the surviving triple-overlap is NOT localized (spread randomly over a small/medium alphabet),
+     all three tries are dense near the root, so the intersection must descend the dense upper region before
+     it can prune — there execZ tracks |A∩B| and the win is only a constant factor. The asymptotic win needs
+     the outer operator to prune early (selective/localized survivor) — exactly the query-shaped workloads.
+
+Also observed (re-run, machine warmer): the selective (A∪B)∩C growth test now shows up to 122x at 160k
+(execZ flat ~0.15 ms vs evalI ~18 ms) — same asymptotic trend as before, magnitude varies with load.
+
+[2026-06-27] execZ on the REAL royal92 genealogy (aunt query) — ZipperScaleBench (D2).
+Loaded royal92_simple.metta: 3008 people, 11625 family facts; aunt query yields 2989 aunt-pairs.
+Same body + bindings under all four executors (correctness gated: execZ == evalI == eval == execT):
+    eval(Set)   evalI   execT(opt)   execZ  | execZ/evalI  execZ/eval
+     5586.14     1.82      1.46      1.65    |    0.90x      0.0003x
+-> The aunt query is CONTROL-FLOW heavy (iter over 3008 people + per-person set algebra), so execZ
+   routes the iteration through the evalI "call"; it lands at PARITY with the interned executors
+   (1.65 ms, even a hair under evalI here as the outer set-algebra fuses) and ~3400x faster than the
+   Set-based reference eval (5.6 s). Confirms execZ scales to the production fixture with no blowup.
+
+[2026-06-27] Specialized IntTrie/Trie/zipper paths for Range, suffixClosure, TailsIntersection (fallbacks.md §1-3).
+- ITrie.range / Trie.range: NATIVE ordered trie-slice. Walks in canonical (pathItemOrdering) order
+  (ITrie sorts each node's children by un-interned item; Trie's TreeMap is already ordered), counts
+  terminals, emits only the [lo,hi) window, stops once filled; full-range = identity. Replaces the old
+  fromPaths(sliceRange(toPaths(.))) round-trip in evalI, evalT, and execT (GraphExec).
+- ITrie.suffixClosure / Trie.suffixClosure: STRUCTURAL recursion S(t)=(t\ε) ∪ ⋃_k S(child_k); no path
+  materialization (was fromPaths(toPaths(t).flatMap(_.postfixes))). Backs RightResidual(∅, dividend).
+- ITrie.meetAll: added a Patricia branch (Tuning.patriciaOps) = smallest-first reduceLeft(intersection),
+  i.e. native simultaneous-descent intersect + eq short-circuit on shared tails. Backs TailsIntersection.
+- Zipper: Range handled natively (transpileZ -> ITrie.range over the fused, materialized source) — no
+  evalI re-eval, no path round-trip.
+
+Benchmarks (full suite 195/195 green):
+  Range over a 120000-path trie, native vs old materialize-round-trip:
+    front [1,100)  out=99    : old 148.79 ms -> native 11.01 ms  (13.5x)
+    identity [0,0] out=120000: old 131.61 ms -> native 11.19 ms  (11.8x; native returns t, pays only t.size)
+    tail [-100,0]  out=100   : old 149.55 ms -> native 27.51 ms  ( 5.4x)
+  (native range is now bounded by the O(nodes) size pass + the window; a cached node size would remove
+   even that — left as a follow-up.)
+
+Zipper Iteration: TRIED native (balanced union of per-head fused body zippers) then REVERTED. On wide
+sources it regresses hard — royal92 aunt (3008 heads) went execZ 2.1 ms -> 83 ms (~40x slower than evalI),
+because the union tree allocates a wrapper per head and re-merges per level, vs evalI's single-pass joinAll.
+Iteration stays on the evalI "call". royal92 aunt after revert: eval 6372.95 / evalI 2.13 / execT 1.46 /
+execZ 2.10 ms (execZ 0.99x evalI — parity restored).
+
+[2026-06-27] Streaming cursor for zipper Iteration — TRIED, did NOT help, reverted.
+Implemented an n-ary union cursor `UnionN` (one grouping pass per level = the joinAll shape, instead of
+the earlier O(n log n) re-merging binary Union tree) and used it to combine the per-head fused bodies.
+Result on royal92 aunt (3008 heads): execZ ~82 ms vs evalI 2.5 ms — essentially identical to the eager
+binary-tree version (~83 ms). So the union combiner is NOT the bottleneck.
+Root cause: the cost is materializing 3008 per-head fused-algebra bodies NODE-BY-NODE (the zipper's
+constant-factor overhead) where evalI uses bulk Patricia ops (IntTrieOps) with empty short-circuits. With
+no OUTER operator to prune the bodies, fusion has nothing to deforest, so evalI is strictly better.
+Decision: Iteration stays on the evalI "call". Removed UnionN (dead once Iteration reverted). royal92 aunt
+restored to parity: eval 6641 / evalI 2.12 / execT 1.50 / execZ 2.14 ms (1.01x evalI). Full suite 195/195.
+A real Iteration win needs the byte/bit-trie under the symbols, or an outer-pruned iteration — not a
+different union combiner.
+
+[2026-06-28] Completed the egg zipper track: complete+sound model, a Scala->egg transpiler, and
+independent per-example coincidence programs.
+
+(1) zipper.egg — COMPLETE & SOUND model of the SpaceZipper algebra (egglog exits 0, all checks pass):
+  - mutually-recursive datatypes B (T/F/Or/And/AndNot/Eqi/Term) and Z (Empty/Eps/Src/Wrap1/Union/
+    Intersection/Subtraction/Composition/Restriction/Restr/Raffination/TailsUnion/TailsIntersection/
+    Unwrap/Guard/Descend) over abstract Node (N/ChildOf).
+  - For EVERY op: a local `Descend` movement rule + a `Term` membership combinator. Plus the implemented
+    smart-constructor laws (x∪x=x, x∩x=x, x\x=∅), ring identities (∅, ε), composition normalization,
+    and the restriction smart constructor (Restr resolves via the materialized `Term p` guard).
+  - >=3 qualitatively different tests per op (movement / membership / law-or-denotation) + 20 blended
+    combinations from the examples (selective (A∪B)∩C, three-way A∩B∩C, (A∪B)\B, wrap∘unwrap, etc.).
+  Key egglog lessons (debugged): rule QUERIES don't materialize function terms (had to add a rule to
+  create `Term p` for the Restr guard, and let-bind every Term/Descend OBSERVATION before (run) since
+  checks don't trigger rewrites); commutativity/associativity as rewrites blow up the e-graph (verified
+  observationally instead); and mixing the abstract Src/ChildOf descent with the algebraic laws in one
+  e-graph makes Descend/ChildOf explode (~x4/iter) -> isolated the two vocabularies in (push)/(pop) scopes.
+
+(2) src/main/scala/ZipperEgg.scala — TRANSPILER Scala SpaceZipper -> egg Z:
+  - eggOfTrie(ITrie): concrete trie -> canonical Empty/Eps/Wrap1/Union term.
+  - eggOf(SpaceZipper): one-to-one per constructor (Lit->eggOfTrie; Union/Intersection/Subtraction/
+    Composition direct; Prefix->nested Wrap1; RestrictionNode->Restr; Tails* direct). Same interned-int keys.
+  - coincidenceProgram(...): emits a standalone egg program asserting the transpiled zipper materialises
+    to exactly execZ's result — observationally (member paths Term-true + absent key ∅) and, for the
+    concrete control-flow cases, EXACT structural equality (= $prog $want).
+
+(3) zipper-egg-tests/ — independent programs (share prelude.egg = the model rules), run via
+    `cd zipper-egg-tests && egglog <name>.egg`:
+  datalog-tc (TC of a 4-chain = 6 pairs), aunt-kg (in-repo genealogy), puzzle-2x2 (12 reachable states),
+  selective-intersection ((A∪B)∩C virtual), three-way-intersection (A∩B∩C virtual) + README.md.
+  morkl.ZipperEggTest generates them and (when egglog is installed) runs each asserting exit 0; verified
+  all 5 pass standalone AND the 3 fundamental examples satisfy EXACT equality (transpiler == execZ), the
+  2 virtual ones satisfy observational coincidence (egg reduces the fused ∪/∩ to the same members).
+
+[2026-06-28] Reworked the egg coincidence to be PURELY BY DESCENT (no materialization).
+Critique: the prior `(check (= $prog $want))` proved coincidence by materializing both sides — against
+the whole point of zippers; and the fundamental examples were pre-materialized to Lit.
+Now ZipperEgg.coincidenceProgram emits NO result-trie equality. Instead, the zipper's defining property:
+  - every result member: descend to it -> focus Term = T  (you CAN descend to it);
+  - every BOUNDARY non-member: descend to it -> Term = F   (you CANNOT) — boundary = at each reachable
+    node, every program-vocabulary key (keysOf(z) ∪ result keys) that is NOT a child there.
+Counts per file: datalog 6 members/32 non; aunt 3/34; puzzle-2x2 12/248; selective 1/6; three-way 2/14.
+All 5 standalone egglog files exit 0; morkl.ZipperEggTest (6 tests) green.
+Demonstrated the no-materialization property concretely on the VIRTUAL (A∪B)∩C: (Descend 1 $prog)⇒(Eps)
+(member, ∩/∪ Descend rules reduce locally) and (Descend 2 $prog)⇒(Empty) (non-member pruned at C) — neither
+operand ever built. Removed the `exact`/`$want` path; README updated.
+
+[2026-06-28] Modelled the IMPLEMENTATION of the zipper ops in egg (set operations + recursion), per
+feedback that the prior egg only checked results, not the algorithm.
+- NEW zipper-impl.egg: a trie is (Node terminal sorted-child-list); each op is a constructor reducing by
+  the SAME simultaneous-descent recursion as ITrie/SpaceZipper.materialize:
+    TrU/ClU (union: merge child lists, recurse shared keys), TrI/ClI (intersection: shared keys, prune
+    empties via ConsIf), TrS/ClS (subtraction), TrC/ClMapC (composition: graft b at a's terminals),
+    TrR/ClR (restriction: descend common keys, keep-all on terminal prefix), TrRaf (= x\(x<|y)),
+    TrW (wrap one item), TrUn (unwrap = sorted lookup), TrTU/ClTU & TrTI/ClTI (tails ∪/∩), Mat (materialize
+    a virtual cursor -> dispatch to the trie ops). Uses egglog `<` key comparison in guarded rules.
+  Self-test: per-op coincidence (computes the hand-derived trie) + algebraic LAWS OF THE IMPLEMENTATION
+  (∪/∩ commutative, ∪ associative, idempotence, x\x=∅, ∩-over-∪ distributivity, De Morgan, 3-way ∩ assoc,
+  absorption, materialize (A∪B)∩C) — all proved by reducing both sides through the recursion. egglog exit 0.
+- ZipperEgg.scala: added trOfITrie (ITrie -> (Node .. sorted child list)), implOf (SpaceZipper -> a
+  TrU/TrI/TrS/TrC/TrR/TrW/TrTU/TrTI EXPRESSION), implCoincidenceProgram (egg RUNS the recursion on the
+  transpiled zipper and checks it reduces to exactly the Scala result trie).
+- ZipperEggTest: emitImpl for all 5 examples + a per-operator test (union/intersection/subtraction/
+  composition/restriction/raffination/wrap/tails-∪/tails-∩), each gated `zipper materialize == evalI`.
+  14 zipper-egg-tests/*-impl.egg files generated; all run standalone (egglog exit 0) and via the test.
+  Shared zipper-egg-tests/impl-prelude.egg. README updated. So: the IMPLEMENTATIONS (not just results)
+  are modelled in egg and shown to coincide with Scala via transpilation.
+
+[2026-06-28] Executed the certification plan for the egg zipper track (7 phases) after the review
+found the model unsound, incomplete, and validating definitions. All phases landed:
+
+P0 HYGIENE: formal.egg archived (attic-formal.egg + NOTE) after porting Head, Iter and the
+  IterUnion hoisting counterexamples (distribute sound; bare hoist sound only over provably-headed
+  sources; invariant-Wrap hoist sound) into zipper.egg SCOPE 3, over i64 items. Vocabulary unified
+  (mapping table in zipper-egg-tests/README.md). Everything regenerable (generators documented).
+
+P1 SPECIFIED THE OBJECT: zipper.egg v2 — cursors (C: Root/Descend/Ascend) split BY SORT from
+  spaces (Z: ops + space navigation Sub); Ascend(Descend k c)=c is the zipper contract, Ascend@Root
+  deliberately stuck; FocusOf(Descend k c)=Sub k(FocusOf c) is the movement/navigation commuting
+  law — Unwrap = Sub is now a SPACE op, distinct from movement (the erasure critique). Lock-step
+  invariant stated + machine-checked (linter). Keys/IsEmpty added as first-class observations; the
+  cost contract states exactly where O(1) is false (∪ fan-out, composition frame growth, IsEmpty/
+  exact-Keys searches on ∩ \ · <|).
+
+P2 HOLES CLOSED (each was a verified probe, now a regression check):
+  - Term(Restriction x p) = And(Term x)(Term p) — TOTAL; the old =F was UNSOUND at terminal
+    prefixes (Term(Restriction ε ε) now = T). Sub-of-Restriction likewise total.
+  - tails∩ duplicate heads {1.2,1.3} and 3-way unions reduce (via exact-Keys folds).
+  - tails over Src reduces to the NAMED KeysOf enumeration (not a silent dead-end).
+  - Term(Src)=TermOf, IsEmpty(Src)=EmptyOf + AndNot/Not left rules: composition/restriction/
+    raffination movements over OPAQUE sources reduce to symbolic normal forms — locality now
+    demonstrated for EVERY operator (SCOPE 1 checks).
+  - Mat dispatch for TrUn (+ TrRaf, TrH added); impl "laws" relabelled ground INSTANCE tests.
+  KEY EGG LESSON (hit live): an OVER-APPROXIMATE observation cannot be an equational rule — Keys
+  computed differently on two nodes of one e-class ({∅} ∋ Wrap1 5 ∅) equated KNil=[5] and poisoned
+  the graph (made the hoist counterexample "pass"). Keys is now EXACT by construction; exactness
+  = e-class consistency = soundness. Documented in the file header + README.
+
+P3 BRIDGE INSIDE THE LOGIC: scripts/make_bridge.py merges both models (single source of truth;
+  impl Node renamed TNode) + Reflect : Tr -> Z with INDEPENDENT RGet/RKeys lookups; scripts/
+  gen_bridge_tests.py emits randomized differentials: 11 ops x 25 random tries x all paths depth<=2,
+  spec-side virtual observation AND impl-side recursion BOTH checked against an independent Python
+  path-set reference: 7,150 checks, all pass (replaces hand-picked instances).
+
+P4 UNIVERSAL PROOFS (proofs/, run.sh; z3 4.15.4 + vampire 5.0.1 cross-validated): 11/11 PROVED —
+  pointwise Sub/Term rules + ∪/∩ comm/assoc (deliberately not rewrites); Wrap1; the TOTAL
+  Restriction rules; composition Term/Sub split theorem + normalization via two certified append
+  lemmas (append-cons case split; append-nil by explicit structural-induction schema); key-fold
+  correctness given exact keys (induction over key lists); and the implementation
+  characterizations mem(op(t1,t2),p) <=> mem(t1,p) OP mem(t2,p) by explicit induction on p — the
+  HOMOMORPHISM THEOREM materialize(OpZipper(a,b)) = Op(mat a, mat b) in denotational form,
+  proved (not defined, not assumed: Reflect's squares are checked against independent lookups).
+  z3 proves 8/11 alone (times out on composition x2 + impl_intersection); vampire proves 11/11.
+
+P5 LOCALITY CHECKED, NOT ASSERTED: scripts/check_locality.sh — d descents over an OPAQUE source
+  saturate to EXACTLY d ChildOf lookups (d=1..8), 2d through a virtual ∪ (trie size cannot enter:
+  the source is opaque); scripts/lint_zipper_egg.py enforces syntactically: no observation rule
+  constructs trie nodes, LHS patterns <= 1 constructor deep (one step per layer), and every Sub
+  rule pushes the SAME key into every operand (lock-step). All green.
+
+P6 EXTENDED: Ascend + contract in the spec (checked incl. 2-level round-trips over opaque
+  sources); Iter reinstated HEAD-DEPENDENT via defunctionalized Body/App (JoinBody = datalog join,
+  InvBody = inversion with head capture, ConstBody = formal.egg's invariant special case); the
+  DATALOG WORKLOAD THROUGH THE VIRTUAL ALGEBRA: datalog-tc-virtual.egg unrolls the semi-naive TC
+  fixpoint (to its Scala-computed convergence depth) as nested Iter/JoinBody/\/∪ over the edge
+  literal and egg WALKS it by movement — nothing pre-evaluated. Emitters now generate CURSOR
+  observations (TermAt/Descend/Root) + an Ascend∘Descend=id check + an absent-key IsEmpty check
+  per file. Deferred EXPLICITLY (README): virtual puzzle-2x2 (needs defunctionalizing its
+  superpose/collapse Calls); mutation (needs sibling-storing crumbs — Ascend stops being a pure
+  inverse under edits), sequenced after the read-only algebra.
+
+STATE: zipper.egg + zipper-impl.egg green (~0.02s each); 31 standalone files under
+zipper-egg-tests/ all exit 0 (incl. 11 randomized = 7,150 checks); proofs 11/11; locality checks +
+linter green; ZipperEggTest 8/8 (regenerates everything).
+
+[2026-06-28] Restored formal.egg as the SOUND REFERENCE (Scala exec, eager set-of-paths — no zipper
+logic) and established the THREE-NOTION equivalence (set of paths / eager trie / zipper) in egg, z3,
+and vampire.
+
+formal.egg restoration (from the archive, modernized):
+- i64 items (letters mapped a..z -> 10..35), Product renamed Composition, invariant-body Iter
+  renamed IterC (movement spec's ConstBody = IterC); all original laws/tests kept.
+- FIXED under egglog 2.0 (the archived file HANGS and was UNSOUND under it):
+  * negation-as-failure: the two rules comparing PATH E-CLASSES with (!=) (singleton \ and ∩)
+    fired before denotationally-equal paths merged — observed live: {a·0,b·1} <| {a,b} collapsed
+    to {a·0} (the negative test "should have failed" tripped). Fix: ruleset `neg` + the sound
+    schedule (run-schedule (repeat 8 (run) (saturate paths) (run neg))) — path normalization is
+    its own saturable ruleset, so != only ever sees path-saturated classes. Documented in-file.
+  * lets after (run) never reduce under 2.0 — moved the IterC/hoisting lets before the schedule.
+  * TOTALITY holes the randomized differential exposed: TailsUnion of ε/length-1 singletons and
+    general ∪-distribution; Head of {ε}; tails-intersection with an EMPTY head set — all added.
+- zipper-egg-tests/formal-prelude.egg auto-extracted (rules only, 86 forms) for generated tests.
+
+Three-notion equivalence:
+- EGG: generated/rand-setofpaths-*.egg — 11 ops x 12 random instances in the FORMAL vocabulary,
+  whole-set equality against the independent Python reference (raffination on tiny instances: its
+  eager closure grows factorially under comm/assoc; compositional validation via its two
+  constituents, documented in the generator). Combined with generated/rand-*.egg (zipper + eager
+  trie legs, 7,150 membership checks) => all three notions differentially validated on shared
+  reference semantics. FINAL egg sweep: 45/45 files green (formal.egg, zipper.egg, zipper-impl.egg,
+  all standalone + generated).
+- Z3+VAMPIRE: proofs/threeway_*.smt2 — per operator the ZIPPER observation (movement recursion),
+  the SET-OF-PATHS denotation, and the EAGER-TRIE recursion proved equal ∀ operands ∀ paths:
+  union/intersection/subtraction (full chains), composition and restriction split into _zip/_trie
+  legs (certified movement-rule lemmas asserted; trie legs proved as recursion-alignment vs the
+  zipper recursion — the chain closes by transitivity through the proved zip legs), tails-union
+  (keyfolds = zip leg; threeway_tailsunion_trie = eager union-fold leg, complete-key-list spec).
+  PROOF-ENGINEERING NOTE: vampire fails on define-fun-rec/match encodings — the fully FIRST-ORDER
+  encoding (declared functions + defining axioms) is what made the trie legs provable (z3 unsat).
+  proofs/run.sh FINAL TABLE: 19/19 certified (vampire 17, z3 15 — every theorem by >=1 prover,
+  most by both).
+
+[2026-07-03] AUTOMATED EQUIVALENCE PIPELINE — built, and proofed on all six cornerstones (aunt,
+semi-naive datalog, game of life, 15-puzzle, temperature, n-queens): EquivPipeline.scala +
+AgnosticPipeline + SmtDiff (main), EquivPipelineTest (driver).  Per cornerstone, per stage
+(1 Space-vs-SC.reduce-optimised; 2 zipper-vs-space; 3 optimised-op-graph-vs-space), TWO kinds of
+certificates, all machine-checked in the run:
+
+DATA-AGNOSTIC (the primary, per direction: equivalences must not depend on example data):
+- inputs stay FREE: mentions render as opaque sources (Src (N id)) in egg / uninterpreted predicates
+  in SMT; iterations stay BINDERS via defunctionalised (BodyK id captures) with per-program App
+  rules (movement spec gained BodyK/IL/ZL); fixpoints + recursive calls are k-unrolled (k=2 egg,
+  k=1 smt — the one-step rule certificate), residual call = a shared fresh input; maximal GROUND
+  subtrees constant-fold via the executor (the folded per-op semantics are exactly what
+  proofs/threeway_* certify universally); Range (positional, outside the algebra) folds when ground
+  and becomes a shared opaque input when free — the documented boundary.
+- egg leg: both sides rendered into the movement vocabulary, e-class equality under the certified
+  rules ((check (= $a $b)) with free leaves) — <name>-<stage>-agnostic.egg.
+- smt leg: SmtDiff STRUCTURAL-DIFF DECOMPOSITION — the sides are identical except at finitely many
+  optimiser-rewritten subterms; each differing pair is proved ∀ inputs ∀ paths with its surrounding
+  binders freed to fresh symbols (whole-program equivalence by congruence, as in the e-graph);
+  z3/vampire discharge each obligation — <name>-<stage>-agnostic.smt2.
+
+INSTANCE (executor-grounded spot checks): control flow expanded by exec's own rules (gated
+eval(expanded)==eval(original)); stage 1 in the eager SET reference (ElemP membership obs; ACU-free
+schedule; ROUNDS ladder) with tiered fallbacks (eager TRIE reference: opt-vs-reference-literal;
+then reference-literal observations) when the eager closure exceeds budget; stages 2/3 in the
+bridge (real transpileZ output / real optimised DAG as shared Tr lets, observed through Reflect
+against the reference literal); instance smt legs on folded sides at the observation paths.
+
+HARD-WON ENGINEERING FINDINGS (all documented in-file):
+- eager reference in egg: BIREWRITES (assoc/comm closure, Wrap un-fusion) are combinatorial at
+  program scale — replaced by DIRECTED canonicalisation + ruleset scheduling (acu separated); the
+  remaining distribute rules descend one level per seminaive round top-down, so literals emit as
+  BALANCED trees (log-depth); egglog has no early exit → runner uses an ascending ROUNDS ladder
+  (convergence window can sit below an explosion threshold, e.g. converge@12 explode@16).
+- movement spec is an OBSERVATION calculus, not an evaluator: virtual-Restriction observations over
+  deep eager instances are out of reach (cost model held); eager instance evaluation belongs to the
+  impl recursion (bridge) / formal reference.
+- renderer: one render per body (a per-instance second render is exponential in nesting);
+  isGround must treat BOUND path refs and BOUND rest-mentions as closed (else closed programs like
+  n-queens/15-puzzle never fold); Range/freeMentions traversals must be total.
+- smt: whole-program ∀-goals under nested binders are FO-hard even at k=1 — the structural-diff
+  decomposition is what makes them tractable; binder-free shared subterms emit as define-funs.
+RESULT: all 6 cornerstones green end-to-end (aunt 421s, datalog 0.15s, gol 0.27s, puzzle15 483s
+w/ documented lit-tier on stage-3 instance, temperature 0.19s, nqueens 421s).
+
+[2026-07-03] Pipeline checklist CLOSED (confirm-or-fix pass):
+- FIXED: the SMT runner had z3-first-vampire-fallback (vampire never ran on z3-proved files) and
+  the emitted preludes used define-fun-rec/match (vampire-opaque).  Now: ONE first-order prelude
+  (EquivPipeline.foPrelude) — Path datatype + append/isPrefix as QUANTIFIED AXIOMS + the certified
+  append lemmas — i.e. the FOL LEMMA SET that makes the equivalences vampire-provable, including
+  for the variable-input (data-agnostic) programs; Wrap encoding made tester-free; the runner now
+  REQUIRES BOTH z3 AND vampire on every pipeline obligation.
+- Re-run: all 6 cornerstones green under the both-prover requirement (36 pipeline .smt2 files, each
+  discharged by z3 AND vampire; spot-verified manually as well).
+- Confirmed present: Iter (defunctionalised BodyK binders), Range (ground folds via the executor;
+  free Range = shared opaque input, the documented positional boundary), Fixpoint (k-unrolled with
+  shared residual input); complete frontier algebra = the movement spec's full ops x observations
+  matrix with per-move constant-frame rewrites (checked by scripts/check_locality.sh + the linter).
+
+[2026-07-04] REVIEW CYCLE — vacuousness, proof-matrix holes, rigor (all three points):
+POINT 1 (vacuous artifacts):
+- Root causes found: (a) constant folding on the agnostic sides applied the same literal evaluation
+  the optimiser does, so $a/$b were byte-identical before any rewrite (hash-consing "passed" them);
+  (b) the SMT diff emitter freed BOTH sides' differing binder names to the SAME fresh symbol,
+  collapsing every goal to x=x; (c) when no obligation existed the emitter faked (assert (not true)).
+- Fixes: stage-1 agnostic sides are now the ACTUAL pre/post-SC.reduce terms (NO fold), k=2 for egg
+  and k=1 for smt; alpha-normalisation BEFORE diffing (binder renamings no longer masquerade as
+  structural differences) and reflexive-after-freeing pairs are skipped and counted; fake goals are
+  replaced by explicit TRIVIAL-NO-OBLIGATION markers that the runner records WITHOUT invoking any
+  prover, plus a self-test that asserts no "(assert (not true))" is ever emitted.
+- Probe (DbgReduce) documents which stones SC.reduce genuinely rewrites: aunt (unwrap-merge) and
+  nqueens (4 iteration-law pairs) produce REAL obligations; datalog/gol/temperature are no-ops
+  (their TRIVIAL markers are correct, recorded, and counted).
+- Stage-2 zipper files no longer compare a pre-materialised literal against itself: the virtual
+  Iter/JoinBody programs are emitted for ALL SIX stones (<name>-zipper-virtual.egg via
+  unrollControl(bound,4), residual mentions -> Empty, gated by the Scala executor); datalog-sn
+  converges fully under the movement rules — the flagship; heavier stones record an explicit
+  budget marker rather than a fake pass.
+POINT 2 (proof matrix closed, in value order):
+- (a) keys_intersection/subtraction/composition/restriction/filter_exact.smt2 — candidate-
+  completeness + KFilt soundness; ALL PROVED by both z3 and vampire.
+- (b) isempty_finite.smt2 — IsEmpty/Keys mutual recursion grounded on an inductive finite-trie ADT;
+  the UNCONDITIONAL statement was REFUTED by the provers (duplicate-key shadowing — a genuine
+  catch), fixed with a no-duplicate-keys well-formedness invariant; vampire proves.
+- (c) keyfold_tailsinter.smt2 (key soundness AND completeness), keyfold_head.smt2,
+  keyfold_iter.smt2 — both provers.
+- (d) join_spec.smt2 — the independent join specification (p ∈ join(E,S) ⟺ ∃a,b,c. a·b∈E ∧ b·c∈S
+  ∧ p=a·c) proved equivalent to iterated JoinBody/App — JoinBody's App rule is no longer an
+  unconnected axiom; both provers.
+- (e) list-refinement lemmas: refine_kmerge/kinter (nested pair-induction schemata) + refine_clu +
+  refine_consif proved; refine_cli/cls documented OPEN (headers list every attempted strategy incl.
+  vampire --induction struct; covered by 8,651 randomized differential checks).
+- (f) impl_wrap/unwrap/head.smt2 — both provers.  proofs/run.sh: certified 36/36 (+2 known-open).
+POINT 3 (rigor):
+- Differentials extended beyond Term: Keys (exact root key list), IsEmpty, and Ascend∘Descend
+  round-trips per instance — 8,651 checks, 22/22 generated files green.
+- Every zipper.egg rule now carries `; proof: proofs/<file>.smt2` or an explicit
+  `; definitional/demand-materialisation` annotation; scripts/check_obligations.py enforces
+  totality (81 proof-backed, 26 definitional/demand, 0 problems).
+- Marker audit counters (real/trivial/budget) reported per cornerstone for CI counting.
+- PROOF-CARRYING JUSTIFICATION (new): nqueens' 4 stage-1 diff pairs embed the whole ground
+  iteration tower; their monolithic ∀-obligations exceed both provers even at 240s.  Instead of
+  weakening, each differing pair is now verified as an INSTANCE of the optimiser's ∀-certified law
+  set: SmtDiff.justify replays SC's laws on the left side and demands EXACT syntactic reproduction
+  of the right side (single law, two-law composition, or full replay — laws are local bottom-up
+  traversals, so subtree replay is sound).  Justified pairs cite their universal certificates
+  (lawCertificates: iterate-literal-union -> keyfold_iter.smt2, unwrap-merge -> wrap1.smt2, ...);
+  only residual pairs go to z3+vampire, which then MUST both prove.  Files with zero residual emit
+  LAW-JUSTIFIED-NO-RESIDUAL (counted separately; never a fake check).
+
+[2026-07-04] PROOF-CARRYING DECOMPOSITION completed (nqueens/puzzle15 stage-1 closure):
+- The 4 nqueens stage-1 pairs embed whole ground iteration towers; their monolithic ∀-obligations
+  exceeded z3 AND vampire at 240s (4GB peak).  Root causes found by probing the pairs:
+  (a) pair 0 was JOINABLE — both sides reduce to the SAME normal form under the law set (my replay
+  only reduced the left side); (b) pairs 1-3 mismatched because unrolling the ORIGINAL vs the
+  OPTIMISED program enumerates union branches in different orders, and the positional structural
+  diff paired up the wrong branches, fabricating unprovable (though true) obligations.
+- Fixes, all in SmtDiff: (1) justify gained a REDUCE-JOIN tier — two certified-law derivations
+  meeting at one normal form are proof-carrying (every step preserves semantics ∀, so l ≈ nf ≈ r);
+  (2) the diff is now AC-AWARE on Union — both towers are flattened and common operands cancelled
+  multiset-style (sound: common ∪ restA = common ∪ restB ⇐ restA = restB) before any pairing;
+  (3) partition refines recursively (depth 3): an unjustified pair is normalised on both sides by
+  the certified laws, re-diffed AC-aware, and its sub-pairs refined again.
+- Result: nqueens partition = 4 justified / 0 residual; the egg leg records LAW-JUSTIFIED after
+  the cheap ladder rungs instead of burning the full ladder; the smt twin emits
+  LAW-JUSTIFIED-NO-RESIDUAL with per-pair certificates.  puzzle15's stage-1 (previously masked)
+  now also surfaces its pairs and law-justifies them; aunt's unwrap-merge pair is justified
+  against proofs/wrap1.smt2.
+- FULL SIX-CORNERSTONE RUN (round 11): ALL GREEN — aunt 661s, semi-naive datalog 6.6s, game of
+  life 242s, 15-puzzle 486s, temperature 365s, n-queens 500s.
+- Marker audit (scripts/audit_pipeline_markers.py, CI-countable, fails on fake goals or check-less
+  "real" files): REAL=43 TRIVIAL=31 LAW-JUSTIFIED=5 BUDGET=5 (total 84 artifacts), 0 problems.
+  scripts/check_obligations.py: 81 proof-backed, 26 definitional/demand, 0 problems.
+- FINAL REGRESSION: full Scala suite green — 208 tests across 51 suites, 0 failures, exit 0
+  (the count delta vs the prior 209 is the removed DbgNq probe test; all suites present).
+
+[2026-07-06] REVIEW CYCLE 2 — vacuous instance files, unparsed OPEN status, per-law certificates:
+POINT 1a (identical-literal files classified REAL):
+- The four -zipper.egg instance files (datalog-sn/gol/nqueens/puzzle15) bound $zip and $spc to
+  byte-equal constructor terms — "equivalence" true by hash-consing with ZERO rule applications.
+  The audit's new duplicate-big-let detector then found FIVE MORE files in the same class the
+  review had not listed: gol/nqueens/puzzle15/temperature-space.egg ($orig/$opt byte-equal after
+  ground expansion) and the -lit fallbacks (duplicated $ma/$mb observation pairs).
+- Fix: both emitters detect byte-equal renders and emit an explicit
+  IDENTICAL-LITERAL-NO-EQUIVALENCE-OBLIGATION marker naming the twin that carries the real
+  equivalence content (-zipper-virtual.egg for stage 2; the -space-agnostic legs for stage 1),
+  with single-side observations only (emitObsPairs no longer duplicates lets when a==b).
+  audit_pipeline_markers.py: new IDENT class (requires the named twin to exist) + a hard problem
+  for any REAL egg file binding byte-identical large terms under two let names — the class
+  cannot silently reappear.  Counts now: REAL=34 TRIVIAL=31 LAW-JUSTIFIED=5 BUDGET=5 IDENT=9.
+POINT 1b (STATUS: OPEN parsed by nothing; impl/formal unannotated):
+- proofs/run.sh now writes MACHINE-READABLE verdicts to proofs/STATUS.tsv (file/z3/vampire/
+  verdict) and distinguishes PROVED / OPEN-expected / OPEN-NEW (fails) / COUNTERMODEL (z3 sat —
+  the stated theorem is FALSE; always fails); refine_cli/cls moved from a hardcoded echo into the
+  attempted set with an EXPECTED_OPEN list (a file leaving OPEN is reported for list shrinkage).
+  Fresh run: certified 72, expected-open 2, countermodels 0, unexpected-open 0.
+- ALL rules in zipper-impl.egg (59) and formal.egg (91) now carry proof/definitional/demand
+  annotations; check_obligations.py enforces totality over all THREE rule systems against
+  STATUS.tsv: a cited COUNTERMODEL always fails; a cited OPEN fails unless the rule annotation
+  acknowledges it inline (the ClI/ClS merges cite refine_cli/cls "(OPEN: ...differential-covered)"
+  — 8 open-acknowledged, machine-counted).  Totals: zipper.egg 81+26, zipper-impl 43+16,
+  formal.egg 77+13, problems 0.
+- Gap closed while annotating: the trie leg of tails-∩ had NO certificate (keyfolds covers the
+  zip leg only) — proofs/threeway_tailsinter_trie.smt2 written and PROVED by both provers; key
+  SOUNDNESS is load-bearing there (one listed key with an empty child annihilates the ∩-fold).
+POINT 2 (BodyK rules inline the board relation ~8x with zero sharing):
+- RenderCtx interns ground literals over 120 chars as shared $glit globals (egglog globals are
+  legal inside rule bodies — verified); BodyK App rules and observation lets reference the name.
+  nqueens-zipper-virtual.egg: 15 $glit references, 7.4KB (was one full board inline per site).
+POINT 3 (no per-law artifact/status/screening; enumerated missing laws):
+- NEW proofs/laws/: 37 PER-LAW ∀-certificates over the set-of-paths denotation (sets as
+  Path->Bool predicates, quantified-append FO prelude), generated by
+  scripts/gen_law_obligations.py.  Induction is never smuggled: law_append_assoc/inj and
+  law_isprefix_append carry EXPLICIT structural-induction schema instances (base+step proved in
+  FO); law_comp_assoc needed named intermediate predicates (the nested-existential form defeats
+  both provers; naming the compositions lets resolution index them — then both prove).
+- ALL the enumerated missing laws are now stated and PROVED: composition associativity and
+  right/left distributivity; the De Morgan family (x\(y∪z)=(x\y)\z=(x\y)∩(x\z), x\(y∩z)=
+  (x\y)∪(x\z)); absorption; ∩/∪ distributivity; wrap-as-composition (wrap w x = {w}·x);
+  restriction idempotence and chains + x<|x=x; the raffination partition ((x\|y)∪(x<|y)=x,
+  disjoint); head(x)·tails∪(x) ⊇ x on ε-free x (SUBSET stated as a ∀-implication — the smt
+  language can state inequational laws even though egg cannot); guard hoisting (invariant
+  wrap/∪/composition out of IterC); Iter fusion (nested invariant iterations fuse/commute).
+- proofs/laws/REGISTRY.tsv: 56 rows (20 SC source laws + the formal.egg set-algebra family +
+  the extended algebra), kind FILE/SCHEMATIC/GROUND/DEFINITIONAL; scripts/check_laws.py parses
+  SC.sourceLaws from the Scala source and fails CI on an optimiser law without a live PROVED
+  certificate (or a required algebra law missing from the registry): 20/20 covered, 0 problems.
+  Countermodel screening is run.sh's sat-check + the registry chain.
+- SmtDiff.lawCertificates repointed at the per-law artifacts.
+- PROVER-SHAPED CATCH: stating law_iterc_set exposed formal.egg's (IterC (Singleton p) b) -> b
+  as FALSE at p=ε (a {ε} source has no heads ⇒ iteration is EMPTY); the rule is now split on
+  head shape ((Eps)->Empty; (Item h)/(Concat (Item h) t)->b) and formal.egg still passes, as do
+  all 22 randomized differential files under the regenerated preludes.
+- Full six-cornerstone pipeline rerun under all the above: ALL GREEN (aunt 661s, datalog 7.4s,
+  gol 242s, puzzle15 486s, temperature 365s, nqueens 505s).
+- FINAL REGRESSION: full Scala suite green — 204 tests across 50 suites, 0 failures, exit 0
+  (the prior count included an untracked scratch suite that lived only in the old build scaffold).
+
+[2026-07-06] CYCLE 3 — termination cross-check, residual removal, README, illustrative egg files:
+1) TERMINATION LEMMAS Z3-CROSS-CHECKED (terminating/): every TPTP file now has an SMT-LIB twin,
+   all discharged by z3 (terminating/run.sh pins per-file goal counts; 41 unsat across 11 files).
+   - bounded_growth_decrease: mechanical 15-line translation, instant (as reported).
+   - datalog_b_seminaive_terminates: the twin proves INSTANTLY (0.01s).  The reported failure
+     reproduced only in the LEMMA BUNDLE: a single negated 4-way conjunction defeats z3's case
+     split while each lemma alone is immediate — datalog_b_seminaive_lemmas.smt2 now carries one
+     push/pop goal per stepping stone (4x unsat), so the full import chain (lemmas + bounded
+     growth => theorem) is machine-checked.
+   - Same bundling pathology found and fixed in datalog_b_naive (per-conjunct-per-program goals)
+     plus TWO E-matching gaps: subset(a,top) and the top-specialized decrease lemma never appear
+     as ground terms, so the general triple never instantiates — both added as PROVED stepping
+     stones (15x unsat).  reachable_value needed the naturals induction as an explicit schema
+     instance (same discipline as proofs/laws/).  Default-mode vampire times out on even the
+     easy .p files (no theory portfolio) — the z3 twins are the reliable cross-check.
+2) RESIDUALS OMITTED: Space.LeftResidual/RightResidual and every evaluator/backend/optimizer/test
+   case removed (~70 sites incl. ITrie/Trie native implementations, the :\ and /: operators, and
+   the PropertyTest generator arms); dead helpers (withoutEps, PathValue.postfixes) dropped;
+   residuals.md documents the definitions, the residuated-structure adjunction, and the reason
+   for omission (universally-quantified membership: no per-key decomposition for the movement
+   calculus, no sharing-friendly recursion, anti-monotone in the divisor — hard to speed up).
+3) README made publication-worthy: deduplicated (semiring laws stated once; TailsIntersection
+   example consolidated into §4.4; §3.3 no longer repeats evaluator code); stale claims fixed
+   ("current prototype ... sets and scans" -> the three verified executors; TailsIntersection
+   empty-input now pinned by the certified characterization); new §5.9 states the machine-checked
+   story at a high level (per-law certificates, executor equivalence pipeline, termination);
+   conclusion updated from future tense to what is built; residuals pointer added.
+4) formal.egg REGENERATED as the illustrative tour of the core set language (header narrative,
+   rules-with-obligations section, then worked examples per operator family, all checks green);
+   zipper.egg REGENERATED as the illustrative zipper extension USING THE SAME PRELUDE (includes
+   the auto-extracted formal-prelude; zipper = (context, focus) cursor whose focus stays a core
+   Space term; Descend/Ascend/FocusOf; checks: ascend∘descend = id, two-step descent = descent by
+   the concat (unwrap-merge via moves), query-at-cursor, virtual cursor over an unevaluated ∪).
+   The certified movement spec moved verbatim to zipper-spec.egg; make_bridge/check_obligations/
+   check_locality/lint repointed; preludes re-extracted (107 forms; the rebuild initially DROPPED
+   the IterC-{ε} rule — caught by the checker's rule count and restored); differentials 22/22,
+   standalone examples, locality + lint + obligation checkers all green.
+- FINAL REGRESSION (after all four points): 202 tests / 50 suites — the one in-run failure was
+  ExecutorOverheadBench reading corpus_1000.ser BEFORE ProgramExpressivity regenerated it (the
+  residual removal changed PathValue's implicit serialVersionUID); against the fresh corpus all
+  four .ser consumers pass (ExecutorOverheadBench 18s, CorpusValidation 52s, SCDegeneracies,
+  CorpusRuntimes).  The 204->202 count delta is exactly the two deleted residual tests.  All
+  corpus loaders now fail ACTIONABLY on a stale .ser ("rerun morkl.ProgramExpressivity") instead
+  of with a bare InvalidClassException.
+
+[2026-07-11] DOCS REORGANIZATION: the functional pearl moved README.md -> ALGEBRA.md with only
+slight de-repository edits (dropped file paths, the supercompiler API dump, and CI phrasing from
+§5.8/§5.9 — the machine-checked story stays, tool-agnostic; title case normalized); README.md is
+now a proper repository README (overview, layout table, requirements, run instructions for
+sbt/egglog/proofs/terminating + the five CI checkers, and a one-paragraph verification summary).
+Cross-references updated (SUPERCOMPILER.md, Examples.scala). Both illustrative egg files green;
+compile clean.

@@ -1,0 +1,17 @@
+; KEYS CANDIDATE COMPLETENESS (·): a present key of A·B is a present key of A, or (when ε∈A) a
+; present key of B — via the certified append-cons split.
+(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
+(declare-fun append (Path Path) Path)
+(assert (forall ((q Path)) (= (append nil q) q)))
+(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
+(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
+  (= (= (cons k2 p) (append q r))
+     (or (and (= q nil) (= r (cons k2 p)))
+         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
+(declare-fun A (Path) Bool) (declare-fun B (Path) Bool)
+(define-fun presentA ((h Int)) Bool (exists ((q Path)) (A (cons h q))))
+(define-fun presentB ((h Int)) Bool (exists ((q Path)) (B (cons h q))))
+(assert (not (forall ((h Int))
+  (=> (exists ((p Path) (q Path) (r Path)) (and (= (cons h p) (append q r)) (A q) (B r)))
+      (or (presentA h) (and (A nil) (presentB h)))))))
+(check-sat)

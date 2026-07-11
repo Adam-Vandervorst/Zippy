@@ -3,6 +3,14 @@
 /project/target/
 /target/
 /target/scala-3.4.1/classes/
+.scala-build
 
 .idea
 .bsp
+
+/scbuild/
+
+/sc-run/
+/scbuild/
+
+.claude

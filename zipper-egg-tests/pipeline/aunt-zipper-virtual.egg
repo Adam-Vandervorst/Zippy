@@ -1,0 +1,43 @@
+; BUDGET-EXCEEDED: the virtual program's movement observations did not converge
+; within the rounds ladder for this instance; carried by the Scala executor gate + smaller
+; instances of the same machinery (see datalog-sn / temperature virtual files).
+; AUTO-GENERATED pipeline stage 2 (aunt) — the VIRTUAL zipper program: Iter/BodyK
+; binders over the input literals (control flow NOT pre-materialised); the movement
+; rules walk it (Keys enumeration, per-head App, Guard pruning); every member of the
+; reference output must be reachable, every boundary non-member not.
+(include "prelude.egg")
+(let $glit0 (Union (Union (Union (Union (Wrap1 215 (Union (Union (Union (Wrap1 216 (Wrap1 217 (Eps))) (Wrap1 218 (Wrap1 219 (Eps)))) (Wrap1 219 (Union (Wrap1 216 (Eps)) (Wrap1 226 (Eps))))) (Wrap1 222 (Union (Wrap1 219 (Eps)) (Wrap1 223 (Eps)))))) (Wrap1 220 (Union (Union (Union (Union (Wrap1 216 (Wrap1 219 (Eps))) (Wrap1 217 (Wrap1 216 (Eps)))) (Wrap1 219 (Union (Wrap1 218 (Eps)) (Wrap1 222 (Eps))))) (Wrap1 223 (Wrap1 222 (Eps)))) (Wrap1 226 (Wrap1 219 (Eps)))))) (Wrap1 221 (Union (Union (Wrap1 217 (Eps)) (Wrap1 219 (Eps))) (Wrap1 222 (Eps))))) (Wrap1 224 (Union (Union (Union (Union (Union (Union (Wrap1 216 (Eps)) (Wrap1 217 (Eps))) (Wrap1 218 (Eps))) (Wrap1 219 (Eps))) (Wrap1 222 (Eps))) (Wrap1 223 (Eps))) (Wrap1 226 (Eps))))) (Wrap1 225 (Union (Union (Union (Wrap1 216 (Eps)) (Wrap1 218 (Eps))) (Wrap1 223 (Eps))) (Wrap1 226 (Eps))))))
+(let $glit1 (Union (Union (Union (Union (Union (Union (Wrap1 216 (Eps)) (Wrap1 217 (Eps))) (Wrap1 218 (Eps))) (Wrap1 219 (Eps))) (Wrap1 222 (Eps))) (Wrap1 223 (Eps))) (Wrap1 226 (Eps))))
+(rewrite (App (BodyK 0 (INil) (ZNil)) h0 t) (Wrap1 h0 (Intersection (Subtraction (TailsUnion (Restriction (Sub 215 $glit0) (TailsUnion (Restriction (Sub 220 $glit0) (Sub h0 (Sub 220 $glit0)))))) (Sub h0 (Sub 220 $glit0))) (Sub 225 $glit0))))
+(let $virt (Wrap1 227 (Iter $glit1 (BodyK 0 (INil) (ZNil)))))
+(let $vm0 (Term (Sub 223 (Sub 216 (Sub 227 $virt)))))
+(let $vm1 (Term (Sub 226 (Sub 217 (Sub 227 $virt)))))
+(let $vm2 (Term (Sub 223 (Sub 226 (Sub 227 $virt)))))
+(let $vn0 (Term (Sub 215 $virt)))
+(let $vn1 (Term (Sub 216 $virt)))
+(let $vn2 (Term (Sub 217 $virt)))
+(let $vn3 (Term (Sub 218 $virt)))
+(let $vn4 (Term (Sub 219 $virt)))
+(let $vn5 (Term (Sub 220 $virt)))
+(let $vn6 (Term (Sub 221 $virt)))
+(let $vn7 (Term (Sub 222 $virt)))
+(let $vn8 (Term (Sub 223 $virt)))
+(let $vn9 (Term (Sub 224 $virt)))
+(let $vn10 (Term (Sub 225 $virt)))
+(let $vn11 (Term (Sub 226 $virt)))
+(run ROUNDS)
+(check (= $vm0 (T)))
+(check (= $vm1 (T)))
+(check (= $vm2 (T)))
+(check (= $vn0 (F)))
+(check (= $vn1 (F)))
+(check (= $vn2 (F)))
+(check (= $vn3 (F)))
+(check (= $vn4 (F)))
+(check (= $vn5 (F)))
+(check (= $vn6 (F)))
+(check (= $vn7 (F)))
+(check (= $vn8 (F)))
+(check (= $vn9 (F)))
+(check (= $vn10 (F)))
+(check (= $vn11 (F)))

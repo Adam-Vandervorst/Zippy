@@ -1,0 +1,472 @@
+; ================================================================================================
+; MOVEMENT SPEC of the SpaceZipper algebra (v2 — the certified core).
+;
+; DESIGN.  A zipper is (context, focus).  Two SORTS keep the distinction the previous model erased:
+;   Z — SPACES (path sets) and the space operators, including space-level navigation `Sub k z`
+;       (the subspace under item k).  `Unwrap` is a space op and equals `Sub` denotationally.
+;   C — CURSORS: `(Root z)` and the MOVEMENTS `Descend k c` / `Ascend c`.  The movement monoid is
+;       words over {Descend k, Ascend} acting (partially) on C with the relation
+;           Ascend (Descend k c) = c                       [the zipper contract; Ascend at Root is
+;                                                           deliberately undefined/stuck]
+;       `FocusOf : C -> Z` interprets a cursor, and the commuting law
+;           FocusOf (Descend k c) = Sub k (FocusOf c)
+;       separates movement (C) from space navigation (Z): they agree on focus, but only Descend is
+;       invertible by Ascend — Unwrap/Sub build a NEW root.  (Sort separation makes it impossible
+;       for an e-class to confuse them.)
+;
+; LOCK-STEP INVARIANT.  A cursor over a virtual space is ONE focus into the composite; every `Sub`
+; rule pushes THE SAME key k into every Z-operand of an operator (this is what makes Ascend commute
+; with every operator and the whole design work).  The invariant is a syntactic property of the
+; rules below and is enforced mechanically by scripts/lint_zipper_egg.py.
+;
+; OBSERVATIONS (the full set — see the ops x observations matrix in zipper-egg-tests/README.md):
+;   Term z      : is the focus path a member?                                   B
+;   Sub k z     : the subspace one item down (space-level navigation)            Z
+;   Keys z      : the EXACT present child keys at the focus                      KL
+;                 local for ∅/ε/∪/Guard and concrete sources; for Wrap1 it needs one child
+;                 IsEmpty; for ∩ \ · <| it is a bounded child-emptiness SEARCH (each candidate key
+;                 is kept iff its subspace is non-empty) — the honest cost, stated per-op below.
+;                 NOTE (learned the hard way): in an e-graph Keys CANNOT be an over-approximation —
+;                 every equated observation must be a FUNCTION of the denotation, or congruence
+;                 equates two different approximations of one e-class (e.g. Keys{∅} via the ∅ node
+;                 vs via the Wrap1-of-∅ node) and poisons the graph.  Exactness is soundness here.
+;   IsEmpty z   : is the whole subspace empty?  ⟺ ¬Term z ∧ Keys z = [] — decided locally for
+;                 ∅/ε/Wrap1/∪, a search (via Keys) for ∩ \ · <|, stated as such.
+;   over an OPAQUE trie node (Src n) the observations are the named uninterpreted symbols
+;   (TermOf n) (EmptyOf n) (KeysOf n) and `Sub k (Src n) = Src (ChildOf n k)` — an O(1) child
+;   lookup.  Movements over opaque sources reduce to NORMAL FORMS in these symbols (never dead-end,
+;   never touch the subtree) — that is the locality claim, and it now holds for EVERY operator.
+;
+; KEY ENUMERATION IS THE HARD PART of a virtual zipper, so it is a first-class observation with a
+; merge algebra (KMerge/KInter/KGuard) and per-candidate emptiness filtering (KFilt), and
+; TailsUnion/TailsIntersection/Head/Iter are DEFINED through it — exact keys everywhere (a spurious
+; ∅ would poison a meet / a body; and see the e-graph exactness note above).
+;
+; ITER is the head-DEPENDENT iteration: bodies are defunctionalized as the `Body` sort with
+;   App b h t  — apply body b to head h and tail-space t
+; so any program can add a body constructor + one App rule (JoinBody = the datalog join; InvBody =
+; relation inversion, demonstrating head capture; ConstBody = the invariant-body Iter, ported from
+; formal.egg together with the IterUnion hoisting soundness counterexamples).
+;
+; COST CONTRACT (checked, not asserted: see zipper-egg-tests/locality-schedule.egg and the linter):
+;   * one movement/observation step rewrites ONLY the top constructor — cost O(size of the op
+;     expression at the focus), with ZERO dependence on trie size or subtree contents;
+;   * a chain of d descents is d such steps (mechanized by per-layer saturation in the schedule
+;     file: the checks pass after exactly d+c micro-phases and provably not before);
+;   * state growth: O(1) frames per move per Composition/Restriction node (each descent through ·
+;     adds one Guard/Union frame) — "local in the op expression", NOT constant-size;
+;   * no observation rule constructs concrete trie nodes (linted: no Node/CC on any obs RHS).
+;   * IsEmpty on ∩ \ · <| and KeysX are searches (documented above), used only where exactness is
+;     semantically required.
+;
+; Everything here is a claim ∀vars. LHS = RHS over the denotation; the universal proofs live in
+; proofs/*.smt2 (z3) and proofs/*.p-style obligations (vampire --induction) — egglog runs the
+; algebra, the provers certify the rules.  This file's checks are ground REGRESSIONS (including
+; every previously-stuck probe), not the proofs.
+; ================================================================================================
+
+; ---- abstract concrete-trie node: a base node or an O(1) child lookup ----
+(datatype Node (N i64) (ChildOf Node i64))
+
+(datatype*
+  (B (T) (F)
+     (Not B) (Or B B) (And B B) (AndNot B B)   ; AndNot a b = a ∧ ¬b
+     (Eqi i64 i64)                             ; decidable item equality
+     (TermOf Node)                             ; uninterpreted: is the opaque node terminal?
+     (EmptyOf Node)                            ; uninterpreted: is the opaque node empty?
+     (Term Z)                                  ; membership at the focus
+     (IsEmpty Z)                               ; emptiness of the whole subspace (search for ∩ \ · <|)
+     (IsNilK KL)                               ; helper: is a key list empty?
+     (TermAt C))                               ; membership at a CURSOR focus
+  (KL (KNil) (KCons i64 KL)
+      (KeysOf Node)                            ; uninterpreted: (exact) keys of an opaque node
+      (Keys Z)                                 ; EXACT present keys (see header note)
+      (KMerge KL KL) (KInter KL KL)            ; sorted merge / sorted intersect
+      (KGuard B KL)                            ; KGuard T ks = ks ; KGuard F ks = KNil
+      (KFilt KL Z) (KConsIf i64 B KL)          ; keep a candidate key iff its subspace is non-empty
+      (KeysAt C))
+  (Z (Empty)                                   ; ∅
+     (Eps)                                     ; {ε}
+     (Src Node)                                ; opaque concrete trie node
+     (Wrap1 i64 Z)                             ; {k·p : p ∈ z}
+     (Union Z Z) (Intersection Z Z) (Subtraction Z Z) (Composition Z Z)
+     (Restriction Z Z)                         ; keep x-paths having a prefix in p (TOTAL semantics)
+     (Restr Z Z)                               ; compat alias for the transpiler (= Restriction)
+     (Raffination Z Z)                         ; x \| y = x \ (x <| y)
+     (TailsUnion Z) (TailsIntersection Z) (Head Z)
+     (Unwrap i64 Z)                            ; space op: subspace under k (= Sub; NOT a movement)
+     (Iter Z Body)                             ; head-dependent iteration over present keys
+     (Guard B Z)                               ; Guard T z = z ; Guard F z = ∅
+     (Sub i64 Z)                               ; space-level navigation: the subspace under k
+     (KFoldU KL Z) (KFoldI KL Z)               ; ∪ / ∩ of (Sub h z) over a key list
+     (HFold KL)                                ; Head fold
+     (IFold KL Z Body)                         ; Iter fold
+     (App Body i64 Z)                          ; defunctionalized body application
+     (FocusOf C))                              ; the space at a cursor's focus
+  (Body (ConstBody Z)                          ; invariant body (formal.egg's Iter)
+        (JoinBody Z)                           ; datalog join body: h,t ↦ h·⋃(s <| t)
+        (InvBody) (InvBody2 i64)               ; relation inversion (head capture across levels)
+        (BodyK i64 IL ZL))                     ; program-defined bodies: index + captured items/spaces
+                                               ; (each program adds its own App rules for its BodyK ids)
+  (IL (INil) (ICons i64 IL))                   ; captured item lists (outer iteration heads)
+  (ZL (ZNil) (ZCons Z ZL))                     ; captured space lists (free operands of a body)
+  (C (Root Z) (Descend i64 C) (Ascend C)))
+
+; ================================================================================================
+; booleans
+; ================================================================================================
+(rewrite (Not (T)) (F)) (rewrite (Not (F)) (T)) (rewrite (Not (Not b)) b)   ; definitional (boolean tables)
+(rewrite (Or  (T) b) (T)) (rewrite (Or  b (T)) (T)) (rewrite (Or  (F) b) b) (rewrite (Or  b (F)) b)   ; definitional (boolean tables)
+(rewrite (And (F) b) (F)) (rewrite (And b (F)) (F)) (rewrite (And (T) b) b) (rewrite (And b (T)) b)   ; definitional (boolean tables)
+(rewrite (AndNot (F) b) (F)) (rewrite (AndNot (T) b) (Not b))          ; left rules (were missing)   ; definitional (boolean tables)
+(rewrite (AndNot a (T)) (F)) (rewrite (AndNot a (F)) a)   ; definitional (boolean tables)
+(rewrite (Eqi a a) (T))   ; definitional (boolean tables)
+(rule ((= e (Eqi a b)) (!= a b)) ((union e (F))))   ; definitional (boolean tables)
+
+; ---- conditional space ----
+(rewrite (Guard (T) z) z)   ; definitional (conditional)
+(rewrite (Guard (F) z) (Empty))   ; definitional (conditional)
+
+; ================================================================================================
+; MOVEMENT (cursors): the zipper contract and the focus interpretation
+; ================================================================================================
+(rewrite (Ascend (Descend k c)) c)             ; Ascend ∘ Descend k = id  (Ascend at Root: stuck)   ; definitional (the zipper contract; tested in SCOPE 1)
+(rewrite (FocusOf (Root z)) z)   ; definitional (cursor interpretation)
+(rewrite (FocusOf (Descend k c)) (Sub k (FocusOf c)))   ; movement agrees with space navigation   ; definitional (cursor interpretation)
+(rewrite (TermAt c) (Term (FocusOf c)))   ; definitional (cursor interpretation)
+(rewrite (KeysAt c) (Keys (FocusOf c)))   ; definitional (cursor interpretation)
+
+; ================================================================================================
+; Term — membership at the focus (total; one combinator per operator)
+; ================================================================================================
+(rewrite (Term (Empty)) (F))   ; proof: proofs/pointwise.smt2, proofs/wrap1.smt2
+(rewrite (Term (Eps)) (T))   ; proof: proofs/pointwise.smt2, proofs/wrap1.smt2
+(rewrite (Term (Src n)) (TermOf n))            ; opaque: the NAMED flag (composition etc. stay live)   ; proof: proofs/pointwise.smt2, proofs/wrap1.smt2
+(rewrite (Term (Wrap1 h z)) (F))   ; proof: proofs/pointwise.smt2, proofs/wrap1.smt2
+(rewrite (Term (Union a b)) (Or (Term a) (Term b)))   ; proof: proofs/pointwise.smt2 + proofs/threeway_{union,intersection,subtraction}.smt2
+(rewrite (Term (Intersection a b)) (And (Term a) (Term b)))   ; proof: proofs/pointwise.smt2 + proofs/threeway_{union,intersection,subtraction}.smt2
+(rewrite (Term (Subtraction a b)) (AndNot (Term a) (Term b)))   ; proof: proofs/pointwise.smt2 + proofs/threeway_{union,intersection,subtraction}.smt2
+(rewrite (Term (Composition a b)) (And (Term a) (Term b)))   ; proof: proofs/composition.smt2
+(rewrite (Term (Restriction x p)) (And (Term x) (Term p)))   ; TOTAL — ε∈(x<|p) ⟺ ε∈x ∧ ε∈p   ; proof: proofs/restriction.smt2
+(rewrite (Term (Guard b z)) (And b (Term z)))   ; proof: proofs/pointwise.smt2, proofs/wrap1.smt2
+(rewrite (Term (Head z)) (F))                  ; heads are length-1 paths, never ε   ; proof: proofs/pointwise.smt2, proofs/wrap1.smt2
+; Unwrap/Raffination/Restr/tails/Iter reduce structurally first (below), then Term applies.
+
+; ================================================================================================
+; Sub — space-level navigation (one LOCAL step per operator; same k into every operand = lock-step)
+; ================================================================================================
+(rewrite (Sub k (Empty)) (Empty))   ; proof: proofs/pointwise.smt2 (locality: scripts/check_locality.sh)
+(rewrite (Sub k (Eps)) (Empty))   ; proof: proofs/pointwise.smt2 (locality: scripts/check_locality.sh)
+(rewrite (Sub k (Src n)) (Src (ChildOf n k)))  ; O(1) child lookup — the subtree is NEVER traversed   ; proof: proofs/pointwise.smt2 (locality: scripts/check_locality.sh)
+(rewrite (Sub k (Wrap1 h z)) (Guard (Eqi k h) z))   ; proof: proofs/wrap1.smt2
+(rewrite (Sub k (Union a b)) (Union (Sub k a) (Sub k b)))   ; proof: proofs/pointwise.smt2
+(rewrite (Sub k (Intersection a b)) (Intersection (Sub k a) (Sub k b)))   ; proof: proofs/pointwise.smt2
+(rewrite (Sub k (Subtraction a b)) (Subtraction (Sub k a) (Sub k b)))   ; proof: proofs/pointwise.smt2
+(rewrite (Sub k (Composition a b)) (Union (Composition (Sub k a) b) (Guard (Term a) (Sub k b))))   ; proof: proofs/composition.smt2
+; TOTAL restriction step: a surviving prefix either ended at the focus (ε∈p ⇒ keep all of x's
+; branch) or continues under k — no "p not terminal" invariant required, no unsound F.
+(rewrite (Sub k (Restriction x p)) (Union (Guard (Term p) (Sub k x)) (Restriction (Sub k x) (Sub k p))))   ; proof: proofs/restriction.smt2
+(rewrite (Sub k (Guard b z)) (Guard b (Sub k z)))   ; proof: proofs/pointwise.smt2 (locality: scripts/check_locality.sh)
+
+; ---- space ops that DEFINE themselves via other ops (macros / aliases) ----
+(rewrite (Unwrap k z) (Sub k z))               ; unwrap is space navigation (a NEW root, not a move)   ; definitional (unwrap IS space navigation)
+(rewrite (Restr x p) (Restriction x p))        ; transpiler-compat alias (Restriction now total)   ; definitional (alias)
+(rewrite (Raffination x y) (Subtraction x (Restriction x y)))   ; definitional (macro; behaviour via restriction.smt2)
+(rewrite (Restriction x (Eps)) x)              ; every path has ε as a prefix   ; proof: proofs/restriction.smt2
+(rewrite (Restriction (Empty) p) (Empty))   ; proof: proofs/restriction.smt2
+(rewrite (Restriction x (Empty)) (Empty))   ; proof: proofs/restriction.smt2
+; sound e-class collapse when a prefix provably ends at the focus (the old smart constructor):
+(rule ((= e (Restriction x p))) ((Term p)))   ; demand-materialisation (creates the guard term; asserts nothing)
+(rule ((= e (Restriction x p)) (= (T) (Term p))) ((union e x)))   ; proof: proofs/restriction.smt2 (terminal-prefix collapse)
+
+; ================================================================================================
+; Keys — the EXACT child-key observation.  Local for ∅/ε/∪/Guard/Src; Wrap1 needs one child
+; IsEmpty; ∩ \ · <| filter their CANDIDATE lists by per-key subspace emptiness (KFilt) — the
+; documented bounded search.  Exactness is what keeps observations e-class-consistent.
+; ================================================================================================
+(rewrite (Keys (Empty)) (KNil))   ; definitional (exact by construction)
+(rewrite (Keys (Eps)) (KNil))   ; definitional (exact by construction)
+(rewrite (Keys (Src n)) (KeysOf n))            ; opaque: the NAMED (exact) key set   ; definitional (exact by construction)
+(rewrite (Keys (Wrap1 h z)) (KConsIf h (IsEmpty z) (KNil)))   ; proof: proofs/keys_filter_exact.smt2 (presence ⟺ child nonempty)
+(rewrite (Keys (Union a b)) (KMerge (Keys a) (Keys b)))   ; proof: proofs/refine_kmerge.smt2
+(rewrite (Keys (Guard b z)) (KGuard b (Keys z)))   ; definitional (exact by construction)
+(rewrite (Keys (Intersection a b))   ; proof: proofs/keys_intersection.smt2 + proofs/refine_kinter.smt2 + proofs/keys_filter_exact.smt2
+         (KFilt (KInter (Keys a) (Keys b)) (Intersection a b)))
+(rewrite (Keys (Subtraction a b))   ; proof: proofs/keys_subtraction.smt2 + proofs/keys_filter_exact.smt2
+         (KFilt (Keys a) (Subtraction a b)))
+(rewrite (Keys (Composition a b))   ; proof: proofs/keys_composition.smt2 + proofs/keys_filter_exact.smt2
+         (KFilt (KMerge (Keys a) (KGuard (Term a) (Keys b))) (Composition a b)))
+(rewrite (Keys (Restriction x p))   ; proof: proofs/keys_restriction.smt2 + proofs/keys_filter_exact.smt2
+         (KFilt (KMerge (KGuard (Term p) (Keys x)) (KInter (Keys x) (Keys p))) (Restriction x p)))
+
+; sorted merge / intersect (key-ascending lists, like the implementation's child lists)
+(rewrite (KMerge (KNil) c) c) (rewrite (KMerge c (KNil)) c)   ; proof: proofs/refine_kmerge.smt2
+(rule ((= e (KMerge (KCons k1 r1) (KCons k2 r2))) (< k1 k2)) ((union e (KCons k1 (KMerge r1 (KCons k2 r2))))))   ; proof: proofs/refine_kmerge.smt2
+(rule ((= e (KMerge (KCons k1 r1) (KCons k2 r2))) (< k2 k1)) ((union e (KCons k2 (KMerge (KCons k1 r1) r2)))))   ; proof: proofs/refine_kmerge.smt2
+(rule ((= e (KMerge (KCons k1 r1) (KCons k2 r2))) (= k1 k2)) ((union e (KCons k1 (KMerge r1 r2)))))   ; proof: proofs/refine_kmerge.smt2
+(rewrite (KInter (KNil) c) (KNil)) (rewrite (KInter c (KNil)) (KNil))   ; proof: proofs/refine_kinter.smt2
+(rule ((= e (KInter (KCons k1 r1) (KCons k2 r2))) (< k1 k2)) ((union e (KInter r1 (KCons k2 r2)))))   ; proof: proofs/refine_kinter.smt2
+(rule ((= e (KInter (KCons k1 r1) (KCons k2 r2))) (< k2 k1)) ((union e (KInter (KCons k1 r1) r2))))   ; proof: proofs/refine_kinter.smt2
+(rule ((= e (KInter (KCons k1 r1) (KCons k2 r2))) (= k1 k2)) ((union e (KCons k1 (KInter r1 r2)))))   ; proof: proofs/refine_kinter.smt2
+(rewrite (KGuard (T) ks) ks) (rewrite (KGuard (F) ks) (KNil))   ; definitional (conditional)
+
+; ---- KFilt: keep each candidate key iff its subspace is non-empty (the exactness filter) ----
+(rewrite (KFilt (KNil) z) (KNil))   ; proof: proofs/keys_filter_exact.smt2
+(rewrite (KFilt (KCons h ks) z) (KConsIf h (IsEmpty (Sub h z)) (KFilt ks z)))   ; proof: proofs/keys_filter_exact.smt2
+(rewrite (KConsIf h (T) rest) rest)   ; proof: proofs/keys_filter_exact.smt2
+(rewrite (KConsIf h (F) rest) (KCons h rest))   ; proof: proofs/keys_filter_exact.smt2
+(rewrite (IsNilK (KNil)) (T))   ; proof: proofs/keys_filter_exact.smt2
+(rewrite (IsNilK (KCons h ks)) (F))   ; proof: proofs/keys_filter_exact.smt2
+
+; ================================================================================================
+; IsEmpty — local where possible; an HONEST SEARCH (via exact Keys) for ∩ \ · <|
+; ================================================================================================
+(rewrite (IsEmpty (Empty)) (T))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+(rewrite (IsEmpty (Eps)) (F))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+(rewrite (IsEmpty (Src n)) (EmptyOf n))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+(rewrite (IsEmpty (Wrap1 h z)) (IsEmpty z))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+(rewrite (IsEmpty (Union a b)) (And (IsEmpty a) (IsEmpty b)))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+(rewrite (IsEmpty (Guard b z)) (Or (Not b) (IsEmpty z)))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+; the search: empty ⟺ not a member here and no present child key (Keys is exact, so this is IsNilK)
+(rewrite (IsEmpty (Intersection a b))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+         (And (Not (Term (Intersection a b))) (IsNilK (Keys (Intersection a b)))))
+(rewrite (IsEmpty (Subtraction a b))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+         (And (Not (Term (Subtraction a b))) (IsNilK (Keys (Subtraction a b)))))
+(rewrite (IsEmpty (Composition a b))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+         (And (Not (Term (Composition a b))) (IsNilK (Keys (Composition a b)))))
+(rewrite (IsEmpty (Restriction x p))   ; proof: proofs/isempty_finite.smt2 (wf tries; structural = terminating)
+         (And (Not (Term (Restriction x p))) (IsNilK (Keys (Restriction x p)))))
+
+; ================================================================================================
+; tails / Head / Iter — DEFINED through key enumeration (the previously hand-waved part)
+; ================================================================================================
+(rewrite (TailsUnion z) (KFoldU (Keys z) z))   ; proof: proofs/keyfolds.smt2 + proofs/threeway_tailsunion_trie.smt2
+(rewrite (KFoldU (KNil) z) (Empty))   ; proof: proofs/keyfolds.smt2 + proofs/threeway_tailsunion_trie.smt2
+(rewrite (KFoldU (KCons h ks) z) (Union (Sub h z) (KFoldU ks z)))   ; proof: proofs/keyfolds.smt2 + proofs/threeway_tailsunion_trie.smt2
+(rewrite (TailsIntersection z) (KFoldI (Keys z) z))     ; exact keys: a spurious ∅ would poison the meet   ; proof: proofs/keyfold_tailsinter.smt2
+(rewrite (KFoldI (KNil) z) (Empty))   ; proof: proofs/keyfold_tailsinter.smt2
+(rewrite (KFoldI (KCons h (KNil)) z) (Sub h z))   ; proof: proofs/keyfold_tailsinter.smt2
+(rewrite (KFoldI (KCons h (KCons j ks)) z) (Intersection (Sub h z) (KFoldI (KCons j ks) z)))   ; proof: proofs/keyfold_tailsinter.smt2
+(rewrite (Head z) (HFold (Keys z)))                     ; exact keys: no empty-tailed heads   ; proof: proofs/keyfold_head.smt2 + proofs/impl_head.smt2
+(rewrite (HFold (KNil)) (Empty))   ; proof: proofs/keyfold_head.smt2 + proofs/impl_head.smt2
+(rewrite (HFold (KCons h ks)) (Union (Wrap1 h (Eps)) (HFold ks)))   ; proof: proofs/keyfold_head.smt2 + proofs/impl_head.smt2
+(rewrite (Iter z b) (IFold (Keys z) z b))               ; exact keys: bodies see present heads only   ; proof: proofs/keyfold_iter.smt2
+(rewrite (IFold (KNil) z b) (Empty))   ; proof: proofs/keyfold_iter.smt2
+(rewrite (IFold (KCons h ks) z b) (Union (App b h (Sub h z)) (IFold ks z b)))   ; proof: proofs/keyfold_iter.smt2
+; body applications (defunctionalized; programs add their own constructors + one rule each)
+(rewrite (App (ConstBody v) h t) v)                                    ; invariant body   ; definitional (body definitions; programs add their own)
+(rewrite (App (JoinBody s) h t) (Wrap1 h (TailsUnion (Restriction s t))))   ; the datalog join   ; proof: proofs/join_spec.smt2 (THE datalog join specification)
+(rewrite (App (InvBody) b as) (Iter as (InvBody2 b)))                  ; invert: outer head captured…   ; definitional (body definitions; programs add their own)
+(rewrite (App (InvBody2 b) a t) (Wrap1 a (Wrap1 b (Eps))))             ; …and swapped below   ; definitional (body definitions; programs add their own)
+
+; ================================================================================================
+; algebraic laws (the implemented smart-constructor short-circuits + ring identities)
+; ================================================================================================
+(rewrite (Union a a) a)   ; proof: proofs/pointwise.smt2
+(rewrite (Intersection a a) a)   ; proof: proofs/pointwise.smt2
+(rewrite (Subtraction a a) (Empty))   ; proof: proofs/pointwise.smt2
+(rewrite (Restriction x x) x)                            ; ported from formal.egg   ; proof: proofs/pointwise.smt2
+(rewrite (Union (Empty) x) x) (rewrite (Union x (Empty)) x)   ; proof: proofs/pointwise.smt2
+(rewrite (Intersection (Empty) x) (Empty)) (rewrite (Intersection x (Empty)) (Empty))   ; proof: proofs/pointwise.smt2
+(rewrite (Subtraction (Empty) x) (Empty)) (rewrite (Subtraction x (Empty)) x)   ; proof: proofs/pointwise.smt2
+(rewrite (Composition (Empty) x) (Empty)) (rewrite (Composition x (Empty)) (Empty))   ; proof: proofs/composition_norm.smt2
+(rewrite (Wrap1 h (Empty)) (Empty))   ; proof: proofs/pointwise.smt2
+(rewrite (Composition (Eps) x) x) (rewrite (Composition x (Eps)) x)   ; proof: proofs/composition_norm.smt2
+(rewrite (Composition (Wrap1 h a) b) (Wrap1 h (Composition a b)))   ; proof: proofs/composition_norm.smt2
+(rewrite (Composition (Union a b) c) (Union (Composition a c) (Composition b c)))   ; proof: proofs/composition_norm.smt2
+; commutativity/associativity of ∪/∩ are NOT syntactic rewrites here (e-graph blow-up; the
+; implementation is order-free IntMaps) — they are certified universally in proofs/*.smt2 and
+; spot-checked observationally below.
+
+; ================================================================================================
+; reusable concrete spaces
+; ================================================================================================
+(let $s1   (Wrap1 1 (Eps)))                               ; {1}
+(let $s2   (Wrap1 2 (Eps)))                               ; {2}
+(let $s3   (Wrap1 3 (Eps)))                               ; {3}
+(let $s12  (Union (Wrap1 1 (Eps)) (Wrap1 2 (Eps))))       ; {1, 2}
+(let $s23  (Union (Wrap1 2 (Eps)) (Wrap1 3 (Eps))))       ; {2, 3}
+(let $p12  (Wrap1 1 (Wrap1 2 (Eps))))                     ; {1.2}
+(let $p13  (Wrap1 1 (Wrap1 3 (Eps))))                     ; {1.3}
+(let $epsx (Union (Eps) (Wrap1 1 (Eps))))                 ; {ε, 1}
+
+; ================================================================================================
+; SCOPE 1 — ABSTRACT LOCALITY over opaque sources: EVERY operator's movement reduces to a normal
+; form in ChildOf/TermOf/KeysOf — one local step per layer, the subtree never traversed.  (The old
+; model only showed this for ∪/∩/\; composition/restriction/tails dead-ended.  Fixed.)
+; ================================================================================================
+(push)
+(let $u_move (Sub 1 (Sub 0 (Union (Src (N 10)) (Src (N 20))))))
+(let $i_move (Sub 5 (Intersection (Src (N 1)) (Src (N 2)))))
+(let $d_move (Sub 4 (Subtraction (Src (N 1)) (Src (N 2)))))
+(let $c_move (Term (Sub 2 (Composition (Src (N 1)) (Src (N 2))))))    ; previously stuck at Guard(Term(Src…))
+(let $r_move (Term (Sub 2 (Restriction (Src (N 1)) (Src (N 2))))))    ; previously stuck in Restr's guard
+(let $t_move (TailsUnion (Src (N 1))))                                ; previously stuck; now reduces TO the
+                                                                      ; named enumeration (KeysOf) — documented
+(let $bl_loc (Sub 2 (Sub 1 (Subtraction (Union (Src (N 1)) (Src (N 2))) (Src (N 3))))))
+; movements (cursor sort) + the zipper contract over an opaque source
+(let $curs (Descend 1 (Descend 0 (Root (Union (Src (N 10)) (Src (N 20)))))))
+(let $curs_focus (FocusOf $curs))
+(let $curs_up (Ascend $curs))
+(let $curs_up_up (Ascend (Ascend $curs)))
+(run 40)
+(check (= $u_move (Union (Src (ChildOf (ChildOf (N 10) 0) 1)) (Src (ChildOf (ChildOf (N 20) 0) 1)))))
+(check (= $i_move (Intersection (Src (ChildOf (N 1) 5)) (Src (ChildOf (N 2) 5)))))
+(check (= $d_move (Subtraction (Src (ChildOf (N 1) 4)) (Src (ChildOf (N 2) 4)))))
+; composition: symbolic normal form Or(And(TermOf a', TermOf b), And(TermOf a, TermOf b'))
+(check (= $c_move (Or (And (TermOf (ChildOf (N 1) 2)) (TermOf (N 2)))
+                      (And (TermOf (N 1)) (TermOf (ChildOf (N 2) 2))))))
+; restriction: And(TermOf x', Or/And over p's flags) — assert against its reduced form:
+(check (= $r_move (Or (And (TermOf (N 2)) (TermOf (ChildOf (N 1) 2)))
+                      (And (TermOf (ChildOf (N 1) 2)) (TermOf (ChildOf (N 2) 2))))))
+; tails over an opaque source reduces to the NAMED key enumeration (not a silent dead-end):
+(check (= $t_move (KFoldU (KeysOf (N 1)) (Src (N 1)))))
+(check (= $bl_loc (Subtraction (Union (Src (ChildOf (ChildOf (N 1) 1) 2)) (Src (ChildOf (ChildOf (N 2) 1) 2))) (Src (ChildOf (ChildOf (N 3) 1) 2)))))
+; the zipper contract: focus commutes with Sub; Ascend inverts Descend, twice back to the Root
+(check (= $curs_focus (Union (Src (ChildOf (ChildOf (N 10) 0) 1)) (Src (ChildOf (ChildOf (N 20) 0) 1)))))
+(check (= $curs_up (Descend 0 (Root (Union (Src (N 10)) (Src (N 20)))))))
+(check (= $curs_up_up (Root (Union (Src (N 10)) (Src (N 20))))))
+(pop)
+
+; ================================================================================================
+; SCOPE 2 — DENOTATIONAL per-op tests (≥3 qualitatively different per op) + regressions for every
+; previously-stuck probe.  Equality of spaces is OBSERVATIONAL (Term/Sub), matching the executor.
+; ================================================================================================
+(push)
+; -- Union --
+(let $u_mem  (Term (Union (Empty) (Eps))))
+(let $u_mem0 (Term (Union (Empty) (Empty))))
+(let $u_idem (Union (Src (N 7)) (Src (N 7))))
+(let $comm1a (Term (Sub 1 (Union $s1 $s2)))) (let $comm1b (Term (Sub 1 (Union $s2 $s1))))
+(let $comm2a (Term (Sub 2 (Union $s1 $s2)))) (let $comm2b (Term (Sub 2 (Union $s2 $s1))))
+; -- Intersection --
+(let $i_in   (Term (Sub 2 (Intersection $s12 $s23))))
+(let $i_out  (Sub 1 (Intersection $s12 $s23)))
+(let $i_idem (Intersection $p13 $p13))
+; -- Subtraction --
+(let $d_in   (Sub 1 (Subtraction $s12 $s23)))
+(let $d_out  (Sub 2 (Subtraction $s12 $s23)))
+(let $d_self (Subtraction $p12 $p12))
+; -- Composition --
+(let $c_step (Sub 1 (Composition $s1 $s2)))
+(let $c_full (Sub 2 (Sub 1 (Composition $s1 $s2))))
+(let $c_mem  (Term (Composition (Eps) (Eps))))
+(let $c_term (Term (Sub 2 (Composition $epsx $s2))))
+; -- Wrap1 --
+(let $w_hit  (Sub 1 (Wrap1 1 $s2)))
+(let $w_miss (Sub 5 (Wrap1 1 $s2)))
+(let $w_mem  (Term (Wrap1 1 (Eps))))
+(let $w_ann  (Wrap1 1 (Empty)))
+; -- Restriction (total semantics; incl. the UNSOUNDNESS regression) --
+(let $r_keep (Sub 1 (Restr $p12 $s1)))
+(let $r_dropM (Term (Sub 3 (Restr (Union $p12 $s3) $s1))))
+(let $r_all  (Restr $s12 (Eps)))
+(let $r_sound (Term (Restriction (Eps) (Eps))))          ; REGRESSION: was F (unsound); ε∈({ε}<|{ε}) = T
+(let $r_deep (Term (Sub 2 (Sub 1 (Restriction $p12 $p12)))))   ; prefix = whole path: 1.2 kept
+; -- Raffination (behavioral, no definition-check) --
+(let $f_keep (Term (Sub 3 (Raffination (Union $p12 $s3) $s1))))
+(let $f_drop (Sub 1 (Raffination (Union $p12 $s3) $s1)))
+(let $f_self (IsEmpty (Raffination $s12 $s12)))
+; -- TailsUnion --
+(let $tu_one (TailsUnion (Wrap1 1 (Wrap1 2 (Eps)))))
+(let $tu_twoA (Term (Sub 2 (TailsUnion (Union (Wrap1 1 (Wrap1 2 (Eps))) (Wrap1 3 (Wrap1 4 (Eps))))))))
+(let $tu_twoB (Term (Sub 4 (TailsUnion (Union (Wrap1 1 (Wrap1 2 (Eps))) (Wrap1 3 (Wrap1 4 (Eps))))))))
+(let $tu_eps (TailsUnion (Eps)))
+; -- TailsIntersection (incl. the previously-STUCK probes) --
+(let $ti_shared (Term (Sub 2 (TailsIntersection (Union (Wrap1 1 (Wrap1 2 (Eps))) (Wrap1 4 (Wrap1 2 (Eps))))))))
+(let $ti_one (Term (TailsIntersection (Wrap1 1 (Eps)))))
+(let $ti_disM (Term (Sub 2 (TailsIntersection (Union (Wrap1 1 (Wrap1 2 (Eps))) (Wrap1 4 (Wrap1 3 (Eps))))))))
+(let $ti_dup (TailsIntersection (Union $p12 $p13)))       ; REGRESSION: duplicate heads {1.2,1.3} — was stuck
+(let $ti_dupM (Term (Sub 2 $ti_dup)))
+(let $ti_3way (Term (Sub 9 (TailsIntersection (Union (Wrap1 1 (Wrap1 9 (Eps))) (Union (Wrap1 2 (Wrap1 9 (Eps))) (Wrap1 3 (Wrap1 9 (Eps)))))))))  ; REGRESSION: 3-way union — was stuck
+; -- Unwrap (space op = Sub; distinct from movement) --
+(let $n_one  (Unwrap 1 (Wrap1 1 $s2)))
+(let $n_two  (Unwrap 2 (Unwrap 1 $p12)))
+(let $n_miss (Unwrap 5 (Wrap1 1 $s2)))
+; -- Head (ported op) --
+(let $h_two  (Term (Sub 1 (Head $s12))))                  ; heads of {1,2} contain 1
+(let $h_deep (Term (Sub 1 (Head (Union $p12 $p13)))))     ; heads of {1.2,1.3} = {1}
+(let $h_deepN (IsEmpty (Sub 2 (Head (Union $p12 $p13))))) ; …and nothing else
+(let $h_eps  (Head (Eps)))                                ; ε has no head
+; -- Keys / KeysX / IsEmpty observations --
+(let $k_union (Keys $s12))
+(let $k_inter (Keys (Intersection $s1 $s2)))              ; disjoint: KInter [1] [2] = []
+(let $k_exact (Keys (Subtraction $s12 $s1)))              ; exact: {1,2}\{1} has present key 2 only
+(let $k_wrap0 (Keys (Wrap1 5 (Empty))))                   ; exactness: a wrap of ∅ has NO key
+(let $e_yes (IsEmpty (Intersection $s1 $s2)))             ; the search decides ∅
+(let $e_no  (IsEmpty (Subtraction $s12 $s1)))
+; -- Iter (head-dependent bodies) --
+(let $it_const (Iter $s12 (ConstBody $s3)))               ; invariant body over 2 heads = {3}
+(let $it_constM (Term (Sub 3 $it_const)))
+(let $it_inv (Iter (Union $p12 (Wrap1 3 (Wrap1 4 (Eps)))) (InvBody)))   ; invert {1.2,3.4} = {2.1,4.3}
+(let $it_invA (Term (Sub 1 (Sub 2 $it_inv))))
+(let $it_invB (Term (Sub 3 (Sub 4 $it_inv))))
+(let $it_invN (Term (Sub 2 (Sub 1 $it_inv))))
+(let $it_join (Iter $p12 (JoinBody (Union (Wrap1 2 (Wrap1 7 (Eps))) (Wrap1 8 (Wrap1 9 (Eps)))))))  ; join {1.2} ⋈ {2.7,8.9} = {1.7}
+(let $it_joinA (Term (Sub 7 (Sub 1 $it_join))))
+(let $it_joinN (Term (Sub 9 (Sub 1 $it_join))))
+
+(run 80)
+
+; -- Union --
+(check (= $u_mem (T))) (check (= $u_mem0 (F))) (check (= $u_idem (Src (N 7))))
+(check (= $comm1a $comm1b)) (check (= $comm2a $comm2b)) (check (= $comm1a (T))) (check (= $comm2a (T)))
+; -- Intersection --
+(check (= $i_in (T))) (check (= $i_out (Empty))) (check (= $i_idem $p13))
+; -- Subtraction --
+(check (= $d_in (Eps))) (check (= $d_out (Empty))) (check (= $d_self (Empty)))
+; -- Composition --
+(check (= $c_step $s2)) (check (= $c_full (Eps))) (check (= $c_mem (T))) (check (= $c_term (T)))
+; -- Wrap1 --
+(check (= $w_hit $s2)) (check (= $w_miss (Empty))) (check (= $w_mem (F))) (check (= $w_ann (Empty)))
+; -- Restriction --
+(check (= $r_keep $s2)) (check (= $r_dropM (F))) (check (= $r_all $s12))
+(check (= $r_sound (T)))                                  ; the unsoundness is gone
+(check (= $r_deep (T)))
+; -- Raffination --
+(check (= $f_keep (T))) (check (= $f_drop (Empty))) (check (= $f_self (T)))
+; -- TailsUnion --
+(check (= $tu_one $s2)) (check (= $tu_twoA (T))) (check (= $tu_twoB (T))) (check (= $tu_eps (Empty)))
+; -- TailsIntersection --
+(check (= $ti_shared (T))) (check (= $ti_one (T))) (check (= $ti_disM (F)))
+(check (= $ti_dupM (T)))                                  ; {1.2,1.3}: single present head 1 ⇒ tails {2,3} ∋ 2
+(check (= $ti_3way (T)))                                  ; 3-way: {1.9,2.9,3.9} ⇒ meet = {9}
+; -- Unwrap --
+(check (= $n_one $s2)) (check (= $n_two (Eps))) (check (= $n_miss (Empty)))
+; -- Head --
+(check (= $h_two (T))) (check (= $h_deep (T))) (check (= $h_deepN (T))) (check (= $h_eps (Empty)))
+; -- Keys / IsEmpty --
+(check (= $k_union (KCons 1 (KCons 2 (KNil)))))
+(check (= $k_inter (KNil)))
+(check (= $k_exact (KCons 2 (KNil))))
+(check (= $k_wrap0 (KNil)))
+(check (= $e_yes (T))) (check (= $e_no (F)))
+; -- Iter --
+(check (= $it_constM (T)))
+(check (= $it_invA (T))) (check (= $it_invB (T))) (check (= $it_invN (F)))
+(check (= $it_joinA (T))) (check (= $it_joinN (F)))
+(pop)
+
+; ================================================================================================
+; SCOPE 3 — ported from formal.egg: the IterUnion hoisting-soundness counterexamples (the SC gate).
+; Distributing a body-union over the iteration is sound; HOISTING a branch out is sound ONLY over a
+; provably-HEADED source (it leaks the branch on ∅) — hoisting an invariant Wrap out IS sound.
+; ================================================================================================
+(push)
+(let $iu_body (ConstBody (Union $s1 $s2)))
+(let $iu_orig_empty (Iter (Empty) $iu_body))
+(let $iu_distr_empty (Union (Iter (Empty) (ConstBody $s1)) (Iter (Empty) (ConstBody $s2))))
+(let $iu_hoist_empty (Union $s1 (Iter (Empty) (ConstBody $s2))))
+(let $iu_orig_ne (Iter (Wrap1 7 (Eps)) $iu_body))
+(let $iu_distr_ne (Union (Iter (Wrap1 7 (Eps)) (ConstBody $s1)) (Iter (Wrap1 7 (Eps)) (ConstBody $s2))))
+(let $iu_hoist_ne (Union $s1 (Iter (Wrap1 7 (Eps)) (ConstBody $s2))))
+(let $wi_orig_empty (Iter (Empty) (ConstBody (Wrap1 5 $s1))))
+(let $wi_hoist_empty (Wrap1 5 (Iter (Empty) (ConstBody $s1))))
+(run 60)
+(check (= $iu_orig_empty (Empty)))
+(check (= $iu_orig_empty $iu_distr_empty))     ; distribute: sound on the empty source
+(fail (check (= $iu_orig_empty $iu_hoist_empty)))   ; bare hoist: UNSOUND (leaks {1})
+(check (= $iu_orig_ne $iu_distr_ne))           ; distribute: sound on a headed source
+(check (= $iu_orig_ne $iu_hoist_ne))           ; hoist: sound WHEN the source is provably headed
+(check (= $wi_orig_empty $wi_hoist_empty))     ; hoisting an invariant Wrap absorbs ∅ — sound
+(pop)

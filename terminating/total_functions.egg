@@ -1,0 +1,297 @@
+; ===========================================================================
+; Extending intro.egg's path/quantale algebra with total, self-referential
+; recursive routines over Space (edge relations encoded as tries of paths).
+;
+; This file re-declares the fragment of intro.egg's Path/Space algebra that
+; these routines need (Union/Intersection/Wrap/Unwrap/Product/Head/
+; TailsUnion/Restriction, with the same rewrite rules, verbatim). It is kept
+; self-contained rather than `(run ...)`-ing on top of intro.egg's own
+; accumulated e-graph: intro.egg's ~80 `expr_*` test terms plus its
+; associativity/commutativity birewrites already make for a sizeable e-graph,
+; and re-saturating that alongside the new Compose/Transitive/Reachable
+; machinery blows up combinatorially. The rewrite *rules* below are identical
+; to intro.egg's; only the unrelated pre-existing test terms are dropped.
+;
+; Surface syntax from the prompt, and its egglog counterpart:
+;   P"n" x S            (Scala infix "x")     ~ Product(Singleton(n), S) = Wrap(n, S)
+;   S \/ T               (infix)               ~ Union(S, T)
+;   \/(S)                 (prefix, "union tails") ~ TailsUnion(S)
+;   S /\ T                (infix)               ~ Intersection(S, T)
+;   S <| T                                     ~ Restriction(S, T)
+;   S.iter(P"n", S"nbs", body(n,nbs))           ~ Compose(S)  (new, below):
+;       for every top-level key n of the trie S with value nbs = S(n), compute
+;       Wrap(n, TailsUnion(Restriction(S, nbs))) and union the results. This
+;       is exactly relational self-composition E o E - "one doubling step".
+; ===========================================================================
+
+(datatype Path
+  (Eps)
+  (Item String)
+  (Concat Path Path))
+
+(datatype Space
+  (Empty)
+  (Singleton Path)
+  (Union Space Space)
+  (Intersection Space Space)
+  (Restriction Space Space)
+  (Wrap Path Space)
+  (Unwrap Space Path)
+  (Product Space Space)
+  (Head Space)
+  (TailsUnion Space))
+
+(relation drop-prefix (Path Path Space))
+
+; `compute` is every rule that just normalizes/evaluates existing terms
+; (the base algebra plus Compose). `unroll` is the two self-referential
+; recursion rules for Transitive/Reachable. Keeping them in separate
+; rulesets lets the run-schedule below fully digest one round of recursion
+; (saturating `compute`) before admitting the next one - see the comment
+; above the run-schedule for why this staging matters.
+(ruleset compute)
+(ruleset unroll)
+
+(rewrite (Union x x) x :ruleset compute)
+(rewrite (Intersection x x) x :ruleset compute)
+(rewrite (Union x y) (Union y x) :ruleset compute)
+(rewrite (Intersection x y) (Intersection y x) :ruleset compute)
+(rewrite (Union x (Empty)) x :ruleset compute)
+(rewrite (Union (Empty) x) x :ruleset compute)
+(rewrite (Intersection x (Empty)) (Empty) :ruleset compute)
+(rewrite (Intersection (Empty) x) (Empty) :ruleset compute)
+(rewrite (Intersection (Union x y) z) (Union (Intersection x z) (Intersection y z)) :ruleset compute)
+(rewrite (Intersection x (Union y z)) (Union (Intersection x y) (Intersection x z)) :ruleset compute)
+(rewrite (Intersection (Singleton p) (Singleton q)) (Empty) :when ((!= p q)) :ruleset compute)
+
+(rewrite (Concat x (Eps)) x :ruleset compute)
+(rewrite (Concat (Eps) x) x :ruleset compute)
+
+(birewrite (Concat x (Concat y z)) (Concat (Concat x y) z) :ruleset compute)
+(birewrite (Union x (Union y z)) (Union (Union x y) z) :ruleset compute)
+(birewrite (Intersection x (Intersection y z)) (Intersection (Intersection x y) z) :ruleset compute)
+
+(rewrite (Wrap x (Empty)) (Empty) :ruleset compute)
+(rewrite (Wrap (Eps) s) s :ruleset compute)
+(birewrite (Wrap x (Singleton p)) (Singleton (Concat x p)) :ruleset compute)
+(birewrite (Wrap x (Union s t)) (Union (Wrap x s) (Wrap x t)) :ruleset compute)
+
+(rewrite (Unwrap (Empty) p) (Empty) :ruleset compute)
+(rewrite (Unwrap s (Eps)) s :ruleset compute)
+(rewrite (Unwrap (Wrap p s) p) s :ruleset compute)
+(rewrite (Unwrap (Wrap (Concat p q) s) p) (Wrap q s) :ruleset compute)
+(rewrite (Unwrap (Wrap p s) (Concat p q)) (Unwrap s q) :ruleset compute)
+(rewrite (Unwrap (Union s t) x) (Union (Unwrap s x) (Unwrap t x)) :ruleset compute)
+
+(rule ((= out (Unwrap (Singleton whole) prefix)))
+      ((drop-prefix prefix whole out)) :ruleset compute)
+
+(rule ((drop-prefix (Eps) whole out))
+      ((union out (Singleton whole))) :ruleset compute)
+(rule ((drop-prefix p p out))
+      ((union out (Singleton (Eps)))) :ruleset compute)
+(rule ((drop-prefix p (Concat p rest) out))
+      ((union out (Singleton rest))) :ruleset compute)
+(rule ((drop-prefix (Concat p q) (Concat p r) out))
+      ((drop-prefix q r out)) :ruleset compute)
+(rule ((drop-prefix (Item a) (Eps) out))
+      ((union out (Empty))) :ruleset compute)
+(rule ((drop-prefix (Concat (Item a) p) (Eps) out))
+      ((union out (Empty))) :ruleset compute)
+(rule ((drop-prefix (Item a) (Item b) out) (!= a b))
+      ((union out (Empty))) :ruleset compute)
+(rule ((drop-prefix (Item a) (Concat (Item b) r) out) (!= a b))
+      ((union out (Empty))) :ruleset compute)
+(rule ((drop-prefix (Concat (Item a) p) (Item b) out) (!= a b))
+      ((union out (Empty))) :ruleset compute)
+(rule ((drop-prefix (Concat (Item a) p) (Concat (Item b) r) out) (!= a b))
+      ((union out (Empty))) :ruleset compute)
+
+(rewrite (Product (Empty) t) (Empty) :ruleset compute)
+(rewrite (Product s (Empty)) (Empty) :ruleset compute)
+(rewrite (Product (Union s t) u) (Union (Product s u) (Product t u)) :ruleset compute)
+(rewrite (Product s (Union t u)) (Union (Product s t) (Product s u)) :ruleset compute)
+(rewrite (Product (Union (Singleton p) s) t) (Union (Wrap p t) (Product s t)) :ruleset compute)
+(rewrite (Product (Singleton p) t) (Wrap p t) :ruleset compute)
+
+(rewrite (TailsUnion (Empty)) (Empty) :ruleset compute)
+(rewrite (TailsUnion (Union (Wrap (Item p) s) t)) (Union s (TailsUnion t)) :ruleset compute)
+(rewrite (TailsUnion (Wrap (Item p) s)) s :ruleset compute)
+
+(rewrite (Restriction (Empty) p) (Empty) :ruleset compute)
+(rewrite (Restriction x (Empty)) (Empty) :ruleset compute)
+(rewrite (Restriction x (Singleton (Eps))) x :ruleset compute)
+(rewrite (Restriction x (Union p q)) (Union (Restriction x p) (Restriction x q)) :ruleset compute)
+(rewrite (Restriction x (Singleton p)) (Wrap p (Unwrap x p)) :ruleset compute)
+
+(rewrite (Head (Empty)) (Empty) :ruleset compute)
+(rewrite (Head (Union x y)) (Union (Head x) (Head y)) :ruleset compute)
+(rewrite (Head (Singleton (Concat (Item h) t))) (Singleton (Item h)) :ruleset compute)
+(rewrite (Head (Singleton (Item h))) (Singleton (Item h)) :ruleset compute)
+
+; ---------------------------------------------------------------------------
+; Compose: one relational-composition ("doubling") step, E |-> E o E, written
+; (Compose e) as shorthand for (ComposeAcc (Head e) e (Empty)).
+;
+; ComposeAcc walks the head-keys of e, building up, for each key h with
+; neighbor set nbs = Unwrap(e,h), the two-hop wrap Wrap(h, TailsUnion
+; (Restriction(e, nbs))), and unioning the results - the same head-
+; decomposition recipe intro.egg uses for TailsIntersection.
+;
+; NOTE: this is deliberately a plain macro, not its own constructor/rule.
+; An earlier version defined `(constructor Compose (Space) Space)` with a
+; rule `(= comp (Compose e)) ... -> (union comp (ComposeAcc (Head e) e
+; (Empty)))` so call sites could write the short `(Compose e)` form. That
+; version silently dropped edges as soon as e was itself built from nested
+; Compose/Union subterms (exactly what happens once e is fed back into
+; Compose across doubling rounds) - going through the extra `Compose`
+; indirection let ComposeAcc's walk start from a not-yet-fully-merged
+; representation of `(Head e)` that a later, cleaner representation never
+; retriggered. Inlining `(ComposeAcc (Head e) e (Empty))` directly at every
+; call site (verified against hand-computed doubling steps on both an
+; acyclic chain and a graph with a cycle) does not have this problem.
+; ---------------------------------------------------------------------------
+(constructor ComposeAcc (Space Space Space) Space)  ; ComposeAcc(remaining-head-keys, edges, acc)
+
+(rewrite (ComposeAcc (Empty) e acc) acc :ruleset compute)
+(rewrite (ComposeAcc (Singleton (Item h)) e acc)
+         (Union acc (Wrap (Item h) (TailsUnion (Restriction e (Unwrap e (Item h)))))) :ruleset compute)
+(rewrite (ComposeAcc (Union (Singleton (Item h)) rest) e acc)
+         (ComposeAcc rest e (Union acc (Wrap (Item h) (TailsUnion (Restriction e (Unwrap e (Item h))))))) :ruleset compute)
+
+; ---------------------------------------------------------------------------
+; R"transitive"(edges) := edges \/ R"transitive"(edges \/ edges.iter(...))
+;
+; Written exactly as given, with NO explicit base case/guard. The second
+; rewrite is not an extra case bolted on from outside the algebra: it is what
+; Union's idempotence (x \/ x = x) already forces once the argument sequence
+; hits a post-fixed-point of doubling (e \/ Compose(e) = e). At that point
+; "X = e \/ X" has e itself as its least (and, by the algebra's own
+; antisymmetry of \/-containment, unique-as-least) solution, so recording it
+; is just making an equation the algebra already entails explicit enough for
+; congruence closure to use it. This is the "saturation" the prompt points
+; at: nothing about *this* recursion needs a syntactic termination check,
+; because further unrolling past the fixed point is semantically a no-op.
+;
+; Both rules live in `unroll`, run one step at a time (see the run-schedule),
+; so that a round of recursion never fires before the *previous* round's
+; Compose/Union bookkeeping has fully digested in `compute` - see the
+; run-schedule comment below for why that staging is load-bearing.
+; ---------------------------------------------------------------------------
+(constructor Transitive (Space) Space)
+
+(rewrite (Transitive e) (Union e (Transitive (Union e (ComposeAcc (Head e) e (Empty))))) :ruleset unroll)
+(rewrite (Transitive e) e :when ((= (Union e (ComposeAcc (Head e) e (Empty))) e)) :ruleset unroll)
+
+; ---------------------------------------------------------------------------
+; R"reachable"(edges, nodemask, reach) :=
+;   reach \/ R"reachable"(edges, nodemask,
+;              (reach \/ \/(edges <| (reach /\ nodemask))) /\ nodemask)
+;
+; Parenthesization: in the Scala source the recursive call's argument is the
+; unparenthesized `reach \/ \/(...) /\ nodemask`, and Scala resolves infix
+; precedence by the operator's FIRST character - `\` (of `\/`) outranks `/`
+; (of `/\`) - so it parses as (reach \/ ...) /\ nodemask, the whole update
+; intersected with the mask, NOT reach \/ (... /\ nodemask). An earlier
+; version of this file encoded the latter; for arguments already inside the
+; mask the two coincide (which is why the checks below pass either way, both
+; seeds being masked), but they differ on seeds outside the mask - the true
+; parse trims a stray seed at the first unfolding, the old encoding carried
+; it forever.
+;
+; Same shape as Transitive otherwise, one-hop instead of doubling, with the
+; frontier confined to nodemask on both ends (only nodes in reach/\nodemask
+; are expanded from, and the /\nodemask on the whole update admits only
+; nodes inside the mask). That trailing /\nodemask is exactly what makes
+; this recursion terminate for EVERY finite mask - see reachable_decrease.p
+; (measure card(nodemask \ reach) strictly shrinks until the argument
+; stabilizes, at which point the :when rule below cuts the recursion) +
+; no_infinite_descent.smt2, and reachable_value.p for what the returned
+; value then contains.
+; ---------------------------------------------------------------------------
+(constructor Reachable (Space Space Space) Space)
+
+(rewrite (Reachable e m r)
+         (Union r (Reachable e m (Intersection (Union r (TailsUnion (Restriction e (Intersection r m)))) m)))
+         :ruleset unroll)
+(rewrite (Reachable e m r) r
+  :when ((= (Intersection (Union r (TailsUnion (Restriction e (Intersection r m)))) m) r))
+  :ruleset unroll)
+
+; ===========================================================================
+; Concrete finite instances - the actual saturation/convergence test.
+; ===========================================================================
+
+; --- Graph A: acyclic chain  a -> b -> c -> d
+(let gA_ab (Singleton (Concat (Item "a") (Item "b"))))
+(let gA_bc (Singleton (Concat (Item "b") (Item "c"))))
+(let gA_cd (Singleton (Concat (Item "c") (Item "d"))))
+(let gA_edges (Union gA_ab (Union gA_bc gA_cd)))
+
+(let gA_transitive (Transitive gA_edges))
+(let gA_expected
+  (Union (Singleton (Concat (Item "a") (Item "b")))
+  (Union (Singleton (Concat (Item "a") (Item "c")))
+  (Union (Singleton (Concat (Item "a") (Item "d")))
+  (Union (Singleton (Concat (Item "b") (Item "c")))
+  (Union (Singleton (Concat (Item "b") (Item "d")))
+         (Singleton (Concat (Item "c") (Item "d")))))))))
+
+; ---------------------------------------------------------------------------
+; Staged schedule: fully digest one round of recursion (Compose, Restriction,
+; Head, and all the AC bookkeeping for Union/Concat/Intersection) before
+; admitting the next round of self-referential unrolling. Interleaving them
+; naively (a flat `(run N)` over both rulesets at once) lets `unroll` race
+; ahead into deeper nesting before the previous round's Compose/Head/
+; Restriction calls - and the AC associativity/commutativity search they
+; trigger - have resolved, which blows up combinatorially within ~10 rounds
+; even for a 2-edge graph. Staging keeps each round's work flat and bounded.
+;
+; Each graph gets its own dedicated schedule below rather than one shared
+; one: `unroll` fires on every live Transitive/Reachable instance each round,
+; so batching all instances under one schedule makes every round as
+; expensive as its priciest instance. Graph B's cycle is much pricier per
+; round than graph A's chain (the cycle keeps discovering "new" self/mutual
+; reachability facts for longer), so it gets more rounds on its own.
+; ---------------------------------------------------------------------------
+(run-schedule
+  (saturate compute)
+  (repeat 4
+    (run unroll)
+    (saturate compute)))
+
+(check (= gA_transitive gA_expected))
+
+; --- Graph B: a 3-cycle a -> b -> c -> a, plus a tail edge c -> d.
+; Used for Reachable below: a cycle is the real stress test for "does this
+; converge" (an acyclic graph converges trivially in a bounded number of
+; hops; a cycle is where an explicit "did anything change" guard would
+; normally be unavoidable, and here it isn't one).
+(let gB_ab (Singleton (Concat (Item "a") (Item "b"))))
+(let gB_bc (Singleton (Concat (Item "b") (Item "c"))))
+(let gB_ca (Singleton (Concat (Item "c") (Item "a"))))
+(let gB_cd (Singleton (Concat (Item "c") (Item "d"))))
+(let gB_edges (Union gB_ab (Union gB_bc (Union gB_ca gB_cd))))
+
+; --- Reachable, on graph B's edges, from seed {a}
+(let s_a (Singleton (Item "a")))
+(let s_b (Singleton (Item "b")))
+(let s_c (Singleton (Item "c")))
+(let s_d (Singleton (Item "d")))
+(let mask_abc (Union s_a (Union s_b s_c)))
+(let mask_abcd (Union mask_abc s_d))
+
+(let reach_masked (Reachable gB_edges mask_abc s_a))       ; traversal confined to {a,b,c}: must NOT leak to d
+(let reach_masked_expected mask_abc)
+
+(let reach_full (Reachable gB_edges mask_abcd s_a))        ; mask includes d: must reach everything
+(let reach_full_expected mask_abcd)
+
+(run-schedule
+  (saturate compute)
+  (repeat 5
+    (run unroll)
+    (saturate compute)))
+
+(check (= reach_masked reach_masked_expected))
+(check (= reach_full reach_full_expected))

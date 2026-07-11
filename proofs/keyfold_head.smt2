@@ -1,0 +1,23 @@
+; HEAD FOLD: with an exact key list (sound + complete), HFold computes the Head denotation
+;   p ∈ Head(Z) ⟺ ∃h. present(h) ∧ p = [h]
+; by induction over the key list (soundness matters: a spurious key would add a phantom head).
+(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
+(declare-datatypes ((KList 0)) (((knil) (kcons (khd Int) (ktl KList)))))
+(declare-fun Z (Path) Bool)
+(define-fun present ((h Int)) Bool (exists ((q Path)) (Z (cons h q))))
+(declare-fun inK (Int KList) Bool)
+(assert (forall ((h Int)) (= (inK h knil) false)))
+(assert (forall ((h Int) (j Int) (r KList)) (= (inK h (kcons j r)) (or (= h j) (inK h r)))))
+(declare-fun KS () KList)
+(assert (forall ((h Int)) (=> (inK h KS) (present h))))
+(assert (forall ((h Int)) (=> (present h) (inK h KS))))
+(declare-fun foldH (KList Path) Bool)
+(assert (forall ((p Path)) (= (foldH knil p) false)))
+(assert (forall ((h Int) (r KList) (p Path))
+  (= (foldH (kcons h r) p) (or (= p (cons h nil)) (foldH r p)))))
+(define-fun PF ((ks KList)) Bool (forall ((p Path))
+  (= (foldH ks p) (exists ((h Int)) (and (inK h ks) (= p (cons h nil)))))))
+(assert (=> (and (PF knil) (forall ((j Int) (r KList)) (=> (PF r) (PF (kcons j r))))) (forall ((ks KList)) (PF ks))))
+(assert (not (forall ((p Path))
+  (= (foldH KS p) (exists ((h Int)) (and (present h) (= p (cons h nil))))))))
+(check-sat)

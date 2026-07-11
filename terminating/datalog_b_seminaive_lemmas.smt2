@@ -1,0 +1,51 @@
+; The four stepping-stone lemmas of datalog_b_seminaive_terminates.p, re-proved from the BASE
+; axioms only (no lemma imports) — one push/pop goal each (z3 answers "unsat" FOUR times; the
+; single negated 4-way conjunction defeats the case split, each goal alone is instant).
+; This makes the whole import chain machine-checked:
+;   these lemmas  +  bounded_growth_decrease.smt2  ⊢  datalog_b_seminaive_terminates.smt2.
+(declare-sort Node 0)
+(declare-sort NSet 0)
+(declare-fun mem (Node NSet) Bool)
+(declare-fun subset (NSet NSet) Bool)
+(declare-fun setminus (NSet NSet) NSet)
+(declare-fun cup (NSet NSet) NSet)
+(declare-const empty NSet)
+(declare-const top NSet)
+(declare-fun flag (NSet) Int)
+(declare-fun d (NSet) NSet)
+(declare-fun allp (NSet NSet) NSet)
+(declare-fun deltap (NSet NSet) NSet)
+(assert (forall ((x Node) (a NSet) (b NSet))
+  (= (mem x (cup a b)) (or (mem x a) (mem x b)))))
+(assert (forall ((x Node) (a NSet) (b NSet))
+  (= (mem x (setminus a b)) (and (mem x a) (not (mem x b))))))
+(assert (forall ((a NSet) (b NSet))
+  (= (subset a b) (forall ((x Node)) (=> (mem x a) (mem x b))))))
+(assert (forall ((a NSet) (b NSet))
+  (=> (forall ((x Node)) (= (mem x a) (mem x b))) (= a b))))
+(assert (forall ((x Node)) (not (mem x empty))))
+(assert (forall ((x Node)) (mem x top)))
+(assert (= (flag empty) 0))
+(assert (forall ((a NSet)) (=> (distinct a empty) (= (flag a) 1))))
+(assert (forall ((a NSet) (dl NSet)) (= (allp a dl) (cup a (setminus (d dl) a)))))
+(assert (forall ((a NSet) (dl NSet)) (= (deltap a dl) (setminus (d dl) a))))
+; allp_grows
+(push)
+(assert (not (forall ((a NSet) (dl NSet)) (subset a (allp a dl)))))
+(check-sat)
+(pop)
+; allp_in_top
+(push)
+(assert (not (forall ((a NSet) (dl NSet)) (subset (allp a dl) top))))
+(check-sat)
+(pop)
+; stalled_delta_empty: a stalled `all` forces the next delta empty
+(push)
+(assert (not (forall ((a NSet) (dl NSet)) (=> (= (allp a dl) a) (= (deltap a dl) empty)))))
+(check-sat)
+(pop)
+; flag_bounds
+(push)
+(assert (not (forall ((a NSet)) (and (>= (flag a) 0) (<= (flag a) 1)))))
+(check-sat)
+(pop)

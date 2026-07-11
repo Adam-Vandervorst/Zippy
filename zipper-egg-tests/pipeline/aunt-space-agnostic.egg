@@ -1,0 +1,3 @@
+; AUTO-GENERATED pipeline space (aunt) — DATA-AGNOSTIC.
+; TRIVIAL-NO-OBLIGATION: all 2 candidate pair(s) render identically after
+; freeing binders (the rewrite is definitionally absorbed by the rendering).

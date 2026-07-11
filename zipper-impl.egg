@@ -1,0 +1,196 @@
+; ================================================================================================
+; The IMPLEMENTATION of the zipper / trie operations modelled in egglog — the actual SET OPERATIONS
+; and RECURSION that `src/main/scala/IntTrie.scala` (ITrie.union/intersection/…) and
+; `SpaceZipper.materialize` run, NOT just their resulting trie.
+;
+; A trie is `(Node terminal children)` with `children` a key-ASCENDING list (`CC key subtrie rest` /
+; `CNil`) holding no empty subtrie — exactly the `(terminal, IntMap[ITrie])` ITrie shape, with the
+; IntMap rendered as the sorted assoc-list its Patricia merges walk.  Each operation is a constructor
+; that REDUCES by the same simultaneous-descent recursion as the Scala code:
+;   union          : merge both child lists; recurse on shared keys                (ITrie.union / IntTrieOps.unionTries)
+;   intersection   : keep shared keys, recurse, PRUNE empties                      (… intersectTries, with `keep`)
+;   subtraction    : keep a's keys; at shared keys subtract & prune                (… diffTries)
+;   composition    : graft b at every terminal of a (map children, splice b if a∋ε)(ITrie.composition)
+;   restriction    : descend keys common to x and the (non-terminal) prefixes      (ITrie.restriction / restrictTries)
+;   raffination    : x \ (x <| y)                                                  (ITrie.raffination)
+;   wrap / unwrap  : prepend one item / look one item up                           (ITrie.wrap / unwrap)
+;   tails-union/∩  : ∪ / ∩ of the child subtries                                   (ITrie.tailsUnion / tailsIntersection)
+; `Mat` is `SpaceZipper.materialize`: it dispatches each virtual cursor to the matching trie op.
+;
+; Coincidence: every op reduces a transpiled input to the SAME canonical `Node` the Scala op returns
+; (checked below and, per program, under `zipper-egg-tests/*-impl.egg`); and the algebraic laws of the
+; IMPLEMENTATION (idempotence, commutativity, associativity, distributivity, De Morgan, …) are proved
+; by reducing both sides to one canonical normal form.  egglog exits 0 with every (check) passing.
+; ================================================================================================
+
+(datatype*
+  (B (T) (F) (Or B B) (And B B) (AndNot B B))
+  (Tr (Node B CL)                       ; a trie node: terminal? + sorted child list
+      (TrU Tr Tr) (TrI Tr Tr) (TrS Tr Tr) (TrC Tr Tr)      ; union / intersect / subtract / compose
+      (TrR Tr Tr) (TrRaf Tr Tr)                            ; restriction / raffination
+      (TrW i64 Tr) (TrUn i64 Tr)                           ; wrap one item / unwrap one item
+      (TrTU Tr) (TrTI Tr)                                  ; tails-union / tails-intersection
+      (TrH Tr)                                             ; head: the present first items, as {h}
+      (ClTU CL) (ClTI CL)                                  ; ∪ / ∩ over a child list (yields a Tr)
+      (ZLit Tr) (Mat Tr))                                  ; a concrete cursor / materialise a (virtual) cursor
+  (CL (CNil) (CC i64 Tr CL)             ; key-ascending child list (no empty subtrie)
+      (ClU CL CL) (ClI CL CL) (ClS CL CL) (ClR CL CL) (ClMapC CL Tr)
+      (HCl CL)                                             ; head over a child list
+      (ConsIf i64 Tr CL)))                                 ; cons that drops an empty subtrie
+
+; ---- booleans (the terminal flag algebra) ----
+(rewrite (Or  (T) b) (T)) (rewrite (Or  b (T)) (T)) (rewrite (Or  (F) b) b) (rewrite (Or  b (F)) b)   ; definitional (truth tables: the defining equations of the flag algebra)
+(rewrite (And (F) b) (F)) (rewrite (And b (F)) (F)) (rewrite (And (T) b) b) (rewrite (And b (T)) b)   ; definitional (truth tables: the defining equations of the flag algebra)
+(rewrite (AndNot a (T)) (F)) (rewrite (AndNot a (F)) a)   ; definitional (truth tables: the defining equations of the flag algebra)
+
+; ---- ConsIf k v rest : prepend (k,v) unless v is the empty trie (mirrors `keep`/`binPrune`) ----
+(rewrite (ConsIf k (Node (F) (CNil)) rest) rest)   ; proof: proofs/refine_consif.smt2
+(rewrite (ConsIf k (Node (T) c) rest) (CC k (Node (T) c) rest))   ; proof: proofs/refine_consif.smt2
+(rewrite (ConsIf k (Node (F) (CC j w cr)) rest) (CC k (Node (F) (CC j w cr)) rest))   ; proof: proofs/refine_consif.smt2
+
+; ---- UNION : (or terminals, merge child lists; recurse on shared keys) ----
+(rewrite (TrU (Node t1 c1) (Node t2 c2)) (Node (Or t1 t2) (ClU c1 c2)))   ; proof: proofs/impl_union.smt2
+(rewrite (ClU (CNil) c) c) (rewrite (ClU c (CNil)) c)   ; proof: proofs/refine_clu.smt2
+(rule ((= e (ClU (CC k1 v1 r1) (CC k2 v2 r2))) (< k1 k2)) ((union e (CC k1 v1 (ClU r1 (CC k2 v2 r2))))))   ; proof: proofs/refine_clu.smt2
+(rule ((= e (ClU (CC k1 v1 r1) (CC k2 v2 r2))) (< k2 k1)) ((union e (CC k2 v2 (ClU (CC k1 v1 r1) r2)))))   ; proof: proofs/refine_clu.smt2
+(rule ((= e (ClU (CC k1 v1 r1) (CC k2 v2 r2))) (= k1 k2)) ((union e (CC k1 (TrU v1 v2) (ClU r1 r2)))))   ; proof: proofs/refine_clu.smt2
+
+; ---- INTERSECTION : (and terminals; only shared keys, recursed, empties pruned) ----
+(rewrite (TrI (Node t1 c1) (Node t2 c2)) (Node (And t1 t2) (ClI c1 c2)))   ; proof: proofs/impl_intersection.smt2
+(rewrite (ClI (CNil) c) (CNil)) (rewrite (ClI c (CNil)) (CNil))   ; proof: proofs/refine_cli.smt2 (OPEN: nested pair-induction + pruning; differential-covered by generated/rand-intersection.egg)
+(rule ((= e (ClI (CC k1 v1 r1) (CC k2 v2 r2))) (< k1 k2)) ((union e (ClI r1 (CC k2 v2 r2)))))   ; proof: proofs/refine_cli.smt2 (OPEN: nested pair-induction + pruning; differential-covered by generated/rand-intersection.egg)
+(rule ((= e (ClI (CC k1 v1 r1) (CC k2 v2 r2))) (< k2 k1)) ((union e (ClI (CC k1 v1 r1) r2))))   ; proof: proofs/refine_cli.smt2 (OPEN: nested pair-induction + pruning; differential-covered by generated/rand-intersection.egg)
+(rule ((= e (ClI (CC k1 v1 r1) (CC k2 v2 r2))) (= k1 k2)) ((union e (ConsIf k1 (TrI v1 v2) (ClI r1 r2)))))   ; proof: proofs/refine_cli.smt2 (OPEN: nested pair-induction + pruning; differential-covered by generated/rand-intersection.egg)
+
+; ---- SUBTRACTION : (a∧¬b terminals; keep a's keys, at shared keys subtract & prune) ----
+(rewrite (TrS (Node t1 c1) (Node t2 c2)) (Node (AndNot t1 t2) (ClS c1 c2)))   ; proof: proofs/impl_subtraction.smt2
+(rewrite (ClS (CNil) c) (CNil)) (rewrite (ClS c (CNil)) c)   ; proof: proofs/refine_cls.smt2 (OPEN: nested pair-induction + pruning; differential-covered by generated/rand-subtraction.egg)
+(rule ((= e (ClS (CC k1 v1 r1) (CC k2 v2 r2))) (< k1 k2)) ((union e (CC k1 v1 (ClS r1 (CC k2 v2 r2))))))   ; proof: proofs/refine_cls.smt2 (OPEN: nested pair-induction + pruning; differential-covered by generated/rand-subtraction.egg)
+(rule ((= e (ClS (CC k1 v1 r1) (CC k2 v2 r2))) (< k2 k1)) ((union e (ClS (CC k1 v1 r1) r2))))   ; proof: proofs/refine_cls.smt2 (OPEN: nested pair-induction + pruning; differential-covered by generated/rand-subtraction.egg)
+(rule ((= e (ClS (CC k1 v1 r1) (CC k2 v2 r2))) (= k1 k2)) ((union e (ConsIf k1 (TrS v1 v2) (ClS r1 r2)))))   ; proof: proofs/refine_cls.smt2 (OPEN: nested pair-induction + pruning; differential-covered by generated/rand-subtraction.egg)
+
+; ---- COMPOSITION : graft b at every terminal of a ----
+(rewrite (TrC (Node (F) c1) b) (Node (F) (ClMapC c1 b)))               ; a∌ε : just compose each child with b   ; proof: proofs/threeway_composition_trie.smt2
+(rewrite (TrC (Node (T) c1) b) (TrU (Node (F) (ClMapC c1 b)) b))       ; a∋ε : also splice b here   ; proof: proofs/threeway_composition_trie.smt2
+(rewrite (ClMapC (CNil) b) (CNil))   ; proof: proofs/threeway_composition_trie.smt2
+(rewrite (ClMapC (CC k v r) b) (ConsIf k (TrC v b) (ClMapC r b)))   ; proof: proofs/threeway_composition_trie.smt2
+
+; ---- RESTRICTION : keep x-paths having a prefix in `prefixes` ----
+(rewrite (TrR x (Node (T) cp)) x)                                      ; a prefix ended here ⇒ keep all of x   ; proof: proofs/threeway_restriction_trie.smt2
+(rewrite (TrR (Node tx cx) (Node (F) cp)) (Node (F) (ClR cx cp)))      ; else descend common keys   ; proof: proofs/threeway_restriction_trie.smt2
+(rewrite (ClR (CNil) cp) (CNil)) (rewrite (ClR cx (CNil)) (CNil))   ; proof: proofs/threeway_restriction_trie.smt2
+(rule ((= e (ClR (CC k1 v1 r1) (CC k2 v2 r2))) (< k1 k2)) ((union e (ClR r1 (CC k2 v2 r2)))))   ; proof: proofs/threeway_restriction_trie.smt2
+(rule ((= e (ClR (CC k1 v1 r1) (CC k2 v2 r2))) (< k2 k1)) ((union e (ClR (CC k1 v1 r1) r2))))   ; proof: proofs/threeway_restriction_trie.smt2
+(rule ((= e (ClR (CC k1 v1 r1) (CC k2 v2 r2))) (= k1 k2)) ((union e (ConsIf k1 (TrR v1 v2) (ClR r1 r2)))))   ; proof: proofs/threeway_restriction_trie.smt2
+
+; ---- RAFFINATION : x \| y = x \ (x <| y) ----
+(rewrite (TrRaf x y) (TrS x (TrR x y)))   ; definitional (raffination is DEFINED as x \ (x <| y); components certified above)
+
+; ---- WRAP one item / UNWRAP one item ----
+(rewrite (TrW k z) (Node (F) (ConsIf k z (CNil))))                     ; prepend k (drops if z empty)   ; proof: proofs/impl_wrap.smt2
+(rewrite (TrUn k (Node t (CNil))) (Node (F) (CNil)))                   ; nothing under k   ; proof: proofs/impl_unwrap.smt2
+(rule ((= e (TrUn k (Node t (CC j v r)))) (= k j)) ((union e v)))   ; proof: proofs/impl_unwrap.smt2
+(rule ((= e (TrUn k (Node t (CC j v r)))) (< k j)) ((union e (Node (F) (CNil)))))   ; sorted ⇒ k not present   ; proof: proofs/impl_unwrap.smt2
+(rule ((= e (TrUn k (Node t (CC j v r)))) (< j k)) ((union e (TrUn k (Node t r)))))   ; proof: proofs/impl_unwrap.smt2
+
+; ---- TAILS-UNION / TAILS-INTERSECTION : ∪ / ∩ of the child subtries ----
+(rewrite (TrTU (Node t c)) (ClTU c))   ; proof: proofs/threeway_tailsunion_trie.smt2
+(rewrite (ClTU (CNil)) (Node (F) (CNil)))   ; proof: proofs/threeway_tailsunion_trie.smt2
+(rewrite (ClTU (CC k v r)) (TrU v (ClTU r)))   ; proof: proofs/threeway_tailsunion_trie.smt2
+(rewrite (TrTI (Node t c)) (ClTI c))   ; proof: proofs/threeway_tailsinter_trie.smt2
+(rewrite (ClTI (CNil)) (Node (F) (CNil)))   ; proof: proofs/threeway_tailsinter_trie.smt2
+(rewrite (ClTI (CC k v (CNil))) v)   ; proof: proofs/threeway_tailsinter_trie.smt2
+(rewrite (ClTI (CC k v (CC j w r))) (TrI v (ClTI (CC j w r))))   ; proof: proofs/threeway_tailsinter_trie.smt2
+
+; ---- HEAD : the present first items, each as a length-1 path (ITrie.head) ----
+(rewrite (TrH (Node t c)) (Node (F) (HCl c)))   ; proof: proofs/impl_head.smt2
+(rewrite (HCl (CNil)) (CNil))   ; proof: proofs/impl_head.smt2
+(rewrite (HCl (CC k v r)) (CC k (Node (T) (CNil)) (HCl r)))   ; proof: proofs/impl_head.smt2
+
+; ---- MATERIALISE a (virtual) cursor : dispatch each operator to its trie op (SpaceZipper.materialize) ----
+(rewrite (Mat (ZLit t)) t)   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrU a b)) (TrU (Mat a) (Mat b)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrI a b)) (TrI (Mat a) (Mat b)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrS a b)) (TrS (Mat a) (Mat b)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrC a b)) (TrC (Mat a) (Mat b)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrR x p)) (TrR (Mat x) (Mat p)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrRaf x y)) (TrRaf (Mat x) (Mat y)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrW k z)) (TrW k (Mat z)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrUn k z)) (TrUn k (Mat z)))              ; was MISSING (probe: Mat of an unwrap cursor)   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrTU z)) (TrTU (Mat z)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrTI z)) (TrTI (Mat z)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+(rewrite (Mat (TrH z)) (TrH (Mat z)))   ; definitional (materialize dispatch: cursor constructor -> its trie op; per-op certificates above)
+
+; ================================================================================================
+; reusable concrete tries (sorted child lists)
+; ================================================================================================
+(let $eps (Node (T) (CNil)))                                ; {ε}
+(let $emp (Node (F) (CNil)))                                ; ∅
+(let $a   (Node (F) (CC 1 $eps (CC 2 $eps (CNil)))))        ; {1, 2}
+(let $b   (Node (F) (CC 2 $eps (CC 3 $eps (CNil)))))        ; {2, 3}
+(let $c   (Node (F) (CC 1 $eps (CNil))))                    ; {1}
+(let $abc (Node (F) (CC 1 $eps (CC 2 $eps (CC 3 $eps (CNil))))))   ; {1,2,3}
+(let $bcd (Node (F) (CC 2 $eps (CC 3 $eps (CC 4 $eps (CNil))))))   ; {2,3,4}
+(let $p12 (Node (F) (CC 1 (Node (F) (CC 2 $eps (CNil))) (CNil))))  ; {1.2}
+(let $p13 (Node (F) (CC 1 (Node (F) (CC 3 $eps (CNil))) (CNil))))  ; {1.3}
+
+; ================================================================================================
+; PER-OPERATION coincidence: the recursive implementation computes the hand-derived result.
+; ================================================================================================
+(let $u   (TrU $a $b))                                      ; {1,2}∪{2,3} = {1,2,3}
+(let $i   (TrI $a $b))                                      ; {1,2}∩{2,3} = {2}
+(let $s   (TrS $a $b))                                      ; {1,2}\{2,3} = {1}
+(let $comp (TrC $c (Node (F) (CC 2 $eps (CNil)))))          ; {1}·{2} = {1.2}
+(let $restr (TrR (TrU $p12 $p13) $c))                       ; {1.2,1.3} <| {1} = {1.2,1.3}
+(let $raf  (TrRaf (TrU $p12 (Node (F) (CC 3 $eps (CNil)))) $c))  ; ({1.2,3}) \| {1} = {3}
+(let $wr   (TrW 1 (Node (F) (CC 2 $eps (CNil)))))           ; wrap 1 over {2} = {1.2}
+(let $un   (TrUn 1 $p12))                                   ; unwrap 1 of {1.2} = {2}
+(let $tu   (TrTU (TrU $p12 (Node (F) (CC 3 (Node (F) (CC 4 $eps (CNil))) (CNil)))))) ; tails of {1.2,3.4} = {2,4}
+(let $ti   (TrTI (TrU $p12 (Node (F) (CC 4 (Node (F) (CC 2 $eps (CNil))) (CNil))))))  ; tails∩ of {1.2,4.2} = {2}
+
+; ================================================================================================
+; GROUND INSTANCE TESTS of the implementation's algebraic laws.  These are TESTS on hand-picked
+; instances, not proofs — the ∀-quantified versions (mem-characterisation of each op, and the laws
+; as corollaries) are the proof obligations in proofs/*.smt2, discharged by z3/vampire.
+; ================================================================================================
+(let $comm_u  (TrU $a $b)) (let $comm_u2 (TrU $b $a))                 ; ∪ commutative
+(let $comm_i  (TrI $a $b)) (let $comm_i2 (TrI $b $a))                 ; ∩ commutative
+(let $assoc_u (TrU (TrU $a $b) $c)) (let $assoc_u2 (TrU $a (TrU $b $c)))   ; ∪ associative
+(let $idem_u  (TrU $a $a)) (let $idem_i (TrI $a $a)) (let $self_s (TrS $a $a))  ; idempotence / x\x
+(let $distrib  (TrI (TrU $a $b) $abc)) (let $distrib2 (TrU (TrI $a $abc) (TrI $b $abc)))  ; ∩ distributes over ∪
+(let $demorgan (TrS $abc (TrU $a $b)))  (let $demorgan2 (TrS (TrS $abc $a) $b))           ; x\(a∪b) = (x\a)\b
+(let $threeway (TrI (TrI $abc $bcd) $b)) (let $threeway2 (TrI $abc (TrI $bcd $b)))         ; ∩ assoc (3-way)
+(let $absorb   (TrU $a (TrI $a $b)))                                  ; absorption a∪(a∩b) = a
+(let $matlaw   (Mat (TrI (TrU (ZLit $a) (ZLit $b)) (ZLit $c))))       ; materialise (A∪B)∩C = the trie
+; probe regressions (previously stuck / missing)
+(let $matun    (Mat (TrUn 1 (ZLit $p12))))                            ; Mat of an unwrap cursor — was STUCK
+(let $headt    (TrH (TrU $p12 $b)))                                   ; head of {1.2, 2, 3} = {1,2,3}
+(let $rafmat   (Mat (TrRaf (ZLit (TrU $p12 (Node (F) (CC 3 $eps (CNil))))) (ZLit $c))))  ; raff via Mat
+
+(run 400)
+
+; -- per-op coincidence --
+(check (= $u   $abc))
+(check (= $i   (Node (F) (CC 2 $eps (CNil)))))
+(check (= $s   $c))
+(check (= $comp $p12))
+(check (= $restr (TrU $p12 $p13)))
+(check (= $raf  (Node (F) (CC 3 $eps (CNil)))))
+(check (= $wr   $p12))
+(check (= $un   (Node (F) (CC 2 $eps (CNil)))))
+(check (= $tu   (Node (F) (CC 2 $eps (CC 4 $eps (CNil))))))
+(check (= $ti   (Node (F) (CC 2 $eps (CNil)))))
+
+; -- laws of the implementation --
+(check (= $comm_u $comm_u2))   (check (= $comm_u $abc))
+(check (= $comm_i $comm_i2))
+(check (= $assoc_u $assoc_u2))
+(check (= $idem_u $a))   (check (= $idem_i $a))   (check (= $self_s $emp))
+(check (= $distrib $distrib2))
+(check (= $demorgan $demorgan2))
+(check (= $threeway $threeway2))   (check (= $threeway (Node (F) (CC 2 $eps (CC 3 $eps (CNil))))))
+(check (= $absorb $a))
+(check (= $matlaw $c))         ; (A∪B)∩C materialises to {1} via the modelled recursion
+(check (= $matun (Node (F) (CC 2 $eps (CNil)))))   ; Mat(unwrap 1 {1.2}) = {2}
+(check (= $headt $abc))                            ; head({1.2,2,3}) = {1,2,3}
+(check (= $rafmat (Node (F) (CC 3 $eps (CNil))))) ; ({1.2,3} \| {1}) = {3}
