@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -45,7 +47,7 @@ object Loaders:
     val ps = collection.mutable.Set.empty[PathValue]
     val ids = collection.mutable.LinkedHashSet.empty[String]
     val names = collection.mutable.Map.empty[String, String]
-    def sym(items: String*): PathValue = PathValue(items.map(PathItem.Symbol(_)).toList)
+    def sym(items: String*): PathValue = PathValue(items.toList)
     for l <- lines do l.trim match
       case Parent(p, c) => ps += sym("parent", p, c); ps += sym("child", c, p); ids += p; ids += c
       case Female(x)    => ps += sym("female", x); ids += x
@@ -113,8 +115,8 @@ class ExAuntMetta extends FunSuite:
                s"family should be specialized away; params=${entryRoutine.mentions}")
         // show a few resolved aunt->niece/nephew name pairs
         val pairs = got.paths.toVector.take(5).map { p =>
-          val a = p.items(1) match { case PathItem.Symbol(s) => s; case _ => "?" }
-          val n = p.items(2) match { case PathItem.Symbol(s) => s; case _ => "?" }
+          val a = p.items(1)
+          val n = p.items(2)
           s"${fam.names.getOrElse(a, a)} is aunt of ${fam.names.getOrElse(n, n)}"
         }
         Loaders.note(s"[aunt/metta] ${got.paths.size} aunt-pairs; e.g.\n  ${pairs.mkString("\n  ")}")
@@ -124,7 +126,7 @@ class ExAuntMetta extends FunSuite:
     val f = Loaders.resolve(lotCandidates*)
     assume(f.isDefined, "lot.metta not present in this checkout")
     val real = Loaders.mettaFamily(f.get.getPath).get
-    def heads(rel: String) = real.family.paths.count(_.items.headOption.contains(PathItem.Symbol(rel)))
+    def heads(rel: String) = real.family.paths.count(_.items.headOption.contains(rel))
     assertEquals(heads("parent"), 117); assertEquals(heads("child"), 117)
     assertEquals(heads("female"), 40);  assertEquals(heads("male"), 46)
     assertEquals(real.people.paths.size, 101) // distinct ids appearing in parent/female/male facts
@@ -147,7 +149,7 @@ class ExDatalog extends FunSuite:
                              "J"->"M","K"->"M","L"->"M"), "TopSort")
 
   def edgeSpace(es: Vector[(String, String)]): SpaceValue =
-    SpaceValue(es.map((a, b) => PathValue(List(PathItem.Symbol(a), PathItem.Symbol(b)))).toSet)
+    SpaceValue(es.map((a, b) => PathValue(List(a, b))).toSet)
 
   /** Independent reference: transitive closure by fixpoint over string pairs. */
   def refTC(es: Vector[(String, String)]): Set[(String, String)] =
@@ -157,7 +159,7 @@ class ExDatalog extends FunSuite:
       val ns = s ++ add; grown = ns.size != s.size; s = ns
     s
   def toPairs(sv: SpaceValue): Set[(String, String)] =
-    sv.paths.map(p => (p.items(0), p.items(1)) match { case (PathItem.Symbol(a), PathItem.Symbol(b)) => (a, b) })
+    sv.paths.map(p => (p.items(0), p.items(1)))
 
   // naive: doubling fixpoint (Routines.transitive_routine)
   // semi-naive: maintain (all, delta); only join the frontier delta with edges.
@@ -260,9 +262,9 @@ object GoL:
   def rulesFor(live: Set[(Int, Int)]): Rules = { val (lo, hi) = windowFor(live); new Rules(lo, hi) }
 
   def field(cells: Set[(Int, Int)]): SpaceValue =
-    SpaceValue(cells.map((x, y) => PathValue(List(PathItem.Symbol("Cell"), PathItem.Symbol(x.toString), PathItem.Symbol(y.toString)))))
+    SpaceValue(cells.map((x, y) => PathValue(List("Cell", x.toString, y.toString))))
   def cells(sv: SpaceValue): Set[(Int, Int)] =
-    sv.paths.collect { case PathValue(PathItem.Symbol("Cell")::PathItem.Symbol(x)::PathItem.Symbol(y)::Nil) => (x.toInt, y.toInt) }
+    sv.paths.collect { case PathValue("Cell"::x::y::Nil) => (x.toInt, y.toInt) }
   /** Independent reference: one B3/S23 step on the infinite plane. */
   def step(live: Set[(Int, Int)]): Set[(Int, Int)] =
     val counts = collection.mutable.Map.empty[(Int, Int), Int]
@@ -347,8 +349,8 @@ object NQueens:
     def place(k: Int, n: Int): Space =
       if k == 0 then Space.Empty
       else
-        val kp = Path.Constant(PathValue(PathItem.Symbol(k.toString) :: Nil))
-        val np = Path.Constant(PathValue(PathItem.Symbol(n.toString) :: Nil))
+        val kp = Path.Constant(PathValue(k.toString :: Nil))
+        val np = Path.Constant(PathValue(n.toString :: Nil))
         place(k - 1, n).iterk(k - 1, S"taken", qs =>
           (upto(np) \ S"taken"(kp)).iterh(P"q", P"q" x (qs x (R"aoe"(P"q", kp, np) \/ S"taken"))))
     def program: Space = place(nn, nn)
@@ -519,13 +521,13 @@ object NOAA:
     else t.split("\\s+") match { case Array(a, b, c) => Some(Cell(a.toInt, b.toInt, c.toDouble)); case _ => None }
   }
   def bucket(a: Double): String = if a < -1 then "VC" else if a < -0.2 then "C" else if a < 0.2 then "N" else if a < 1 then "W" else "VW"
-  def bits(v: Int, n: Int): List[PathItem] = (n - 1 to 0 by -1).map(i => PathItem.Symbol(((v >> i) & 1).toString)).toList
+  def bits(v: Int, n: Int): List[PathItem] = (n - 1 to 0 by -1).map(i => ((v >> i) & 1).toString).toList
   // spatial-trie encoding: lat(6 bits).lon(7 bits).bucket  — prefix restriction = spatial range query
   def worldBin(cells: Vector[Cell]): SpaceValue =
-    SpaceValue(cells.map(c => PathValue(bits(c.lat, 6) ++ bits(c.lon, 7) :+ PathItem.Symbol(bucket(c.anom)))).toSet)
+    SpaceValue(cells.map(c => PathValue(bits(c.lat, 6) ++ bits(c.lon, 7) :+ (bucket(c.anom)))).toSet)
   // temperature-first encoding: bucket.lat.lon — prefix restriction by bucket = temperature query
   def worldTemp(cells: Vector[Cell]): SpaceValue =
-    SpaceValue(cells.map(c => PathValue(List(PathItem.Symbol(bucket(c.anom)), PathItem.Symbol(c.lat.toString), PathItem.Symbol(c.lon.toString)))).toSet)
+    SpaceValue(cells.map(c => PathValue(List(bucket(c.anom), c.lat.toString, c.lon.toString))).toSet)
   /** Canonical covering of integer interval [lo,hi] by binary-trie prefixes of an `n`-bit trie. */
   def interval(lo: Int, hi: Int, n: Int): SpaceValue =
     val out = collection.mutable.Set.empty[PathValue]
@@ -533,8 +535,8 @@ object NOAA:
       val top = base + (1 << level) - 1
       if lo <= base && top <= hi then out += PathValue(prefix.reverse)
       else if level > 0 then
-        rec(PathItem.Symbol("0") :: prefix, level - 1, base)
-        rec(PathItem.Symbol("1") :: prefix, level - 1, base + (1 << (level - 1)))
+        rec("0" :: prefix, level - 1, base)
+        rec("1" :: prefix, level - 1, base + (1 << (level - 1)))
     rec(Nil, n, 0)
     SpaceValue(out.toSet)
 end NOAA

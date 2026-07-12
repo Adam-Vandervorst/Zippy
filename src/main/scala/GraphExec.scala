@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.mutable.Stack
 
 /** Trie-native executor for the RecursiveOpGraph — the `exec` analog that operates directly on

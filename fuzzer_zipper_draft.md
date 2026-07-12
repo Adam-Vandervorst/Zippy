@@ -159,8 +159,8 @@ object Loc:
 
   def uop(src: Loc, pf: PathValue => PathValue) = Dep(src, p => Const(pf(p)))
 
-  def int_to_int(f: Int => Int) = uop(Full((0 to 9).map(k => PathItem.Symbol(k.toString)).toSet),
-    p => PathValue(f(p.items.map(_.show).mkString.toInt).toString.map(c => PathItem.Symbol(c.toString)).toList))
+  def int_to_int(f: Int => Int) = uop(Full((0 to 9).map(k => k.toString).toSet),
+    p => PathValue(f(p.items.mkString.toInt).toString.map(c => c.toString).toList))
 
   def sqrt = int_to_int(i => Math.sqrt(i.toDouble).toInt)
 end Loc

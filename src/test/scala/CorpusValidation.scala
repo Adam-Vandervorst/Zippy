@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 
 /** Differential validation: every executor must agree on every (program, input) pair.  Loads the saved

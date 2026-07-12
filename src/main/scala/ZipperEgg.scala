@@ -1,3 +1,5 @@
+package morkl
+
 /** Transpiler from the Scala [[SpaceZipper]] abstraction into the egglog `Z` term language modelled in
  *  `zipper.egg` / `zipper-egg-tests/prelude.egg`.  Every constructor maps one-to-one:
  *

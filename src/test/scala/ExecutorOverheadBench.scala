@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 
 /** Invariant under test: the COMPILED op-graph executors must never be slower than the matching

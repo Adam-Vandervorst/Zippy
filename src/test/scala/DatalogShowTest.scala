@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -44,7 +46,7 @@ class DatalogShowTest extends FunSuite:
     S"all" \/ callN("pt_sn", S"addressOf", S"assign", S"all" \/ (join(S"assign", S"delta") \ S"all"), join(S"assign", S"delta") \ S"all") }
 
   // ---- fact sets (carac fixtures for tc/rsg; a small sensible instance for andersen) ----
-  def pair(a: String, b: String): PathValue = PathValue(List(PathItem.Symbol(a), PathItem.Symbol(b)))
+  def pair(a: String, b: String): PathValue = PathValue(List(a, b))
   def rel(ps: (String, String)*): SpaceValue = SpaceValue(ps.map(pair.tupled).toSet)
   val edges = rel("a" -> "b", "b" -> "c", "c" -> "d", "z" -> "z")                    // carac tc/base
   val up    = rel("a"->"e","a"->"f","f"->"m","g"->"n","h"->"n","i"->"o","j"->"o")     // carac rsg
@@ -57,7 +59,7 @@ class DatalogShowTest extends FunSuite:
   def closure(step: Set[(String, String)] => Set[(String, String)], seed: Set[(String, String)]): Set[(String, String)] =
     var s = seed; var g = true
     while g do { val ns = s ++ step(s); g = ns != s; s = ns }; s
-  def tuples(es: SpaceValue): Set[(String, String)] = es.paths.map { case PathValue(List(PathItem.Symbol(a), PathItem.Symbol(b))) => (a, b) }
+  def tuples(es: SpaceValue): Set[(String, String)] = es.paths.map { case PathValue(List(a, b)) => (a, b) }
   val refTC  = closure(s => for ((a, b) <- s; (c, d) <- s if b == c) yield (a, d), tuples(edges))
   val refRSG = closure(r => tuples(flat) ++ (for ((x, a) <- tuples(up); (b, a2) <- r if a2 == a; (b2, y) <- tuples(down) if b2 == b) yield (x, y)), tuples(flat))
   val refPT  = closure(pt => tuples(addressOf) ++ (for ((y, z) <- tuples(assign); (z2, x) <- pt if z2 == z) yield (y, x)), tuples(addressOf))
@@ -102,10 +104,7 @@ end DatalogShowTest
 /** Render a [[Space]] / [[Routine]] as explicit, runnable Scala `Space.*` / `Path.*` constructor source. */
 object Expand:
   import Space.*
-  def item(pi: PathItem): String = pi match
-    case PathItem.Symbol(n)   => s"""PathItem.Symbol("$n")"""
-    case PathItem.Variable(n) => s"""PathItem.Variable("$n")"""
-    case PathItem.Arity(k)    => s"PathItem.Arity($k)"
+  def item(pi: PathItem): String = s""""$pi""""
   def pv(p: PathValue): String = s"PathValue(List(${p.items.map(item).mkString(", ")}))"
   def ref(pr: PathRef): String = if pr.lengthHint < 0 then s"""PathRef("${pr.s}")""" else s"""PathRef("${pr.s}").known(${pr.lengthHint})"""
   def path(p: Path): String = p match
@@ -114,7 +113,7 @@ object Expand:
     case Path.Concat(l, r) => s"Path.Concat(${path(l)}, ${path(r)})"
     case other             => other.toString
   def sv(s: SpaceValue): String =
-    s"SpaceValue(Set(${s.paths.toList.sortBy(_.items.map(_.show).mkString(".")).map(pv).mkString(", ")}))"
+    s"SpaceValue(Set(${s.paths.toList.sortBy(_.show).map(pv).mkString(", ")}))"
   def space(s: Space, ind: Int): String =
     val p = "  " * ind; val q = "  " * (ind + 1)
     def bin(name: String, x: Space, y: Space) = s"Space.$name(\n$q${space(x, ind + 1)},\n$q${space(y, ind + 1)})"

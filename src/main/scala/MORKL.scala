@@ -1,3 +1,5 @@
+package morkl
+
 import scala.util.Random
 import scala.collection.mutable.{ArrayBuffer, LongMap, Stack}
 import scala.collection.Searching
@@ -6,15 +8,8 @@ import java.nio.charset.StandardCharsets
 import scala.language.implicitConversions
 
 
-enum PathItem:
-  case Symbol(n: String)
-  case Variable(n: String)
-  case Arity(k: Int)
-
-  def show: String = this match
-    case PathItem.Symbol(n) => n
-    case PathItem.Variable(n) => s"$$$n"
-    case PathItem.Arity(k) => s"[$k]"
+/** A path item is just its text: no arity/variable kinds, one alias to keep the domain vocabulary. */
+type PathItem = String
 
 case class SymbolConflict(l: String, r: String) extends Exception(s"Symbol conflict $l $r")
 
@@ -57,7 +52,7 @@ object Path:
   def fromFactors(ps: Iterable[Path]): Path = if ps.isEmpty then Path.Constant(PathValue(Nil)) else ps.iterator.reduce(Path.Concat(_, _))
 
 case class PathValue(items: List[PathItem]):
-  def show: String = items.map(_.show).mkString(".")
+  def show: String = items.mkString(".")
 
   def prefixes: Seq[PathValue] =
     // e.g. Test.Foo.Bar.2 |-> Vector(Test, Test.Foo, Test.Foo.Bar, Test.Foo.Bar.2)
@@ -68,28 +63,6 @@ case class PathValue(items: List[PathItem]):
     if this.prefixes.contains(that) then Some(this)
     else if that.prefixes.contains(this) then Some(that)
     else None
-
-  infix def renameFrom(that: PathValue, bound: Map[String, String] = Map.empty): PathValue =
-    // $x.$y.$x renameFrom $a.$b.$a == $a.$b.$a
-    // $x.c.$x renameFrom $a.c.$b == $a.c.$a
-    // s.$x.$y renameFrom s.$a.$a == s.$a.$y
-    // $x.p.$y.$x renameFrom $a.q.$a.$b == $a.p.$y.$a
-    (this.items, that.items) match
-      case (PathItem.Variable(x)::this_tail, PathItem.Variable(y)::that_tail) =>
-        bound.get(x) match
-          case Some(y_analog) =>
-            val v = PathItem.Variable(y_analog)
-            PathValue(v::(PathValue(this_tail).renameFrom(PathValue(that_tail), bound)).items)
-          case None =>
-            val v = PathItem.Variable(x)
-            if bound.exists((_, y_) => y == y_) then
-              PathValue(v::(PathValue(this_tail).renameFrom(PathValue(that_tail), bound)).items)
-            else
-              PathValue(PathItem.Variable(y)::(PathValue(this_tail).renameFrom(PathValue(that_tail), bound + (x -> y))).items)
-      case (v::this_tail, _::that_tail) =>
-        PathValue(v::(PathValue(this_tail).renameFrom(PathValue(that_tail), bound)).items)
-      case (Nil, _) => PathValue(Nil)
-      case (rest, Nil) => PathValue(rest.map{ case PathItem.Variable(v) => PathItem.Variable(bound.getOrElse(v, v)); case x => x })
 
 
 class PathContext:
@@ -120,7 +93,7 @@ object PathContext:
 
   def mixed(seed: Long = 0): PathContext = new PathContext:
     private val rng = Random(seed)
-    override def resolve(pr: PathRef): PathValue = PathValue(PathItem.Symbol(pr.s + "_" + Base64.getEncoder.encodeToString(rng.nextBytes(4)).take(4))::Nil)
+    override def resolve(pr: PathRef): PathValue = PathValue((pr.s + "_" + Base64.getEncoder.encodeToString(rng.nextBytes(4)).take(4))::Nil)
 
 
 
@@ -216,13 +189,13 @@ case class SpaceValue(paths: Set[PathValue]):
   def prettyLines: String = paths.map(_.show).toSeq.sorted.mkString("", "\n", "")
 
 
-/** Canonical total order on paths — the trie-native order (`pathItemOrdering` on items, with
+/** Canonical total order on paths — the trie-native order (`String` order on items, with
  *  shorter-is-less on a shared prefix).  Every backend slices `Range` by THIS order, so they agree. */
 given pathValueOrdering: Ordering[PathValue] with
   def compare(a: PathValue, b: PathValue): Int =
     val ai = a.items.iterator; val bi = b.items.iterator
     while ai.hasNext && bi.hasNext do
-      val c = pathItemOrdering.compare(ai.next(), bi.next())
+      val c = ai.next().compareTo(bi.next())
       if c != 0 then return c
     Integer.compare(a.items.length, b.items.length)
 
@@ -334,25 +307,14 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
 
 /** Lossless textual codec for the `Literal` constant carried by operation-graph nodes.
  *  The previous encoding (newline-joined `PathValue.show`) was ambiguous: an empty space and
- *  a space containing the empty path both rendered as "", and a symbol containing a "." was
+ *  a space containing the empty path both rendered as "", and an item containing a "." was
  *  indistinguishable from a multi-item path.  This base64-per-item codec round-trips empty
- *  spaces, epsilon paths, symbols, variables and arity items unambiguously, while staying
+ *  spaces, epsilon paths and arbitrary items unambiguously, while staying
  *  backward-compatible with plain `Syntax.parse`-able lines. */
 object LiteralCodec:
   private val marker = "lit64:"
-  private def encodeText(s: String): String = Base64.getEncoder.encodeToString(s.getBytes(StandardCharsets.UTF_8))
-  private def decodeText(s: String): String = new String(Base64.getDecoder.decode(s), StandardCharsets.UTF_8)
-  private def encodeItem(item: PathItem): String = item match
-    case PathItem.Symbol(n) => "S" + encodeText(n)
-    case PathItem.Variable(n) => "V" + encodeText(n)
-    case PathItem.Arity(k) => "A" + k.toString
-  private def decodeItem(s: String): PathItem =
-    if s.isEmpty then throw IllegalArgumentException("empty encoded path item")
-    s.head match
-      case 'S' => PathItem.Symbol(decodeText(s.tail))
-      case 'V' => PathItem.Variable(decodeText(s.tail))
-      case 'A' => PathItem.Arity(s.tail.toInt)
-      case other => throw IllegalArgumentException(s"unknown encoded path item tag $other")
+  private def encodeItem(item: PathItem): String = Base64.getEncoder.encodeToString(item.getBytes(StandardCharsets.UTF_8))
+  private def decodeItem(s: String): PathItem = new String(Base64.getDecoder.decode(s), StandardCharsets.UTF_8)
   private def encodePath(p: PathValue): String = marker + p.items.map(encodeItem).mkString(".")
   private def decodePath(line: String): PathValue =
     val body = line.stripPrefix(marker)
@@ -363,10 +325,10 @@ object LiteralCodec:
       if line.startsWith(marker) then decodePath(line) else Syntax.parse(line)).toSet)
 
   /** Lossless encoding of a single Constant path: keep the readable `show` form when it
-   *  round-trips through `Syntax.parse` (the common symbol-path case, so op-graph dumps stay
+   *  round-trips through `Syntax.parse` (the common case, so op-graph dumps stay
    *  legible), otherwise escape with the base64 marker.  The plain `show`/`parse` round-trip is
-   *  LOSSY for the empty path (`"".split('.')` -> `[Symbol("")]`), Arity items (`[k]`), and
-   *  symbols containing a dot — these must be escaped or the op-graph mis-evaluates. */
+   *  LOSSY for the empty path (`"".split('.')` -> `[""]`) and
+   *  items containing a dot — these must be escaped or the op-graph mis-evaluates. */
   def encodeConst(p: PathValue): String =
     val s = p.show
     if Syntax.parse(s) == p then s else encodePath(p)
@@ -1148,7 +1110,7 @@ def lowerMutualPassthrough(scc: Vector[RoutinePtr], lowered: Map[RoutinePtr, Rou
     case other => !refersScc(other)               // Range/Fold/residual/grounded: no SCC-call allowed
   if !rs.forall(r => mono(r.body)) then return None
   val recVar = SpaceMention("#fixscc#" + scc.map(_.s).sorted.mkString("+"))
-  def tag(rp: RoutinePtr): Path = Path.Constant(PathValue(List(PathItem.Symbol("#scc#" + rp.s))))
+  def tag(rp: RoutinePtr): Path = Path.Constant(PathValue(List(("#scc#" + rp.s))))
   def substCalls(s: Space): Space = subs(s)(spost = { case c: Space.Call if sccSet(c.r) => Space.Unwrap(Space.Mention(recVar), tag(c.r)) })
   val combined = rs.map(r => Space.Wrap(substCalls(r.body), tag(r.name))).reduce(Space.Union(_, _))
   val fix = Space.Fixpoint(Space.Empty, recVar, combined)
@@ -1192,8 +1154,8 @@ def asFixpointGeneral(self: RoutinePtr, refs: Vector[PathRef], mentions: Vector[
           if !(monoIn(base, cm) && monoIn(call.mentions(ci), cm)) then None
           else
             val state = SpaceMention("#fixarg#" + self.s)
-            val argTag = Path.Constant(PathValue(List(PathItem.Symbol("#arg#"))))
-            val outTag = Path.Constant(PathValue(List(PathItem.Symbol("#out#"))))
+            val argTag = Path.Constant(PathValue(List("#arg#")))
+            val outTag = Path.Constant(PathValue(List("#out#")))
             val cur = Space.Unwrap(Space.Mention(state), argTag)
             def sub(e: Space): Space = subs(e)(spost = { case Space.Mention(`cm`) => cur })
             val step = Space.Union(Space.Wrap(sub(call.mentions(ci)), argTag), Space.Wrap(sub(base), outTag))
@@ -1334,8 +1296,8 @@ object Reflect:
       case Path.Deref(pr) => Set[PathValue](f"Deref.${pr.s}")
       case Path.Constant(pi) => Set[PathValue](f"Constant.${pi.show}")
       case Path.Concat(l, r) =>
-        (for p <- recp(l) yield PathValue(PathItem.Symbol("Concat")::PathItem.Symbol("lhs")::p.items)) union
-        (for p <- recp(r) yield PathValue(PathItem.Symbol("Concat")::PathItem.Symbol("rhs")::p.items))
+        (for p <- recp(l) yield PathValue("Concat"::"lhs"::p.items)) union
+        (for p <- recp(r) yield PathValue("Concat"::"rhs"::p.items))
       case Path.GroundedPP(p, f) => ???
       case Path.GroundedSP(s, f) => ???
 
@@ -1343,52 +1305,52 @@ object Reflect:
       case Space.Empty => Set("Empty")
       case Space.Call(rp, refs, mentions) =>
         Set[PathValue](f"Call.routine.${rp.s}") union
-        (for (pd, i) <- refs.zipWithIndex; pp <- recp(pd) yield PathValue(PathItem.Symbol("Call")::PathItem.Symbol("path")::PathItem.Symbol(i.toString)::pp.items)).toSet union
-        (for (sd, i) <- mentions.zipWithIndex; sp <- recs(sd) yield PathValue(PathItem.Symbol("Call")::PathItem.Symbol("space")::PathItem.Symbol(i.toString)::sp.items)).toSet
+        (for (pd, i) <- refs.zipWithIndex; pp <- recp(pd) yield PathValue("Call"::"path"::i.toString::pp.items)).toSet union
+        (for (sd, i) <- mentions.zipWithIndex; sp <- recs(sd) yield PathValue("Call"::"space"::i.toString::sp.items)).toSet
       case Space.Mention(p) => Set(f"Mention.${p.s}")
       case Space.Singleton(p) => Set(f"Singleton.${p.pretty}")
-      case Space.Literal(SpaceValue(ps)) => for pp <- ps yield PathValue(PathItem.Symbol("Literal")::pp.items)
+      case Space.Literal(SpaceValue(ps)) => for pp <- ps yield PathValue("Literal"::pp.items)
       case Space.Union(x, y) =>
-        (for pp <- recs(x) yield PathValue(PathItem.Symbol("Union")::pp.items)) union
-        (for pp <- recs(y) yield PathValue(PathItem.Symbol("Union")::pp.items))
+        (for pp <- recs(x) yield PathValue("Union"::pp.items)) union
+        (for pp <- recs(y) yield PathValue("Union"::pp.items))
       case Space.Intersection(x, y) =>
-        (for pp <- recs(x) yield PathValue(PathItem.Symbol("Intersection")::pp.items)) union
-        (for pp <- recs(y) yield PathValue(PathItem.Symbol("Intersection")::pp.items))
+        (for pp <- recs(x) yield PathValue("Intersection"::pp.items)) union
+        (for pp <- recs(y) yield PathValue("Intersection"::pp.items))
       case Space.Subtraction(x, y) =>
-        (for pp <- recs(x) yield PathValue(PathItem.Symbol("Subtraction")::PathItem.Symbol("domain")::pp.items)) union
-        (for pp <- recs(y) yield PathValue(PathItem.Symbol("Subtraction")::PathItem.Symbol("argument")::pp.items))
+        (for pp <- recs(x) yield PathValue("Subtraction"::"domain"::pp.items)) union
+        (for pp <- recs(y) yield PathValue("Subtraction"::"argument"::pp.items))
       case Space.Restriction(x, y) =>
-        (for pp <- recs(x) yield PathValue(PathItem.Symbol("Restriction") :: PathItem.Symbol("domain") :: pp.items)) union
-        (for pp <- recs(y) yield PathValue(PathItem.Symbol("Restriction") :: PathItem.Symbol("argument") :: pp.items))
+        (for pp <- recs(x) yield PathValue("Restriction" :: "domain" :: pp.items)) union
+        (for pp <- recs(y) yield PathValue("Restriction" :: "argument" :: pp.items))
       case Space.Raffination(x, y) =>
-        (for pp <- recs(x) yield PathValue(PathItem.Symbol("Raffination") :: PathItem.Symbol("domain") :: pp.items)) union
-        (for pp <- recs(y) yield PathValue(PathItem.Symbol("Raffination") :: PathItem.Symbol("argument") :: pp.items))
+        (for pp <- recs(x) yield PathValue("Raffination" :: "domain" :: pp.items)) union
+        (for pp <- recs(y) yield PathValue("Raffination" :: "argument" :: pp.items))
       case Space.Composition(x, y) =>
-        (for pp <- recs(x) yield PathValue(PathItem.Symbol("Composition") :: PathItem.Symbol("domain") :: pp.items)) union
-        (for pp <- recs(y) yield PathValue(PathItem.Symbol("Composition") :: PathItem.Symbol("argument") :: pp.items))
+        (for pp <- recs(x) yield PathValue("Composition" :: "domain" :: pp.items)) union
+        (for pp <- recs(y) yield PathValue("Composition" :: "argument" :: pp.items))
       case Space.Wrap(x, p_e) =>
-        (for pp <- recp(p_e) yield PathValue(PathItem.Symbol("Wrap") :: PathItem.Symbol("prefix") :: pp.items)) union
-        (for pp <- recs(x) yield PathValue(PathItem.Symbol("Wrap") :: PathItem.Symbol("domain") :: pp.items))
+        (for pp <- recp(p_e) yield PathValue("Wrap" :: "prefix" :: pp.items)) union
+        (for pp <- recs(x) yield PathValue("Wrap" :: "domain" :: pp.items))
       case Space.Unwrap(x, p_e) =>
-        (for pp <- recp(p_e) yield PathValue(PathItem.Symbol("Unwrap") :: PathItem.Symbol("prefix") :: pp.items)) union
-        (for pp <- recs(x) yield PathValue(PathItem.Symbol("Unwrap") :: PathItem.Symbol("domain") :: pp.items))
+        (for pp <- recp(p_e) yield PathValue("Unwrap" :: "prefix" :: pp.items)) union
+        (for pp <- recs(x) yield PathValue("Unwrap" :: "domain" :: pp.items))
       case Space.TailsUnion(x) =>
-        for pp <- recs(x) yield PathValue(PathItem.Symbol("TailsUnion") :: pp.items)
+        for pp <- recs(x) yield PathValue("TailsUnion" :: pp.items)
       case Space.TailsIntersection(x) =>
-        for pp <- recs(x) yield PathValue(PathItem.Symbol("TailsIntersection") :: pp.items)
+        for pp <- recs(x) yield PathValue("TailsIntersection" :: pp.items)
       case Space.Iteration(x, symbol, rest, templates) =>
         Set[PathValue](f"Iteration.head.${symbol.s}", f"Iteration.tail.${rest.s}") union
-        (for sp <- recs(x) yield PathValue(PathItem.Symbol("Iteration")::PathItem.Symbol("domain")::sp.items)) union
-        (for sp <- recs(templates) yield PathValue(PathItem.Symbol("Iteration")::PathItem.Symbol("templates")::sp.items))
+        (for sp <- recs(x) yield PathValue("Iteration"::"domain"::sp.items)) union
+        (for sp <- recs(templates) yield PathValue("Iteration"::"templates"::sp.items))
       case Space.Fixpoint(init, rec, body) =>
         Set[PathValue](f"Fixpoint.rec.${rec.s}") union
-        (for sp <- recs(init) yield PathValue(PathItem.Symbol("Fixpoint")::PathItem.Symbol("init")::sp.items)) union
-        (for sp <- recs(body) yield PathValue(PathItem.Symbol("Fixpoint")::PathItem.Symbol("body")::sp.items))
+        (for sp <- recs(init) yield PathValue("Fixpoint"::"init"::sp.items)) union
+        (for sp <- recs(body) yield PathValue("Fixpoint"::"body"::sp.items))
       case Space.GroundedPS(p, f) => ???
       case Space.GroundedSS(s, f) => ???
       case Space.Range(x, lo, hi) =>
         Set[PathValue](f"Range.lo.$lo", f"Range.hi.$hi") union
-        (for sp <- recs(x) yield PathValue(PathItem.Symbol("Range")::sp.items))
+        (for sp <- recs(x) yield PathValue("Range"::sp.items))
 
     SpaceValue(recs(s))
 
@@ -1707,7 +1669,7 @@ def itypes(s: Space): SpaceValue =
   // $z = f32^ * z^ * Point3D^ * S
   // >>
   def recp(x: Path): PathValue = x match
-    case Path.Deref(pr) => PathValue(PathItem.Variable(pr.s)::Nil)
+    case Path.Deref(pr) => PathValue(("$" + pr.s)::Nil)
     case Path.Constant(pi) => pi
     case Path.Concat(l, r) => PathValue(recp(l).items ++ recp(r).items)
     case Path.GroundedPP(p, f) => ???
@@ -1719,16 +1681,16 @@ def itypes(s: Space): SpaceValue =
     case Space.Call(r, refs, mentions) =>
       val refts = refs.foldLeft(Set.empty[PathValue])((a, p) => a.incl(recp(p)))
       mentions.foldLeft(refts)((a, s) => a.union(recs(s)))
-    case Space.Mention(sm) => Set(PathValue(PathItem.Variable(sm.s)::Nil))
+    case Space.Mention(sm) => Set(PathValue(("$" + sm.s)::Nil))
     case Space.Singleton(p) => Set(recp(p))
     case Space.Literal(sv) => Set.empty
     case Space.Union(x, y) => recs(x) union recs(y)
 //    case Space.Intersection(x, y) => recs(x) union recs(y)
-    case Space.Intersection(x, y) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue(PathItem.Variable("_")::Nil))),
-                                                      Space.Literal(SpaceValue(recs(y))) x Space.Singleton(Path.Constant(PathValue(PathItem.Variable("_")::Nil))))).paths
+    case Space.Intersection(x, y) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue("$_"::Nil))),
+                                                      Space.Literal(SpaceValue(recs(y))) x Space.Singleton(Path.Constant(PathValue("$_"::Nil))))).paths
     case Space.Subtraction(x, y) => recs(x) union recs(y)
 //    case Space.Restriction(x, prefixes) => recs(x) union recs(prefixes)
-    case Space.Restriction(x, prefixes) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue(PathItem.Variable("_")::Nil))),
+    case Space.Restriction(x, prefixes) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue("$_"::Nil))),
       Space.Literal(SpaceValue(recs(prefixes))))).paths
     case Space.Composition(x, y) => recs(x) union recs(y)
     case Space.Wrap(src, p) => recs(src) // .incl(recp(p))
@@ -1739,8 +1701,8 @@ def itypes(s: Space): SpaceValue =
     case Space.Iteration(src, symbol, rest, templates) =>
       import Syntax.*
       val srcs = Space.Literal(SpaceValue(recs(src)))
-      val sv = PathValue(PathItem.Variable(symbol.s)::Nil)
-      val sr = PathValue(PathItem.Variable(rest.s)::Nil)
+      val sv = PathValue(("$" + symbol.s)::Nil)
+      val sr = PathValue(("$" + rest.s)::Nil)
       val ts = Space.Literal(SpaceValue(recs(templates)))
 
       println(s"${srcs.show}.iter(${sv.show}:${sr.show} => ${ts.show})")
@@ -1761,7 +1723,7 @@ def itypes(s: Space): SpaceValue =
 
 def otypes(s: Space): SpaceValue =
   def recp(x: Path): PathValue = x match
-    case Path.Deref(pr) => PathValue(PathItem.Variable(pr.s)::Nil)
+    case Path.Deref(pr) => PathValue(("$" + pr.s)::Nil)
     case Path.Constant(pi) => pi
     case Path.Concat(l, r) => PathValue(recp(l).items ++ recp(r).items)
     case Path.GroundedPP(p, f) => ???
@@ -1773,16 +1735,16 @@ def otypes(s: Space): SpaceValue =
     case Space.Call(r, refs, mentions) =>
       val refts = refs.foldLeft(Set.empty[PathValue])((a, p) => a.incl(recp(p)))
       mentions.foldLeft(refts)((a, s) => a.union(recs(s)))
-    case Space.Mention(sm) => Set(PathValue(PathItem.Variable(sm.s)::Nil))
+    case Space.Mention(sm) => Set(PathValue(("$" + sm.s)::Nil))
     case Space.Singleton(p) => Set(recp(p))
     case Space.Literal(sv) => Set.empty
     case Space.Union(x, y) => recs(x) union recs(y)
 //    case Space.Intersection(x, y) => recs(x) union recs(y)
-    case Space.Intersection(x, y) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue(PathItem.Variable("_")::Nil))),
-                                                      Space.Literal(SpaceValue(recs(y))) x Space.Singleton(Path.Constant(PathValue(PathItem.Variable("_")::Nil))))).paths
+    case Space.Intersection(x, y) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue("$_"::Nil))),
+                                                      Space.Literal(SpaceValue(recs(y))) x Space.Singleton(Path.Constant(PathValue("$_"::Nil))))).paths
     case Space.Subtraction(x, y) => recs(x) union recs(y)
 //    case Space.Restriction(x, prefixes) => recs(x) union recs(prefixes)
-    case Space.Restriction(x, prefixes) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue(PathItem.Variable("_")::Nil))),
+    case Space.Restriction(x, prefixes) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue("$_"::Nil))),
       Space.Literal(SpaceValue(recs(prefixes))))).paths
     case Space.Composition(x, y) => recs(x) union recs(y)
     case Space.Wrap(src, p) => eval(Space.Composition(Space.Singleton(Path.Constant(recp(p))), Space.Literal(SpaceValue(recs(src))))).paths
@@ -1798,9 +1760,8 @@ def otypes(s: Space): SpaceValue =
   SpaceValue(recs(s))
 
 object Syntax:
-  import PathItem.*
   import Path.*
-  given parse: Conversion[String, PathValue] = s => PathValue(s.split('.').map(name => if name.startsWith("$") then PathItem.Variable(name.tail) else PathItem.Symbol(name)).toList)
+  given parse: Conversion[String, PathValue] = s => PathValue(s.split('.').toList)
   given constant: Conversion[String, Path] = (parse andThen Path.Constant.apply)(_)
   given parse2: Conversion[(String, String), (PathValue, PathValue)] = (x, y) => (parse(x), parse(y))
   given constant2: Conversion[(String, String), (Path, Path)] = (x, y) => (Path.Constant(parse(x)), Path.Constant(parse(y)))

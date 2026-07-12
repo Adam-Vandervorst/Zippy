@@ -6,16 +6,16 @@
 ; For virtual cursors the Sub rules move LOCALLY through the operators — no operand is built.
 
 (include "prelude.egg")
-(let $prog (Intersection (Union (Union (Wrap1 166 (Eps)) (Wrap1 167 (Eps))) (Union (Wrap1 167 (Eps)) (Wrap1 169 (Eps)))) (Wrap1 166 (Eps))))
+(let $prog (Intersection (Union (Union (Wrap1 1 (Eps)) (Wrap1 2 (Eps))) (Union (Wrap1 2 (Eps)) (Wrap1 3 (Eps)))) (Wrap1 1 (Eps))))
 (let $root (TermAt (Root $prog)))
-(let $mem0 (TermAt (Descend 166 (Root $prog))))
-(let $non0 (TermAt (Descend 167 (Root $prog))))
-(let $non1 (TermAt (Descend 169 (Root $prog))))
-(let $non2 (TermAt (Descend 166 (Descend 166 (Root $prog)))))
-(let $non3 (TermAt (Descend 167 (Descend 166 (Root $prog)))))
-(let $non4 (TermAt (Descend 169 (Descend 166 (Root $prog)))))
+(let $mem0 (TermAt (Descend 1 (Root $prog))))
+(let $non0 (TermAt (Descend 2 (Root $prog))))
+(let $non1 (TermAt (Descend 3 (Root $prog))))
+(let $non2 (TermAt (Descend 1 (Descend 1 (Root $prog)))))
+(let $non3 (TermAt (Descend 2 (Descend 1 (Root $prog)))))
+(let $non4 (TermAt (Descend 3 (Descend 1 (Root $prog)))))
 (let $absent (IsEmpty (FocusOf (Descend 999998 (Root $prog)))))
-(let $zipup (FocusOf (Ascend (Descend 166 (Root $prog)))))
+(let $zipup (FocusOf (Ascend (Descend 1 (Root $prog)))))
 
 (run 300)
 

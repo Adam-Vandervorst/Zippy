@@ -3,8 +3,8 @@
 ; ($impl) and checks it reduces to exactly the trie the Scala implementation computed ($want).
 
 (include "impl-prelude.egg")
-(let $impl (TrR (Node (F) (CC 166 (Node (F) (CC 167 (Node (T) (CNil)) (CNil))) (CC 169 (Node (T) (CNil)) (CNil)))) (Node (F) (CC 166 (Node (T) (CNil)) (CNil)))))
-(let $want (Node (F) (CC 166 (Node (F) (CC 167 (Node (T) (CNil)) (CNil))) (CNil))))
+(let $impl (TrR (Node (F) (CC 1 (Node (F) (CC 2 (Node (T) (CNil)) (CNil))) (CC 3 (Node (T) (CNil)) (CNil)))) (Node (F) (CC 1 (Node (T) (CNil)) (CNil)))))
+(let $want (Node (F) (CC 1 (Node (F) (CC 2 (Node (T) (CNil)) (CNil))) (CNil))))
 
 (run 400)
 

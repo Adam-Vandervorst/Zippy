@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 
 /** Runtime + node-size census of the saved corpus over 1000 inputs, then supercompile the 5 slowest

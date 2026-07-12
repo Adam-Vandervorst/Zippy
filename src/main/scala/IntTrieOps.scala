@@ -1,3 +1,5 @@
+package scala.collection.immutable
+
 import morkl.ITrie
 
 /** Native merges of the `IntMap[ITrie]` children maps that back [[morkl.ITrie]].  This object lives

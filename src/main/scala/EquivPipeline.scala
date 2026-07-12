@@ -1,3 +1,5 @@
+package morkl
+
 /** The automated equivalence pipeline: Scala programs → egg (equivalence under the certified
  *  rewrite systems) and → z3/vampire (equal outputs for equal inputs, ∀ paths).
  *
@@ -65,7 +67,7 @@ object EquivPipeline:
       case Iteration(src, sym, rest, body) =>                 // exec's rule: union over head groups
         val srcE = expand(src)
         val groups = eval(srcE).paths.collect { case PathValue(h :: t) => (h, PathValue(t)) }.groupMap(_._1)(_._2)
-        val parts = groups.toList.sortBy(_._1.show).map { (h, tails) =>
+        val parts = groups.toList.sortBy(_._1).map { (h, tails) =>
           expand(body)(using pc.grown(Map(sym -> PathValue(h :: Nil))),
                         sc.grown(Map(rest -> SpaceValue(tails.toSet))), rc)
         }
@@ -441,7 +443,7 @@ object AgnosticPipeline:
     def text: String =
       (litDefs.map((r, n) => s"(let $n $r)") ++ appRules.values.map(_._2)).mkString("\n")
 
-  def mentionId(m: SpaceMention): Int = Interner.intern(PathItem.Symbol("$mention$" + m.s))
+  def mentionId(m: SpaceMention): Int = Interner.intern(("$mention$" + m.s))
 
   private def pathTokens(p: Path, penv: Map[String, String]): List[String] = p match
     case Path.Constant(v) => Interner.internPath(v.items).map(_.toString)
@@ -477,7 +479,7 @@ object AgnosticPipeline:
         // (fallbacks.md); over free inputs it is treated as an opaque shared input, keyed by its
         // operand's rendering + bounds so both sides align iff their Range subtrees align.
         val key = s"range|$lo|$hi|" + renderZ(x, penv, senv, ctx, false)
-        s"(Src (N ${Interner.intern(PathItem.Symbol("$range$" + key.hashCode))}))"
+        s"(Src (N ${Interner.intern(("$range$" + key.hashCode))}))"
       case Iteration(src, sym, rest, body) =>
         // defunctionalize: captured items = bound path vars used in body (other than sym);
         // captured spaces = bound/free space refs used in body (other than rest)

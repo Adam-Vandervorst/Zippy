@@ -43,7 +43,7 @@ Every `PathItem` is interned to an `Int` once via a global, O(1) `Interner` (a C
 + an array); the trie's children are then `IntMap[ITrie]` (a big-endian Patricia trie).  Two
 things follow:
 
-- **Evaluation creates no `PathItem`s.**  Path constants are interned at singleton/wrap
+- **Evaluation touches no `PathItem`s.**  Path constants are interned at singleton/wrap
   construction; the ring/prefix/tails operations only combine interned ints.  Un-interning
   happens solely at the `toSpaceValue` boundary (and grounded host functions re-intern their
   outputs there).

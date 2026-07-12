@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.immutable.IntMap
 
 /** SpaceZipper-based evaluation (a third paradigm beside the interpreters and the op-graph).

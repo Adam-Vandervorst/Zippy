@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.immutable.TreeMap
 import scala.collection.mutable
 
@@ -10,7 +12,7 @@ import scala.collection.mutable
  *  and `iter` reads each child's tail-trie directly instead of re-grouping a flat set.
  *
  *  A node carries `terminal` (does a path END here, i.e. is the empty path present at this
- *  node) and `children` keyed by [[PathItem]] in a total order ([[pathItemOrdering]]).  Tries
+ *  node) and `children` keyed by [[PathItem]] in its natural (`String`) order.  Tries
  *  are immutable and structurally shared; smart construction keeps them canonical (no empty
  *  subtries), so `==` is exact set-equality and node identity enables cheap sharing.
  */
@@ -29,18 +31,6 @@ final case class Trie(terminal: Boolean, children: TreeMap[PathItem, Trie]):
   def prefixCount(n: Int): Int =
     if n == 0 then (if nonEmpty then 1 else 0)
     else children.valuesIterator.map(_.prefixCount(n - 1)).sum
-
-/** Total order on path items: Symbol < Variable < Arity, then within-kind. */
-given pathItemOrdering: Ordering[PathItem] with
-  private def rank(p: PathItem): Int = p match
-    case _: PathItem.Symbol => 0
-    case _: PathItem.Variable => 1
-    case _: PathItem.Arity => 2
-  def compare(a: PathItem, b: PathItem): Int = (a, b) match
-    case (PathItem.Symbol(x), PathItem.Symbol(y)) => x.compareTo(y)
-    case (PathItem.Variable(x), PathItem.Variable(y)) => x.compareTo(y)
-    case (PathItem.Arity(x), PathItem.Arity(y)) => Integer.compare(x, y)
-    case _ => Integer.compare(rank(a), rank(b))
 
 object Trie:
   val empty: Trie = Trie(false, TreeMap.empty)
@@ -61,7 +51,7 @@ object Trie:
     if t.children.isEmpty then empty
     else t.children.foldLeft(Trie(false, t.children): Trie) { case (acc, (_, c)) => union(acc, suffixClosure(c)) }
   /** Native ordered slice `[start, end)` in canonical order — no path materialization.  The TreeMap
-   *  children already iterate in [[pathItemOrdering]], so we walk in order (prefixes before
+   *  children already iterate in `String` order, so we walk in order (prefixes before
    *  extensions), count terminals and emit only those in the window, stopping once it is filled. */
   def range(t: Trie, start: Int, end: Int): Trie =
     val size = t.size

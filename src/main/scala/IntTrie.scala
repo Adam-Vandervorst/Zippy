@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.immutable.{IntMap, IntTrieOps}
 import scala.collection.mutable
 
@@ -24,7 +26,7 @@ object Interner:
  *  `IntMap` (a big-endian Patricia trie).  This lets the ring operations use IntMap's
  *  structural, O(n+m) `unionWith`/`intersectionWith` callbacks directly — they line up exactly
  *  with the algebra (union = merge-with-recursive-union, intersection = merge-with-recursive-
- *  intersection).  Evaluation over [[ITrie]] never allocates a [[PathItem]]: it only combines
+ *  intersection).  Evaluation over [[ITrie]] never touches a [[PathItem]]: it only combines
  *  interned ints; un-interning happens only at the [[toSpaceValue]] boundary. */
 final case class ITrie(terminal: Boolean, children: IntMap[ITrie]):
   def isEmpty: Boolean = !terminal && children.isEmpty
@@ -151,7 +153,7 @@ object ITrie:
   def suffixClosure(t: ITrie): ITrie =
     if t.children.isEmpty then empty
     else t.children.foldLeft(ITrie(false, t.children): ITrie) { case (acc, (_, c)) => union(acc, suffixClosure(c)) }
-  /** Native ordered slice `[start, end)` in canonical ([[pathItemOrdering]]) order — NO path
+  /** Native ordered slice `[start, end)` in canonical (`String`) order — NO path
    *  materialization.  Walks the trie in canonical order (children sorted by their un-interned item;
    *  prefixes before extensions), counting terminals and emitting only those inside the window, and
    *  stops as soon as the window is filled.  The full-range slice is the identity (returns `t`). */
@@ -175,7 +177,7 @@ object ITrie:
 
 /** Direct evaluator over the interned IntMap-trie.  Mirrors [[evalT]] but on [[ITrie]]; path
  *  constants are interned once (at singleton/wrap construction) and the set operations only
- *  combine interned ints — no [[PathItem]] is created during evaluation.  Grounded host
+ *  combine interned ints — no [[PathItem]] is touched during evaluation.  Grounded host
  *  functions cross the SpaceValue boundary (and re-intern their outputs there). */
 private val iLiteralCache: java.util.Map[SpaceValue, ITrie] =
   java.util.Collections.synchronizedMap(new java.util.IdentityHashMap[SpaceValue, ITrie]())

@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import scala.collection.mutable
 

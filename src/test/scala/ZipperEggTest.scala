@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -18,7 +20,7 @@ class ZipperEggTest extends FunSuite:
 
   val noRc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
   val noPc: PathContext = PathContextMap(Map.empty)
-  def pv(items: String*): PathValue = PathValue(items.toList.map(PathItem.Symbol(_)))
+  def pv(items: String*): PathValue = PathValue(items.toList)
   def sv(ps: PathValue*): SpaceValue = SpaceValue(ps.toSet)
 
   val dir = new java.io.File(Loaders.repoRoot, "zipper-egg-tests")

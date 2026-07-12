@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.mutable
 
 /** A positive supercompiler for the MORKL space/path algebra.

@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -8,8 +10,7 @@ class TrieOps extends FunSuite:
   import Space.*
 
   val rnd = new scala.util.Random(7)
-  val alphabet = Vector(PathItem.Symbol("a"), PathItem.Symbol("b"), PathItem.Symbol("c"),
-                        PathItem.Arity(0), PathItem.Arity(1), PathItem.Variable("x"))
+  val alphabet = Vector("a", "b", "c", "0", "1", "x")
   def randPath(): PathValue = PathValue(List.fill(rnd.nextInt(4))(alphabet(rnd.nextInt(alphabet.size))))
   def randSV(): SpaceValue = SpaceValue((0 until rnd.nextInt(7)).map(_ => randPath()).toSet)
   def t(sv: SpaceValue): Trie = Trie.fromSpaceValue(sv)
@@ -118,8 +119,7 @@ end TrieEval
 class ITrieOps extends FunSuite:
   import Space.*
   val rnd = new scala.util.Random(11)
-  val alphabet = Vector(PathItem.Symbol("a"), PathItem.Symbol("b"), PathItem.Symbol("c"),
-                        PathItem.Arity(0), PathItem.Arity(1), PathItem.Variable("x"))
+  val alphabet = Vector("a", "b", "c", "0", "1", "x")
   def randPath(): PathValue = PathValue(List.fill(rnd.nextInt(4))(alphabet(rnd.nextInt(alphabet.size))))
   def randSV(): SpaceValue = SpaceValue((0 until rnd.nextInt(7)).map(_ => randPath()).toSet)
   def t(sv: SpaceValue): ITrie = ITrie.fromSpaceValue(sv)

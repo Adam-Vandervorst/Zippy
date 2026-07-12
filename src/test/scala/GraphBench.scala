@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -81,7 +83,7 @@ class GraphBench extends FunSuite:
     // aunt query (synthetic families of growing size)
     for n <- Seq(150, 400) do
       val r = new scala.util.Random(n); val ps = collection.mutable.Set.empty[PathValue]
-      def sym(xs: String*) = PathValue(xs.map(PathItem.Symbol(_)).toList)
+      def sym(xs: String*) = PathValue(xs.toList)
       for i <- 1 until n do { val p = r.nextInt(i); ps += sym("parent", p.toString, i.toString); ps += sym("child", i.toString, p.toString) }
       for i <- 0 until n do { if r.nextBoolean() then ps += sym("female", i.toString) else ps += sym("male", i.toString) }
       val fam = SpaceValue(ps.toSet); val ppl = SpaceValue((0 until n).map(i => sym(i.toString)).toSet)
@@ -96,7 +98,7 @@ class GraphBench extends FunSuite:
     // temperature: spatial trie-prefix + bucket query over the resident grid
     for bits <- Seq(12, 14) do
       val rr = new scala.util.Random(bits)
-      val cells = (0 until (1 << bits)).map(i => PathValue(NOAA.bits(i, bits) :+ PathItem.Symbol(Vector("VC","C","N","W","VW")(rr.nextInt(5))))).toSet
+      val cells = (0 until (1 << bits)).map(i => PathValue(NOAA.bits(i, bits) :+ (Vector("VC","C","N","W","VW")(rr.nextInt(5))))).toSet
       val world = Literal(SpaceValue(cells))
       val q = Union(Restriction(world, Literal(NOAA.interval(0, (1 << bits) / 8, bits))), Restriction(world, ss"VW"))
       run(Bench(s"temperature ${1 << bits}", q, Map.empty, PartialFunction.empty, PartialFunction.empty))
@@ -133,8 +135,8 @@ class GraphBench extends FunSuite:
 
     // union_iter (shows the optimizer hoisting; mentions xs, ys)
     locally {
-      val xs = SpaceValue((0 until 400).map(i => PathValue(List(PathItem.Symbol((i % 30).toString), PathItem.Symbol(i.toString)))).toSet)
-      val ys = SpaceValue((0 until 400).map(i => PathValue(List(PathItem.Symbol((i % 20).toString), PathItem.Symbol(s"y$i")))).toSet)
+      val xs = SpaceValue((0 until 400).map(i => PathValue(List(((i % 30).toString), i.toString))).toSet)
+      val ys = SpaceValue((0 until 400).map(i => PathValue(List(((i % 20).toString), s"y$i"))).toSet)
       run(Bench("union_iter", Routines.union_iter_routine.body,
         Map("xs" -> xs, "ys" -> ys), Syntax.mod(Routines.union_iter_routine), PartialFunction.empty))
     }
@@ -144,7 +146,7 @@ class GraphBench extends FunSuite:
     for size <- Seq(40, 80) do
       val rr = new scala.util.Random(size)
       val edges = SpaceValue((0 until size * 2).map(_ =>
-        PathValue(List(PathItem.Symbol(rr.nextInt(size).toString), PathItem.Symbol(rr.nextInt(size).toString)))).toSet)
+        PathValue(List(rr.nextInt(size).toString, rr.nextInt(size).toString))).toSet)
       val rc = Syntax.mod(Routines.transitive_routine)
       val call = Space.Call(RoutinePtr("transitive"), Vector(), Vector(Literal(edges)))
       val ref = eval(call)(using PathContextMap(Map.empty), SpaceContextMap(Map.empty), rc)
@@ -237,9 +239,9 @@ class SubgraphHoistBench extends FunSuite:
     // synthetic: an invariant inner iteration inside an outer loop that genuinely runs N times
     // (DISTINCT heads, so the outer groups into N and the inner loop runs N times without hoisting)
     for n <- Seq(150, 400) do
-      val innerLit = SpaceValue((0 until 60).map(i => PathValue(List(PathItem.Symbol("k"), PathItem.Symbol(i.toString)))).toSet)
+      val innerLit = SpaceValue((0 until 60).map(i => PathValue(List("k", i.toString))).toSet)
       val inner: Space = Iteration(Literal(innerLit), PathRef("y"), SpaceMention("s"), Composition(Singleton(hd("y")), S"s"))
-      val src = SpaceValue((0 until n).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet)   // distinct heads
+      val src = SpaceValue((0 until n).map(i => PathValue(List(i.toString))).toSet)   // distinct heads
       val main = R"o"(S"src") := Iteration(S"src", PathRef("x"), SpaceMention("r"), Union(inner, Singleton(hd("x"))))
       row(s"invariant-inner N=$n", main, Map("src" -> src), PartialFunction.empty)
 
@@ -334,7 +336,7 @@ class SCOptBench extends FunSuite:
     // 3. temperature — prefix-interval + band restriction over a 4096-cell grid literal
     locally {
       val rr = new scala.util.Random(12)
-      val cells = (0 until 4096).map(i => PathValue(NOAA.bits(i, 12) :+ PathItem.Symbol(Vector("VC","C","N","W","VW")(rr.nextInt(5))))).toSet
+      val cells = (0 until 4096).map(i => PathValue(NOAA.bits(i, 12) :+ (Vector("VC","C","N","W","VW")(rr.nextInt(5))))).toSet
       val world = Literal(SpaceValue(cells))
       val q = Union(Restriction(world, Literal(NOAA.interval(0, 512, 12))), Restriction(world, ss"VW"))
       run("temperature 4096", R"t"() := q, Map.empty, PartialFunction.empty)
@@ -344,7 +346,7 @@ class SCOptBench extends FunSuite:
     locally {
       val rr = new scala.util.Random(80)
       val edges = SpaceValue((0 until 160).map(_ =>
-        PathValue(List(PathItem.Symbol(rr.nextInt(80).toString), PathItem.Symbol(rr.nextInt(80).toString)))).toSet)
+        PathValue(List(rr.nextInt(80).toString, rr.nextInt(80).toString))).toSet)
       // bind edges via a Literal so main.body is closed for eval/evalI reference
       val body = Routines.transitive_routine.body match
         case Space.Union(_, Space.Call(_, _, Vector(next))) =>
@@ -445,7 +447,7 @@ class AblationStages extends FunSuite:
     // lowerCalls leaves the top-level entry call to a recursive routine as a residual Call.
     locally {
       val rr = new scala.util.Random(7)
-      val edges = SpaceValue((0 until 30).map(_ => PathValue(List(PathItem.Symbol(rr.nextInt(15).toString), PathItem.Symbol(rr.nextInt(15).toString)))).toSet)
+      val edges = SpaceValue((0 until 30).map(_ => PathValue(List(rr.nextInt(15).toString, rr.nextInt(15).toString))).toSet)
       val cfg = Routines.transitive_routine.body match
         case Space.Union(_, Space.Call(_, _, Vector(next))) => Space.Fixpoint(Literal(edges), SpaceMention("edges"), next)
         case _ => fail("transitive shape")
@@ -470,7 +472,7 @@ class AblationStages extends FunSuite:
     // temperature (small grid, closed, no Calls)
     locally {
       val rr = new scala.util.Random(9)
-      val cells = (0 until 1024).map(i => PathValue(NOAA.bits(i, 10) :+ PathItem.Symbol(Vector("VC","C","N","W","VW")(rr.nextInt(5))))).toSet
+      val cells = (0 until 1024).map(i => PathValue(NOAA.bits(i, 10) :+ (Vector("VC","C","N","W","VW")(rr.nextInt(5))))).toSet
       val world = Literal(SpaceValue(cells))
       row("temperature 1024", Union(Restriction(world, Literal(NOAA.interval(0, 128, 10))), Restriction(world, ss"VW")), Map.empty, PartialFunction.empty)
     }

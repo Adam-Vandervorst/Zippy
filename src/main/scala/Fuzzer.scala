@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.Searching
 import morkl.Syntax.{*, given}
 
@@ -168,8 +170,8 @@ object Loc:
           .flatMap(i => rightf(PathValue(segment.items.take(i))).branches(PathValue(segment.items.drop(i)))).toSet
 
   def uop(src: Loc, pf: PathValue => PathValue) = Dep(src, p => Const(pf(p)))
-  def int_to_int(f: Int => Int) = uop(Full((0 to 9).map(k => PathItem.Symbol(k.toString)).toSet),
-    p => PathValue(f(p.items.map(_.show).mkString.toInt).toString.map(c => PathItem.Symbol(c.toString)).toList))
+  def int_to_int(f: Int => Int) = uop(Full((0 to 9).map(k => k.toString).toSet),
+    p => PathValue(f(p.items.mkString.toInt).toString.map(c => c.toString).toList))
   def sqrt = int_to_int(i => Math.sqrt(i.toDouble).toInt)
 end Loc
 
@@ -185,7 +187,7 @@ object SpaceFuzzer:
   import Space.*
   import java.util.Random
 
-  val alphabet: Vector[PathItem] = Vector("a", "b", "c", "d").map(PathItem.Symbol(_))
+  val alphabet: Vector[PathItem] = Vector("a", "b", "c", "d")
   val argM: SpaceMention = SpaceMention("x")
   val X: Space = Space.Mention(argM)
 
@@ -219,7 +221,7 @@ object SpaceFuzzer:
     private def someArg(using rng: Random): SpaceValue =                       // a non-empty subset of the argument
       val chosen = paths.filter(_ => rng.nextBoolean()); SpaceValue((if chosen.isEmpty then Vector(pick(paths)) else chosen).toSet)
     private def constP(p: PathValue): Path = Path.Constant(p)
-    private def freshTag(using rng: Random): PathValue = PathValue(List(PathItem.Symbol("w" + rng.nextInt(4))))
+    private def freshTag(using rng: Random): PathValue = PathValue(List(("w" + rng.nextInt(4))))
     private def somePrefixLit(using rng: Random): Space =                       // 1-item prefixes drawn from the argument's heads
       val its = firstItems.filter(_ => rng.nextBoolean()); val use = if its.isEmpty then Vector(pick(firstItems)) else its
       Space.Literal(SpaceValue(use.map(it => PathValue(List(it))).toSet))

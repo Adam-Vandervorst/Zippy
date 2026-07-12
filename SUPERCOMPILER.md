@@ -175,7 +175,7 @@ sn_tc_sc2(#g0, #g1) := #g0 \/ sn_tc_sc2(
 `Interner`) and keys the trie children by `IntMap[ITrie]` (a Patricia trie).  The ring
 operations are then `IntMap` callback merges — `union = unionWith(recursive union)`,
 `intersection = intersectionWith(recursive intersection)` — which match the algebra and merge
-in one O(n+m) structural pass.  `evalI` (the evaluator over `ITrie`) creates **no `PathItem`
+in one O(n+m) structural pass.  `evalI` (the evaluator over `ITrie`) touches **no `PathItem`
 during evaluation**: constants are interned at construction and the operations only combine
 ints; un-interning happens only at the `SpaceValue` boundary.  Benchmarks: geomean ≈ **16×**
 faster than the reference Set across the six (pure) example domains, and ≈ **1.5×** (up to 2.4×)

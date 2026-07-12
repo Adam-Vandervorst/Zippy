@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -43,7 +45,7 @@ class RecursionLoweringBench extends FunSuite:
     System.out.println("(BEFORE = interpret original Calls; AFTER = lowered Fixpoint)")
     System.out.println(f"${"depth"}%5s ${"width"}%5s ${"|out|"}%7s | ${"eval(low)"}%10s ${"evalI(low)"}%11s ${"execT(low)"}%11s ${"execZ(low)"}%11s | ${"BEFORE (orig Calls)"}%20s")
     for (d, m) <- Seq((10, 40), (20, 40), (40, 40), (20, 160)) do
-      val x = SpaceValue((0 until m).map(i => PathValue(List.fill(d)(PathItem.Symbol("h")) :+ PathItem.Symbol("t" + i))).toSet)
+      val x = SpaceValue((0 until m).map(i => PathValue(List.fill(d)("h") :+ ("t" + i))).toSet)
       val xi = iT(x)
       val rEval = eval(mtop)(using sc = SpaceContextMap(Map(SpaceMention("x") -> x)))
       val rI = evalI(mtop)(using ic = Map(SpaceMention("x") -> xi)).toSpaceValue
@@ -65,7 +67,7 @@ class RecursionLoweringBench extends FunSuite:
     System.out.println("\n=== SINGLE self-recursion  transitive closure (chain of N nodes) ===")
     System.out.println(f"${"N"}%5s ${"|edges|"}%8s ${"|TC|"}%7s | ${"eval(low)"}%10s ${"evalI(low)"}%11s ${"execT(low)"}%11s ${"execZ(low)"}%11s")
     for n <- Seq(8, 16, 32, 48) do
-      val edges = SpaceValue((0 until n - 1).map(i => PathValue(List(PathItem.Symbol(i.toString), PathItem.Symbol((i + 1).toString)))).toSet)
+      val edges = SpaceValue((0 until n - 1).map(i => PathValue(List(i.toString, (i + 1).toString))).toSet)
       val ei = iT(edges)
       val rEval = eval(ttop)(using sc = SpaceContextMap(Map(SpaceMention("edges") -> edges)))
       val rI = evalI(ttop)(using ic = Map(SpaceMention("edges") -> ei)).toSpaceValue

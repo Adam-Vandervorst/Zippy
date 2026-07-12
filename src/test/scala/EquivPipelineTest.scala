@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -153,7 +155,7 @@ class EquivPipelineTest extends FunSuite:
     val ms = (freeMentions(a) ++ freeMentions(b)).distinct
     for trial <- 1 to 3 do
       val binds = ms.map(m => m -> SpaceValue((0 until rng.nextInt(4)).map(_ =>
-        PathValue(List.fill(1 + rng.nextInt(2))(PathItem.Symbol(rng.nextInt(3).toString)))).toSet)).toMap
+        PathValue(List.fill(1 + rng.nextInt(2))(rng.nextInt(3).toString))).toSet)).toMap
       val sc = SpaceContextMap(binds)
       assertEquals(eval(a)(using pc0, sc, PartialFunction.empty), eval(b)(using pc0, sc, PartialFunction.empty),
                    s"$name: agnostic sides differ on random binding #$trial")
@@ -202,7 +204,7 @@ class EquivPipelineTest extends FunSuite:
       var emitted = 0
       for ((l, r, ps, ss), i) <- ms.zipWithIndex do
         val penv = ps.zipWithIndex.map((n, j) => n -> (900000 + i * 100 + j).toString).toMap
-        val senv = ss.zipWithIndex.map((n, j) => n -> s"(Src (N ${Interner.intern(PathItem.Symbol(s"$$free$${i}_$$j$$$n"))}))").toMap
+        val senv = ss.zipWithIndex.map((n, j) => n -> s"(Src (N ${Interner.intern(s"$$free$${i}_$$j$$$n")}))").toMap
         val rl = AgnosticPipeline.renderZ(l, penv, senv, ctx, false)
         val rr = AgnosticPipeline.renderZ(r, penv, senv, ctx, false)
         if rl != rr then
@@ -524,7 +526,7 @@ class EquivPipelineTest extends FunSuite:
   // ==============================================================================================
   // The cornerstone examples
   // ==============================================================================================
-  def pv(items: String*): PathValue = PathValue(items.toList.map(PathItem.Symbol(_)))
+  def pv(items: String*): PathValue = PathValue(items.toList)
   def sv(ps: PathValue*): SpaceValue = SpaceValue(ps.toSet)
   def routineN(name: String, ms: String*)(body: Space): Routine =
     Routine(RoutinePtr(name), Vector.empty, ms.map(SpaceMention(_)).toVector, body)
@@ -558,7 +560,7 @@ class EquivPipelineTest extends FunSuite:
 
   test("pipeline: temperature") {
     val rr = new scala.util.Random(12)
-    val cells = (0 until 16).map(i => PathValue(NOAA.bits(i, 4) :+ PathItem.Symbol(Vector("VC", "C", "N", "W", "VW")(rr.nextInt(5))))).toSet
+    val cells = (0 until 16).map(i => PathValue(NOAA.bits(i, 4) :+ (Vector("VC", "C", "N", "W", "VW")(rr.nextInt(5))))).toSet
     val world = Mention(SpaceMention("world"))
     val q = Union(Restriction(world, Literal(NOAA.interval(0, 4, 4))), Restriction(world, Literal(NOAA.interval(12, 16, 4))))
     pipeline("temperature", q, SpaceContextMap(Map(SpaceMention("world") -> SpaceValue(cells))), PartialFunction.empty)
