@@ -2101,3 +2101,65 @@ checks, laws changed 996/1000 programs, reduce 0.3s total.  Full battery
 (37 suites) green.  ExSlidingPuzzle full-BFS 430s timing investigated: same
 431s at git HEAD via stash — pre-existing Slow-test cost, not a laws
 regression.  CorpusValidation + ExecutorOverheadBench re-running.
+
+================================================================================
+2026-07-13  Abstract result-size analysis (Lower.sizeBounds)
+================================================================================
+Interval abstraction of a space's size: SizeBounds(lo, loHeaded, hi) with
+lo <= |eval(s)| <= hi and loHeaded a lower bound on the HEADED path count (the
+number of groups an iteration runs).  Transfer functions per constructor,
+saturating arithmetic, unknowns (mentions/calls/grounded) widen to [0, inf).
+Two corrections over the sketched old attempt, both pinned by tests:
+ - intersection upper is min (not max);
+ - composition lower is max(lo_l, lo_r) when both sides are nonempty, NOT
+   lo_l*lo_r: concatenation splits can collide ({a,aa}.{a,aa} has 3 paths, not
+   4).  The product upper stays.
+ - iteration lower takes ONE group's body (bodies may overlap across groups),
+   gated on loHeaded(src) >= 1 — an eps-only source runs zero groups, so plain
+   nonemptiness would be unsound (same refinement as the headedGuard work).
+Integration ("get rid of everything superseded"):
+ - provablyNonEmpty / provablyHeaded are now one-liners over sizeBounds
+   (lo >= 1 / loHeaded >= 1) — the syntactic case enumerations are gone, and
+   the guards got strictly stronger (e.g. subtraction of a provably-empty
+   right side, Range windows, fixpoint-from-init now prove headedness), so
+   IterUnion_Indep hoists bare in more cases.
+ - New rule SizeEmpty (hi == 0 => Empty) opens the optimized() pipeline —
+   analysis-level empty propagation through arbitrary nesting.
+Validation: new suite morkl.SizeBoundsCheck (4 tests) — corpus soundness
+(1000 programs x 5 random closed instantiations = 5000 checks: closed, open,
+and SC.reduce'd bounds all contain |eval|), the s||g control-flow operator
+derivation reproduced EXACTLY (s = {}: interval pins |g|; s nonempty:
+[|s|, |s|+|g|]), tricky transfer functions, SizeEmpty through optimized().
+Full battery (38 suites incl. CorpusLawValidation 100k checks): green.
+--- anchors after size analysis --------------------------------------------------
+CorpusValidation 1,000,000 pairs / 7 executors agree; ExecutorOverheadBench
+green (execT/evalI geomean 1.092 — in the usual band).  EquivPipelineTest
+relaunched on the final tree (prior run was stopped stale mid-flight when the
+analysis changed Lower shapes; the 15-puzzle graph-agnostic prover-timeout
+seen two runs ago remains under watch).
+--- tightness report (SizeBoundsReport) -------------------------------------------
+New suite morkl.SizeBoundsReport: sizeBounds over the suite's named programs
+(closed with canonical data) + 1000 corpus programs x 5 random closed
+instances.  All 5016 measurements SOUND.  The first run exposed the big
+tightness gap: rest-mentions widened every nested iteration to [0, inf) —
+1838/5000 corpus uppers unbounded; child-index/invert/union-iter/gol all inf.
+Fixed with an ENVIRONMENT refinement: an iteration/fold binds
+rest |-> [0, hi(src)] (a head-group is contained in its source); "_" binders
+and Fixpoint recs stay unknown.  After refinement (corpus, 5000 instances):
+  upper: 0 unbounded (was 1838); exact 732 (15%); slack p50=6 p90=188
+         p99=114k max=3.3e10 — the heavy tail is multiplicative compounding
+         through k-nested iterations (hi_src * hi_body per level), worst on
+         instances whose true result is EMPTY dynamically
+  lower: exact 2645 (53%); vacuous (lo=0, n>0) 1953 (39%) — intersection/
+         restriction/unwrap all zero their lower bound; slack p50=0 p90=4
+         p99=12 max=235 (a TailsUnion tower)
+  both-exact: 503 (10%)
+Suite table highlights: n-queens n=4..6 EXACT after aoe-inlining (optimized()
+constant-folds to a literal); or-else control-flow op exact on the empty
+branch; NOAA queries [0, 2592] (restriction zeroes the lower bound, upper =
+whole world); recursive entries (transitive, sliding puzzle) honestly vacuous
+[0, inf) — Call/Fixpoint iterates are unbounded by design.
+Least tight (finite): corpus#169/2 n=0 vs hi=3.3e10 (4-deep iteration nest
+over restrictions); lower: corpus#838/4 n=235 vs lo=0 (TailsUnion tower).
+Full battery (38 suites) green after the refinement; CorpusLawValidation and
+ProductUnionCheck green.

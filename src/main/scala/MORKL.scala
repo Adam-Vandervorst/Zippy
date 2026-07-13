@@ -224,7 +224,7 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
     all_forever(Lower.inline(using new PartialFunction {
       override def apply(f: RoutinePtr): Routine = ctx(f)
       override def isDefinedAt(f: RoutinePtr): Boolean = f != name && ctx.isDefinedAt(f)
-    })(body), List(Lower.ConstantOps, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.IterComposition_Indep, Lower.EpsGuard_Wrap, Lower.IterWitness_TransposeSemiJoin, Lower.IterWitness_HeadNarrow, Lower.UnwrapPush, Lower.WrapMerge, Lower.RestrictionPush, Lower.CompWrapAssoc, Lower.CompAssocRight, Lower.CompLitWraps, Lower.Unwrap_Merge, Lower.SingletonConstPrefix_Wrap, Lower.RaffinationPush, Lower.RaffRestrictAlgebra, Lower.RestrictRaffWrapBoth, Lower.IterSetOpMerge, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
+    })(body), List(Lower.ConstantOps, Lower.SizeEmpty, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.IterComposition_Indep, Lower.EpsGuard_Wrap, Lower.IterWitness_TransposeSemiJoin, Lower.IterWitness_HeadNarrow, Lower.UnwrapPush, Lower.WrapMerge, Lower.RestrictionPush, Lower.CompWrapAssoc, Lower.CompAssocRight, Lower.CompLitWraps, Lower.Unwrap_Merge, Lower.SingletonConstPrefix_Wrap, Lower.RaffinationPush, Lower.RaffRestrictAlgebra, Lower.RestrictRaffWrapBoth, Lower.IterSetOpMerge, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
 //    })(body), List(Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
 
 def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
@@ -1602,27 +1602,117 @@ object Lower:
       Path.Constant(PathValue(xs ++ ys))
   })
 
-  private def emptyPath(p: Path): Boolean = p match { case Path.Constant(PathValue(Nil)) => true; case _ => false }
-  /** Conservative static "this space has at least one path" / "…at least one path with a head" tests.
-   *  Both only ever return true when CERTAIN, so the IterUnion hoist below stays sound. */
-  def provablyNonEmpty(s: Space): Boolean = s match
-    case Space.Singleton(_) => true
-    case Space.Literal(SpaceValue(ps)) => ps.nonEmpty
-    case Space.Union(a, b) => provablyNonEmpty(a) || provablyNonEmpty(b)
-    case Space.Wrap(a, _) => provablyNonEmpty(a)
-    case Space.Composition(a, b) => provablyNonEmpty(a) && provablyNonEmpty(b)
-    case _ => false
   private def pathHeaded(p: Path): Boolean = p match
     case Path.Constant(PathValue(items)) => items.nonEmpty
     case Path.Deref(pr) => pr.lengthHint >= 1
     case Path.Concat(l, r) => pathHeaded(l) || pathHeaded(r)   // ≥1 item on either side ⇒ the concat has a head
     case _ => false
-  def provablyHeaded(s: Space): Boolean = s match
-    case Space.Singleton(p) => pathHeaded(p)
-    case Space.Literal(SpaceValue(ps)) => ps.exists(_.items.nonEmpty)
-    case Space.Union(a, b) => provablyHeaded(a) || provablyHeaded(b)
-    case Space.Wrap(a, p) => if emptyPath(p) then provablyHeaded(a) else provablyNonEmpty(a)
-    case _ => false
+
+  // ---- abstract result-size analysis ------------------------------------------
+  /** Interval abstraction of a space's SIZE: `lo ≤ |eval(s)| ≤ hi`, plus `loHeaded ≤ |{p ∈
+   *  eval(s) : p ≠ ε}|` — the lower bound on HEADED paths, i.e. on the groups an iteration over
+   *  the space runs (0 ≤ loHeaded ≤ lo ≤ hi).  Unknowns (mentions, calls, grounded, unwraps of
+   *  unknowns) widen to `[0, ∞)`; arithmetic saturates at [[SizeBounds.INF]].
+   *
+   *  The transfer functions (each an exact set-cardinality law):
+   *    union         [max(lo), l+r]        a headed path of either side survives: loHeaded = max
+   *    intersection  [0, min(hi)]
+   *    subtraction   [relu(lo_l − hi_r), hi_l]      (and likewise for loHeaded)
+   *    restriction   [0, hi_l]  (∅ prefixes ⇒ ∅)
+   *    raffination   [lo_l if r provably ∅ else 0, hi_l]
+   *    composition   [max(lo) if both ≥ 1 else 0, hi_l·hi_r] — for a FIXED element of one side,
+   *                  concatenation is injective in the other, so max is a sound lower bound
+   *                  (the naive lo_l·lo_r overcounts when splits collide, e.g. {a,aa}·{a,aa});
+   *                  a concat is headed when either part is
+   *    wrap          size-preserving (bijective); a headed prefix makes every path headed
+   *    unwrap/tails  [0, hi_src]
+   *    range         window (0,k) / (−k,0) slices exactly min(size, k) paths
+   *    iteration     [lo_body if the source provably RUNS (loHeaded_src ≥ 1) else 0,
+   *                   hi_src·hi_body] — group bodies may overlap, so the lower bound takes ONE
+   *                  group's body, never a product
+   *    fixpoint      accumulates a union from init: [lo_init, ∞)
+   *
+   *  This subsumes the old syntactic `provablyNonEmpty`/`provablyHeaded` (now defined by it) and
+   *  powers [[SizeEmpty]] (`hi == 0` IS the empty space) and the guard decision in
+   *  [[IterUnion_Indep]] (a provably-running source hoists bare, with no runtime factor). */
+  final case class SizeBounds(lo: Long, loHeaded: Long, hi: Long)
+  object SizeBounds:
+    val INF: Long = Long.MaxValue
+    val unknown: SizeBounds = SizeBounds(0, 0, INF)
+  import SizeBounds.INF
+  private def satAdd(a: Long, b: Long): Long = if a == INF || b == INF then INF else { val s = a + b; if s < 0 then INF else s }
+  private def satMul(a: Long, b: Long): Long = if a == 0 || b == 0 then 0 else if a == INF || b == INF || a > INF / b then INF else a * b
+  private def relu(a: Long): Long = if a < 0 then 0 else a
+
+  def sizeBounds(s: Space): SizeBounds = sizeBounds(s, Map.empty)
+  /** `env` refines binder mentions: an iteration's rest-set is ONE head-group of its source, so
+   *  `|rest| ≤ ⌈src⌉` — without it every nested rest-iteration widens to [0, ∞).  Binders named
+   *  `_` are never bound (contexts ignore the throwaway binder), and a Fixpoint's rec stays
+   *  unknown (its iterates are unbounded). */
+  private def sizeBounds(s: Space, env: Map[SpaceMention, SizeBounds]): SizeBounds = s match
+    case Space.Empty => SizeBounds(0, 0, 0)
+    case Space.Singleton(p) => SizeBounds(1, if pathHeaded(p) then 1 else 0, 1)
+    case Space.Literal(SpaceValue(ps)) => SizeBounds(ps.size, ps.count(_.items.nonEmpty), ps.size)
+    case Space.Union(a, b) =>
+      val x = sizeBounds(a, env); val y = sizeBounds(b, env)
+      SizeBounds(x.lo max y.lo, x.loHeaded max y.loHeaded, satAdd(x.hi, y.hi))
+    case Space.Intersection(a, b) =>
+      SizeBounds(0, 0, sizeBounds(a, env).hi min sizeBounds(b, env).hi)
+    case Space.Subtraction(a, b) =>
+      val x = sizeBounds(a, env); val y = sizeBounds(b, env)
+      SizeBounds(relu(x.lo - y.hi), relu(x.loHeaded - y.hi), x.hi)
+    case Space.Restriction(a, b) =>
+      val x = sizeBounds(a, env)
+      SizeBounds(0, 0, if sizeBounds(b, env).hi == 0 then 0 else x.hi)
+    case Space.Raffination(a, b) =>
+      val x = sizeBounds(a, env); val y = sizeBounds(b, env)
+      if y.hi == 0 then x else SizeBounds(0, 0, x.hi)
+    case Space.Composition(a, b) =>
+      val x = sizeBounds(a, env); val y = sizeBounds(b, env)
+      val lo = if x.lo >= 1 && y.lo >= 1 then x.lo max y.lo else 0
+      val loH = (if y.lo >= 1 then x.loHeaded else 0) max (if x.lo >= 1 then y.loHeaded else 0)
+      SizeBounds(lo, loH, satMul(x.hi, y.hi))
+    case Space.Wrap(src, p) =>
+      val x = sizeBounds(src, env)
+      SizeBounds(x.lo, if pathHeaded(p) then x.lo else x.loHeaded, x.hi)
+    case Space.Unwrap(src, _) => SizeBounds(0, 0, sizeBounds(src, env).hi)
+    case Space.TailsUnion(src) => SizeBounds(0, 0, sizeBounds(src, env).hi)
+    case Space.TailsIntersection(src) => SizeBounds(0, 0, sizeBounds(src, env).hi)
+    case Space.Range(x, a, b) =>
+      val sub = sizeBounds(x, env)
+      if a == 0 && b == 0 then sub                                        // the whole space
+      else
+        val window = if a == 0 && b > 0 then Some(b.toLong) else if b == 0 && a < 0 then Some(-a.toLong) else None
+        window match
+          case Some(w) => SizeBounds(sub.lo min w, 0, sub.hi min w)        // exactly min(size, w) paths
+          case None => SizeBounds(0, 0, sub.hi)
+    case Space.Iteration(src, _, rest, body) =>
+      val sb = sizeBounds(src, env)
+      val benv = if rest.s == "_" then env else env.updated(rest, SizeBounds(0, 0, sb.hi))
+      val bb = sizeBounds(body, benv)                                     // one head-group: |rest| ≤ ⌈src⌉
+      val runs = sb.loHeaded >= 1                                         // ≥1 head-group ⇒ the body's union has ≥1 term
+      SizeBounds(if runs then bb.lo else 0, if runs then bb.loHeaded else 0, satMul(sb.hi, bb.hi))
+    case Space.Fixpoint(init, _, _) =>
+      val ib = sizeBounds(init, env)                                           // the accumulator only grows from init
+      SizeBounds(ib.lo, ib.loHeaded, INF)
+    case Space.Fold(src, _, _, _, rest, body, _) =>
+      val sb = sizeBounds(src, env)
+      val benv = if rest.s == "_" then env else env.updated(rest, SizeBounds(0, 0, sb.hi))
+      SizeBounds(0, 0, satMul(sb.hi, sizeBounds(body, benv).hi))
+    case Space.Mention(m) => env.getOrElse(m, SizeBounds.unknown)
+    case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => SizeBounds.unknown
+
+  /** "this space has at least one path" / "…at least one path with a head" — via [[sizeBounds]];
+   *  only ever true when CERTAIN, so the IterUnion hoist below stays sound. */
+  def provablyNonEmpty(s: Space): Boolean = sizeBounds(s).lo >= 1
+  def provablyHeaded(s: Space): Boolean = sizeBounds(s).loHeaded >= 1
+
+  /** a size interval of [0,0] IS the empty space — the analysis-level Empty propagation
+   *  (subsumes chains of syntactic absorptions in one step, e.g. a restriction by a
+   *  provably-empty prefix set under a wrap under a union operand). */
+  val SizeEmpty = subs(_: Space)(spost = {
+    case sp if sp != Space.Empty && sizeBounds(sp).hi == 0 => Space.Empty
+  })
 
   // ---- constant-time emptiness factors --------------------------------------
   /** `{ε}` iff `x` is non-empty, else `∅` — O(one path).  `x ∩ {ε}` covers an ε-only `x`

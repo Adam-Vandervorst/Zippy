@@ -26,7 +26,7 @@
 (let $vn9 (Term (Sub 65 (Sub 17 $virt))))
 (let $vn10 (Term (Sub 66 (Sub 17 $virt))))
 (let $vn11 (Term (Sub 62 (Sub 17 (Sub 17 $virt)))))
-(run 14)
+(run 20)
 (check (= $vm0 (T)))
 (check (= $vm1 (T)))
 (check (= $vm2 (T)))
