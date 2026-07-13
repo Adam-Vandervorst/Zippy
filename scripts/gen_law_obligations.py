@@ -315,6 +315,109 @@ law("law_iter_fusion", "nested invariant iterations fuse and commute",
          eq(ITERC(A, ITERC(C, B)), ITERC(C, ITERC(A, B)))),
     decls=SETS)
 
+# ---- inverse-index semijoin (Lower.IterWitness_TransposeSemiJoin), k=l=1 instances ----
+law("law_transpose_spec", "the (1,1)-transpose index: TR = { w·u | u·w prefixes an E-path }",
+    conj("(forall ((u Int) (w Int)) (= (TR (cons w (cons u nil))) "
+         "(exists ((t Path)) (E (cons u (cons w t))))))",
+         "(forall ((p Path)) (=> (TR p) (exists ((u Int) (w Int)) (= p (cons w (cons u nil))))))"),
+    decls="(declare-fun E (Path) Bool)\n(declare-fun TR (Path) Bool)\n" +
+          "(assert (forall ((p Path)) (= (TR p) (exists ((u Int) (w Int) (t Path)) "
+          "(and (= p (cons w (cons u nil))) (E (cons u (cons w t))))))))\n")
+law("law_iter_transpose_semijoin",
+    "narrowing a head-dependent iteration to the transpose-index candidates drops only groups whose witness is empty (body strict in the witness)",
+    "(forall ((p Path)) (= "
+    "(exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) "
+    "(exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) "
+    "(exists ((u Int)) (and (P u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))",
+    decls="(declare-fun S (Path) Bool)\n(declare-fun E (Path) Bool)\n(declare-const c0 Int)\n"
+          "(declare-fun Bd (Int Path) Bool)\n(declare-fun P (Int) Bool)\n"
+          "; P = the transpose-index candidates Unwrap(TR, c0): u with a witness u·c0·… in E\n"
+          "(assert (forall ((u Int)) (= (P u) (exists ((q Path)) (E (cons u (cons c0 q)))))))\n"
+          "; STRICTNESS: the iteration body denotes nothing when the witness unwrap is empty\n"
+          "(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h (cons c0 q))))) (not (Bd h p)))))\n")
+law("law_iter_head_narrow",
+    "narrowing a head-dependent iteration to the heads of the witness base E drops only groups whose witness is empty (body strict in the witness)",
+    "(forall ((p Path)) (= "
+    "(exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) "
+    "(exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) "
+    "(exists ((u Int)) (and (PH u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))",
+    decls="(declare-fun S (Path) Bool)\n(declare-fun E (Path) Bool)\n"
+          "(declare-fun Bd (Int Path) Bool)\n(declare-fun PH (Int) Bool)\n"
+          "; PH = Head(E): the 1-item children of E\n"
+          "(assert (forall ((u Int)) (= (PH u) (exists ((q Path)) (E (cons u q))))))\n"
+          "; STRICTNESS: the iteration body denotes nothing when the witness unwrap at h is empty\n"
+          "(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h q)))) (not (Bd h p)))))\n")
+# ---- mined composition laws (scripts/mine_laws.py; 18 PROVED / 4 machine-refuted) ----
+law("law_unwrap_push", "unwrap distributes through ∪/∩/\\ (pointwise membership at w·p)",
+    conj(eq(UNWRAP(UNION(A, B), "w"), UNION(UNWRAP(A, "w"), UNWRAP(B, "w"))),
+         eq(UNWRAP(INTER(A, B), "w"), INTER(UNWRAP(A, "w"), UNWRAP(B, "w"))),
+         eq(UNWRAP(SUB(A, B), "w"), SUB(UNWRAP(A, "w"), UNWRAP(B, "w")))),
+    decls=SETS + CONSTS)
+law("law_wrap_merge", "set operations over equal-prefix wraps merge under the wrap",
+    conj(eq(UNION(WRAP("w", A), WRAP("w", B)), WRAP("w", UNION(A, B))),
+         eq(INTER(WRAP("w", A), WRAP("w", B)), WRAP("w", INTER(A, B))),
+         eq(SUB(WRAP("w", A), WRAP("w", B)), WRAP("w", SUB(A, B)))),
+    decls=SETS + CONSTS, assume=APPEND_INJ)
+law("law_wrap_disjoint", "constant prefixes with DIFFERENT HEAD ITEMS give disjoint cylinders",
+    "(forall ((k Int) (j Int) (w2 Path) (u2 Path)) (=> (distinct k j) (and " +
+    eq(INTER(WRAP("(cons k w2)", A), WRAP("(cons j u2)", B)), EMPTY) + " " +
+    eq(SUB(WRAP("(cons k w2)", A), WRAP("(cons j u2)", B)), WRAP("(cons k w2)", A)) + ")))",
+    decls=SETS)
+law("law_restrict_push", "restriction pushes through the subject's ∪/∩/\\ and splits over prefix unions",
+    conj(eq(RESTRICT(UNION(A, B), C), UNION(RESTRICT(A, C), RESTRICT(B, C))),
+         eq(RESTRICT(INTER(A, B), C), INTER(RESTRICT(A, C), B)),
+         eq(RESTRICT(SUB(A, B), C), SUB(RESTRICT(A, C), B)),
+         eq(RESTRICT(A, UNION(B, C)), UNION(RESTRICT(A, B), RESTRICT(A, C)))))
+law("law_comp_wrap_assoc", "a left wrap slides out of a composition: Wrap(w,a)·b = Wrap(w, a·b)",
+    eq(COMP(WRAP("w", A), B), WRAP("w", COMP(A, B))),
+    decls=SETS + CONSTS, assume=APPEND_ASSOC)
+law("law_restrict_wrap_both", "restriction under a common wrap prefix descends",
+    "(forall ((p Path)) (= "
+    "(and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (exists ((q2 Path)) (and (exists ((pq Path)) (and (= q2 (append w pq)) (B pq))) (isPrefix q2 p)))) "
+    "(exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (exists ((q3 Path)) (and (B q3) (isPrefix q3 qq))))))))",
+    decls=SETS + CONSTS, assume=APPEND_ASSOC + APPEND_INJ + ISPREFIX_APPEND)
+law("law_iter_comp_right_hoist", "an invariant right composition factor hoists out of an iteration",
+    eq(ITERC(A, COMP(B, C)), COMP(ITERC(A, B), C)),
+    decls=SETS)
+law("law_union_chain_tailsu", "n-ary union as TailsUnion over distinct synthetic tags (3-ary instance; the executor then merges balanced with empties filtered)",
+    eq(TAILSU(UNION(UNION(WRAP("(cons 1001 nil)", A), WRAP("(cons 1002 nil)", B)), WRAP("(cons 1003 nil)", C))),
+       UNION(UNION(A, B), C)),
+    decls=SETS)
+law("law_iter_merge", "same-source iteration merges: ∪ free; ∩/\\ under the KEYED guard (bodies output their group key first — groups disjoint across keys; the unguarded ∩ is refuted)",
+    conj("(forall ((p Path)) (= (or (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (or (Bd1 hh p) (Bd2 hh p))))))",
+         "(forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (Bd2 hh p))))))",
+         "(forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (not (exists ((hh Int)) (and (G hh) (Bd2 hh p))))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (not (Bd2 hh p)))))))"),
+    decls="(declare-fun G (Int) Bool)\n(declare-fun Bd1 (Int Path) Bool)\n(declare-fun Bd2 (Int Path) Bool)\n",
+    assume="""; KEYED guard (the ∩/\\ conjuncts need it; countermodel exists without it)
+(assert (forall ((hh Int) (p Path)) (=> (Bd1 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
+(assert (forall ((hh Int) (p Path)) (=> (Bd2 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
+""")
+law("law_raff_push", "raffination pushes through the subject's ∪/∩/\\ and splits over prefix unions",
+    conj(eq(RAFF(UNION(A, B), C), UNION(RAFF(A, C), RAFF(B, C))),
+         eq(RAFF(INTER(A, B), C), INTER(RAFF(A, C), B)),
+         eq(RAFF(SUB(A, B), C), SUB(RAFF(A, C), B)),
+         eq(RAFF(A, UNION(B, C)), RAFF(RAFF(A, B), C))))
+law("law_raff_restrict_algebra", "the raffination/restriction partition: annihilation, idempotence, recovery, commute",
+    conj(eq(RESTRICT(RAFF(A, B), B), EMPTY),
+         eq(RAFF(RESTRICT(A, B), B), EMPTY),
+         eq(RAFF(RAFF(A, B), B), RAFF(A, B)),
+         eq(RESTRICT(RESTRICT(A, B), B), RESTRICT(A, B)),
+         eq(UNION(RAFF(A, B), RESTRICT(A, B)), A),
+         eq(RAFF(RESTRICT(A, B), C), RESTRICT(RAFF(A, C), B))))
+law("law_raff_wrap_both", "raffination under a common wrap prefix descends",
+    "(forall ((p Path)) (= "
+    "(and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (not (exists ((q2 Path)) (and (exists ((pq Path)) (and (= q2 (append w pq)) (B pq))) (isPrefix q2 p))))) "
+    "(exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (not (exists ((q3 Path)) (and (B q3) (isPrefix q3 qq)))))))))",
+    decls=SETS + CONSTS, assume=APPEND_ASSOC + APPEND_INJ + ISPREFIX_APPEND)
+law("law_comp_lit_wraps", "a 2-path literal on the left of a composition is a union of wraps",
+    eq(COMP(UNION(SING("w"), SING("u")), B), UNION(WRAP("w", B), WRAP("u", B))),
+    decls=SETS + CONSTS)
+law("law_tailsu_push", "tails-union distributes over ∪ and cancels a single-item wrap",
+    conj(eq(TAILSU(UNION(A, B)), UNION(TAILSU(A), TAILSU(B))),
+         "(forall ((h Int)) " + eq(TAILSU(WRAP("(cons h nil)", A)), A) + ")"),
+    decls=SETS)
+
+
 MINIMAL = "\n".join(PRELUDE.splitlines()[:9]) + "\n"   # axioms only — the certified-lemma
 # assumptions blow up the default saturation strategy on the pure-induction schema files.
 SCHEMA_FILES = {"law_append_assoc", "law_append_inj", "law_isprefix_append"}
@@ -389,6 +492,28 @@ REG = [
     ("head-tails-cover", "FILE", "laws/law_head_tails_cover.smt2", "head(x)·tails∪(x) ⊇ x on ε-free x (subset as ∀-implication)"),
     ("guard-hoist", "FILE", "laws/law_guard_hoist.smt2", "invariant guard/wrap/composition hoisting"),
     ("iter-fusion", "FILE", "laws/law_iter_fusion.smt2", "nested invariant iterations fuse/commute"),
+    ("iter-transpose-semijoin", "FILE", "laws/law_iter_transpose_semijoin.smt2,laws/law_transpose_spec.smt2",
+     "inverse-index semijoin: k=l=1 certified; k,l<=3 = the same argument level-wise (SCHEMATIC, matched syntactically); body-strictness analysis in Lower"),
+    ("transpose-spec", "FILE", "laws/law_transpose_spec.smt2", "the (1,1)-transpose index spec (emitted nest = spec is the iteration-semantics schema, cf. keyfold_iter)"),
+    ("iter-witness-head-narrow", "FILE", "laws/law_iter_head_narrow.smt2",
+     "level-wise Head semijoin: source narrowed to Restriction(src, Head(E)); exact at the deepest level of suffix-witness joins; body-strictness analysis shared with the transpose law"),
+    ("unwrap-push", "FILE", "laws/law_unwrap_push.smt2", "mined; unwrap through set ops"),
+    ("wrap-merge", "FILE", "laws/law_wrap_merge.smt2", "mined; set ops merge under equal wraps"),
+    ("wrap-disjoint", "FILE", "laws/law_wrap_disjoint.smt2", "mined; incomparable cylinders (part of wrap-merge in Lower)"),
+    ("restriction-push", "FILE", "laws/law_restrict_push.smt2", "mined; restriction through subject ops + prefix unions"),
+    ("comp-wrap-assoc", "FILE", "laws/law_comp_wrap_assoc.smt2", "mined; left wrap slides out of composition"),
+    ("comp-assoc-right", "FILE", "laws/law_comp_assoc.smt2", "census; right-assoc canonicalization"),
+    ("comp-lit-to-wraps", "FILE", "laws/law_comp_lit_wraps.smt2", "census; compositions traded for unions of wraps (n<=4 schematic via comp-over-union-left + wrap-as-comp)"),
+    ("unwrap-fuse-const", "FILE", "laws/law_unwrap_merge.smt2", "census; constant unwrap chains fuse (same items descended, fewer nodes)"),
+    ("singleton-constprefix-wrap", "FILE", "laws/law_wrap_set.smt2", "profile; hoistable constant-prefix wrap split from singletons (merge direction gated to fully-constant)"),
+    ("iter-comp-right-hoist", "FILE", "laws/law_iter_comp_right_hoist.smt2", "profile; invariant right comp factor out of iterations"),
+    ("raffination-push", "FILE", "laws/law_raff_push.smt2", "profile; raffination through subject ops + prefix unions (pointwise)"),
+    ("raff-restrict-algebra", "FILE", "laws/law_raff_restrict_algebra.smt2", "profile; partition annihilation/idempotence/recovery/commute"),
+    ("restrict-raff-wrap-both", "FILE", "laws/law_restrict_wrap_both.smt2,laws/law_raff_wrap_both.smt2", "profile; descend below a common wrap prefix"),
+    ("iter-setop-merge", "FILE", "laws/law_iter_merge.smt2", "triple census; GUARDED: keyed bodies make groups independent — ∩/\\ move through same-source iterations; ∪ free (gated off invariant bodies vs IterUnion_Indep)"),
+    ("union-chain-tailsu", "FILE", "laws/law_union_chain_tailsu.smt2", "comm-assoc reordering natively: ≥4-ary ∪ chains as TailsUnion over synthetic tags; CERTIFIED but NOT DEFAULT (measured regression on small branches); ∩ analogue (sentinel) documented OPEN — no ≥3-ary ∩ occurs in the applications"),
+    ("restrict-wrap-both", "FILE", "laws/law_restrict_wrap_both.smt2", "mined (certificate only; not in Lower)"),
+    ("tailsu-push", "FILE", "laws/law_tailsu_push.smt2", "mined (certificate only; TailsUnion lowers to iteration)"),
 ]
 with open(outdir / "REGISTRY.tsv", "w") as f:
     f.write("# law\tkind\tcertificates\tnote\n")

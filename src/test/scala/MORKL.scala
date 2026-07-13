@@ -1195,9 +1195,10 @@ class Lowering extends FunSuite:
 //    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Xeya"))) \ S"family"("child" x "Xeya")) /\ S"family"("female")))
 //           \/ ("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Jim"))) \ S"family"("child" x "Jim")) /\ S"family"("female"))))
     val folded_people = Lower.Concat_Path(unrolled_people)
-//    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female")))
-//           \/ ("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female"))))
-    assert(folded_people.show == ("Aunt" x (("Xeya" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))) \/ ("Jim" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))))).show)
+//    the unroll emits one branch per DISTINCT head, in sorted head order ("Jim" < "Xeya"):
+//    "Aunt" x (("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female")))
+//           \/ ("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female"))))
+    assert(folded_people.show == ("Aunt" x (("Jim" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))) \/ ("Xeya" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))))).show)
   }
 end Lowering
 

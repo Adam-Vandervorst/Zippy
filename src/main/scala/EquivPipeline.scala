@@ -804,7 +804,23 @@ ${smt.defsText}
     "iter-tails" -> "proofs/laws/law_tailsu_set.smt2 + proofs/keyfolds.smt2",
     "tailsunion-singleton" -> "proofs/laws/law_tailsu_set.smt2",
     "range-singleton" -> "GROUND — trusted positional boundary (fallbacks.md); executor-evaluated",
-    "unwrap-wrap" -> "proofs/laws/law_unwrap_set.smt2")
+    "unwrap-wrap" -> "proofs/laws/law_unwrap_set.smt2",
+    "iter-transpose-semijoin" -> "proofs/laws/law_iter_transpose_semijoin.smt2 + laws/law_transpose_spec.smt2",
+    "iter-witness-head-narrow" -> "proofs/laws/law_iter_head_narrow.smt2",
+    "unwrap-push" -> "proofs/laws/law_unwrap_push.smt2",
+    "wrap-merge" -> "proofs/laws/law_wrap_merge.smt2 + laws/law_wrap_disjoint.smt2",
+    "restriction-push" -> "proofs/laws/law_restrict_push.smt2",
+    "comp-wrap-assoc" -> "proofs/laws/law_comp_wrap_assoc.smt2",
+    "comp-assoc-right" -> "proofs/laws/law_comp_assoc.smt2",
+    "comp-lit-to-wraps" -> "proofs/laws/law_comp_lit_wraps.smt2",
+    "unwrap-fuse-const" -> "proofs/laws/law_unwrap_merge.smt2",
+    "singleton-constprefix-wrap" -> "proofs/laws/law_wrap_set.smt2",
+    "iter-comp-right-hoist" -> "proofs/laws/law_iter_comp_right_hoist.smt2",
+    "raffination-push" -> "proofs/laws/law_raff_push.smt2",
+    "raff-restrict-algebra" -> "proofs/laws/law_raff_restrict_algebra.smt2",
+    "restrict-raff-wrap-both" -> "proofs/laws/law_restrict_wrap_both.smt2 + laws/law_raff_wrap_both.smt2",
+    "iter-setop-merge" -> "proofs/laws/law_iter_merge.smt2",
+    "union-chain-tailsu" -> "proofs/laws/law_union_chain_tailsu.smt2")
 
   def justify(l: Space, r: Space): Option[String] =
     def onceMatches(from: Space, to: Space): Option[String] =

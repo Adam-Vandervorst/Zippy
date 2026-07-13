@@ -55,3 +55,23 @@ raffination-partition	FILE	laws/law_raffination_partition.smt2	(x\|y) ∪ (x<|y)
 head-tails-cover	FILE	laws/law_head_tails_cover.smt2	head(x)·tails∪(x) ⊇ x on ε-free x (subset as ∀-implication)
 guard-hoist	FILE	laws/law_guard_hoist.smt2	invariant guard/wrap/composition hoisting
 iter-fusion	FILE	laws/law_iter_fusion.smt2	nested invariant iterations fuse/commute
+iter-transpose-semijoin	FILE	laws/law_iter_transpose_semijoin.smt2,laws/law_transpose_spec.smt2	inverse-index semijoin: k=l=1 certified; k,l<=3 = the same argument level-wise (SCHEMATIC, matched syntactically); body-strictness analysis in Lower
+transpose-spec	FILE	laws/law_transpose_spec.smt2	the (1,1)-transpose index spec (emitted nest = spec is the iteration-semantics schema, cf. keyfold_iter)
+iter-witness-head-narrow	FILE	laws/law_iter_head_narrow.smt2	level-wise Head semijoin: source narrowed to Restriction(src, Head(E)); exact at the deepest level of suffix-witness joins; body-strictness analysis shared with the transpose law
+unwrap-push	FILE	laws/law_unwrap_push.smt2	mined; unwrap through set ops
+wrap-merge	FILE	laws/law_wrap_merge.smt2	mined; set ops merge under equal wraps
+wrap-disjoint	FILE	laws/law_wrap_disjoint.smt2	mined; incomparable cylinders (part of wrap-merge in Lower)
+restriction-push	FILE	laws/law_restrict_push.smt2	mined; restriction through subject ops + prefix unions
+comp-wrap-assoc	FILE	laws/law_comp_wrap_assoc.smt2	mined; left wrap slides out of composition
+comp-assoc-right	FILE	laws/law_comp_assoc.smt2	census; right-assoc canonicalization
+comp-lit-to-wraps	FILE	laws/law_comp_lit_wraps.smt2	census; compositions traded for unions of wraps (n<=4 schematic via comp-over-union-left + wrap-as-comp)
+unwrap-fuse-const	FILE	laws/law_unwrap_merge.smt2	census; constant unwrap chains fuse (same items descended, fewer nodes)
+singleton-constprefix-wrap	FILE	laws/law_wrap_set.smt2	profile; hoistable constant-prefix wrap split from singletons (merge direction gated to fully-constant)
+iter-comp-right-hoist	FILE	laws/law_iter_comp_right_hoist.smt2	profile; invariant right comp factor out of iterations
+raffination-push	FILE	laws/law_raff_push.smt2	profile; raffination through subject ops + prefix unions (pointwise)
+raff-restrict-algebra	FILE	laws/law_raff_restrict_algebra.smt2	profile; partition annihilation/idempotence/recovery/commute
+restrict-raff-wrap-both	FILE	laws/law_restrict_wrap_both.smt2,laws/law_raff_wrap_both.smt2	profile; descend below a common wrap prefix
+iter-setop-merge	FILE	laws/law_iter_merge.smt2	triple census; GUARDED: keyed bodies make groups independent — ∩/\ move through same-source iterations; ∪ free (gated off invariant bodies vs IterUnion_Indep)
+union-chain-tailsu	FILE	laws/law_union_chain_tailsu.smt2	comm-assoc reordering natively: ≥4-ary ∪ chains as TailsUnion over synthetic tags; CERTIFIED but NOT DEFAULT (measured regression on small branches); ∩ analogue (sentinel) documented OPEN — no ≥3-ary ∩ occurs in the applications
+restrict-wrap-both	FILE	laws/law_restrict_wrap_both.smt2	mined (certificate only; not in Lower)
+tailsu-push	FILE	laws/law_tailsu_push.smt2	mined (certificate only; TailsUnion lowers to iteration)

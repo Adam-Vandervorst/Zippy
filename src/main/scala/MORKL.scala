@@ -224,7 +224,7 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
     all_forever(Lower.inline(using new PartialFunction {
       override def apply(f: RoutinePtr): Routine = ctx(f)
       override def isDefinedAt(f: RoutinePtr): Boolean = f != name && ctx.isDefinedAt(f)
-    })(body), List(Lower.ConstantOps, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
+    })(body), List(Lower.ConstantOps, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.IterComposition_Indep, Lower.EpsGuard_Wrap, Lower.IterWitness_TransposeSemiJoin, Lower.IterWitness_HeadNarrow, Lower.UnwrapPush, Lower.WrapMerge, Lower.RestrictionPush, Lower.CompWrapAssoc, Lower.CompAssocRight, Lower.CompLitWraps, Lower.Unwrap_Merge, Lower.SingletonConstPrefix_Wrap, Lower.RaffinationPush, Lower.RaffRestrictAlgebra, Lower.RestrictRaffWrapBoth, Lower.IterSetOpMerge, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
 //    })(body), List(Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
 
 def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
@@ -825,23 +825,35 @@ def optimize_sharing(g: RecursiveOpGraph): RecursiveOpGraph =
           // An Extract is a *binding* (a scope's input slot), not a recomputable value: an
           // ExtractSpaceMention("edges") inside a Fixpoint/Iteration body is the loop variable — a
           // DIFFERENT value from an ancestor's ExtractSpaceMention("edges").  Discriminating its key
-          // by scope level keeps the two distinct (so `next(cur)` is never merged into `next(init)`),
-          // while same-level Extracts of structurally identical sibling subgraphs still share a VN
-          // (so those subgraphs keep deduplicating).  Extracts are never redirected.  The constant is
-          // length-prefixed so a space inside it can't be confused with a field boundary (injective).
+          // by scope level keeps the two distinct (so `next(cur)` is never merged into `next(init)`).
+          // The key is POSITIONAL (slot index), not the binder's name: a binding is identified by
+          // where it sits, so α-equivalent sibling subgraphs (same shape, different binder names)
+          // get identical VN sequences and deduplicate (see the SG key below).  Extracts are never
+          // redirected.  Non-extract constants are length-prefixed so a space inside one can't be
+          // confused with a field boundary (injective).
           val isExtract = n.operation.startsWith("Extract")
-          val key = (if isExtract then s"$lvl@" else "") +
-            s"${n.operation} ${n.kind} ${n.inputs.map(vnAt).mkString(",")} ${n.constant.length}:${n.constant}"
-          val vn = intern(key)
-          lookup(key) match
-            case Some(nc) if !isResult && !isExtract => fr.oldToNew(j) = nc; fr.oldToVN(j) = vn
-            case _ =>
-              val nc = r.store(Node(n.operation, n.constant, n.kind, n.inputs.map(newAt)))
-              if !isResult && !isExtract then fr.seen.getOrElseUpdate(key, nc)
-              fr.oldToNew(j) = nc; fr.oldToVN(j) = vn; keptVNs += vn
+          // idempotence peephole: an interior pass-through `Union(x, x)` IS x — drop the node and
+          // alias it to its operand (the union splits in push_out leave these behind; collapsing
+          // them normalizes bodies so α-equivalent loops keep merging).  A scope RESULT stays
+          // materialized (executors read the last slot).
+          if !isResult && n.operation == "Union" && n.inputs.length == 2 && vnAt(n.inputs(0)) == vnAt(n.inputs(1)) then
+            fr.oldToNew(j) = newAt(n.inputs(0)); fr.oldToVN(j) = vnAt(n.inputs(0))
+          else
+            val key = if isExtract then s"$lvl@${n.operation} ${n.kind} @$j"
+              else s"${n.operation} ${n.kind} ${n.inputs.map(vnAt).mkString(",")} ${n.constant.length}:${n.constant}"
+            val vn = intern(key)
+            lookup(key) match
+              case Some(nc) if !isResult && !isExtract => fr.oldToNew(j) = nc; fr.oldToVN(j) = vn
+              case _ =>
+                val nc = r.store(Node(n.operation, n.constant, n.kind, n.inputs.map(newAt)))
+                if !isResult && !isExtract then fr.seen.getOrElseUpdate(key, nc)
+                fr.oldToNew(j) = nc; fr.oldToVN(j) = vn; keptVNs += vn
         case Right(sg) =>
           val (newSg, bodyVNs) = process(sg, Some(r))
-          val key = s"SG ${sg.root.operation} ${sg.root.inputs.map(vnAt).mkString(",")} ${bodyVNs.mkString(",")} ${sg.root.constant.length}:${sg.root.constant}"
+          // Iteration/Fixpoint root constants are binder NAMES (display only — execution binds by
+          // slot), so they are dropped from the key: α-equivalent loops over the same source merge.
+          val rootConst = if sg.root.operation == "Iteration" || sg.root.operation == "Fixpoint" then "" else sg.root.constant
+          val key = s"SG ${sg.root.operation} ${sg.root.inputs.map(vnAt).mkString(",")} ${bodyVNs.mkString(",")} ${rootConst.length}:$rootConst"
           val vn = intern(key)
           lookup(key) match
             case Some(nc) if !isResult => fr.oldToNew(j) = nc; fr.oldToVN(j) = vn
@@ -871,7 +883,7 @@ def optimize_sharing(g: RecursiveOpGraph): RecursiveOpGraph =
  *  slots] ++ [interior nodes, topologically] ++ [result last] with fresh coordinates.  Well-formed
  *  by construction, at any depth.  `hoistSubgraphs=false` pins subgraphs (node-only LICM) — kept for
  *  A/B measurement of the subgraph-hoisting win. */
-def push_out(g: RecursiveOpGraph, hoistSubgraphs: Boolean = true): RecursiveOpGraph =
+def push_out(g: RecursiveOpGraph, hoistSubgraphs: Boolean = true, splitUnions: Boolean = true): RecursiveOpGraph =
   import scala.collection.mutable.{HashMap => MMap, ArrayBuffer => MBuf, Set => MSet}
   // ---- node entries (Left ops, and Right subgraphs as a node in their parent scope) ----
   final class Ent(val id: Int, val isSub: Boolean, val op: String, val constant: String,
@@ -911,23 +923,21 @@ def push_out(g: RecursiveOpGraph, hoistSubgraphs: Boolean = true): RecursiveOpGr
           val e = ents(id); ents(id) = Ent(e.id, true, e.op, e.constant, e.kind, e.inputIds, e.homeScope, childSid, e.pinned)
     sid
   val rootScope = collect(g, Vector.empty, -1)
-  val nScopes = scopeLevel.length
+  def nScopes = scopeLevel.length
+  val resultIds = MBuf.tabulate(nScopes)(sid => scopeNodeIds(sid)(scopeResultIdx(sid)))
 
-  // ---- structural sets over the ORIGINAL tree: per scope, every id its subtree references
-  // (allRefs) and every id homed in its subtree (subtreeIds).  Computed bottom-up. ----
-  val entsByHome = Array.fill(nScopes)(MBuf.empty[Int]); for e <- ents do entsByHome(e.homeScope).addOne(e.id)
-  val allRefs = Array.fill(nScopes)(MSet.empty[Int])
-  val subtreeIds = Array.fill(nScopes)(MSet.empty[Int])
-  for sid <- (nScopes - 1) to 0 by -1 do
-    for id <- entsByHome(sid) do { allRefs(sid) ++= ents(id).inputIds; subtreeIds(sid).addOne(id) }
-    if scopeParent(sid) >= 0 then { allRefs(scopeParent(sid)) ++= allRefs(sid); subtreeIds(scopeParent(sid)) ++= subtreeIds(sid) }
+  // ---- structural sets: per scope, every id its subtree references (allRefs) and every id homed
+  // in its subtree (subtreeIds), bottom-up — RECOMPUTABLE because the union split below mutates
+  // the id graph. ----
+  var entsByHome: Array[MBuf[Int]] = null
+  var allRefs: Array[MSet[Int]] = null
+  var subtreeIds: Array[MSet[Int]] = null
+  var placement: Array[Int] = null
   /** A subgraph's external dependencies: its source inputs + every reference its whole subtree makes
    *  to nodes OUTSIDE that subtree.  These determine how far it can hoist. */
   def subgraphDeps(e: Ent): Array[Int] =
     (allRefs(e.childScope).iterator.filterNot(subtreeIds(e.childScope)) ++ e.inputIds.iterator).toArray
-
-  // ---- pass 2: earliest-legal placement scope per node id (deepest dependency, memoized) ----
-  val placement = Array.fill(ents.length)(-1)
+  // earliest-legal placement scope per node id (deepest dependency, memoized)
   def place(id: Int): Int =
     if placement(id) >= 0 then return placement(id)
     val e = ents(id)
@@ -936,7 +946,97 @@ def push_out(g: RecursiveOpGraph, hoistSubgraphs: Boolean = true): RecursiveOpGr
             else if deps.isEmpty then rootScope
             else deps.iterator.map(place).maxBy(scopeLevel)   // deepest (innermost original loop) dep
     placement(id) = p; p
-  for id <- ents.indices do place(id)
+  def recompute(): Unit =
+    entsByHome = Array.fill(nScopes)(MBuf.empty[Int]); for e <- ents do entsByHome(e.homeScope).addOne(e.id)
+    allRefs = Array.fill(nScopes)(MSet.empty[Int])
+    subtreeIds = Array.fill(nScopes)(MSet.empty[Int])
+    for sid <- (nScopes - 1) to 0 by -1 do
+      for id <- entsByHome(sid) do { allRefs(sid) ++= ents(id).inputIds; subtreeIds(sid).addOne(id) }
+      if scopeParent(sid) >= 0 then { allRefs(scopeParent(sid)) ++= allRefs(sid); subtreeIds(scopeParent(sid)) ++= subtreeIds(sid) }
+    placement = Array.fill(ents.length)(-1)
+    for id <- ents.indices do place(id)
+  recompute()
+
+  // ---- union split (the drain-chain step): an Iteration whose RESULT is `Union(a, b)` with one
+  // operand placed OUTSIDE the loop (loop-invariant by construction) splits into
+  //   Union(iter{a}, Composition(headedGuard(src), b))
+  // in the parent scope.  The guard `Range(src,-1,0).iter(_,_,{ε})` is {ε} iff src has ≥1 head
+  // (ε sorts first, so the LAST path is headed iff any is) — O(one path) — so the hoisted operand
+  // is emitted exactly when the loop would have run, and ∅-sources stay ∅.  This is what lets a
+  // whole inner loop hoist out of an enclosing product loop: the next optimize() round sees the
+  // parent's Union and splits/hoists again.  One split per pass; optimize() iterates to fixpoint. */
+  /** the loop's result behind any pass-through `Union(x, x)` chain (splits below leave those) */
+  def effectiveResult(sid: Int): Int =
+    var rid = resultIds(sid)
+    while { val e = ents(rid); !e.isSub && e.op == "Union" && e.inputIds.length == 2 && e.inputIds(0) == e.inputIds(1) } do
+      rid = ents(rid).inputIds(0)
+    rid
+  /** redirect every consumer of the loop `ownerId` to `newId`, retargeting the parent's result and
+   *  unpinning the loop (it is no longer its scope's result, so it may hoist like any subgraph) */
+  def rewireLoop(ownerId: Int, parentSid: Int, newId: Int): Unit =
+    for i <- ents.indices if i != newId do
+      val e = ents(i)
+      if e.inputIds.contains(ownerId) then
+        ents(i) = Ent(e.id, e.isSub, e.op, e.constant, e.kind, e.inputIds.map(x => if x == ownerId then newId else x), e.homeScope, e.childScope, e.pinned)
+    if resultIds(parentSid) == ownerId then
+      resultIds(parentSid) = newId
+      val u = ents(newId)
+      ents(newId) = Ent(u.id, u.isSub, u.op, u.constant, u.kind, u.inputIds, u.homeScope, u.childScope, true)
+    val oe = ents(ownerId)
+    ents(ownerId) = Ent(ownerId, true, oe.op, oe.constant, oe.kind, oe.inputIds, oe.homeScope, oe.childScope, !hoistSubgraphs)
+
+  def trySplit(): Boolean =
+    var sid = 0
+    while sid < nScopes do
+      val ownerId = scopeOwner(sid)
+      if ownerId >= 0 && ents(ownerId).op == "Iteration" then
+        val parentSid = scopeParent(sid)
+        val rid = effectiveResult(sid)
+        val r = ents(rid)
+        if !r.isSub && placement(rid) == sid && r.inputIds.length == 2 then
+          val a = r.inputIds(0); val b = r.inputIds(1)
+          if r.op == "Union" && a != b then
+            val hoisted = if placement(b) != sid then b else if placement(a) != sid then a else -1
+            if hoisted >= 0 then
+              val kept = if hoisted == b then a else b
+              // in-scope result becomes a pass-through of the kept operand (no index shifts)
+              ents(rid) = Ent(rid, false, "Union", "", "space", Array(kept, kept), r.homeScope, -1, r.pinned)
+              // headed-guard subgraph: Range(src,-1,0).iter(_, _, {ε}) — {ε} iff the loop runs
+              val srcId = ents(ownerId).inputIds(0)
+              val rangeId = ents.length
+              ents.addOne(Ent(rangeId, false, "Range", "-1,0", "space", Array(srcId), parentSid, -1, false))
+              val guardId = ents.length
+              val gsid = nScopes
+              ents.addOne(Ent(guardId, true, "Iteration", "_", "space", Array(rangeId), parentSid, gsid, !hoistSubgraphs))
+              val e0 = ents.length; ents.addOne(Ent(e0, false, "ExtractPathRef", "_", "path", Array(), gsid, -1, true))
+              val e1 = ents.length; ents.addOne(Ent(e1, false, "ExtractSpaceMention", "_", "space", Array(), gsid, -1, true))
+              val e2 = ents.length; ents.addOne(Ent(e2, false, "Constant", LiteralCodec.encodeConst(PathValue(Nil)), "path", Array(), gsid, -1, false))
+              val e3 = ents.length; ents.addOne(Ent(e3, false, "Singleton", "", "space", Array(e2), gsid, -1, true))
+              scopeLevel.addOne(scopeLevel(sid)); scopeParent.addOne(parentSid)
+              scopeRoot.addOne(Node("Iteration", "_", "space", Vector()))
+              scopeResultIdx.addOne(3); scopeOwner.addOne(guardId)
+              scopeNodeIds.addOne(MBuf(e0, e1, e2, e3)); resultIds.addOne(e3)
+              val compId = ents.length
+              ents.addOne(Ent(compId, false, "Composition", "", "space", Array(guardId, hoisted), parentSid, -1, false))
+              val unionId = ents.length
+              ents.addOne(Ent(unionId, false, "Union", "", "space", Array(ownerId, compId), parentSid, -1, false))
+              rewireLoop(ownerId, parentSid, unionId)
+              return true
+          else if r.op == "Composition" then
+            // iter{g · s} with g loop-invariant = g · iter{s} (and symmetrically) — sound with NO
+            // guard: composition distributes over the union of iterates, and ∅ annihilates it.
+            val outside = if placement(a) != sid then a else if placement(b) != sid then b else -1
+            if outside >= 0 && !(placement(a) != sid && placement(b) != sid) then
+              val kept = if outside == a then b else a
+              ents(rid) = Ent(rid, false, "Union", "", "space", Array(kept, kept), r.homeScope, -1, r.pinned)
+              val compId = ents.length
+              val inputs = if outside == a then Array(outside, ownerId) else Array(ownerId, outside)
+              ents.addOne(Ent(compId, false, "Composition", "", "space", inputs, parentSid, -1, false))
+              rewireLoop(ownerId, parentSid, compId)
+              return true
+      sid += 1
+    false
+  if splitUnions && trySplit() then recompute()
 
   // ---- re-derive the scope tree from subgraph placements, then its levels ----
   val newParent = Array.fill(nScopes)(-1)
@@ -970,7 +1070,7 @@ def push_out(g: RecursiveOpGraph, hoistSubgraphs: Boolean = true): RecursiveOpGr
     val lvl = newLevel(sid)
     val r = RecursiveOpGraph(scopeRoot(sid), parent, MBuf.empty)
     val here = nodesByScope(sid)
-    val resultId = scopeNodeIds(sid)(scopeResultIdx(sid))
+    val resultId = resultIds(sid)
     val extracts = here.filter(id => ents(id).op.startsWith("Extract") && id != resultId)
       .sortBy(id => scopeNodeIds(sid).indexOf(id))      // keep original slot order (0,1,..)
     val interior = here.filter(id => !ents(id).op.startsWith("Extract") && id != resultId)
@@ -1270,7 +1370,7 @@ def optimize(g: RecursiveOpGraph, budget: Deadline = Deadline.never, prof: Profi
     else
       prof.count("opt_iters", 1)
       val loops0 = loopNodes(g)
-      val g1 = prof.timed("push_out")(push_out(g, hoistSubgraphs)); prof.count("push_out", (loops0 - loopNodes(g1)).toLong)  // nodes hoisted out of loops
+      val g1 = prof.timed("push_out")(push_out(g, hoistSubgraphs, splitUnions = hoistSubgraphs)); prof.count("push_out", (loops0 - loopNodes(g1)).toLong)  // nodes hoisted out of loops
       val n1 = nodeCount(g1)
       val g2 = prof.timed("optimize_sharing")(optimize_sharing(g1)); prof.count("optimize_sharing", (n1 - nodeCount(g2)).toLong)  // duplicates removed
       val hg2 = structuralHash(g2)
@@ -1444,10 +1544,16 @@ object Lower:
 
   val IterateLiteral_Union = subs(_: Space)(PartialFunction.empty, {
     case Space.Iteration(Space.Literal(SpaceValue(paths)), symbol, rest, template) =>
-      val heads = paths.filter(_.items.nonEmpty)   // the empty path ε has no head ⇒ contributes nothing (matches eval)
-      if heads.isEmpty then Space.Empty
-      else heads.map(p => subs(template)(spre={ case Space.Mention(`rest`) => Space.Singleton(Path.Constant(PathValue(p.items.tail))) },
-                                         ppre={ case Path.Deref(`symbol`) => Path.Constant(PathValue(p.items.head::Nil)) }))
+      // one copy per DISTINCT head, with the rest-mention bound to the whole group's tail-set —
+      // exactly eval's groupMap.  (Unrolling per PATH handed a body a partial rest-set: wrong for
+      // anything non-monotone in `rest` — Range, tails-∩, right-hand subtraction… — the corpus law
+      // gate caught it on a two-paths-one-head literal under Range(rest, 2, 4).)  ε has no head
+      // and contributes nothing (matches eval).
+      val groups = paths.filter(_.items.nonEmpty).groupMap(_.items.head)(p => PathValue(p.items.tail))
+      if groups.isEmpty then Space.Empty
+      else groups.toList.sortBy(_._1).map((h, tails) =>
+        subs(template)(spre = { case Space.Mention(`rest`) => Space.Literal(SpaceValue(tails)) },
+                       ppre = { case Path.Deref(`symbol`) => Path.Constant(PathValue(h :: Nil)) }))
         .reduce(Space.Union(_, _))
   })
 
@@ -1518,20 +1624,75 @@ object Lower:
     case Space.Wrap(a, p) => if emptyPath(p) then provablyHeaded(a) else provablyNonEmpty(a)
     case _ => false
 
+  // ---- constant-time emptiness factors --------------------------------------
+  /** `{ε}` iff `x` is non-empty, else `∅` — O(one path).  `x ∩ {ε}` covers an ε-only `x`
+   *  (Range's slice starts at the smallest path, which may be ε and contribute no head);
+   *  the Range(0,1) probe iterates the FIRST path only. */
+  def nonEmptyGuard(x: Space): Space =
+    Space.Union(Space.Intersection(x, Space.Singleton(Path.ZERO)),
+                Space.Iteration(Space.Range(x, 0, 1), PathRef("_"), SpaceMention("_"), Space.Singleton(Path.ZERO)))
+  /** `{ε}` iff `x` has ≥1 HEADED path (i.e. an iteration over `x` runs), else `∅` — O(one path).
+   *  This is the factor an iteration hoist needs, NOT [[nonEmptyGuard]]: `x == {ε}` is non-empty
+   *  but runs zero iterations, so the nonEmpty factor would leak the hoisted branch.  ε sorts
+   *  FIRST in the canonical path order, so the LAST path (`Range(x, -1, 0)`) is headed iff any
+   *  path is. */
+  def headedGuard(x: Space): Space =
+    Space.Iteration(Space.Range(x, -1, 0), PathRef("_"), SpaceMention("_"), Space.Singleton(Path.ZERO))
+
+  /** Conservative "every path of `s` is ε", i.e. `s ⊆ {ε}` — true for the guards above and their
+   *  compositions.  Lets a guard factor commute with Wrap (see [[EpsGuard_Wrap]]): a ⊆{ε} factor
+   *  only selects between `∅` and identity, so it cannot contribute items in front of a prefix. */
+  def provablyEpsSubset(s: Space): Boolean = s match
+    case Space.Empty => true
+    case Space.Singleton(Path.Constant(PathValue(Nil))) => true
+    case Space.Literal(SpaceValue(ps)) => ps.forall(_.items.isEmpty)
+    case Space.Union(a, b) => provablyEpsSubset(a) && provablyEpsSubset(b)
+    case Space.Intersection(a, b) => provablyEpsSubset(a) || provablyEpsSubset(b)
+    case Space.Subtraction(a, _) => provablyEpsSubset(a)
+    case Space.Restriction(a, _) => provablyEpsSubset(a)
+    case Space.Raffination(a, _) => provablyEpsSubset(a)
+    case Space.Composition(a, b) => provablyEpsSubset(a) && provablyEpsSubset(b)
+    case Space.Range(x, _, _) => provablyEpsSubset(x)
+    case Space.Iteration(_, _, _, body) => provablyEpsSubset(body)   // a union of ⊆{ε} bodies stays ⊆ {ε}
+    case _ => false
+
   /** Hoist a loop-INVARIANT union branch OUT of the iteration — the strongest way to whack products:
    *  the invariant branch is computed ONCE instead of once per head, with no re-iteration of src.
-   *  Sound ONLY when src provably has ≥1 head (`iter(src, l∪r) = l ∪ iter(src, r)` needs the union over
-   *  heads to be non-empty; over a headless source iter is ∅, so the bare hoist would leak l — the old
-   *  unsoundness, egglog: formal.egg IterUnion checks).  When src is not provably headed we DON'T rewrite
-   *  (no bloat, no regression); the op-graph push_out still performs sound loop-invariant motion at run
-   *  time for the symbolic case. */
+   *  The bare hoist `iter(src, l∪r) = l ∪ iter(src, r)` needs the union over heads to be non-empty
+   *  (over a headless source iter is ∅, so it would leak l — the old unsoundness, egglog: formal.egg
+   *  IterUnion checks).  When src provably has ≥1 head we hoist bare; otherwise we attach the
+   *  constant-time [[headedGuard]] factor: `iter(src, l∪r) = (headed(src) · l) ∪ iter(src, r)` —
+   *  sound for EVERY src, and the ⊆{ε} factor later commutes/fuses (EpsGuard_Wrap, WrapMerge). */
   val IterUnion_Indep = subs(_: Space)(PartialFunction.empty, {
-    case Space.Iteration(src, symbol, rest, Space.Union(lhs, rhs)) if provablyHeaded(src) && {
+    case Space.Iteration(src, symbol, rest, Space.Union(lhs, rhs)) if {
       val (soc, poc) = collect(lhs)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () }); soc.isEmpty && poc.isEmpty
-    } => Space.Union(Space.Iteration(src, symbol, rest, rhs), lhs)
-    case Space.Iteration(src, symbol, rest, Space.Union(lhs, rhs)) if provablyHeaded(src) && {
+    } =>
+      val hoisted = if provablyHeaded(src) then lhs else Space.Composition(headedGuard(src), lhs)
+      Space.Union(Space.Iteration(src, symbol, rest, rhs), hoisted)
+    case Space.Iteration(src, symbol, rest, Space.Union(lhs, rhs)) if {
       val (soc, poc) = collect(rhs)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () }); soc.isEmpty && poc.isEmpty
-    } => Space.Union(Space.Iteration(src, symbol, rest, lhs), rhs)
+    } =>
+      val hoisted = if provablyHeaded(src) then rhs else Space.Composition(headedGuard(src), rhs)
+      Space.Union(Space.Iteration(src, symbol, rest, lhs), hoisted)
+  })
+
+  /** Hoist a loop-INVARIANT composition factor out of an iteration.  Sound WITHOUT any guard:
+   *  composition distributes over the union of iterates (⋃_h (g·s_h) = g·⋃_h s_h), and with zero
+   *  iterates both sides are ∅. */
+  val IterComposition_Indep = subs(_: Space)(PartialFunction.empty, {
+    case Space.Iteration(src, symbol, rest, Space.Composition(g, s)) if {
+      val (soc, poc) = collect(g)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () }); soc.isEmpty && poc.isEmpty
+    } => Space.Composition(g, Space.Iteration(src, symbol, rest, s))
+    case Space.Iteration(src, symbol, rest, Space.Composition(s, g)) if {
+      val (soc, poc) = collect(g)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () }); soc.isEmpty && poc.isEmpty
+    } => Space.Composition(Space.Iteration(src, symbol, rest, s), g)
+  })
+
+  /** A ⊆{ε} factor commutes into a Wrap: `g · (p × s) = p × (g · s)` when g ⊆ {ε} (g only selects
+   *  between ∅ and identity, so it cannot put items in front of the prefix p).  Moves guards out
+   *  of the way so common prefixes become adjacent and factorable. */
+  val EpsGuard_Wrap = subs(_: Space)(PartialFunction.empty, {
+    case Space.Composition(g, Space.Wrap(s, p)) if provablyEpsSubset(g) => Space.Wrap(Space.Composition(g, s), p)
   })
 
   val UnwrapConcat_Unwraps = subs(_: Space)(PartialFunction.empty, {
@@ -1547,7 +1708,10 @@ object Lower:
   })
 
   val SingletonSpaceOp_PathOp = subs(_: Space)(PartialFunction.empty, {
-    case Space.Wrap(Space.Singleton(y), x) => Space.Singleton(Path.Concat(x, y))
+    // merge only when FULLY CONSTANT (folds onward to a literal); the deref-bearing cases are the
+    // domain of SingletonConstPrefix_Wrap below (the split direction — hoistable constant prefix),
+    // and unconditional merge would ping-pong with it
+    case Space.Wrap(Space.Singleton(y), x) if constPath(x) && constPath(y) => Space.Singleton(Path.Concat(x, y))
   })
 
   val SingletonComposition_Wrap = subs(_: Space)(PartialFunction.empty, {
@@ -1636,6 +1800,393 @@ object Lower:
   val Range_Singleton = subs(_: Space)(PartialFunction.empty, {
     case Space.Range(Space.Singleton(p), lo, hi) =>     // ordered-slice of a 1-element set: kept iff index 0 ∈ [lo,hi)
       val (l, h) = RangeBounds.normalize(1, lo, hi); if l < h then Space.Singleton(p) else Space.Empty
+  })
+
+  // ================================================================================================
+  // INVERSE-INDEX SEMIJOIN (iter-transpose-semijoin).
+  //
+  // A (rest-chained) k-nested iteration binding single-item symbols z1..zk whose innermost body is
+  // STRICT in a witness unwrap  Unwrap(E, z1·…·zk·c)  — E constant-rooted (loop-invariant) and c
+  // of statically-known item length — evaluates a body frame for EVERY source group and lets the
+  // witness veto it.  This law makes the loop OUTPUT-SENSITIVE: it materializes the (k,ℓ)-
+  // TRANSPOSE index of E (loop-invariant, so CSE/push-out hoist and evaluate it once),
+  //     TR = { w1…wℓ·u1…uk | u1…uk·w1…wℓ is a (k+ℓ)-item prefix of an E-path },
+  // takes the candidate set  P = Unwrap(TR, c) = { z⃗ | z⃗·c prefixes an E-path }, and narrows the
+  // iteration source to  Restriction(S, P).
+  //
+  // UNCONDITIONALLY SOUND, with no shape assumptions on S or E: a dropped group's witness is ∅ and
+  // the body is strict in it, so the group contributed ∅; a kept group keeps its ENTIRE subtree
+  // (P's elements are exactly k items, so the prefix restriction cannot split a group's tails);
+  // E-paths deeper than k+ℓ are still indexed by their prefix (the transpose nest binds prefix
+  // groups), and shorter ones can never satisfy the witness.  Certificates:
+  // proofs/laws/law_iter_transpose_semijoin.smt2 + proofs/laws/law_transpose_spec.smt2 (k=ℓ=1
+  // instances; k,ℓ>1 repeat the same level-wise argument — SCHEMATIC in the registry).
+  // ================================================================================================
+  /** does the term contain any generated name with this reserved prefix?  The semijoin guards
+   *  are SHAPE-based, not value-based: the other laws keep rewriting a freshly-planted narrower
+   *  (splitting its unwraps, fusing its concats), so an equality guard re-fires forever — but the
+   *  generated tj/hn-prefixed binder names survive every rewrite. */
+  private def hasGenTag(s: Space, tag: String): Boolean =
+    var found = false
+    subs(s)(spre = { case it @ Space.Iteration(_, sy, re, _) if sy.s.startsWith(tag) || re.s.startsWith(tag) =>
+                       found = true; it },
+            ppre = { case d @ Path.Deref(pr) if pr.s.startsWith(tag) => found = true; d })
+    found
+
+  private def unwrapSpine(s: Space): (Space, List[Path]) = s match
+    case Space.Unwrap(inner, q) => val (b, qs) = unwrapSpine(inner); (b, qs :+ q)
+    case other => (other, Nil)
+
+  /** statically-known ITEM length of a path expression (constants; single-item binders). */
+  private def pathItemLen(p: Path): Option[Int] = p match
+    case Path.Constant(pv) => Some(pv.items.length)
+    case Path.Deref(pr) if pr.lengthHint == 1 => Some(1)
+    case Path.Concat(l, r) => for a <- pathItemLen(l); b <- pathItemLen(r) yield a + b
+    case _ => None
+
+  private def cleanSpace(sp: Space, prs: Set[String], sms: Set[String]): Boolean =
+    val (so, po) = collect(sp)({ case Space.Mention(m) if sms(m.s) => () },
+                              { case Path.Deref(pr) if prs(pr.s) => () })
+    so.isEmpty && po.isEmpty
+  private def cleanPath(p: Path, prs: Set[String], sms: Set[String]): Boolean =
+    cleanSpace(Space.Singleton(p), prs, sms)
+  private def constPath(p: Path): Boolean = p match
+    case Path.Constant(_) => true
+    case Path.Concat(l, r) => constPath(l) && constPath(r)
+    case _ => false
+
+  /** find, in a STRICT position of `body` (∅ there forces the whole body result to ∅), an unwrap
+   *  spine base·pre·(Deref z1)…(Deref zk)·post with base a foreign mention and pre CONSTANT (so E
+   *  hoists above z1, and the law only fires at the OUTERMOST nest level — an inner level would
+   *  see outer binders in pre).  Returns (E, cs): E = base unwrapped by pre; cs = the longest
+   *  clean, statically-sized prefix of post (a shorter c only narrows less — still sound). */
+  private def findWitness(body: Space, zs: Vector[String], sms: Set[String]): Option[(Space, List[Path])] =
+    val zset = zs.toSet
+    def trySpine(x: Space): Option[(Space, List[Path])] =
+      val (base, qs) = unwrapSpine(x)
+      if qs.isEmpty then None
+      else
+        val idx = qs.indexWhere { case Path.Deref(pr) => pr.s == zs.head; case _ => false }
+        if idx < 0 then None
+        else
+          val run = qs.slice(idx, idx + zs.length)
+          val runOk = run.length == zs.length &&
+            run.zip(zs).forall { case (Path.Deref(pr), n) => pr.s == n; case _ => false }
+          val pre = qs.take(idx)
+          val post = qs.drop(idx + zs.length)
+          if !runOk || !pre.forall(constPath) then None
+          else base match
+            case Space.Mention(m) if !sms(m.s) =>
+              val cs = post.takeWhile(p => cleanPath(p, zset, sms) && pathItemLen(p).isDefined)
+              if cs.isEmpty then None else Some((pre.foldLeft(base)(Space.Unwrap.apply), cs))
+            case _ => None
+    def search(s: Space): Option[(Space, List[Path])] = s match
+      case u: Space.Unwrap => trySpine(u)
+      case Space.Composition(a, b) => search(a).orElse(search(b))
+      case Space.Intersection(a, b) => search(a).orElse(search(b))
+      case Space.Subtraction(a, _) => search(a)
+      case Space.Restriction(a, b) => search(a).orElse(search(b))
+      case Space.Raffination(a, _) => search(a)
+      case Space.Wrap(src, _) => search(src)
+      case Space.TailsUnion(src) => search(src)
+      case Space.TailsIntersection(src) => search(src)
+      case Space.Iteration(src, _, _, _) => search(src)   // iteration of an ∅ source is ∅ (strict)
+      case _ => None
+    search(body)
+
+  private def transposeSemiJoinRewrite(it: Space): Option[Space] = it match
+    case Space.Iteration(src0, z1, m1, b1) if z1.lengthHint == 1 =>
+      // peel the rest-chained nest (up to 3 single-item levels)
+      def peel(zsAcc: Vector[PathRef], msAcc: Vector[SpaceMention], b: Space): (Vector[PathRef], Vector[SpaceMention], Space) = b match
+        case Space.Iteration(Space.Mention(sm), z, m, bi) if sm == msAcc.last && z.lengthHint == 1 && zsAcc.length < 3 =>
+          peel(zsAcc :+ z, msAcc :+ m, bi)
+        case _ => (zsAcc, msAcc, b)
+      val (zs, ms, innerBody) = peel(Vector(z1), Vector(m1), b1)
+      val smNames = ms.map(_.s).toSet
+      findWitness(innerBody, zs.map(_.s), smNames).flatMap { (e, cs) =>
+        val k = zs.length
+        val lw = cs.map(pathItemLen(_).get).sum
+        val tag = s"tj${Integer.toHexString(e.hashCode ^ (k * 31 + lw))}"
+        val us = Vector.tabulate(k)(i => PathRef(s"${tag}u$i").known(1))
+        val ws = Vector.tabulate(lw)(i => PathRef(s"${tag}w$i").known(1))
+        val binders = us ++ ws
+        val rests = Vector.tabulate(binders.length)(i => SpaceMention(s"${tag}r$i"))
+        val trBodyPath = (ws.map(Path.Deref(_): Path) ++ us.map(Path.Deref(_): Path)).reduceRight(Path.Concat.apply)
+        val tr = binders.zip(rests).zipWithIndex.foldRight(Space.Singleton(trBodyPath): Space) {
+          case (((bnd, rst), i), acc) =>
+            val srcI: Space = if i == 0 then e else Space.Mention(rests(i - 1))
+            Space.Iteration(srcI, bnd, rst, acc)
+        }
+        val c = cs.reduceRight(Path.Concat.apply)
+        val p = Space.Unwrap(tr, c)
+        // guard on the WHOLE Restriction chain AND by generated-name tag: the other laws keep
+        // rewriting a planted narrower (unwrap splits, concat fusion), so value equality would
+        // re-fire forever; one transpose narrowing per node is the fixpoint
+        if hasGenTag(src0, "tj") then None
+        else Some(Space.Iteration(Space.Restriction(src0, p), z1, m1, b1))
+      }
+    case _ => None
+
+  val IterWitness_TransposeSemiJoin = subs(_: Space)(spre = {
+    case it: Space.Iteration if transposeSemiJoinRewrite(it).isDefined => transposeSemiJoinRewrite(it).get
+  })
+
+  // ================================================================================================
+  // LEVEL-WISE HEAD SEMIJOIN (iter-witness-head-narrow) — NEST-TOP FORM.
+  //
+  // A rest-chained nest binding z1..zk whose innermost body is STRICT in a witness unwrap
+  //     Unwrap(E, z1·…·zk)            (the binder run is the SUFFIX of the spine)
+  // with E clean of the nest's own binders — and GENUINELY VARYING (containing at least one
+  // Deref: an outer binder or a parameter; a fully-constant E has a static, typically dense head
+  // set whose narrowing costs a head-iteration per frame and prunes nothing) — evaluates a leaf
+  // frame for every source group and lets the witness veto it.  Narrow EVERY level i to
+  //     Restriction(src_i, Head(E·z1·…·z_{i-1}))
+  // (Head as the canonical head-iteration).  Unconditionally sound per level (certificate:
+  // proofs/laws/law_iter_head_narrow.smt2 — dropped groups have an ∅ witness and the body is
+  // strict in it; kept groups keep whole subtrees); the DEEPEST level's narrowing is exact, so
+  // leaf frames run only for witness-passing groups.  When an invariant statically-sized suffix
+  // follows the run, iter-transpose-semijoin narrows exactly instead and this law defers.
+  // ================================================================================================
+  private def headEnc(e: Space): Space =
+    val tag = s"hn${Integer.toHexString(e.hashCode)}"
+    val hw = PathRef(s"${tag}h").known(1)
+    Space.Iteration(e, hw, SpaceMention(s"${tag}r"), Space.Singleton(Path.Deref(hw)))
+
+  /** find, in a STRICT position of `body`, an unwrap spine base·pre·(Deref z1)…(Deref zk)·post
+   *  with base a foreign mention, pre clean of the nest (outer binders allowed) and containing a
+   *  Deref (the varying-witness profitability condition), and post NOT an invariant sized suffix
+   *  (that case belongs to the transpose law).  Returns E = base unwrapped by pre. */
+  private def findHeadNestWitness(body: Space, zs: Vector[String], sms: Set[String]): Option[Space] =
+    val zset = zs.toSet
+    def trySpine(x: Space): Option[Space] =
+      val (base, qs) = unwrapSpine(x)
+      val idx = qs.indexWhere { case Path.Deref(pr) => pr.s == zs.head; case _ => false }
+      if idx < 0 then None
+      else
+        val run = qs.slice(idx, idx + zs.length)
+        val runOk = run.length == zs.length &&
+          run.zip(zs).forall { case (Path.Deref(pr), n) => pr.s == n; case _ => false }
+        val pre = qs.take(idx)
+        val post = qs.drop(idx + zs.length)
+        val hasSuffix = post.headOption.exists(p => cleanPath(p, zset, sms) && pathItemLen(p).isDefined)
+        val varies = pre.exists(!constPath(_))
+        base match
+          case Space.Mention(m) if runOk && !sms(m.s) && !hasSuffix && varies &&
+               pre.forall(cleanPath(_, zset, sms)) =>
+            Some(pre.foldLeft(base: Space)(Space.Unwrap.apply))
+          case _ => None
+    def search(s: Space): Option[Space] = s match
+      case u: Space.Unwrap => trySpine(u)
+      case Space.Composition(a, b) => search(a).orElse(search(b))
+      case Space.Intersection(a, b) => search(a).orElse(search(b))
+      case Space.Subtraction(a, _) => search(a)
+      case Space.Restriction(a, b) => search(a).orElse(search(b))
+      case Space.Raffination(a, _) => search(a)
+      case Space.Wrap(src, _) => search(src)
+      case Space.TailsUnion(src) => search(src)
+      case Space.TailsIntersection(src) => search(src)
+      case Space.Iteration(src, _, _, _) => search(src)   // iteration of an ∅ source is ∅ (strict)
+      case _ => None
+    search(body)
+
+  private def headNarrowRewrite(it: Space): Option[Space] = it match
+    case Space.Iteration(src0, z1, m1, b1) if z1.lengthHint == 1 &&
+         !hasGenTag(src0, "hn") =>
+      def peel(zsAcc: Vector[PathRef], msAcc: Vector[SpaceMention], b: Space): (Vector[PathRef], Vector[SpaceMention], Space) = b match
+        case Space.Iteration(Space.Mention(sm), z, m, bi) if sm == msAcc.last && z.lengthHint == 1 && zsAcc.length < 3 =>
+          peel(zsAcc :+ z, msAcc :+ m, bi)
+        case _ => (zsAcc, msAcc, b)
+      val (zs, ms, innerBody) = peel(Vector(z1), Vector(m1), b1)
+      findHeadNestWitness(innerBody, zs.map(_.s), ms.map(_.s).toSet).map { e =>
+        def chainE(i: Int): Space = zs.take(i).foldLeft(e)((acc, z) => Space.Unwrap(acc, Path.Deref(z)))
+        def rebuild(i: Int): Space =
+          val orig: Space = if i == 0 then src0 else Space.Mention(ms(i - 1))
+          val src = Space.Restriction(orig, headEnc(chainE(i)))
+          Space.Iteration(src, zs(i), ms(i), if i == zs.length - 1 then innerBody else rebuild(i + 1))
+        rebuild(0)
+      }
+    case _ => None
+
+  val IterWitness_HeadNarrow = subs(_: Space)(spre = {
+    case it: Space.Iteration if headNarrowRewrite(it).isDefined => headNarrowRewrite(it).get
+  })
+
+  // ================================================================================================
+  // MINED COMPOSITION LAWS (scripts/mine_laws.py): every candidate stated denotationally and
+  // adjudicated by the provers — 18 PROVED, 4 REFUTED with machine-verified countermodels
+  // (proofs/laws/MINED.tsv).  The profitable PROVED ones below; certificates in proofs/laws/.
+  // ================================================================================================
+
+  /** unwrap pushed through the set operations (certificate: laws/law_unwrap_push.smt2) —
+   *  membership at w·p distributes pointwise; pushing exposes deeper Wrap/literal reductions. */
+  val UnwrapPush = subs(_: Space)(spost = {
+    case Space.Unwrap(Space.Union(a, b), w) => Space.Union(Space.Unwrap(a, w), Space.Unwrap(b, w))
+    case Space.Unwrap(Space.Intersection(a, b), w) => Space.Intersection(Space.Unwrap(a, w), Space.Unwrap(b, w))
+    case Space.Unwrap(Space.Subtraction(a, b), w) => Space.Subtraction(Space.Unwrap(a, w), Space.Unwrap(b, w))
+  })
+
+  private def incomparableConsts(p: Path, q: Path): Boolean = (p, q) match
+    case (Path.Constant(a), Path.Constant(b)) =>
+      a.items.nonEmpty && b.items.nonEmpty && a.items.head != b.items.head   // certified form: heads differ
+    case _ => false
+
+  /** set operations over equal-prefix wraps merge under the wrap (subsuming the common-prefix
+   *  union factoring `(p×a) ∪ (p×b) = p×(a∪b)`); incomparable constant prefixes are disjoint
+   *  cylinders (certificates: laws/law_wrap_merge.smt2, laws/law_wrap_disjoint.smt2). */
+  val WrapMerge = subs(_: Space)(spost = {
+    case Space.Union(Space.Wrap(a, p), Space.Wrap(b, q)) if p == q => Space.Wrap(Space.Union(a, b), p)
+    case Space.Intersection(Space.Wrap(a, p), Space.Wrap(b, q)) if p == q => Space.Wrap(Space.Intersection(a, b), p)
+    case Space.Subtraction(Space.Wrap(a, p), Space.Wrap(b, q)) if p == q => Space.Wrap(Space.Subtraction(a, b), p)
+    case Space.Intersection(Space.Wrap(_, p), Space.Wrap(_, q)) if incomparableConsts(p, q) => Space.Empty
+    case Space.Subtraction(w1 @ Space.Wrap(_, p), Space.Wrap(_, q)) if incomparableConsts(p, q) => w1
+  })
+
+  /** restriction pushed through the subject's set operations, and split over a union of prefix
+   *  sets (certificate: laws/law_restrict_push.smt2).  The ∩/\ forms restrict ONE side only. */
+  val RestrictionPush = subs(_: Space)(spost = {
+    case Space.Restriction(Space.Union(a, b), pr) => Space.Union(Space.Restriction(a, pr), Space.Restriction(b, pr))
+    case Space.Restriction(Space.Intersection(a, b), pr) => Space.Intersection(Space.Restriction(a, pr), b)
+    case Space.Restriction(Space.Subtraction(a, b), pr) => Space.Subtraction(Space.Restriction(a, pr), b)
+    case Space.Restriction(a, Space.Union(p1, p2)) => Space.Union(Space.Restriction(a, p1), Space.Restriction(a, p2))
+  })
+
+  /** a left wrap slides out of a composition: Wrap(w,a)·b = Wrap(w, a·b)
+   *  (certificate: laws/law_comp_wrap_assoc.smt2 — wrap-as-composition + associativity). */
+  val CompWrapAssoc = subs(_: Space)(spost = {
+    case Space.Composition(Space.Wrap(a, w), b) => Space.Wrap(Space.Composition(a, b), w)
+  })
+
+  /** composition canonicalizes RIGHT-associated (certificate: laws/law_comp_assoc.smt2), exposing
+   *  left factors to CompWrapAssoc / CompLitWraps; strictly reduces left-spine depth. */
+  val CompAssocRight = subs(_: Space)(spost = {
+    case Space.Composition(Space.Composition(a, b), c) => Space.Composition(a, Space.Composition(b, c))
+  })
+
+  /** a SMALL literal on the left of a composition becomes a union of wraps — compositions traded
+   *  for unions (certificate: laws/law_comp_lit_wraps.smt2 for the 2-path instance; n<=4 is the
+   *  same argument via comp-over-union-left + wrap-as-comp, level-wise).  Bounded to avoid blowup. */
+  val CompLitWraps = subs(_: Space)(spost = {
+    case Space.Composition(Space.Literal(v), b) if v.paths.nonEmpty && v.paths.size <= 4 =>
+      v.paths.toList.sortBy(_.show).map(pv => Space.Wrap(b, Path.Constant(pv)): Space).reduceLeft(Space.Union.apply)
+  })
+
+  private def pathFactors(p: Path): List[Path] = p match
+    case Path.Concat(l, r) => pathFactors(l) ++ pathFactors(r)
+    case other => List(other)
+  private def refactor(fs: List[Path]): Path = fs.reduceRight(Path.Concat.apply)
+
+  /** a singleton whose path has a CONSTANT PREFIX followed by deref-bearing factors splits into
+   *  Wrap(Singleton(varying), constPrefix) — the constant-prefix wrap is loop-invariant and
+   *  hoistable (Wrap_Iter / WrapMerge / graph push_out); the merge direction is gated to fully-
+   *  constant paths so the pair cannot ping-pong.  Certificate: laws/law_wrap_set.smt2
+   *  (the singleton-fusion case, read right-to-left). */
+  val SingletonConstPrefix_Wrap = subs(_: Space)(spost = {
+    case Space.Singleton(p @ Path.Concat(_, _))
+        if { val fs = pathFactors(p); fs.head.isInstanceOf[Path.Constant] && fs.exists(f => !constPath(f)) } =>
+      val fs = pathFactors(p)
+      val (cs, rest) = fs.span(constPath)
+      val prefix = Path.Constant(PathValue(cs.flatMap { case Path.Constant(v) => v.items; case _ => Nil }))
+      Space.Wrap(Space.Singleton(refactor(rest)), prefix)
+  })
+
+  /** an iteration-invariant RIGHT composition factor hoists out of the iteration's union of
+   *  groups: ∪_h (B_h · c) = (∪_h B_h) · c  (certificate: laws/law_iter_comp_right_hoist.smt2).
+   *  Subsumed by [[IterComposition_Indep]] in the default pipeline; kept as the certified name
+   *  the supercompiler's reducer registers. */
+  val IterCompRight_Hoist = subs(_: Space)(spost = {
+    case Space.Iteration(src, h, r, Space.Composition(b, cc))
+        if cleanSpace(cc, Set(h.s), Set(r.s)) =>
+      Space.Composition(Space.Iteration(src, h, r, b), cc)
+  })
+
+  /** raffination pushed through the subject's set operations and split over prefix unions —
+   *  raffination is POINTWISE (x∧¬pref), so it distributes exactly like restriction
+   *  (certificate: laws/law_raff_push.smt2). */
+  val RaffinationPush = subs(_: Space)(spost = {
+    case Space.Raffination(Space.Union(a, b), pr) => Space.Union(Space.Raffination(a, pr), Space.Raffination(b, pr))
+    case Space.Raffination(Space.Intersection(a, b), pr) => Space.Intersection(Space.Raffination(a, pr), b)
+    case Space.Raffination(Space.Subtraction(a, b), pr) => Space.Subtraction(Space.Raffination(a, pr), b)
+    case Space.Raffination(a, Space.Union(p1, p2)) => Space.Raffination(Space.Raffination(a, p1), p2)
+  })
+
+  /** the raffination/restriction PARTITION collapses: opposite composition annihilates, repeated
+   *  application is idempotent, and the two halves reunite to the subject
+   *  (certificate: laws/law_raff_restrict_algebra.smt2). */
+  val RaffRestrictAlgebra = subs(_: Space)(spost = {
+    case Space.Restriction(Space.Raffination(x, y), y2) if y == y2 => Space.Empty
+    case Space.Raffination(Space.Restriction(x, y), y2) if y == y2 => Space.Empty
+    case Space.Raffination(r @ Space.Raffination(x, y), y2) if y == y2 => r
+    case Space.Restriction(r @ Space.Restriction(x, y), y2) if y == y2 => r
+    case Space.Union(Space.Raffination(x, y), Space.Restriction(x2, y2)) if x == x2 && y == y2 => x
+    case Space.Union(Space.Restriction(x, y), Space.Raffination(x2, y2)) if x == x2 && y == y2 => x
+  })
+
+  /** restriction and raffination under a COMMON wrap prefix descend below it
+   *  (certificates: laws/law_restrict_wrap_both.smt2, laws/law_raff_wrap_both.smt2). */
+  val RestrictRaffWrapBoth = subs(_: Space)(spost = {
+    case Space.Restriction(Space.Wrap(a, w), Space.Wrap(pr, w2)) if w == w2 =>
+      Space.Wrap(Space.Restriction(a, pr), w)
+    case Space.Raffination(Space.Wrap(a, w), Space.Wrap(pr, w2)) if w == w2 =>
+      Space.Wrap(Space.Raffination(a, pr), w)
+  })
+
+  /** is the body's output GUARANTEED to start with the group key h?  (The "independent" guard:
+   *  keyed bodies make groups pairwise DISJOINT across keys, licensing ∩/\ to move through
+   *  same-source iterations.)  Syntactic under-approximation, sound by construction. */
+  private def keyedBy(b: Space, h: PathRef): Boolean =
+    def headIsH(p: Path): Boolean = pathFactors(p).headOption match
+      case Some(Path.Deref(pr)) => pr.s == h.s
+      case _ => false
+    b match
+      case Space.Wrap(_, p) => headIsH(p)
+      case Space.Singleton(p) => headIsH(p)
+      case Space.Union(x, y) => keyedBy(x, h) && keyedBy(y, h)
+      case Space.Composition(Space.Singleton(p), _) => headIsH(p)
+      case _ => false
+
+  /** n-ary UNION CHAINS re-associate/commute NATIVELY through the engine: ∪ᵢAᵢ =
+   *  TailsUnion(⋃ᵢ ~uᵢ~·Aᵢ) with distinct synthetic constant tags — NO new construct, so every
+   *  law/optimization applies wherever the pattern lands; the executor's TailsUnion then merges
+   *  the branches BALANCED with empty branches filtered (ITrie.joinAll), instead of a left-nested
+   *  pairwise chain that re-walks its growing accumulator.  Fires on chains of ≥ 4 operands not
+   *  already tagged.  CERTIFIED BUT NOT IN THE DEFAULT PIPELINE: measured on the workload
+   *  profiles, the per-evaluation tag-wrap + strip overhead EXCEEDS the balanced-merge gain at
+   *  the applications' branch sizes (puzzle15 2136->2954 ticks, gol 10204->12539) — it pays only
+   *  for large overlapping branches, so it is available for explicit use, not default.  (The ∩
+   *  analogue needs a sentinel construction — ⋃ᵢtᵢ·(Aᵢ∪{σ}) then \{σ}, else an EMPTY operand
+   *  silently drops out of the meet; its head-group lemmas prove but the final tails-∩ goal
+   *  resists both provers and NO ≥3-ary ∩ chain occurs in the applications, so it stays a
+   *  documented design, not a rewrite.)
+   *  Certificate: laws/law_union_chain_tailsu.smt2 (3-ary; n-ary is the same argument per tag). */
+  private def unionOps(s: Space): List[Space] = s match
+    case Space.Union(a, b) => unionOps(a) ++ unionOps(b)
+    case other => List(other)
+  private def isUTag(s: Space): Boolean = s match
+    case Space.Wrap(_, Path.Constant(PathValue(n :: Nil))) => n.startsWith("~u")
+    case _ => false
+  val UnionChain_TailsU = subs(_: Space)(spost = {
+    case u: Space.Union if { val ops = unionOps(u); ops.length >= 4 && !ops.exists(isUTag) } =>
+      val ops = unionOps(u)
+      Space.TailsUnion(ops.zipWithIndex.map((a, i) =>
+        Space.Wrap(a, Path.Constant(PathValue(List(s"~u$i~")))): Space).reduceLeft(Space.Union.apply))
+  })
+
+  /** SAME-SOURCE iteration merges.  ∪ merges FREELY (certificate: laws/law_iter_merge.smt2, the
+   *  union conjunct) — gated away from loop-INVARIANT bodies, which belong to IterUnion_Indep's
+   *  hoist (the two would ping-pong).  ∩ and \ merge only under the KEYED guard on both bodies
+   *  (same certificate, keyed conjuncts; the unguarded ∩ is REFUTED — countermodel in the law
+   *  mining log — so the guard is necessary, not defensive). */
+  val IterSetOpMerge = subs(_: Space)(spost = {
+    case Space.Union(Space.Iteration(s1, h1, r1, b1), Space.Iteration(s2, h2, r2, b2))
+        if s1 == s2 && h1.s == h2.s && r1.s == r2.s &&
+           !cleanSpace(b1, Set(h1.s), Set(r1.s)) && !cleanSpace(b2, Set(h1.s), Set(r1.s)) =>
+      Space.Iteration(s1, h1, r1, Space.Union(b1, b2))
+    case Space.Intersection(Space.Iteration(s1, h1, r1, b1), Space.Iteration(s2, h2, r2, b2))
+        if s1 == s2 && h1.s == h2.s && r1.s == r2.s && keyedBy(b1, h1) && keyedBy(b2, h1) =>
+      Space.Iteration(s1, h1, r1, Space.Intersection(b1, b2))
+    case Space.Subtraction(Space.Iteration(s1, h1, r1, b1), Space.Iteration(s2, h2, r2, b2))
+        if s1 == s2 && h1.s == h2.s && r1.s == r2.s && keyedBy(b1, h1) && keyedBy(b2, h1) =>
+      Space.Iteration(s1, h1, r1, Space.Subtraction(b1, b2))
   })
 
   /** unwrap a just-wrapped prefix (egglog-checked): equal prefix cancels; a constant prefix that is

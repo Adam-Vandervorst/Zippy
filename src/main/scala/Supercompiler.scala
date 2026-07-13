@@ -637,7 +637,19 @@ object SC:
     "unwrap-concat-unwraps" -> Lower.UnwrapConcat_Unwraps, "singleton-composition-wrap" -> Lower.SingletonComposition_Wrap,
     "singleton-space-op-path-op" -> Lower.SingletonSpaceOp_PathOp, "restriction-singleton-unwrap" -> Lower.SingletonRestriction_Unwrap,
     "iter-tails" -> Lower.Iter_Tails, "tailsunion-singleton" -> Lower.TailsUnion_Singleton,
-    "range-singleton" -> Lower.Range_Singleton, "unwrap-wrap" -> Lower.Unwrap_Wrap)
+    "range-singleton" -> Lower.Range_Singleton, "unwrap-wrap" -> Lower.Unwrap_Wrap,
+    "iter-transpose-semijoin" -> Lower.IterWitness_TransposeSemiJoin,
+    "iter-witness-head-narrow" -> Lower.IterWitness_HeadNarrow,
+    "unwrap-push" -> Lower.UnwrapPush, "wrap-merge" -> Lower.WrapMerge,
+    "restriction-push" -> Lower.RestrictionPush, "comp-wrap-assoc" -> Lower.CompWrapAssoc,
+    "comp-assoc-right" -> Lower.CompAssocRight, "comp-lit-to-wraps" -> Lower.CompLitWraps,
+    "unwrap-fuse-const" -> Lower.Unwrap_Merge,
+    "singleton-constprefix-wrap" -> Lower.SingletonConstPrefix_Wrap,
+    "iter-comp-right-hoist" -> Lower.IterCompRight_Hoist,
+    "raffination-push" -> Lower.RaffinationPush,
+    "raff-restrict-algebra" -> Lower.RaffRestrictAlgebra,
+    "restrict-raff-wrap-both" -> Lower.RestrictRaffWrapBoth,
+    "iter-setop-merge" -> Lower.IterSetOpMerge)
   val simplifyRules: List[Space => Space] = sourceLaws.map(_._2)
 
   /** Bounded fixpoint reduction.  The step cap turns an oscillating/non-terminating rule into a

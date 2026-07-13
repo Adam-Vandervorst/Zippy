@@ -248,6 +248,28 @@ hoisted constant lands after the loop that uses it; and a scope whose result *is
 as cheap defence but no longer triggers.  (The earlier lossy-`Constant`-round-trip bug stays fixed
 via `LiteralCodec.encodeConst/decodeConst`.)
 
+Both passes were later upgraded for **independent-product-to-union** splitting.  `push_out` also
+splits an Iteration whose *result* is `Union(a, b)` with one operand already placed outside the
+loop: the loop keeps the dependent operand and the parent gains
+`Union(iter{a}, headedGuard(src) · b)`, where `headedGuard(src) = Range(src,-1,0).iter(_,_,{ε})`
+is the constant-time "loop runs at least once" factor ({ε} iff `src` has a headed path — ε sorts
+first, so probing the LAST path suffices; ∅-sources therefore stay ∅, which a bare hoist would
+break).  A result that is a `Composition` with a loop-invariant factor splits the same way with
+NO guard (∅ annihilates composition).  Chained across `optimize`'s fixpoint loop this hoists whole
+inner loops out of product loops (loop depth 2 → 1 on the canonical example).  `optimize_sharing`
+became **α-invariant**: binding slots are value-numbered by position rather than binder name, and
+Iteration/Fixpoint root names are dropped from subgraph keys, so loops identical up to renaming
+(the two head-loops of a same-source product, or repeated emptiness guards) deduplicate; an
+idempotence peephole collapses the interior pass-through `Union(x, x)` nodes the splits leave
+behind.  At the Space level the same derivation is available statically: `Lower.IterUnion_Indep`
+now attaches `headedGuard` when the source is not provably headed (instead of refusing),
+`IterComposition_Indep` hoists invariant composition factors, `EpsGuard_Wrap` commutes ⊆{ε}
+factors past `Wrap`, and `UnionWrap_Factor` does common-prefix factoring
+(`(p×a) ∪ (p×b) = p×(a∪b)`) — together rewriting
+`s(foo).iter(x, s(bar).iter(y, {cux.x} ∪ {cux.y}))` to
+`"cux" × (headed(s(bar))·Head(s(foo)) ∪ headed(s(foo))·Head(s(bar)))` (see
+`morkl.ProductUnionCheck`).
+
 **Why `exec` had no business being slower than `eval`.**  The op-graph stores Literal/Constant
 payloads as serialized strings; `execT` was re-decoding (base64 + parse + intern) and rebuilding the
 trie on *every* node execution, while `evalI` holds live interned objects.  Process-wide string-keyed

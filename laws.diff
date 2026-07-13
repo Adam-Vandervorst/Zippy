@@ -1,0 +1,1437 @@
+diff --git a/proofs/STATUS.tsv b/proofs/STATUS.tsv
+index 6ada363..76a598c 100644
+--- a/proofs/STATUS.tsv
++++ b/proofs/STATUS.tsv
+@@ -73,3 +73,20 @@ laws/law_unwrap_set	timeout	proved	PROVED
+ laws/law_wrap_as_comp	unsat	proved	PROVED
+ laws/law_wrap_set	unsat	proved	PROVED
+ threeway_tailsinter_trie	unsat	proved	PROVED
++laws/law_transpose_spec	unsat	proved	PROVED
++laws/law_iter_transpose_semijoin	unsat	proved	PROVED
++laws/law_iter_head_narrow	timeout	proved	PROVED
++laws/law_unwrap_push	unsat	-	PROVED
++laws/law_wrap_merge	unsat	-	PROVED
++laws/law_restrict_push	unsat	-	PROVED
++laws/law_comp_wrap_assoc	unsat	-	PROVED
++laws/law_tailsu_push	unsat	-	PROVED
++laws/law_wrap_disjoint	unsat	-	PROVED
++laws/law_restrict_wrap_both	timeout	proved	PROVED
++laws/law_comp_lit_wraps	unsat	-	PROVED
++laws/law_iter_comp_right_hoist	unsat	-	PROVED
++laws/law_raff_push	unsat	-	PROVED
++laws/law_raff_restrict_algebra	unsat	-	PROVED
++laws/law_raff_wrap_both	timeout	proved	PROVED
++laws/law_iter_merge	unsat	-	PROVED
++laws/law_union_chain_tailsu	unsat	-	PROVED
+diff --git a/proofs/laws/MINED.tsv b/proofs/laws/MINED.tsv
+new file mode 100644
+index 0000000..cb0ebce
+--- /dev/null
++++ b/proofs/laws/MINED.tsv
+@@ -0,0 +1,23 @@
++# candidate	z3	vampire	verdict
++unwrap-over-union	unsat	-	PROVED
++unwrap-over-inter	unsat	-	PROVED
++unwrap-over-sub	unsat	-	PROVED
++unwrap-over-comp-NAIVE	timeout	-	UNKNOWN
++wrap-merge-union	unsat	-	PROVED
++wrap-merge-inter	unsat	-	PROVED
++wrap-merge-sub	unsat	-	PROVED
++wrap-disjoint-inter	unsat	-	PROVED
++wrap-disjoint-sub	unsat	-	PROVED
++restrict-over-union	unsat	-	PROVED
++restrict-inter-left	unsat	-	PROVED
++restrict-sub-left	unsat	-	PROVED
++restrict-prefixes-union	unsat	-	PROVED
++restrict-wrap-both	timeout	-	UNKNOWN
++restrict-over-restrict-NAIVE	timeout	-	UNKNOWN
++comp-wrap-left-assoc	unsat	-	PROVED
++comp-over-union-left	unsat	-	PROVED
++comp-over-union-right	unsat	-	PROVED
++comp-over-inter-left-NAIVE	timeout	-	UNKNOWN
++tailsu-over-union	unsat	-	PROVED
++tailsu-over-inter-NAIVE	timeout	-	UNKNOWN
++tailsu-wrap-single	unsat	-	PROVED
+diff --git a/proofs/laws/REGISTRY.tsv b/proofs/laws/REGISTRY.tsv
+index e9c853b..2e21dac 100644
+--- a/proofs/laws/REGISTRY.tsv
++++ b/proofs/laws/REGISTRY.tsv
+@@ -55,3 +55,23 @@ raffination-partition	FILE	laws/law_raffination_partition.smt2	(x\|y) ∪ (x<|y)
+ head-tails-cover	FILE	laws/law_head_tails_cover.smt2	head(x)·tails∪(x) ⊇ x on ε-free x (subset as ∀-implication)
+ guard-hoist	FILE	laws/law_guard_hoist.smt2	invariant guard/wrap/composition hoisting
+ iter-fusion	FILE	laws/law_iter_fusion.smt2	nested invariant iterations fuse/commute
++iter-transpose-semijoin	FILE	laws/law_iter_transpose_semijoin.smt2,laws/law_transpose_spec.smt2	inverse-index semijoin: k=l=1 certified; k,l<=3 = the same argument level-wise (SCHEMATIC, matched syntactically); body-strictness analysis in Lower
++transpose-spec	FILE	laws/law_transpose_spec.smt2	the (1,1)-transpose index spec (emitted nest = spec is the iteration-semantics schema, cf. keyfold_iter)
++iter-witness-head-narrow	FILE	laws/law_iter_head_narrow.smt2	level-wise Head semijoin: source narrowed to Restriction(src, Head(E)); exact at the deepest level of suffix-witness joins; body-strictness analysis shared with the transpose law
++unwrap-push	FILE	laws/law_unwrap_push.smt2	mined; unwrap through set ops
++wrap-merge	FILE	laws/law_wrap_merge.smt2	mined; set ops merge under equal wraps
++wrap-disjoint	FILE	laws/law_wrap_disjoint.smt2	mined; incomparable cylinders (part of wrap-merge in Lower)
++restriction-push	FILE	laws/law_restrict_push.smt2	mined; restriction through subject ops + prefix unions
++comp-wrap-assoc	FILE	laws/law_comp_wrap_assoc.smt2	mined; left wrap slides out of composition
++comp-assoc-right	FILE	laws/law_comp_assoc.smt2	census; right-assoc canonicalization
++comp-lit-to-wraps	FILE	laws/law_comp_lit_wraps.smt2	census; compositions traded for unions of wraps (n<=4 schematic via comp-over-union-left + wrap-as-comp)
++unwrap-fuse-const	FILE	laws/law_unwrap_merge.smt2	census; constant unwrap chains fuse (same items descended, fewer nodes)
++singleton-constprefix-wrap	FILE	laws/law_wrap_set.smt2	profile; hoistable constant-prefix wrap split from singletons (merge direction gated to fully-constant)
++iter-comp-right-hoist	FILE	laws/law_iter_comp_right_hoist.smt2	profile; invariant right comp factor out of iterations
++raffination-push	FILE	laws/law_raff_push.smt2	profile; raffination through subject ops + prefix unions (pointwise)
++raff-restrict-algebra	FILE	laws/law_raff_restrict_algebra.smt2	profile; partition annihilation/idempotence/recovery/commute
++restrict-raff-wrap-both	FILE	laws/law_restrict_wrap_both.smt2,laws/law_raff_wrap_both.smt2	profile; descend below a common wrap prefix
++iter-setop-merge	FILE	laws/law_iter_merge.smt2	triple census; GUARDED: keyed bodies make groups independent — ∩/\ move through same-source iterations; ∪ free (gated off invariant bodies vs IterUnion_Indep)
++union-chain-tailsu	FILE	laws/law_union_chain_tailsu.smt2	comm-assoc reordering natively: ≥4-ary ∪ chains as TailsUnion over synthetic tags; CERTIFIED but NOT DEFAULT (measured regression on small branches); ∩ analogue (sentinel) documented OPEN — no ≥3-ary ∩ occurs in the applications
++restrict-wrap-both	FILE	laws/law_restrict_wrap_both.smt2	mined (certificate only; not in Lower)
++tailsu-push	FILE	laws/law_tailsu_push.smt2	mined (certificate only; TailsUnion lowers to iteration)
+diff --git a/proofs/laws/law_comp_lit_wraps.smt2 b/proofs/laws/law_comp_lit_wraps.smt2
+new file mode 100644
+index 0000000..0608810
+--- /dev/null
++++ b/proofs/laws/law_comp_lit_wraps.smt2
+@@ -0,0 +1,25 @@
++; LAW CERTIFICATE — a 2-path literal on the left of a composition is a union of wraps
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(declare-const w Path)
++(declare-const u Path)
++(declare-const q0 Path)
++(assert (not (forall ((p Path)) (= (exists ((uu Path) (vv Path)) (and (= p (append uu vv)) (or (= uu w) (= uu u)) (B vv))) (or (exists ((qq Path)) (and (= p (append w qq)) (B qq))) (exists ((qq Path)) (and (= p (append u qq)) (B qq))))))))
++(check-sat)
+diff --git a/proofs/laws/law_comp_wrap_assoc.smt2 b/proofs/laws/law_comp_wrap_assoc.smt2
+new file mode 100644
+index 0000000..c9d93e2
+--- /dev/null
++++ b/proofs/laws/law_comp_wrap_assoc.smt2
+@@ -0,0 +1,27 @@
++; LAW CERTIFICATE — a left wrap slides out of a composition: Wrap(w,a)·b = Wrap(w, a·b)
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(declare-const w Path)
++(declare-const u Path)
++(declare-const q0 Path)
++; assumed: proofs/laws/law_append_assoc.smt2 (certified there via a schema instance)
++(assert (forall ((a Path) (b Path) (c Path)) (= (append (append a b) c) (append a (append b c)))))
++(assert (not (forall ((p Path)) (= (exists ((uu Path) (vv Path)) (and (= p (append uu vv)) (exists ((qq Path)) (and (= uu (append w qq)) (A qq))) (B vv))) (exists ((qq Path)) (and (= p (append w qq)) (exists ((uu Path) (vv Path)) (and (= qq (append uu vv)) (A uu) (B vv)))))))))
++(check-sat)
+diff --git a/proofs/laws/law_iter_comp_right_hoist.smt2 b/proofs/laws/law_iter_comp_right_hoist.smt2
+new file mode 100644
+index 0000000..b971b3c
+--- /dev/null
++++ b/proofs/laws/law_iter_comp_right_hoist.smt2
+@@ -0,0 +1,22 @@
++; LAW CERTIFICATE — an invariant right composition factor hoists out of an iteration
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(assert (not (forall ((p Path)) (= (and (exists ((hh Int) (tt Path)) (A (cons hh tt))) (exists ((uu Path) (vv Path)) (and (= p (append uu vv)) (B uu) (C vv)))) (exists ((uu Path) (vv Path)) (and (= p (append uu vv)) (and (exists ((hh Int) (tt Path)) (A (cons hh tt))) (B uu)) (C vv)))))))
++(check-sat)
+diff --git a/proofs/laws/law_iter_head_narrow.smt2 b/proofs/laws/law_iter_head_narrow.smt2
+new file mode 100644
+index 0000000..907a064
+--- /dev/null
++++ b/proofs/laws/law_iter_head_narrow.smt2
+@@ -0,0 +1,27 @@
++; LAW CERTIFICATE — narrowing a head-dependent iteration to the heads of the witness base E drops only groups whose witness is empty (body strict in the witness)
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun S (Path) Bool)
++(declare-fun E (Path) Bool)
++(declare-fun Bd (Int Path) Bool)
++(declare-fun PH (Int) Bool)
++; PH = Head(E): the 1-item children of E
++(assert (forall ((u Int)) (= (PH u) (exists ((q Path)) (E (cons u q))))))
++; STRICTNESS: the iteration body denotes nothing when the witness unwrap at h is empty
++(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h q)))) (not (Bd h p)))))
++(assert (not (forall ((p Path)) (= (exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) (exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) (exists ((u Int)) (and (PH u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))))
++(check-sat)
+diff --git a/proofs/laws/law_iter_merge.smt2 b/proofs/laws/law_iter_merge.smt2
+new file mode 100644
+index 0000000..42afbab
+--- /dev/null
++++ b/proofs/laws/law_iter_merge.smt2
+@@ -0,0 +1,28 @@
++; LAW CERTIFICATE — same-source iteration merges: ∪ free; ∩/\ under the KEYED guard (bodies output their group key first — groups disjoint across keys; the unguarded ∩ is refuted)
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun G (Int) Bool)
++(declare-fun Bd1 (Int Path) Bool)
++(declare-fun Bd2 (Int Path) Bool)
++; KEYED guard (the ∩/\ conjuncts need it; countermodel exists without it)
++(assert (forall ((hh Int) (p Path)) (=> (Bd1 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
++(assert (forall ((hh Int) (p Path)) (=> (Bd2 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
++(assert (not (and
++  (forall ((p Path)) (= (or (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (or (Bd1 hh p) (Bd2 hh p))))))
++  (forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (Bd2 hh p))))))
++  (forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (not (exists ((hh Int)) (and (G hh) (Bd2 hh p))))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (not (Bd2 hh p))))))))))
++(check-sat)
+diff --git a/proofs/laws/law_iter_transpose_semijoin.smt2 b/proofs/laws/law_iter_transpose_semijoin.smt2
+new file mode 100644
+index 0000000..b34950a
+--- /dev/null
++++ b/proofs/laws/law_iter_transpose_semijoin.smt2
+@@ -0,0 +1,28 @@
++; LAW CERTIFICATE — narrowing a head-dependent iteration to the transpose-index candidates drops only groups whose witness is empty (body strict in the witness)
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun S (Path) Bool)
++(declare-fun E (Path) Bool)
++(declare-const c0 Int)
++(declare-fun Bd (Int Path) Bool)
++(declare-fun P (Int) Bool)
++; P = the transpose-index candidates Unwrap(TR, c0): u with a witness u·c0·… in E
++(assert (forall ((u Int)) (= (P u) (exists ((q Path)) (E (cons u (cons c0 q)))))))
++; STRICTNESS: the iteration body denotes nothing when the witness unwrap is empty
++(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h (cons c0 q))))) (not (Bd h p)))))
++(assert (not (forall ((p Path)) (= (exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) (exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) (exists ((u Int)) (and (P u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))))
++(check-sat)
+diff --git a/proofs/laws/law_raff_push.smt2 b/proofs/laws/law_raff_push.smt2
+new file mode 100644
+index 0000000..50d2c91
+--- /dev/null
++++ b/proofs/laws/law_raff_push.smt2
+@@ -0,0 +1,26 @@
++; LAW CERTIFICATE — raffination pushes through the subject's ∪/∩/\ and splits over prefix unions
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(assert (not (and
++  (forall ((p Path)) (= (and (or (A p) (B p)) (not (and (or (A p) (B p)) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))) (or (and (A p) (not (and (A p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))) (and (B p) (not (and (B p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))))))
++  (forall ((p Path)) (= (and (and (A p) (B p)) (not (and (and (A p) (B p)) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))) (and (and (A p) (not (and (A p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))) (B p))))
++  (forall ((p Path)) (= (and (and (A p) (not (B p))) (not (and (and (A p) (not (B p))) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))) (and (and (A p) (not (and (A p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))) (not (B p)))))
++  (forall ((p Path)) (= (and (A p) (not (and (A p) (exists ((qq Path)) (and (or (B qq) (C qq)) (isPrefix qq p)))))) (and (and (A p) (not (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))) (not (and (and (A p) (not (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))))))))
++(check-sat)
+diff --git a/proofs/laws/law_raff_restrict_algebra.smt2 b/proofs/laws/law_raff_restrict_algebra.smt2
+new file mode 100644
+index 0000000..456e990
+--- /dev/null
++++ b/proofs/laws/law_raff_restrict_algebra.smt2
+@@ -0,0 +1,28 @@
++; LAW CERTIFICATE — the raffination/restriction partition: annihilation, idempotence, recovery, commute
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(assert (not (and
++  (forall ((p Path)) (= (and (and (A p) (not (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))) false))
++  (forall ((p Path)) (= (and (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))) (not (and (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))) false))
++  (forall ((p Path)) (= (and (and (A p) (not (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))) (not (and (and (A p) (not (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))) (and (A p) (not (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p))))))))
++  (forall ((p Path)) (= (and (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))) (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p))))))
++  (forall ((p Path)) (= (or (and (A p) (not (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))) (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p))))) (A p)))
++  (forall ((p Path)) (= (and (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))) (not (and (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))) (and (and (A p) (not (and (A p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))))))))
++(check-sat)
+diff --git a/proofs/laws/law_raff_wrap_both.smt2 b/proofs/laws/law_raff_wrap_both.smt2
+new file mode 100644
+index 0000000..c4d70d8
+--- /dev/null
++++ b/proofs/laws/law_raff_wrap_both.smt2
+@@ -0,0 +1,31 @@
++; LAW CERTIFICATE — raffination under a common wrap prefix descends
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(declare-const w Path)
++(declare-const u Path)
++(declare-const q0 Path)
++; assumed: proofs/laws/law_append_assoc.smt2 (certified there via a schema instance)
++(assert (forall ((a Path) (b Path) (c Path)) (= (append (append a b) c) (append a (append b c)))))
++; assumed: proofs/laws/law_append_inj.smt2 (certified there via a schema instance)
++(assert (forall ((w Path) (p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q))))
++; assumed: proofs/laws/law_isprefix_append.smt2 (certified there via a schema instance)
++(assert (forall ((w Path) (p Path)) (= (isPrefix w p) (exists ((q Path)) (= p (append w q))))))
++(assert (not (forall ((p Path)) (= (and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (not (exists ((q2 Path)) (and (exists ((pq Path)) (and (= q2 (append w pq)) (B pq))) (isPrefix q2 p))))) (exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (not (exists ((q3 Path)) (and (B q3) (isPrefix q3 qq)))))))))))
++(check-sat)
+diff --git a/proofs/laws/law_restrict_push.smt2 b/proofs/laws/law_restrict_push.smt2
+new file mode 100644
+index 0000000..7308082
+--- /dev/null
++++ b/proofs/laws/law_restrict_push.smt2
+@@ -0,0 +1,26 @@
++; LAW CERTIFICATE — restriction pushes through the subject's ∪/∩/\ and splits over prefix unions
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(assert (not (and
++  (forall ((p Path)) (= (and (or (A p) (B p)) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))) (or (and (A p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))) (and (B p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))))))
++  (forall ((p Path)) (= (and (and (A p) (B p)) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))) (and (and (A p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))) (B p))))
++  (forall ((p Path)) (= (and (and (A p) (not (B p))) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))) (and (and (A p) (exists ((qq Path)) (and (C qq) (isPrefix qq p)))) (not (B p)))))
++  (forall ((p Path)) (= (and (A p) (exists ((qq Path)) (and (or (B qq) (C qq)) (isPrefix qq p)))) (or (and (A p) (exists ((qq Path)) (and (B qq) (isPrefix qq p)))) (and (A p) (exists ((qq Path)) (and (C qq) (isPrefix qq p))))))))))
++(check-sat)
+diff --git a/proofs/laws/law_restrict_wrap_both.smt2 b/proofs/laws/law_restrict_wrap_both.smt2
+new file mode 100644
+index 0000000..d43ecd1
+--- /dev/null
++++ b/proofs/laws/law_restrict_wrap_both.smt2
+@@ -0,0 +1,31 @@
++; LAW CERTIFICATE — restriction under a common wrap prefix descends
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(declare-const w Path)
++(declare-const u Path)
++(declare-const q0 Path)
++; assumed: proofs/laws/law_append_assoc.smt2 (certified there via a schema instance)
++(assert (forall ((a Path) (b Path) (c Path)) (= (append (append a b) c) (append a (append b c)))))
++; assumed: proofs/laws/law_append_inj.smt2 (certified there via a schema instance)
++(assert (forall ((w Path) (p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q))))
++; assumed: proofs/laws/law_isprefix_append.smt2 (certified there via a schema instance)
++(assert (forall ((w Path) (p Path)) (= (isPrefix w p) (exists ((q Path)) (= p (append w q))))))
++(assert (not (forall ((p Path)) (= (and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (exists ((q2 Path)) (and (exists ((pq Path)) (and (= q2 (append w pq)) (B pq))) (isPrefix q2 p)))) (exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (exists ((q3 Path)) (and (B q3) (isPrefix q3 qq))))))))))
++(check-sat)
+diff --git a/proofs/laws/law_tailsu_push.smt2 b/proofs/laws/law_tailsu_push.smt2
+new file mode 100644
+index 0000000..0c0f67f
+--- /dev/null
++++ b/proofs/laws/law_tailsu_push.smt2
+@@ -0,0 +1,24 @@
++; LAW CERTIFICATE — tails-union distributes over ∪ and cancels a single-item wrap
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(assert (not (and
++  (forall ((p Path)) (= (exists ((hh Int)) (or (A (cons hh p)) (B (cons hh p)))) (or (exists ((hh Int)) (A (cons hh p))) (exists ((hh Int)) (B (cons hh p))))))
++  (forall ((h Int)) (forall ((p Path)) (= (exists ((hh Int)) (exists ((qq Path)) (and (= (cons hh p) (append (cons h nil) qq)) (A qq)))) (A p)))))))
++(check-sat)
+diff --git a/proofs/laws/law_transpose_spec.smt2 b/proofs/laws/law_transpose_spec.smt2
+new file mode 100644
+index 0000000..19423f4
+--- /dev/null
++++ b/proofs/laws/law_transpose_spec.smt2
+@@ -0,0 +1,24 @@
++; LAW CERTIFICATE — the (1,1)-transpose index: TR = { w·u | u·w prefixes an E-path }
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun E (Path) Bool)
++(declare-fun TR (Path) Bool)
++(assert (forall ((p Path)) (= (TR p) (exists ((u Int) (w Int) (t Path)) (and (= p (cons w (cons u nil))) (E (cons u (cons w t))))))))
++(assert (not (and
++  (forall ((u Int) (w Int)) (= (TR (cons w (cons u nil))) (exists ((t Path)) (E (cons u (cons w t))))))
++  (forall ((p Path)) (=> (TR p) (exists ((u Int) (w Int)) (= p (cons w (cons u nil)))))))))
++(check-sat)
+diff --git a/proofs/laws/law_union_chain_tailsu.smt2 b/proofs/laws/law_union_chain_tailsu.smt2
+new file mode 100644
+index 0000000..daf4843
+--- /dev/null
++++ b/proofs/laws/law_union_chain_tailsu.smt2
+@@ -0,0 +1,22 @@
++; LAW CERTIFICATE — n-ary union as TailsUnion over distinct synthetic tags (3-ary instance; the executor then merges balanced with empties filtered)
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(assert (not (forall ((p Path)) (= (exists ((hh Int)) (or (or (exists ((qq Path)) (and (= (cons hh p) (append (cons 1001 nil) qq)) (A qq))) (exists ((qq Path)) (and (= (cons hh p) (append (cons 1002 nil) qq)) (B qq)))) (exists ((qq Path)) (and (= (cons hh p) (append (cons 1003 nil) qq)) (C qq))))) (or (or (A p) (B p)) (C p))))))
++(check-sat)
+diff --git a/proofs/laws/law_unwrap_push.smt2 b/proofs/laws/law_unwrap_push.smt2
+new file mode 100644
+index 0000000..428ea8f
+--- /dev/null
++++ b/proofs/laws/law_unwrap_push.smt2
+@@ -0,0 +1,28 @@
++; LAW CERTIFICATE — unwrap distributes through ∪/∩/\ (pointwise membership at w·p)
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(declare-const w Path)
++(declare-const u Path)
++(declare-const q0 Path)
++(assert (not (and
++  (forall ((p Path)) (= (or (A (append w p)) (B (append w p))) (or (A (append w p)) (B (append w p)))))
++  (forall ((p Path)) (= (and (A (append w p)) (B (append w p))) (and (A (append w p)) (B (append w p)))))
++  (forall ((p Path)) (= (and (A (append w p)) (not (B (append w p)))) (and (A (append w p)) (not (B (append w p)))))))))
++(check-sat)
+diff --git a/proofs/laws/law_wrap_disjoint.smt2 b/proofs/laws/law_wrap_disjoint.smt2
+new file mode 100644
+index 0000000..6585057
+--- /dev/null
++++ b/proofs/laws/law_wrap_disjoint.smt2
+@@ -0,0 +1,22 @@
++; LAW CERTIFICATE — constant prefixes with DIFFERENT HEAD ITEMS give disjoint cylinders
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(assert (not (forall ((k Int) (j Int) (w2 Path) (u2 Path)) (=> (distinct k j) (and (forall ((p Path)) (= (and (exists ((qq Path)) (and (= p (append (cons k w2) qq)) (A qq))) (exists ((qq Path)) (and (= p (append (cons j u2) qq)) (B qq)))) false)) (forall ((p Path)) (= (and (exists ((qq Path)) (and (= p (append (cons k w2) qq)) (A qq))) (not (exists ((qq Path)) (and (= p (append (cons j u2) qq)) (B qq))))) (exists ((qq Path)) (and (= p (append (cons k w2) qq)) (A qq))))))))))
++(check-sat)
+diff --git a/proofs/laws/law_wrap_merge.smt2 b/proofs/laws/law_wrap_merge.smt2
+new file mode 100644
+index 0000000..e03833c
+--- /dev/null
++++ b/proofs/laws/law_wrap_merge.smt2
+@@ -0,0 +1,30 @@
++; LAW CERTIFICATE — set operations over equal-prefix wraps merge under the wrap
++; Generated by scripts/gen_law_obligations.py; verdict tracked in proofs/STATUS.tsv.
++(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
++(declare-fun append (Path Path) Path)
++(assert (forall ((q Path)) (= (append nil q) q)))
++(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
++(declare-fun isPrefix (Path Path) Bool)
++(assert (forall ((p Path)) (isPrefix nil p)))
++(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
++(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
++  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
++; certified lemmas assumed below: proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2
++(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
++  (= (= (cons k2 p) (append q r))
++     (or (and (= q nil) (= r (cons k2 p)))
++         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
++(assert (forall ((q Path)) (= (append q nil) q)))
++(declare-fun A (Path) Bool)
++(declare-fun B (Path) Bool)
++(declare-fun C (Path) Bool)
++(declare-const w Path)
++(declare-const u Path)
++(declare-const q0 Path)
++; assumed: proofs/laws/law_append_inj.smt2 (certified there via a schema instance)
++(assert (forall ((w Path) (p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q))))
++(assert (not (and
++  (forall ((p Path)) (= (or (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (exists ((qq Path)) (and (= p (append w qq)) (B qq)))) (exists ((qq Path)) (and (= p (append w qq)) (or (A qq) (B qq))))))
++  (forall ((p Path)) (= (and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (exists ((qq Path)) (and (= p (append w qq)) (B qq)))) (exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (B qq))))))
++  (forall ((p Path)) (= (and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (not (exists ((qq Path)) (and (= p (append w qq)) (B qq))))) (exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (not (B qq))))))))))
++(check-sat)
+diff --git a/scripts/gen_law_obligations.py b/scripts/gen_law_obligations.py
+index 989bd48..5a349e0 100644
+--- a/scripts/gen_law_obligations.py
++++ b/scripts/gen_law_obligations.py
+@@ -315,6 +315,109 @@ law("law_iter_fusion", "nested invariant iterations fuse and commute",
+          eq(ITERC(A, ITERC(C, B)), ITERC(C, ITERC(A, B)))),
+     decls=SETS)
+ 
++# ---- inverse-index semijoin (Lower.IterWitness_TransposeSemiJoin), k=l=1 instances ----
++law("law_transpose_spec", "the (1,1)-transpose index: TR = { w·u | u·w prefixes an E-path }",
++    conj("(forall ((u Int) (w Int)) (= (TR (cons w (cons u nil))) "
++         "(exists ((t Path)) (E (cons u (cons w t))))))",
++         "(forall ((p Path)) (=> (TR p) (exists ((u Int) (w Int)) (= p (cons w (cons u nil))))))"),
++    decls="(declare-fun E (Path) Bool)\n(declare-fun TR (Path) Bool)\n" +
++          "(assert (forall ((p Path)) (= (TR p) (exists ((u Int) (w Int) (t Path)) "
++          "(and (= p (cons w (cons u nil))) (E (cons u (cons w t))))))))\n")
++law("law_iter_transpose_semijoin",
++    "narrowing a head-dependent iteration to the transpose-index candidates drops only groups whose witness is empty (body strict in the witness)",
++    "(forall ((p Path)) (= "
++    "(exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) "
++    "(exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) "
++    "(exists ((u Int)) (and (P u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))",
++    decls="(declare-fun S (Path) Bool)\n(declare-fun E (Path) Bool)\n(declare-const c0 Int)\n"
++          "(declare-fun Bd (Int Path) Bool)\n(declare-fun P (Int) Bool)\n"
++          "; P = the transpose-index candidates Unwrap(TR, c0): u with a witness u·c0·… in E\n"
++          "(assert (forall ((u Int)) (= (P u) (exists ((q Path)) (E (cons u (cons c0 q)))))))\n"
++          "; STRICTNESS: the iteration body denotes nothing when the witness unwrap is empty\n"
++          "(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h (cons c0 q))))) (not (Bd h p)))))\n")
++law("law_iter_head_narrow",
++    "narrowing a head-dependent iteration to the heads of the witness base E drops only groups whose witness is empty (body strict in the witness)",
++    "(forall ((p Path)) (= "
++    "(exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) "
++    "(exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) "
++    "(exists ((u Int)) (and (PH u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))",
++    decls="(declare-fun S (Path) Bool)\n(declare-fun E (Path) Bool)\n"
++          "(declare-fun Bd (Int Path) Bool)\n(declare-fun PH (Int) Bool)\n"
++          "; PH = Head(E): the 1-item children of E\n"
++          "(assert (forall ((u Int)) (= (PH u) (exists ((q Path)) (E (cons u q))))))\n"
++          "; STRICTNESS: the iteration body denotes nothing when the witness unwrap at h is empty\n"
++          "(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h q)))) (not (Bd h p)))))\n")
++# ---- mined composition laws (scripts/mine_laws.py; 18 PROVED / 4 machine-refuted) ----
++law("law_unwrap_push", "unwrap distributes through ∪/∩/\\ (pointwise membership at w·p)",
++    conj(eq(UNWRAP(UNION(A, B), "w"), UNION(UNWRAP(A, "w"), UNWRAP(B, "w"))),
++         eq(UNWRAP(INTER(A, B), "w"), INTER(UNWRAP(A, "w"), UNWRAP(B, "w"))),
++         eq(UNWRAP(SUB(A, B), "w"), SUB(UNWRAP(A, "w"), UNWRAP(B, "w")))),
++    decls=SETS + CONSTS)
++law("law_wrap_merge", "set operations over equal-prefix wraps merge under the wrap",
++    conj(eq(UNION(WRAP("w", A), WRAP("w", B)), WRAP("w", UNION(A, B))),
++         eq(INTER(WRAP("w", A), WRAP("w", B)), WRAP("w", INTER(A, B))),
++         eq(SUB(WRAP("w", A), WRAP("w", B)), WRAP("w", SUB(A, B)))),
++    decls=SETS + CONSTS, assume=APPEND_INJ)
++law("law_wrap_disjoint", "constant prefixes with DIFFERENT HEAD ITEMS give disjoint cylinders",
++    "(forall ((k Int) (j Int) (w2 Path) (u2 Path)) (=> (distinct k j) (and " +
++    eq(INTER(WRAP("(cons k w2)", A), WRAP("(cons j u2)", B)), EMPTY) + " " +
++    eq(SUB(WRAP("(cons k w2)", A), WRAP("(cons j u2)", B)), WRAP("(cons k w2)", A)) + ")))",
++    decls=SETS)
++law("law_restrict_push", "restriction pushes through the subject's ∪/∩/\\ and splits over prefix unions",
++    conj(eq(RESTRICT(UNION(A, B), C), UNION(RESTRICT(A, C), RESTRICT(B, C))),
++         eq(RESTRICT(INTER(A, B), C), INTER(RESTRICT(A, C), B)),
++         eq(RESTRICT(SUB(A, B), C), SUB(RESTRICT(A, C), B)),
++         eq(RESTRICT(A, UNION(B, C)), UNION(RESTRICT(A, B), RESTRICT(A, C)))))
++law("law_comp_wrap_assoc", "a left wrap slides out of a composition: Wrap(w,a)·b = Wrap(w, a·b)",
++    eq(COMP(WRAP("w", A), B), WRAP("w", COMP(A, B))),
++    decls=SETS + CONSTS, assume=APPEND_ASSOC)
++law("law_restrict_wrap_both", "restriction under a common wrap prefix descends",
++    "(forall ((p Path)) (= "
++    "(and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (exists ((q2 Path)) (and (exists ((pq Path)) (and (= q2 (append w pq)) (B pq))) (isPrefix q2 p)))) "
++    "(exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (exists ((q3 Path)) (and (B q3) (isPrefix q3 qq))))))))",
++    decls=SETS + CONSTS, assume=APPEND_ASSOC + APPEND_INJ + ISPREFIX_APPEND)
++law("law_iter_comp_right_hoist", "an invariant right composition factor hoists out of an iteration",
++    eq(ITERC(A, COMP(B, C)), COMP(ITERC(A, B), C)),
++    decls=SETS)
++law("law_union_chain_tailsu", "n-ary union as TailsUnion over distinct synthetic tags (3-ary instance; the executor then merges balanced with empties filtered)",
++    eq(TAILSU(UNION(UNION(WRAP("(cons 1001 nil)", A), WRAP("(cons 1002 nil)", B)), WRAP("(cons 1003 nil)", C))),
++       UNION(UNION(A, B), C)),
++    decls=SETS)
++law("law_iter_merge", "same-source iteration merges: ∪ free; ∩/\\ under the KEYED guard (bodies output their group key first — groups disjoint across keys; the unguarded ∩ is refuted)",
++    conj("(forall ((p Path)) (= (or (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (or (Bd1 hh p) (Bd2 hh p))))))",
++         "(forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (Bd2 hh p))))))",
++         "(forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (not (exists ((hh Int)) (and (G hh) (Bd2 hh p))))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (not (Bd2 hh p)))))))"),
++    decls="(declare-fun G (Int) Bool)\n(declare-fun Bd1 (Int Path) Bool)\n(declare-fun Bd2 (Int Path) Bool)\n",
++    assume="""; KEYED guard (the ∩/\\ conjuncts need it; countermodel exists without it)
++(assert (forall ((hh Int) (p Path)) (=> (Bd1 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
++(assert (forall ((hh Int) (p Path)) (=> (Bd2 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
++""")
++law("law_raff_push", "raffination pushes through the subject's ∪/∩/\\ and splits over prefix unions",
++    conj(eq(RAFF(UNION(A, B), C), UNION(RAFF(A, C), RAFF(B, C))),
++         eq(RAFF(INTER(A, B), C), INTER(RAFF(A, C), B)),
++         eq(RAFF(SUB(A, B), C), SUB(RAFF(A, C), B)),
++         eq(RAFF(A, UNION(B, C)), RAFF(RAFF(A, B), C))))
++law("law_raff_restrict_algebra", "the raffination/restriction partition: annihilation, idempotence, recovery, commute",
++    conj(eq(RESTRICT(RAFF(A, B), B), EMPTY),
++         eq(RAFF(RESTRICT(A, B), B), EMPTY),
++         eq(RAFF(RAFF(A, B), B), RAFF(A, B)),
++         eq(RESTRICT(RESTRICT(A, B), B), RESTRICT(A, B)),
++         eq(UNION(RAFF(A, B), RESTRICT(A, B)), A),
++         eq(RAFF(RESTRICT(A, B), C), RESTRICT(RAFF(A, C), B))))
++law("law_raff_wrap_both", "raffination under a common wrap prefix descends",
++    "(forall ((p Path)) (= "
++    "(and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (not (exists ((q2 Path)) (and (exists ((pq Path)) (and (= q2 (append w pq)) (B pq))) (isPrefix q2 p))))) "
++    "(exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (not (exists ((q3 Path)) (and (B q3) (isPrefix q3 qq)))))))))",
++    decls=SETS + CONSTS, assume=APPEND_ASSOC + APPEND_INJ + ISPREFIX_APPEND)
++law("law_comp_lit_wraps", "a 2-path literal on the left of a composition is a union of wraps",
++    eq(COMP(UNION(SING("w"), SING("u")), B), UNION(WRAP("w", B), WRAP("u", B))),
++    decls=SETS + CONSTS)
++law("law_tailsu_push", "tails-union distributes over ∪ and cancels a single-item wrap",
++    conj(eq(TAILSU(UNION(A, B)), UNION(TAILSU(A), TAILSU(B))),
++         "(forall ((h Int)) " + eq(TAILSU(WRAP("(cons h nil)", A)), A) + ")"),
++    decls=SETS)
++
++
+ MINIMAL = "\n".join(PRELUDE.splitlines()[:9]) + "\n"   # axioms only — the certified-lemma
+ # assumptions blow up the default saturation strategy on the pure-induction schema files.
+ SCHEMA_FILES = {"law_append_assoc", "law_append_inj", "law_isprefix_append"}
+@@ -389,6 +492,28 @@ REG = [
+     ("head-tails-cover", "FILE", "laws/law_head_tails_cover.smt2", "head(x)·tails∪(x) ⊇ x on ε-free x (subset as ∀-implication)"),
+     ("guard-hoist", "FILE", "laws/law_guard_hoist.smt2", "invariant guard/wrap/composition hoisting"),
+     ("iter-fusion", "FILE", "laws/law_iter_fusion.smt2", "nested invariant iterations fuse/commute"),
++    ("iter-transpose-semijoin", "FILE", "laws/law_iter_transpose_semijoin.smt2,laws/law_transpose_spec.smt2",
++     "inverse-index semijoin: k=l=1 certified; k,l<=3 = the same argument level-wise (SCHEMATIC, matched syntactically); body-strictness analysis in Lower"),
++    ("transpose-spec", "FILE", "laws/law_transpose_spec.smt2", "the (1,1)-transpose index spec (emitted nest = spec is the iteration-semantics schema, cf. keyfold_iter)"),
++    ("iter-witness-head-narrow", "FILE", "laws/law_iter_head_narrow.smt2",
++     "level-wise Head semijoin: source narrowed to Restriction(src, Head(E)); exact at the deepest level of suffix-witness joins; body-strictness analysis shared with the transpose law"),
++    ("unwrap-push", "FILE", "laws/law_unwrap_push.smt2", "mined; unwrap through set ops"),
++    ("wrap-merge", "FILE", "laws/law_wrap_merge.smt2", "mined; set ops merge under equal wraps"),
++    ("wrap-disjoint", "FILE", "laws/law_wrap_disjoint.smt2", "mined; incomparable cylinders (part of wrap-merge in Lower)"),
++    ("restriction-push", "FILE", "laws/law_restrict_push.smt2", "mined; restriction through subject ops + prefix unions"),
++    ("comp-wrap-assoc", "FILE", "laws/law_comp_wrap_assoc.smt2", "mined; left wrap slides out of composition"),
++    ("comp-assoc-right", "FILE", "laws/law_comp_assoc.smt2", "census; right-assoc canonicalization"),
++    ("comp-lit-to-wraps", "FILE", "laws/law_comp_lit_wraps.smt2", "census; compositions traded for unions of wraps (n<=4 schematic via comp-over-union-left + wrap-as-comp)"),
++    ("unwrap-fuse-const", "FILE", "laws/law_unwrap_merge.smt2", "census; constant unwrap chains fuse (same items descended, fewer nodes)"),
++    ("singleton-constprefix-wrap", "FILE", "laws/law_wrap_set.smt2", "profile; hoistable constant-prefix wrap split from singletons (merge direction gated to fully-constant)"),
++    ("iter-comp-right-hoist", "FILE", "laws/law_iter_comp_right_hoist.smt2", "profile; invariant right comp factor out of iterations"),
++    ("raffination-push", "FILE", "laws/law_raff_push.smt2", "profile; raffination through subject ops + prefix unions (pointwise)"),
++    ("raff-restrict-algebra", "FILE", "laws/law_raff_restrict_algebra.smt2", "profile; partition annihilation/idempotence/recovery/commute"),
++    ("restrict-raff-wrap-both", "FILE", "laws/law_restrict_wrap_both.smt2,laws/law_raff_wrap_both.smt2", "profile; descend below a common wrap prefix"),
++    ("iter-setop-merge", "FILE", "laws/law_iter_merge.smt2", "triple census; GUARDED: keyed bodies make groups independent — ∩/\\ move through same-source iterations; ∪ free (gated off invariant bodies vs IterUnion_Indep)"),
++    ("union-chain-tailsu", "FILE", "laws/law_union_chain_tailsu.smt2", "comm-assoc reordering natively: ≥4-ary ∪ chains as TailsUnion over synthetic tags; CERTIFIED but NOT DEFAULT (measured regression on small branches); ∩ analogue (sentinel) documented OPEN — no ≥3-ary ∩ occurs in the applications"),
++    ("restrict-wrap-both", "FILE", "laws/law_restrict_wrap_both.smt2", "mined (certificate only; not in Lower)"),
++    ("tailsu-push", "FILE", "laws/law_tailsu_push.smt2", "mined (certificate only; TailsUnion lowers to iteration)"),
+ ]
+ with open(outdir / "REGISTRY.tsv", "w") as f:
+     f.write("# law\tkind\tcertificates\tnote\n")
+diff --git a/scripts/mine_laws.py b/scripts/mine_laws.py
+new file mode 100644
+index 0000000..a9fa5ab
+--- /dev/null
++++ b/scripts/mine_laws.py
+@@ -0,0 +1,105 @@
++#!/usr/bin/env python3
++"""LAW MINING: enumerate candidate reduction laws for compositions of Space operators that the
++optimizer currently leaves unreduced, state each denotationally (the proofs/laws/ encoding), and
++throw the provers at every candidate:
++    z3 unsat  (or vampire refutation)  -> PROVED       (a real law)
++    z3 sat                             -> COUNTERMODEL (the candidate is FALSE — kept in the
++                                          table as documentation of the screening)
++    both give up                       -> UNKNOWN
++Results land in proofs/laws/MINED.tsv; the PROVED+profitable ones get implemented in Lower and
++promoted to generated certificates (gen_law_obligations.py).
++"""
++import pathlib, subprocess, sys
++
++root = pathlib.Path(__file__).resolve().parent.parent
++out = root / "proofs" / "laws" / "MINED.tsv"
++tmp = pathlib.Path("/tmp/mine_law.smt2")
++
++PRELUDE = (root / "scripts" / "gen_law_obligations.py").read_text()
++PRELUDE = PRELUDE.split('PRELUDE = """')[1].split('"""')[0]
++
++SETS = "(declare-fun A (Path) Bool)\n(declare-fun B (Path) Bool)\n(declare-fun C (Path) Bool)\n(declare-fun P (Path) Bool)\n"
++CONSTS = "(declare-const w Path)\n(declare-const q0 Path)\n(declare-const k Int)\n(declare-const j Int)\n"
++LEMMAS = """(assert (forall ((a Path) (b Path) (c Path)) (= (append (append a b) c) (append a (append b c)))))
++(assert (forall ((v Path) (p Path) (q Path)) (=> (= (append v p) (append v q)) (= p q))))
++(assert (forall ((v Path) (p Path)) (= (isPrefix v p) (exists ((q Path)) (= p (append v q))))))
++"""  # certified: law_append_assoc / law_append_inj / law_isprefix_append
++
++
++def wrap(w, s):
++    return lambda p: f"(exists ((qq Path)) (and (= {p} (append {w} qq)) {s('qq')}))"
++def unwrap(s, w):
++    return lambda p: s(f"(append {w} {p})")
++def comp(a, b):
++    return lambda p: f"(exists ((uu Path) (vv Path)) (and (= {p} (append uu vv)) {a('uu')} {b('vv')}))"
++def restrict(a, pr):
++    return lambda p: f"(and {a(p)} (exists ((qq Path)) (and {pr('qq')} (isPrefix qq {p}))))"
++def tailsu(s):
++    return lambda p: f"(exists ((hh Int)) {s(f'(cons hh {p})')})"
++A = lambda p: f"(A {p})"
++B = lambda p: f"(B {p})"
++C = lambda p: f"(C {p})"
++Pp = lambda p: f"(P {p})"
++def union(x, y): return lambda p: f"(or {x(p)} {y(p)})"
++def inter(x, y): return lambda p: f"(and {x(p)} {y(p)})"
++def sub(x, y): return lambda p: f"(and {x(p)} (not {y(p)}))"
++EMPTY = lambda p: "false"
++def eq(l, r): return f"(forall ((p Path)) (= {l('p')} {r('p')}))"
++
++KP = "(cons k nil)"   # single-item path k
++JP = "(cons j nil)"
++
++# name, goal, extra assumptions
++CANDS = [
++    # ---- unwrap pushed through the set operations ----
++    ("unwrap-over-union",  eq(unwrap(union(A, B), "w"), union(unwrap(A, "w"), unwrap(B, "w"))), ""),
++    ("unwrap-over-inter",  eq(unwrap(inter(A, B), "w"), inter(unwrap(A, "w"), unwrap(B, "w"))), ""),
++    ("unwrap-over-sub",    eq(unwrap(sub(A, B), "w"),   sub(unwrap(A, "w"), unwrap(B, "w"))), ""),
++    ("unwrap-over-comp-NAIVE", eq(unwrap(comp(A, B), "w"), comp(unwrap(A, "w"), B)), ""),
++    # ---- wrap merges (equal constant prefix; distinct single heads) ----
++    ("wrap-merge-union",   eq(union(wrap("w", A), wrap("w", B)), wrap("w", union(A, B))), ""),
++    ("wrap-merge-inter",   eq(inter(wrap("w", A), wrap("w", B)), wrap("w", inter(A, B))), LEMMAS),
++    ("wrap-merge-sub",     eq(sub(wrap("w", A), wrap("w", B)),   wrap("w", sub(A, B))), LEMMAS),
++    ("wrap-disjoint-inter", "(=> (distinct k j) " + eq(inter(wrap(KP, A), wrap(JP, B)), EMPTY) + ")", ""),
++    ("wrap-disjoint-sub",   "(=> (distinct k j) " + eq(sub(wrap(KP, A), wrap(JP, B)), wrap(KP, A)) + ")", ""),
++    # ---- restriction pushed through the set operations (subject on the left) ----
++    ("restrict-over-union", eq(restrict(union(A, B), Pp), union(restrict(A, Pp), restrict(B, Pp))), ""),
++    ("restrict-inter-left", eq(restrict(inter(A, B), Pp), inter(restrict(A, Pp), B)), ""),
++    ("restrict-sub-left",   eq(restrict(sub(A, B), Pp),   sub(restrict(A, Pp), B)), ""),
++    ("restrict-prefixes-union", eq(restrict(A, union(Pp, C)), union(restrict(A, Pp), restrict(A, C))), ""),
++    ("restrict-wrap-both",  eq(restrict(wrap("w", A), wrap("w", Pp)), wrap("w", restrict(A, Pp))), LEMMAS),
++    ("restrict-over-restrict-NAIVE", eq(restrict(restrict(A, Pp), C), restrict(A, inter(Pp, C))), ""),
++    # ---- composition ----
++    ("comp-wrap-left-assoc", eq(comp(wrap("w", A), B), wrap("w", comp(A, B))), LEMMAS),
++    ("comp-over-union-left", eq(comp(union(A, B), C), union(comp(A, C), comp(B, C))), ""),
++    ("comp-over-union-right", eq(comp(A, union(B, C)), union(comp(A, B), comp(A, C))), ""),
++    ("comp-over-inter-left-NAIVE", eq(comp(inter(A, B), C), inter(comp(A, C), comp(B, C))), ""),
++    # ---- tails-union ----
++    ("tailsu-over-union",  eq(tailsu(union(A, B)), union(tailsu(A), tailsu(B))), ""),
++    ("tailsu-over-inter-NAIVE", eq(tailsu(inter(A, B)), inter(tailsu(A), tailsu(B))), ""),
++    ("tailsu-wrap-single", eq(tailsu(wrap(KP, A)), A), ""),
++]
++
++results = []
++for name, goal, assume in CANDS:
++    text = PRELUDE + SETS + CONSTS + assume + f"(assert (not {goal}))\n(check-sat)\n"
++    tmp.write_text(text)
++    z = subprocess.run(["z3", "-T:20", str(tmp)], capture_output=True, text=True).stdout.strip().splitlines()
++    zr = z[-1] if z else "?"
++    verdict = {"unsat": "PROVED", "sat": "COUNTERMODEL"}.get(zr)
++    vr = "-"
++    if verdict is None:
++        v = subprocess.run(["/Applications/vampire", "--input_syntax", "smtlib2", "-t", "20s", str(tmp)],
++                           capture_output=True, text=True).stdout
++        vr = "proved" if "Refutation found" in v else "-"
++        verdict = "PROVED" if vr == "proved" else "UNKNOWN"
++    results.append((name, zr, vr, verdict))
++    print(f"{name:34s} z3={zr:8s} vampire={vr:7s} => {verdict}")
++
++with open(out, "w") as f:
++    f.write("# candidate\tz3\tvampire\tverdict\n")
++    for r in results:
++        f.write("\t".join(r) + "\n")
++print(f"\n{sum(1 for r in results if r[3]=='PROVED')} PROVED, "
++      f"{sum(1 for r in results if r[3]=='COUNTERMODEL')} COUNTERMODEL, "
++      f"{sum(1 for r in results if r[3]=='UNKNOWN')} UNKNOWN -> {out}")
+diff --git a/src/main/scala/EquivPipeline.scala b/src/main/scala/EquivPipeline.scala
+index 9dec766..dfa6a22 100644
+--- a/src/main/scala/EquivPipeline.scala
++++ b/src/main/scala/EquivPipeline.scala
+@@ -804,7 +804,23 @@ ${smt.defsText}
+     "iter-tails" -> "proofs/laws/law_tailsu_set.smt2 + proofs/keyfolds.smt2",
+     "tailsunion-singleton" -> "proofs/laws/law_tailsu_set.smt2",
+     "range-singleton" -> "GROUND — trusted positional boundary (fallbacks.md); executor-evaluated",
+-    "unwrap-wrap" -> "proofs/laws/law_unwrap_set.smt2")
++    "unwrap-wrap" -> "proofs/laws/law_unwrap_set.smt2",
++    "iter-transpose-semijoin" -> "proofs/laws/law_iter_transpose_semijoin.smt2 + laws/law_transpose_spec.smt2",
++    "iter-witness-head-narrow" -> "proofs/laws/law_iter_head_narrow.smt2",
++    "unwrap-push" -> "proofs/laws/law_unwrap_push.smt2",
++    "wrap-merge" -> "proofs/laws/law_wrap_merge.smt2 + laws/law_wrap_disjoint.smt2",
++    "restriction-push" -> "proofs/laws/law_restrict_push.smt2",
++    "comp-wrap-assoc" -> "proofs/laws/law_comp_wrap_assoc.smt2",
++    "comp-assoc-right" -> "proofs/laws/law_comp_assoc.smt2",
++    "comp-lit-to-wraps" -> "proofs/laws/law_comp_lit_wraps.smt2",
++    "unwrap-fuse-const" -> "proofs/laws/law_unwrap_merge.smt2",
++    "singleton-constprefix-wrap" -> "proofs/laws/law_wrap_set.smt2",
++    "iter-comp-right-hoist" -> "proofs/laws/law_iter_comp_right_hoist.smt2",
++    "raffination-push" -> "proofs/laws/law_raff_push.smt2",
++    "raff-restrict-algebra" -> "proofs/laws/law_raff_restrict_algebra.smt2",
++    "restrict-raff-wrap-both" -> "proofs/laws/law_restrict_wrap_both.smt2 + laws/law_raff_wrap_both.smt2",
++    "iter-setop-merge" -> "proofs/laws/law_iter_merge.smt2",
++    "union-chain-tailsu" -> "proofs/laws/law_union_chain_tailsu.smt2")
+ 
+   def justify(l: Space, r: Space): Option[String] =
+     def onceMatches(from: Space, to: Space): Option[String] =
+diff --git a/src/main/scala/MORKL.scala b/src/main/scala/MORKL.scala
+index 5edd05b..6a10159 100644
+--- a/src/main/scala/MORKL.scala
++++ b/src/main/scala/MORKL.scala
+@@ -253,7 +253,7 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
+     all_forever(Lower.inline(using new PartialFunction {
+       override def apply(f: RoutinePtr): Routine = ctx(f)
+       override def isDefinedAt(f: RoutinePtr): Boolean = f != name && ctx.isDefinedAt(f)
+-    })(body), List(Lower.ConstantOps, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
++    })(body), List(Lower.ConstantOps, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.IterWitness_TransposeSemiJoin, Lower.IterWitness_HeadNarrow, Lower.UnwrapPush, Lower.WrapMerge, Lower.RestrictionPush, Lower.CompWrapAssoc, Lower.CompAssocRight, Lower.CompLitWraps, Lower.UnwrapFuseConst, Lower.SingletonConstPrefix_Wrap, Lower.IterCompRight_Hoist, Lower.RaffinationPush, Lower.RaffRestrictAlgebra, Lower.RestrictRaffWrapBoth, Lower.IterSetOpMerge, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
+ //    })(body), List(Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
+ 
+ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
+@@ -1587,7 +1587,10 @@ object Lower:
+   })
+ 
+   val SingletonSpaceOp_PathOp = subs(_: Space)(PartialFunction.empty, {
+-    case Space.Wrap(Space.Singleton(y), x) => Space.Singleton(Path.Concat(x, y))
++    // merge only when FULLY CONSTANT (folds onward to a literal); the deref-bearing cases are the
++    // domain of SingletonConstPrefix_Wrap below (the split direction — hoistable constant prefix),
++    // and unconditional merge would ping-pong with it
++    case Space.Wrap(Space.Singleton(y), x) if constPath(x) && constPath(y) => Space.Singleton(Path.Concat(x, y))
+   })
+ 
+   val SingletonComposition_Wrap = subs(_: Space)(PartialFunction.empty, {
+@@ -1678,6 +1681,402 @@ object Lower:
+       val (l, h) = RangeBounds.normalize(1, lo, hi); if l < h then Space.Singleton(p) else Space.Empty
+   })
+ 
++  // ================================================================================================
++  // INVERSE-INDEX SEMIJOIN (iter-transpose-semijoin).
++  //
++  // A (rest-chained) k-nested iteration binding single-item symbols z1..zk whose innermost body is
++  // STRICT in a witness unwrap  Unwrap(E, z1·…·zk·c)  — E constant-rooted (loop-invariant) and c
++  // of statically-known item length — evaluates a body frame for EVERY source group and lets the
++  // witness veto it.  This law makes the loop OUTPUT-SENSITIVE: it materializes the (k,ℓ)-
++  // TRANSPOSE index of E (loop-invariant, so CSE/push-out hoist and evaluate it once),
++  //     TR = { w1…wℓ·u1…uk | u1…uk·w1…wℓ is a (k+ℓ)-item prefix of an E-path },
++  // takes the candidate set  P = Unwrap(TR, c) = { z⃗ | z⃗·c prefixes an E-path }, and narrows the
++  // iteration source to  Restriction(S, P).
++  //
++  // UNCONDITIONALLY SOUND, with no shape assumptions on S or E: a dropped group's witness is ∅ and
++  // the body is strict in it, so the group contributed ∅; a kept group keeps its ENTIRE subtree
++  // (P's elements are exactly k items, so the prefix restriction cannot split a group's tails);
++  // E-paths deeper than k+ℓ are still indexed by their prefix (the transpose nest binds prefix
++  // groups), and shorter ones can never satisfy the witness.  Certificates:
++  // proofs/laws/law_iter_transpose_semijoin.smt2 + proofs/laws/law_transpose_spec.smt2 (k=ℓ=1
++  // instances; k,ℓ>1 repeat the same level-wise argument — SCHEMATIC in the registry).
++  // ================================================================================================
++  /** all narrowers stacked on a source by Restriction (the semijoin laws' re-fire guards
++   *  must look through EACH OTHER's narrowings, not just the outermost). */
++  private def narrowerChain(s: Space): List[Space] = s match
++    case Space.Restriction(inner, n) => n :: narrowerChain(inner)
++    case _ => Nil
++
++  /** does the term contain any generated name with this reserved prefix?  The semijoin guards
++   *  are SHAPE-based, not value-based: the other laws keep rewriting a freshly-planted narrower
++   *  (splitting its unwraps, fusing its concats), so an equality guard re-fires forever — but the
++   *  generated tj/hn-prefixed binder names survive every rewrite. */
++  private def hasGenTag(s: Space, tag: String): Boolean =
++    var found = false
++    subs(s)(spre = { case it @ Space.Iteration(_, sy, re, _) if sy.s.startsWith(tag) || re.s.startsWith(tag) =>
++                       found = true; it },
++            ppre = { case d @ Path.Deref(pr) if pr.s.startsWith(tag) => found = true; d })
++    found
++
++  private def unwrapSpine(s: Space): (Space, List[Path]) = s match
++    case Space.Unwrap(inner, q) => val (b, qs) = unwrapSpine(inner); (b, qs :+ q)
++    case other => (other, Nil)
++
++  /** statically-known ITEM length of a path expression (constants; single-item binders). */
++  private def pathItemLen(p: Path): Option[Int] = p match
++    case Path.Constant(pv) => Some(pv.items.length)
++    case Path.Deref(pr) if pr.lengthHint == 1 => Some(1)
++    case Path.Concat(l, r) => for a <- pathItemLen(l); b <- pathItemLen(r) yield a + b
++    case _ => None
++
++  private def cleanSpace(sp: Space, prs: Set[String], sms: Set[String]): Boolean =
++    val (so, po) = collect(sp)({ case Space.Mention(m) if sms(m.s) => () },
++                              { case Path.Deref(pr) if prs(pr.s) => () })
++    so.isEmpty && po.isEmpty
++  private def cleanPath(p: Path, prs: Set[String], sms: Set[String]): Boolean =
++    cleanSpace(Space.Singleton(p), prs, sms)
++  private def constPath(p: Path): Boolean = p match
++    case Path.Constant(_) => true
++    case Path.Concat(l, r) => constPath(l) && constPath(r)
++    case _ => false
++
++  /** find, in a STRICT position of `body` (∅ there forces the whole body result to ∅), an unwrap
++   *  spine base·pre·(Deref z1)…(Deref zk)·post with base a foreign mention and pre CONSTANT (so E
++   *  hoists above z1, and the law only fires at the OUTERMOST nest level — an inner level would
++   *  see outer binders in pre).  Returns (E, cs): E = base unwrapped by pre; cs = the longest
++   *  clean, statically-sized prefix of post (a shorter c only narrows less — still sound). */
++  private def findWitness(body: Space, zs: Vector[String], sms: Set[String]): Option[(Space, List[Path])] =
++    val zset = zs.toSet
++    def trySpine(x: Space): Option[(Space, List[Path])] =
++      val (base, qs) = unwrapSpine(x)
++      if qs.isEmpty then None
++      else
++        val idx = qs.indexWhere { case Path.Deref(pr) => pr.s == zs.head; case _ => false }
++        if idx < 0 then None
++        else
++          val run = qs.slice(idx, idx + zs.length)
++          val runOk = run.length == zs.length &&
++            run.zip(zs).forall { case (Path.Deref(pr), n) => pr.s == n; case _ => false }
++          val pre = qs.take(idx)
++          val post = qs.drop(idx + zs.length)
++          if !runOk || !pre.forall(constPath) then None
++          else base match
++            case Space.Mention(m) if !sms(m.s) =>
++              val cs = post.takeWhile(p => cleanPath(p, zset, sms) && pathItemLen(p).isDefined)
++              if cs.isEmpty then None else Some((pre.foldLeft(base)(Space.Unwrap.apply), cs))
++            case _ => None
++    def search(s: Space): Option[(Space, List[Path])] = s match
++      case u: Space.Unwrap => trySpine(u)
++      case Space.Composition(a, b) => search(a).orElse(search(b))
++      case Space.Intersection(a, b) => search(a).orElse(search(b))
++      case Space.Subtraction(a, _) => search(a)
++      case Space.Restriction(a, b) => search(a).orElse(search(b))
++      case Space.Raffination(a, _) => search(a)
++      case Space.Wrap(src, _) => search(src)
++      case Space.TailsUnion(src) => search(src)
++      case Space.TailsIntersection(src) => search(src)
++      case Space.Iteration(src, _, _, _) => search(src)   // iteration of an ∅ source is ∅ (strict)
++      case _ => None
++    search(body)
++
++  private def transposeSemiJoinRewrite(it: Space): Option[Space] = it match
++    case Space.Iteration(src0, z1, m1, b1) if z1.lengthHint == 1 =>
++      // peel the rest-chained nest (up to 3 single-item levels)
++      def peel(zsAcc: Vector[PathRef], msAcc: Vector[SpaceMention], b: Space): (Vector[PathRef], Vector[SpaceMention], Space) = b match
++        case Space.Iteration(Space.Mention(sm), z, m, bi) if sm == msAcc.last && z.lengthHint == 1 && zsAcc.length < 3 =>
++          peel(zsAcc :+ z, msAcc :+ m, bi)
++        case _ => (zsAcc, msAcc, b)
++      val (zs, ms, innerBody) = peel(Vector(z1), Vector(m1), b1)
++      val smNames = ms.map(_.s).toSet
++      findWitness(innerBody, zs.map(_.s), smNames).flatMap { (e, cs) =>
++        val k = zs.length
++        val lw = cs.map(pathItemLen(_).get).sum
++        val tag = s"tj${Integer.toHexString(e.hashCode ^ (k * 31 + lw))}"
++        val us = Vector.tabulate(k)(i => PathRef(s"${tag}u$i").known(1))
++        val ws = Vector.tabulate(lw)(i => PathRef(s"${tag}w$i").known(1))
++        val binders = us ++ ws
++        val rests = Vector.tabulate(binders.length)(i => SpaceMention(s"${tag}r$i"))
++        val trBodyPath = (ws.map(Path.Deref(_): Path) ++ us.map(Path.Deref(_): Path)).reduceRight(Path.Concat.apply)
++        val tr = binders.zip(rests).zipWithIndex.foldRight(Space.Singleton(trBodyPath): Space) {
++          case (((bnd, rst), i), acc) =>
++            val srcI: Space = if i == 0 then e else Space.Mention(rests(i - 1))
++            Space.Iteration(srcI, bnd, rst, acc)
++        }
++        val c = cs.reduceRight(Path.Concat.apply)
++        val p = Space.Unwrap(tr, c)
++        // guard on the WHOLE Restriction chain AND by generated-name tag: the other laws keep
++        // rewriting a planted narrower (unwrap splits, concat fusion), so value equality would
++        // re-fire forever; one transpose narrowing per node is the fixpoint
++        if hasGenTag(src0, "tj") then None
++        else Some(Space.Iteration(Space.Restriction(src0, p), z1, m1, b1))
++      }
++    case _ => None
++
++  val IterWitness_TransposeSemiJoin = subs(_: Space)(spre = {
++    case it: Space.Iteration if transposeSemiJoinRewrite(it).isDefined => transposeSemiJoinRewrite(it).get
++  })
++
++  // ================================================================================================
++  // LEVEL-WISE HEAD SEMIJOIN (iter-witness-head-narrow) — NEST-TOP FORM.
++  //
++  // A rest-chained nest binding z1..zk whose innermost body is STRICT in a witness unwrap
++  //     Unwrap(E, z1·…·zk)            (the binder run is the SUFFIX of the spine)
++  // with E clean of the nest's own binders — and GENUINELY VARYING (containing at least one
++  // Deref: an outer binder or a parameter; a fully-constant E has a static, typically dense head
++  // set whose narrowing costs a head-iteration per frame and prunes nothing) — evaluates a leaf
++  // frame for every source group and lets the witness veto it.  Narrow EVERY level i to
++  //     Restriction(src_i, Head(E·z1·…·z_{i-1}))
++  // (Head as the canonical head-iteration).  Unconditionally sound per level (certificate:
++  // proofs/laws/law_iter_head_narrow.smt2 — dropped groups have an ∅ witness and the body is
++  // strict in it; kept groups keep whole subtrees); the DEEPEST level's narrowing is exact, so
++  // leaf frames run only for witness-passing groups.  When an invariant statically-sized suffix
++  // follows the run, iter-transpose-semijoin narrows exactly instead and this law defers.
++  // ================================================================================================
++  private def headEnc(e: Space): Space =
++    val tag = s"hn${Integer.toHexString(e.hashCode)}"
++    val hw = PathRef(s"${tag}h").known(1)
++    Space.Iteration(e, hw, SpaceMention(s"${tag}r"), Space.Singleton(Path.Deref(hw)))
++
++  /** find, in a STRICT position of `body`, an unwrap spine base·pre·(Deref z1)…(Deref zk)·post
++   *  with base a foreign mention, pre clean of the nest (outer binders allowed) and containing a
++   *  Deref (the varying-witness profitability condition), and post NOT an invariant sized suffix
++   *  (that case belongs to the transpose law).  Returns E = base unwrapped by pre. */
++  private def findHeadNestWitness(body: Space, zs: Vector[String], sms: Set[String]): Option[Space] =
++    val zset = zs.toSet
++    def trySpine(x: Space): Option[Space] =
++      val (base, qs) = unwrapSpine(x)
++      val idx = qs.indexWhere { case Path.Deref(pr) => pr.s == zs.head; case _ => false }
++      if idx < 0 then None
++      else
++        val run = qs.slice(idx, idx + zs.length)
++        val runOk = run.length == zs.length &&
++          run.zip(zs).forall { case (Path.Deref(pr), n) => pr.s == n; case _ => false }
++        val pre = qs.take(idx)
++        val post = qs.drop(idx + zs.length)
++        val hasSuffix = post.headOption.exists(p => cleanPath(p, zset, sms) && pathItemLen(p).isDefined)
++        val varies = pre.exists(!constPath(_))
++        base match
++          case Space.Mention(m) if runOk && !sms(m.s) && !hasSuffix && varies &&
++               pre.forall(cleanPath(_, zset, sms)) =>
++            Some(pre.foldLeft(base: Space)(Space.Unwrap.apply))
++          case _ => None
++    def search(s: Space): Option[Space] = s match
++      case u: Space.Unwrap => trySpine(u)
++      case Space.Composition(a, b) => search(a).orElse(search(b))
++      case Space.Intersection(a, b) => search(a).orElse(search(b))
++      case Space.Subtraction(a, _) => search(a)
++      case Space.Restriction(a, b) => search(a).orElse(search(b))
++      case Space.Raffination(a, _) => search(a)
++      case Space.Wrap(src, _) => search(src)
++      case Space.TailsUnion(src) => search(src)
++      case Space.TailsIntersection(src) => search(src)
++      case Space.Iteration(src, _, _, _) => search(src)   // iteration of an ∅ source is ∅ (strict)
++      case _ => None
++    search(body)
++
++  private def headNarrowRewrite(it: Space): Option[Space] = it match
++    case Space.Iteration(src0, z1, m1, b1) if z1.lengthHint == 1 &&
++         !hasGenTag(src0, "hn") =>
++      def peel(zsAcc: Vector[PathRef], msAcc: Vector[SpaceMention], b: Space): (Vector[PathRef], Vector[SpaceMention], Space) = b match
++        case Space.Iteration(Space.Mention(sm), z, m, bi) if sm == msAcc.last && z.lengthHint == 1 && zsAcc.length < 3 =>
++          peel(zsAcc :+ z, msAcc :+ m, bi)
++        case _ => (zsAcc, msAcc, b)
++      val (zs, ms, innerBody) = peel(Vector(z1), Vector(m1), b1)
++      findHeadNestWitness(innerBody, zs.map(_.s), ms.map(_.s).toSet).map { e =>
++        def chainE(i: Int): Space = zs.take(i).foldLeft(e)((acc, z) => Space.Unwrap(acc, Path.Deref(z)))
++        def rebuild(i: Int): Space =
++          val orig: Space = if i == 0 then src0 else Space.Mention(ms(i - 1))
++          val src = Space.Restriction(orig, headEnc(chainE(i)))
++          Space.Iteration(src, zs(i), ms(i), if i == zs.length - 1 then innerBody else rebuild(i + 1))
++        rebuild(0)
++      }
++    case _ => None
++
++  val IterWitness_HeadNarrow = subs(_: Space)(spre = {
++    case it: Space.Iteration if headNarrowRewrite(it).isDefined => headNarrowRewrite(it).get
++  })
++
++  // ================================================================================================
++  // MINED COMPOSITION LAWS (scripts/mine_laws.py): every candidate stated denotationally and
++  // adjudicated by the provers — 18 PROVED, 4 REFUTED with machine-verified countermodels
++  // (proofs/laws/MINED.tsv).  The profitable PROVED ones below; certificates in proofs/laws/.
++  // ================================================================================================
++
++  /** unwrap pushed through the set operations (certificate: laws/law_unwrap_push.smt2) —
++   *  membership at w·p distributes pointwise; pushing exposes deeper Wrap/literal reductions. */
++  val UnwrapPush = subs(_: Space)(spost = {
++    case Space.Unwrap(Space.Union(a, b), w) => Space.Union(Space.Unwrap(a, w), Space.Unwrap(b, w))
++    case Space.Unwrap(Space.Intersection(a, b), w) => Space.Intersection(Space.Unwrap(a, w), Space.Unwrap(b, w))
++    case Space.Unwrap(Space.Subtraction(a, b), w) => Space.Subtraction(Space.Unwrap(a, w), Space.Unwrap(b, w))
++  })
++
++  private def incomparableConsts(p: Path, q: Path): Boolean = (p, q) match
++    case (Path.Constant(a), Path.Constant(b)) =>
++      a.items.nonEmpty && b.items.nonEmpty && a.items.head != b.items.head   // certified form: heads differ
++    case _ => false
++
++  /** set operations over equal-prefix wraps merge under the wrap; incomparable constant prefixes
++   *  are disjoint cylinders (certificates: laws/law_wrap_merge.smt2, laws/law_wrap_disjoint.smt2). */
++  val WrapMerge = subs(_: Space)(spost = {
++    case Space.Union(Space.Wrap(a, p), Space.Wrap(b, q)) if p == q => Space.Wrap(Space.Union(a, b), p)
++    case Space.Intersection(Space.Wrap(a, p), Space.Wrap(b, q)) if p == q => Space.Wrap(Space.Intersection(a, b), p)
++    case Space.Subtraction(Space.Wrap(a, p), Space.Wrap(b, q)) if p == q => Space.Wrap(Space.Subtraction(a, b), p)
++    case Space.Intersection(Space.Wrap(_, p), Space.Wrap(_, q)) if incomparableConsts(p, q) => Space.Empty
++    case Space.Subtraction(w1 @ Space.Wrap(_, p), Space.Wrap(_, q)) if incomparableConsts(p, q) => w1
++  })
++
++  /** restriction pushed through the subject's set operations, and split over a union of prefix
++   *  sets (certificate: laws/law_restrict_push.smt2).  The ∩/\ forms restrict ONE side only. */
++  val RestrictionPush = subs(_: Space)(spost = {
++    case Space.Restriction(Space.Union(a, b), pr) => Space.Union(Space.Restriction(a, pr), Space.Restriction(b, pr))
++    case Space.Restriction(Space.Intersection(a, b), pr) => Space.Intersection(Space.Restriction(a, pr), b)
++    case Space.Restriction(Space.Subtraction(a, b), pr) => Space.Subtraction(Space.Restriction(a, pr), b)
++    case Space.Restriction(a, Space.Union(p1, p2)) => Space.Union(Space.Restriction(a, p1), Space.Restriction(a, p2))
++  })
++
++  /** a left wrap slides out of a composition: Wrap(w,a)·b = Wrap(w, a·b)
++   *  (certificate: laws/law_comp_wrap_assoc.smt2 — wrap-as-composition + associativity). */
++  val CompWrapAssoc = subs(_: Space)(spost = {
++    case Space.Composition(Space.Wrap(a, w), b) => Space.Wrap(Space.Composition(a, b), w)
++  })
++
++  /** composition canonicalizes RIGHT-associated (certificate: laws/law_comp_assoc.smt2), exposing
++   *  left factors to CompWrapAssoc / CompLitWraps; strictly reduces left-spine depth. */
++  val CompAssocRight = subs(_: Space)(spost = {
++    case Space.Composition(Space.Composition(a, b), c) => Space.Composition(a, Space.Composition(b, c))
++  })
++
++  /** a SMALL literal on the left of a composition becomes a union of wraps — compositions traded
++   *  for unions (certificate: laws/law_comp_lit_wraps.smt2 for the 2-path instance; n<=4 is the
++   *  same argument via comp-over-union-left + wrap-as-comp, level-wise).  Bounded to avoid blowup. */
++  val CompLitWraps = subs(_: Space)(spost = {
++    case Space.Composition(Space.Literal(v), b) if v.paths.nonEmpty && v.paths.size <= 4 =>
++      v.paths.toList.sortBy(_.show).map(pv => Space.Wrap(b, Path.Constant(pv)): Space).reduceLeft(Space.Union.apply)
++  })
++
++  /** constant unwrap chains fuse into one descent — same items descended, one node and one frame
++   *  op instead of two (certificate: laws/law_unwrap_merge.smt2). */
++  val UnwrapFuseConst = subs(_: Space)(spost = {
++    case Space.Unwrap(Space.Unwrap(x, Path.Constant(a)), Path.Constant(b)) =>
++      Space.Unwrap(x, Path.Constant(PathValue(a.items ++ b.items)))
++  })
++
++  private def pathFactors(p: Path): List[Path] = p match
++    case Path.Concat(l, r) => pathFactors(l) ++ pathFactors(r)
++    case other => List(other)
++  private def refactor(fs: List[Path]): Path = fs.reduceRight(Path.Concat.apply)
++
++  /** a singleton whose path has a CONSTANT PREFIX followed by deref-bearing factors splits into
++   *  Wrap(Singleton(varying), constPrefix) — the constant-prefix wrap is loop-invariant and
++   *  hoistable (Wrap_Iter / WrapMerge / graph push_out); the merge direction is gated to fully-
++   *  constant paths so the pair cannot ping-pong.  Certificate: laws/law_wrap_set.smt2
++   *  (the singleton-fusion case, read right-to-left). */
++  val SingletonConstPrefix_Wrap = subs(_: Space)(spost = {
++    case Space.Singleton(p @ Path.Concat(_, _))
++        if { val fs = pathFactors(p); fs.head.isInstanceOf[Path.Constant] && fs.exists(f => !constPath(f)) } =>
++      val fs = pathFactors(p)
++      val (cs, rest) = fs.span(constPath)
++      val prefix = Path.Constant(PathValue(cs.flatMap { case Path.Constant(v) => v.items; case _ => Nil }))
++      Space.Wrap(Space.Singleton(refactor(rest)), prefix)
++  })
++
++  /** an iteration-invariant RIGHT composition factor hoists out of the iteration's union of
++   *  groups: ∪_h (B_h · c) = (∪_h B_h) · c  (certificate: laws/law_iter_comp_right_hoist.smt2). */
++  val IterCompRight_Hoist = subs(_: Space)(spost = {
++    case Space.Iteration(src, h, r, Space.Composition(b, cc))
++        if cleanSpace(cc, Set(h.s), Set(r.s)) =>
++      Space.Composition(Space.Iteration(src, h, r, b), cc)
++  })
++
++  /** raffination pushed through the subject's set operations and split over prefix unions —
++   *  raffination is POINTWISE (x∧¬pref), so it distributes exactly like restriction
++   *  (certificate: laws/law_raff_push.smt2). */
++  val RaffinationPush = subs(_: Space)(spost = {
++    case Space.Raffination(Space.Union(a, b), pr) => Space.Union(Space.Raffination(a, pr), Space.Raffination(b, pr))
++    case Space.Raffination(Space.Intersection(a, b), pr) => Space.Intersection(Space.Raffination(a, pr), b)
++    case Space.Raffination(Space.Subtraction(a, b), pr) => Space.Subtraction(Space.Raffination(a, pr), b)
++    case Space.Raffination(a, Space.Union(p1, p2)) => Space.Raffination(Space.Raffination(a, p1), p2)
++  })
++
++  /** the raffination/restriction PARTITION collapses: opposite composition annihilates, repeated
++   *  application is idempotent, and the two halves reunite to the subject
++   *  (certificate: laws/law_raff_restrict_algebra.smt2). */
++  val RaffRestrictAlgebra = subs(_: Space)(spost = {
++    case Space.Restriction(Space.Raffination(x, y), y2) if y == y2 => Space.Empty
++    case Space.Raffination(Space.Restriction(x, y), y2) if y == y2 => Space.Empty
++    case Space.Raffination(r @ Space.Raffination(x, y), y2) if y == y2 => r
++    case Space.Restriction(r @ Space.Restriction(x, y), y2) if y == y2 => r
++    case Space.Union(Space.Raffination(x, y), Space.Restriction(x2, y2)) if x == x2 && y == y2 => x
++    case Space.Union(Space.Restriction(x, y), Space.Raffination(x2, y2)) if x == x2 && y == y2 => x
++  })
++
++  /** restriction and raffination under a COMMON wrap prefix descend below it
++   *  (certificates: laws/law_restrict_wrap_both.smt2, laws/law_raff_wrap_both.smt2). */
++  val RestrictRaffWrapBoth = subs(_: Space)(spost = {
++    case Space.Restriction(Space.Wrap(a, w), Space.Wrap(pr, w2)) if w == w2 =>
++      Space.Wrap(Space.Restriction(a, pr), w)
++    case Space.Raffination(Space.Wrap(a, w), Space.Wrap(pr, w2)) if w == w2 =>
++      Space.Wrap(Space.Raffination(a, pr), w)
++  })
++
++  /** is the body's output GUARANTEED to start with the group key h?  (The "independent" guard:
++   *  keyed bodies make groups pairwise DISJOINT across keys, licensing ∩/\ to move through
++   *  same-source iterations.)  Syntactic under-approximation, sound by construction. */
++  private def keyedBy(b: Space, h: PathRef): Boolean =
++    def headIsH(p: Path): Boolean = pathFactors(p).headOption match
++      case Some(Path.Deref(pr)) => pr.s == h.s
++      case _ => false
++    b match
++      case Space.Wrap(_, p) => headIsH(p)
++      case Space.Singleton(p) => headIsH(p)
++      case Space.Union(x, y) => keyedBy(x, h) && keyedBy(y, h)
++      case Space.Composition(Space.Singleton(p), _) => headIsH(p)
++      case _ => false
++
++  /** SAME-SOURCE iteration merges.  ∪ merges FREELY (certificate: laws/law_iter_merge.smt2, the
++   *  union conjunct) — gated away from loop-INVARIANT bodies, which belong to IterUnion_Indep's
++   *  hoist (the two would ping-pong).  ∩ and \ merge only under the KEYED guard on both bodies
++   *  (same certificate, keyed conjuncts; the unguarded ∩ is REFUTED — countermodel in the law
++   *  mining log — so the guard is necessary, not defensive). */
++  /** n-ary UNION CHAINS re-associate/commute NATIVELY through the engine: ∪ᵢAᵢ =
++   *  TailsUnion(⋃ᵢ ~uᵢ~·Aᵢ) with distinct synthetic constant tags — NO new construct, so every
++   *  law/optimization applies wherever the pattern lands; the executor's TailsUnion then merges
++   *  the branches BALANCED with empty branches filtered (ITrie.joinAll), instead of a left-nested
++   *  pairwise chain that re-walks its growing accumulator.  Fires on chains of ≥ 4 operands not
++   *  already tagged.  CERTIFIED BUT NOT IN THE DEFAULT PIPELINE: measured on the workload
++   *  profiles, the per-evaluation tag-wrap + strip overhead EXCEEDS the balanced-merge gain at
++   *  the applications' branch sizes (puzzle15 2136->2954 ticks, gol 10204->12539) — it pays only
++   *  for large overlapping branches, so it is available for explicit use, not default.  (The ∩ analogue needs a sentinel construction — ⋃ᵢtᵢ·(Aᵢ∪{σ}) then \{σ},
++   *  else an EMPTY operand silently drops out of the meet; its head-group lemmas prove but the
++   *  final tails-∩ goal resists both provers and NO ≥3-ary ∩ chain occurs in the applications,
++   *  so it stays a documented design, not a rewrite.)
++   *  Certificate: laws/law_union_chain_tailsu.smt2 (3-ary; n-ary is the same argument per tag). */
++  private def unionOps(s: Space): List[Space] = s match
++    case Space.Union(a, b) => unionOps(a) ++ unionOps(b)
++    case other => List(other)
++  private def isUTag(s: Space): Boolean = s match
++    case Space.Wrap(_, Path.Constant(PathValue(PathItem.Symbol(n) :: Nil))) => n.startsWith("~u")
++    case _ => false
++  val UnionChain_TailsU = subs(_: Space)(spost = {
++    case u: Space.Union if { val ops = unionOps(u); ops.length >= 4 && !ops.exists(isUTag) } =>
++      val ops = unionOps(u)
++      Space.TailsUnion(ops.zipWithIndex.map((a, i) =>
++        Space.Wrap(a, Path.Constant(PathValue(List(PathItem.Symbol(s"~u$i~"))))): Space).reduceLeft(Space.Union.apply))
++  })
++
++  val IterSetOpMerge = subs(_: Space)(spost = {
++    case Space.Union(Space.Iteration(s1, h1, r1, b1), Space.Iteration(s2, h2, r2, b2))
++        if s1 == s2 && h1.s == h2.s && r1.s == r2.s &&
++           !cleanSpace(b1, Set(h1.s), Set(r1.s)) && !cleanSpace(b2, Set(h1.s), Set(r1.s)) =>
++      Space.Iteration(s1, h1, r1, Space.Union(b1, b2))
++    case Space.Intersection(Space.Iteration(s1, h1, r1, b1), Space.Iteration(s2, h2, r2, b2))
++        if s1 == s2 && h1.s == h2.s && r1.s == r2.s && keyedBy(b1, h1) && keyedBy(b2, h1) =>
++      Space.Iteration(s1, h1, r1, Space.Intersection(b1, b2))
++    case Space.Subtraction(Space.Iteration(s1, h1, r1, b1), Space.Iteration(s2, h2, r2, b2))
++        if s1 == s2 && h1.s == h2.s && r1.s == r2.s && keyedBy(b1, h1) && keyedBy(b2, h1) =>
++      Space.Iteration(s1, h1, r1, Space.Subtraction(b1, b2))
++  })
++
+   /** unwrap a just-wrapped prefix (egglog-checked): equal prefix cancels; a constant prefix that is
+    *  a prefix of / extended by the other re-wraps or strips the rest; otherwise (incomparable) Empty. */
+   val Unwrap_Wrap = subs(_: Space)(PartialFunction.empty, {
+diff --git a/src/main/scala/Supercompiler.scala b/src/main/scala/Supercompiler.scala
+index 9208fb5..095f025 100644
+--- a/src/main/scala/Supercompiler.scala
++++ b/src/main/scala/Supercompiler.scala
+@@ -637,7 +637,19 @@ object SC:
+     "unwrap-concat-unwraps" -> Lower.UnwrapConcat_Unwraps, "singleton-composition-wrap" -> Lower.SingletonComposition_Wrap,
+     "singleton-space-op-path-op" -> Lower.SingletonSpaceOp_PathOp, "restriction-singleton-unwrap" -> Lower.SingletonRestriction_Unwrap,
+     "iter-tails" -> Lower.Iter_Tails, "tailsunion-singleton" -> Lower.TailsUnion_Singleton,
+-    "range-singleton" -> Lower.Range_Singleton, "unwrap-wrap" -> Lower.Unwrap_Wrap)
++    "range-singleton" -> Lower.Range_Singleton, "unwrap-wrap" -> Lower.Unwrap_Wrap,
++    "iter-transpose-semijoin" -> Lower.IterWitness_TransposeSemiJoin,
++    "iter-witness-head-narrow" -> Lower.IterWitness_HeadNarrow,
++    "unwrap-push" -> Lower.UnwrapPush, "wrap-merge" -> Lower.WrapMerge,
++    "restriction-push" -> Lower.RestrictionPush, "comp-wrap-assoc" -> Lower.CompWrapAssoc,
++    "comp-assoc-right" -> Lower.CompAssocRight, "comp-lit-to-wraps" -> Lower.CompLitWraps,
++    "unwrap-fuse-const" -> Lower.UnwrapFuseConst,
++    "singleton-constprefix-wrap" -> Lower.SingletonConstPrefix_Wrap,
++    "iter-comp-right-hoist" -> Lower.IterCompRight_Hoist,
++    "raffination-push" -> Lower.RaffinationPush,
++    "raff-restrict-algebra" -> Lower.RaffRestrictAlgebra,
++    "restrict-raff-wrap-both" -> Lower.RestrictRaffWrapBoth,
++    "iter-setop-merge" -> Lower.IterSetOpMerge)
+   val simplifyRules: List[Space => Space] = sourceLaws.map(_._2)
+ 
+   /** Bounded fixpoint reduction.  The step cap turns an oscillating/non-terminating rule into a
+diff --git a/src/test/scala/CorpusLawValidation.scala b/src/test/scala/CorpusLawValidation.scala
+new file mode 100644
+index 0000000..fddcdae
+--- /dev/null
++++ b/src/test/scala/CorpusLawValidation.scala
+@@ -0,0 +1,62 @@
++package morkl
++
++import munit.FunSuite
++
++/** THE LAW-PIPELINE CORPUS GATE: apply the FULL optimiser law set (SC.reduce — every certified
++ *  source law, including the semijoin, push/merge, hoisting, raffination/restriction and keyed
++ *  iteration-merge families) to every fuzzed corpus program, and validate the reduced program
++ *  against `eval` of the original on many random input environments.  This is the
++ *  programs × inputs gate for NEW LAWS: a law that is wrong for any corpus shape fails here.
++ *  Tunables: -Dlawvalid.m (envs per program, default 100), -Dlawvalid.progs (default all). */
++class CorpusLawValidation extends FunSuite:
++  import Space.*
++  override val munitTimeout = scala.concurrent.duration.Duration(30, "min")
++
++  val maxS = 3; val maxP = 3
++  val sNames = (0 until maxS).map(i => SpaceMention("s" + i)).toVector
++  val pNames = (0 until maxP).map(j => PathRef("p" + j)).toVector
++  val A = SpaceFuzzer.alphabet
++
++  def randPath(rng: java.util.Random): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))
++  def smallTrie(rng: java.util.Random): SpaceValue = SpaceValue((0 until (1 + rng.nextInt(6))).map(_ => randPath(rng)).toSet)
++
++  test("law pipeline over the corpus: SC.reduce(prog) == prog on random inputs".tag(SlowTag.Slow)) {
++    val M = sys.props.get("lawvalid.m").map(_.toInt).getOrElse(100)
++    val progLimit = sys.props.get("lawvalid.progs").map(_.toInt).getOrElse(Int.MaxValue)
++    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
++    assert(f.exists, s"corpus not found at ${f.getPath} — run the corpus test first")
++    val recs = locally {
++      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
++      try ois.readObject().asInstanceOf[Vector[FuzzRec]]
++      catch case e: java.io.InvalidClassException =>
++        throw new AssertionError("corpus_1000.ser is STALE — rerun morkl.ProgramExpressivity", e)
++      finally ois.close()
++    }.take(progLimit)
++
++    val rng = new java.util.Random(133742)
++    final case class Env(sv: Array[SpaceValue], pv: Array[PathValue])
++    val envs: Array[Env] = Array.fill(M)(Env(Array.fill(maxS)(smallTrie(rng)), Array.fill(maxP)(randPath(rng))))
++    val noRc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
++
++    var checks = 0L; var changed = 0; var reduceMs = 0.0
++    val t0 = System.nanoTime()
++    for r <- recs do
++      val c0 = System.nanoTime()
++      val red = SC.reduce(r.prog)
++      reduceMs += (System.nanoTime() - c0) / 1e6
++      if red != r.prog then changed += 1
++      var k = 0
++      while k < M do
++        val e = envs(k)
++        val pc: PathContext = PathContextMap((0 until r.nPath).map(j => pNames(j) -> e.pv(j)).toMap)
++        val sc = SpaceContextMap((0 until r.nSpace).map(i => sNames(i) -> e.sv(i)).toMap)
++        val ref = eval(r.prog)(using pc, sc, noRc)
++        val got = eval(red)(using pc, sc, noRc)
++        assertEquals(got, ref, s"LAW BUG: reduced program disagrees\nprog: ${r.prog.show}\nred:  ${red.show}")
++        checks += 1
++        k += 1
++    val secs = (System.nanoTime() - t0) / 1e9
++    println(f"CORPUS-LAW: ${recs.size} programs x $M envs = $checks%d checks, all agree; " +
++      f"laws changed $changed/${recs.size} programs; reduce total ${reduceMs / 1000}%.1fs; wall $secs%.1fs")
++  }
++end CorpusLawValidation
