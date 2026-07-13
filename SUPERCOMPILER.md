@@ -188,9 +188,14 @@ faster than the TreeMap trie — see `BENCHMARKS.md`.
 `Set[List[PathItem]]` semantics. Every operation is a structural trie op: union/intersection/
 subtraction are recursive merges; composition grafts a *shared* `b` at each terminal of `a`;
 restriction/wrap/unwrap walk a spine; `iter` reads each child's tail-trie directly (no flat-set
-regrouping). The n-ary `joinAll`/`meetAll` are the asymptotically careful ones — `meetAll` is
-bounded by the *smallest* branch rather than the largest. A read `Zipper` (descend/ascend/focus)
-is the imperative-execution view for a future op-graph backend.
+regrouping). Each pairwise op reports an `AlgebraicResult` (`Empty | Identity(mask) | Bespoke`)
+at *every* node — the set-only analogue of pathmap's `ring.rs` — so a result that equals an
+argument IS that argument (no allocation, sharing preserved bottom-up: the saturating-fixpoint
+union of an absorbed iterate returns the accumulator object), emptiness annihilates upward, and
+raffination is a single fused traversal instead of `subtract(restrict)`. The n-ary
+`joinAll`/`meetAll` are the asymptotically careful ones — `meetAll` is bounded by the *smallest*
+branch rather than the largest. A read `Zipper` (descend/ascend/focus) is the
+imperative-execution view for a future op-graph backend.
 
 `evalT` is proven to agree with `eval` (property tests over 1000+ random spaces and on every
 example domain).  Two sound `evalT` optimizations matter in practice: **short-circuiting**

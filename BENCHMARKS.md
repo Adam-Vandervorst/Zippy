@@ -3473,3 +3473,71 @@ graph-optimize.  All stages verified equal to the reference.
 | sliding 3x3 step   |    3.296 |    1.821 |    0.114 |    2.740 |    0.686 |
 | n-queens n=6       |   30.366 |    3.314 |    1.668 |    2.515 |    3.252 |
 | temperature 1024   |    0.248 |    0.076 |    0.075 |    0.159 |    0.100 |
+
+## Benchmark run (2026-07-12)
+
+| domain | scale | eval ms | evalT ms | evalI ms | evalI/eval | evalI/evalT | note |
+|---|---|---:|---:|---:|---:|---:|---|
+| datalog-TC       | chain n=16 (|TC|=136) |       2.7 |       2.6 |       0.7 |     3.6x |    3.5x |  |
+| datalog-TC       | chain n=32 (|TC|=528) |      13.6 |       6.3 |       1.2 |    11.4x |    5.3x |  |
+| datalog-TC       | chain n=64 (|TC|=2080) |     106.0 |      14.9 |       3.2 |    33.3x |    4.7x |  |
+| datalog-TC       | chain n=128 (|TC|=8256) |    1256.5 |      88.8 |      11.9 |   105.5x |    7.5x |  |
+| aunt-query       | family n=150         |      19.0 |       1.1 |       0.3 |    62.1x |    3.5x |  |
+| aunt-query       | family n=400         |      64.4 |       5.3 |       0.3 |   204.5x |   16.7x |  |
+| aunt-query       | family n=800         |     268.2 |      20.1 |       0.7 |   391.4x |   29.4x |  |
+| aunt-query       | family n=1600        |    1349.2 |      80.4 |       1.1 |  1207.8x |   72.0x |  |
+| game-of-life     | 16x16 2 steps (68 live) |      30.8 |      16.5 |       8.5 |     3.6x |    1.9x |  |
+| game-of-life     | 24x24 2 steps (193 live) |      94.3 |      18.4 |      10.3 |     9.2x |    1.8x |  |
+| game-of-life     | 32x32 2 steps (321 live) |     226.5 |      28.2 |      13.5 |    16.8x |    2.1x |  |
+| temperature      | 1024 cells (resident) |       0.3 |       0.0 |       0.0 |    62.5x |    2.3x |  |
+| temperature      | 4096 cells (resident) |       0.4 |       0.0 |       0.0 |    64.6x |    1.5x |  |
+| temperature      | 16384 cells (resident) |       1.2 |       0.0 |       0.0 |   905.2x |    1.4x |  |
+| sliding-puzzle   | 2x2 depth 6 (pure)   |      46.3 |      17.7 |      18.2 |     2.5x |    1.0x |  |
+| sliding-puzzle   | 3x3 depth 4 (pure)   |     109.7 |      35.8 |      25.9 |     4.2x |    1.4x |  |
+| n-queens         | n=6 (4 sols, pure)   |      22.2 |       4.6 |       2.3 |     9.5x |    1.9x |  |
+| n-queens         | n=7 (40 sols, pure)  |     113.0 |      12.5 |       6.1 |    18.5x |    2.0x |  |
+| n-queens         | n=8 (92 sols, pure)  |     645.1 |      56.0 |      26.3 |    24.5x |    2.1x |  |
+| join-all         | k=200 m=200          |       0.0 |      -1.0 |       0.0 |     3.7x |    0.0x | reduce(union) vs joinAll |
+| join-all         | k=800 m=300          |       0.1 |      -1.0 |       0.0 |     2.0x |    0.0x | reduce(union) vs joinAll |
+| meet-all         | k=40 core=400 +tiny  |       0.0 |      -1.0 |       0.0 |     0.1x |    0.0x | reduce(meet) vs meetAll |
+| meet-all         | k=120 core=600 +tiny |       0.0 |      -1.0 |       0.0 |     0.4x |    0.0x | reduce(meet) vs meetAll |
+
+Geometric-mean evalI speedup over the six example domains: 33.3x vs the
+reference Set, and 3.6x vs the TreeMap trie (evalT). All six
+domains are pure algebra; PathItems are interned to Ints before evaluation (no PathItem
+is touched during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.
+
+
+## Benchmark run (2026-07-12)
+
+| domain | scale | eval ms | evalT ms | evalI ms | evalI/eval | evalI/evalT | note |
+|---|---|---:|---:|---:|---:|---:|---|
+| datalog-TC       | chain n=16 (|TC|=136) |       5.1 |       2.8 |       0.6 |     8.1x |    4.4x |  |
+| datalog-TC       | chain n=32 (|TC|=528) |      11.3 |       3.4 |       0.9 |    12.8x |    3.9x |  |
+| datalog-TC       | chain n=64 (|TC|=2080) |     101.6 |      12.7 |       2.0 |    50.7x |    6.3x |  |
+| datalog-TC       | chain n=128 (|TC|=8256) |    1236.0 |      85.0 |      11.9 |   104.0x |    7.1x |  |
+| aunt-query       | family n=150         |       9.3 |       1.2 |       0.3 |    31.1x |    3.9x |  |
+| aunt-query       | family n=400         |      64.5 |       5.4 |       0.3 |   207.2x |   17.4x |  |
+| aunt-query       | family n=800         |     287.7 |      18.9 |       0.6 |   452.2x |   29.8x |  |
+| aunt-query       | family n=1600        |    1351.0 |      77.3 |       1.1 |  1279.1x |   73.2x |  |
+| game-of-life     | 16x16 2 steps (68 live) |      23.7 |       7.7 |       5.0 |     4.8x |    1.5x |  |
+| game-of-life     | 24x24 2 steps (193 live) |      85.4 |      15.3 |       8.4 |    10.1x |    1.8x |  |
+| game-of-life     | 32x32 2 steps (321 live) |     226.8 |      27.5 |      13.8 |    16.4x |    2.0x |  |
+| temperature      | 1024 cells (resident) |       0.8 |       0.0 |       0.0 |   177.7x |    1.8x |  |
+| temperature      | 4096 cells (resident) |       0.4 |       0.0 |       0.0 |    71.3x |    1.4x |  |
+| temperature      | 16384 cells (resident) |       1.1 |       0.0 |       0.0 |   686.9x |    2.0x |  |
+| sliding-puzzle   | 2x2 depth 6 (pure)   |      41.5 |      12.0 |       7.1 |     5.8x |    1.7x |  |
+| sliding-puzzle   | 3x3 depth 4 (pure)   |     103.9 |      34.8 |      25.9 |     4.0x |    1.3x |  |
+| n-queens         | n=6 (4 sols, pure)   |      21.8 |       4.0 |       1.5 |    14.3x |    2.6x |  |
+| n-queens         | n=7 (40 sols, pure)  |     108.1 |      11.9 |       6.1 |    17.9x |    2.0x |  |
+| n-queens         | n=8 (92 sols, pure)  |     632.4 |      52.8 |      26.7 |    23.7x |    2.0x |  |
+| join-all         | k=200 m=200          |       0.0 |      -1.0 |       0.0 |     3.9x |    0.0x | reduce(union) vs joinAll |
+| join-all         | k=800 m=300          |       0.1 |      -1.0 |       0.0 |     2.0x |    0.0x | reduce(union) vs joinAll |
+| meet-all         | k=40 core=400 +tiny  |       0.0 |      -1.0 |       0.0 |     0.2x |    0.0x | reduce(meet) vs meetAll |
+| meet-all         | k=120 core=600 +tiny |       0.0 |      -1.0 |       0.0 |     0.5x |    0.0x | reduce(meet) vs meetAll |
+
+Geometric-mean evalI speedup over the six example domains: 39.3x vs the
+reference Set, and 3.7x vs the TreeMap trie (evalT). All six
+domains are pure algebra; PathItems are interned to Ints before evaluation (no PathItem
+is touched during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.
+

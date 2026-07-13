@@ -63,6 +63,112 @@ class TrieOps extends FunSuite:
         assertEquals(z.path, List(k))
   }
 
+/** The AlgebraicResult case analysis must be EXACT: a set Identity bit always means set-equality
+ *  with that argument; Empty means the empty set; Bespoke means the result differs from both
+ *  arguments — with the single documented exception (restriction's ε-prefix short-circuit may
+ *  under-report the RIGHT bit).  Identity must also be an OBJECT: `pick` returns the argument
+ *  node itself, so sharing survives across op applications (the fixpoint absorption pattern). */
+class TrieAlgebra extends FunSuite:
+  import Trie.AlgebraicResult
+  import Trie.AlgebraicResult.{LEFT, RIGHT}
+
+  val rnd = new scala.util.Random(19)
+  val alphabet = Vector("a", "b", "c", "0", "1", "x")
+  def randPath(maxLen: Int = 4): PathValue = PathValue(List.fill(rnd.nextInt(maxLen + 1))(alphabet(rnd.nextInt(alphabet.size))))
+  def randSV(n: Int = 8): SpaceValue = SpaceValue((0 until rnd.nextInt(n)).map(_ => randPath()).toSet)
+  def t(sv: SpaceValue): Trie = Trie.fromSpaceValue(sv)
+
+  // reference set semantics
+  def refUnion(a: SpaceValue, b: SpaceValue): Set[PathValue] = a.paths union b.paths
+  def refInter(a: SpaceValue, b: SpaceValue): Set[PathValue] = a.paths intersect b.paths
+  def refSub(a: SpaceValue, b: SpaceValue): Set[PathValue] = a.paths removedAll b.paths
+  def refRestr(a: SpaceValue, b: SpaceValue): Set[PathValue] = a.paths.filter(p => b.paths.exists(q => p.items.startsWith(q.items)))
+  def refRaff(a: SpaceValue, b: SpaceValue): Set[PathValue] = a.paths removedAll refRestr(a, b)
+  def refComp(a: SpaceValue, b: SpaceValue): Set[PathValue] = for p <- a.paths; q <- b.paths yield PathValue(p.items ++ q.items)
+
+  /** soundness of every case + completeness of the flagged bits */
+  def check(op: String, r: AlgebraicResult, a: SpaceValue, b: SpaceValue, ref: Set[PathValue],
+            leftComplete: Boolean = true, rightComplete: Boolean = true): Unit =
+    r match
+      case AlgebraicResult.Empty => assertEquals(ref, Set.empty[PathValue], s"$op: Empty must mean the empty set ($a, $b)")
+      case AlgebraicResult.Identity(m) =>
+        assert(m != 0, s"$op: zero identity mask")
+        if (m & LEFT) != 0 then assertEquals(a.paths, ref, s"$op: LEFT bit unsound ($a, $b)")
+        if (m & RIGHT) != 0 then assertEquals(b.paths, ref, s"$op: RIGHT bit unsound ($a, $b)")
+        assert(ref.nonEmpty, s"$op: empty identity should be Empty (precedence) ($a, $b)")
+      case AlgebraicResult.Bespoke(res) => assertEquals(res.toSpaceValue.paths, ref, s"$op: Bespoke wrong ($a, $b)")
+    val flaggedL = r match { case AlgebraicResult.Identity(m) => (m & LEFT) != 0; case _ => false }
+    val flaggedR = r match { case AlgebraicResult.Identity(m) => (m & RIGHT) != 0; case _ => false }
+    val emptyCase = r == AlgebraicResult.Empty
+    if leftComplete && ref == a.paths && ref.nonEmpty then assert(flaggedL, s"$op: result == left not flagged ($a, $b)")
+    if rightComplete && ref == b.paths && ref.nonEmpty then assert(flaggedR, s"$op: result == right not flagged ($a, $b)")
+    if ref.isEmpty then assert(emptyCase, s"$op: empty result not reported Empty ($a, $b)")
+
+  test("case analysis is exact on random spaces") {
+    for _ <- 0 until 2000 do
+      val a = randSV(); val b = randSV()
+      val (ta, tb) = (t(a), t(b))
+      check("union", Trie.unionR(ta, tb), a, b, refUnion(a, b))
+      check("intersection", Trie.intersectionR(ta, tb), a, b, refInter(a, b))
+      check("subtraction", Trie.subtractionR(ta, tb), a, b, refSub(a, b), rightComplete = false)
+      check("restriction", Trie.restrictionR(ta, tb), a, b, refRestr(a, b), rightComplete = false)
+      check("raffination", Trie.raffinationR(ta, tb), a, b, refRaff(a, b), rightComplete = false)
+      check("composition", Trie.compositionR(ta, tb), a, b, refComp(a, b))
+  }
+
+  test("case analysis is exact on correlated spaces (subsets, prefixes, self)") {
+    for _ <- 0 until 2000 do
+      val a = randSV()
+      val ta = t(a)
+      val sub = SpaceValue(a.paths.filter(_ => rnd.nextBoolean()))
+      val tsub = t(sub)
+      val pre = SpaceValue(a.paths.map(p => PathValue(p.items.take(rnd.nextInt(p.items.length + 1)))).filter(_ => rnd.nextBoolean()))
+      val tpre = t(pre)
+      // structurally distinct copy of the same set: identity must be detected by VALUE, not eq
+      val copy = t(SpaceValue(a.paths))
+      check("union(a,sub)", Trie.unionR(ta, tsub), a, sub, refUnion(a, sub))
+      check("union(sub,a)", Trie.unionR(tsub, ta), sub, a, refUnion(sub, a))
+      check("union(a,copy)", Trie.unionR(ta, copy), a, a, refUnion(a, a))
+      check("inter(a,sub)", Trie.intersectionR(ta, tsub), a, sub, refInter(a, sub))
+      check("inter(a,copy)", Trie.intersectionR(ta, copy), a, a, refInter(a, a))
+      check("sub(a,sub)", Trie.subtractionR(ta, tsub), a, sub, refSub(a, sub), rightComplete = false)
+      check("sub(a,copy)", Trie.subtractionR(ta, copy), a, a, refSub(a, a), rightComplete = false)
+      check("restr(a,pre)", Trie.restrictionR(ta, tpre), a, pre, refRestr(a, pre), rightComplete = false)
+      check("restr(a,copy)", Trie.restrictionR(ta, copy), a, a, refRestr(a, a), rightComplete = false)
+      check("raff(a,pre)", Trie.raffinationR(ta, tpre), a, pre, refRaff(a, pre), rightComplete = false)
+      check("comp(a,sub)", Trie.compositionR(ta, tsub), a, sub, refComp(a, sub))
+  }
+
+  test("identity results ARE the argument object (structural sharing)") {
+    for _ <- 0 until 500 do
+      val a = randSV(6)
+      if a.paths.nonEmpty then
+        val ta = t(a)
+        val sub = t(SpaceValue(a.paths.filter(_ => rnd.nextBoolean())))
+        assert(Trie.union(ta, sub) eq ta, "union with a subset must return the left object")
+        val up = Trie.union(sub, ta)   // when sub == a as a set either object is a valid identity
+        assert((up eq ta) || ((up eq sub) && sub == ta), "union into a superset must return an argument object")
+        assert(Trie.intersection(ta, Trie.union(ta, t(randSV()))) eq ta, "intersection with a superset must return the smaller object")
+        assert(Trie.subtraction(ta, t(SpaceValue(randSV().paths.map(p => PathValue("z" :: p.items))))) eq ta, "subtraction of a disjoint set must return the left object")
+        assert(Trie.restriction(ta, Trie.epsilon) eq ta, "restriction by {ε} must return the left object")
+        assert(Trie.raffination(ta, t(SpaceValue(Set(PathValue(List("z")))))) eq ta, "raffination by a non-prefix must return the left object")
+        assert(Trie.composition(ta, Trie.epsilon) eq ta, "composition with {ε} must return the left object")
+        assert(Trie.composition(Trie.epsilon, ta) eq ta, "composition of {ε} must return the right object")
+        // fixpoint absorption: re-unioning an already-absorbed iterate allocates nothing
+        val grown = Trie.union(ta, t(randSV()))
+        assert(Trie.union(grown, sub) eq grown, "absorbed iterate must not rebuild the accumulator")
+  }
+
+  test("subtraction never reports the right-identity; empty covers a\\b == b") {
+    // a\b == b as sets forces b ⊆ a\b, hence b == ∅, hence a == ∅: exactly the Empty case.
+    assertEquals(Trie.subtractionR(Trie.empty, Trie.empty), Trie.AlgebraicResult.Empty)
+    for _ <- 0 until 500 do
+      val a = randSV(); val b = randSV()
+      Trie.subtractionR(t(a), t(b)) match
+        case Trie.AlgebraicResult.Identity(m) => assertEquals(m, LEFT, s"subtraction set a counter-identity bit for ($a, $b)")
+        case _ => ()
+  }
+
 /** evalT (the direct trie evaluator) must agree with eval on the real example programs. */
 class TrieEval extends FunSuite:
   import Space.*

@@ -1905,3 +1905,74 @@ now a proper repository README (overview, layout table, requirements, run instru
 sbt/egglog/proofs/terminating + the five CI checkers, and a one-paragraph verification summary).
 Cross-references updated (SUPERCOMPILER.md, Examples.scala). Both illustrative egg files green;
 compile clean.
+
+================================================================================
+2026-07-12  AlgebraicResult for the TreeMap Trie ops (PathMap ring.rs analogue)
+================================================================================
+Plan: introduce a set-only AlgebraicResult (Empty | Identity(mask) | Bespoke(t))
+for the pairwise Trie ops — union, intersection, subtraction, restriction,
+raffination, composition — computed at EVERY trie node, so each op can return an
+argument unchanged (structural sharing, zero allocation), collapse to empty
+(annihilation, prunes the parent), or build a fresh node only when the result
+genuinely mixes both sides.  Because spaces are pure sets of paths, stronger
+laws hold than in pathmap's value-carrying AlgebraicResult<V>:
+  union         Ident(L) <=> b <= a; Ident(R) <=> a <= b; Empty <=> both empty
+  intersection  Ident    <=> that arg contained in the other (the smaller one);
+                Empty <=> disjoint (incl. empty arg)
+  subtraction   Ident(L) <=> a and b disjoint (b empty is the special case);
+                result == right is NOT a case: a\b == b forces a == b == {} =
+                Empty (ring.rs non-commutative rule: never set the counter bit)
+  restriction   Ident(L) <=> every left path extends a right prefix;
+                Ident(R) <=> result equals right as a set; Empty <=> either side
+                empty or nothing prefixed
+  raffination   fused single traversal (was subtraction(x, restriction(x, y)));
+                Ident(L) <=> nothing prefixed; Empty <=> everything prefixed
+                (right containing eps annihilates)
+  composition   Ident(L) <=> right == {eps}; Ident(R) <=> left == {eps};
+                Empty <=> either side empty (exact: a finite nonempty set is
+                never closed under appending a non-eps path)
+Old ad-hoc isEmpty short-circuits inside the ops are superseded by the case
+analysis.  evalT behavior must be unchanged (TrieTest pins ops against eval);
+TrieBench must not regress.
+--- checkpoint 1: core implemented, laws pass -----------------------------------
+unionR/intersectionR/subtractionR/restrictionR/raffinationR/compositionR landed
+in Trie.scala; public ops are pick()-wrappers.  raffination is now ONE fused
+traversal.  Trie.node (canonical ctor) removed: uncalled, and canonicality is
+maintained by construction (Empty children pruned by the case analysis).
+evalT Fixpoint checks `nxt eq cur` before structural equality.
+New suite morkl.TrieAlgebra (4 tests):
+  - soundness+completeness of every case on 2000 random pairs
+  - same on correlated pairs (subsets, prefix sets, value-equal copies)
+  - object-identity sharing (union-absorption, intersection-with-superset,
+    disjoint subtraction/raffination, {eps} composition/restriction)
+  - subtraction never sets the counter bit; Empty covers a\b == b
+Two fixes found by the laws: (1) unionR's `a eq b` fast path returned
+Identity(BOTH) for two references to the empty trie — Empty must take
+precedence (ring.rs convention); (2) test over-specified which argument object
+a BOTH-identity resolves to.
+TrieOps/TrieEval/ITrieOps/ITrieEval/GraphExecT/OptimizerProperties: green.
+--- checkpoint 2: validated + benchmarked ---------------------------------------
+Full functional battery green after the final state (29 suites incl. all six
+example domains, SC suites, GraphExecT, OptimizerProperties, AlgebraicLaws).
+CorpusValidation: 1000 programs x 1000 inputs = 1,000,000 pairs, all 7
+executors agree — evalT behaviorally unchanged.
+TrieBench (clean, solo run) vs the 2026-07-11 baseline block:
+  datalog-TC evalT  n=64 18.5 -> 12.7 ms, n=128 136.1 -> 85.0 ms (growth-rate
+  curve flattened: the fixpoint re-union of an absorbed iterate now returns the
+  accumulator object instead of rebuilding it)
+  aunt-query n=1600 96.3 -> 77.3 ms; n-queens n=8 76.4 -> 52.8 ms;
+  sliding 3x3 58.1 -> 34.8 ms; game-of-life 32x32 33.3 -> 27.5 ms.
+  Sub-3ms cases wobble within JIT/load noise; no asymptotic regression.
+ExecutorOverheadBench green (compiled vs interpreted unaffected).
+SUPERCOMPILER.md Trie-backend paragraph now documents the AlgebraicResult layer.
+Known-unrelated: morkl.SCDegeneracies still fails on corpus idx=45 — the
+pre-existing supercompiler shared-head literal-iteration unsoundness (flagged
+separately); not a Trie regression.
+--- checkpoint 3: equivalence pipeline green ------------------------------------
+morkl.EquivPipelineTest (egglog + z3 + vampire, full ladder): all six instances
+verified after the AlgebraicResult change — aunt 661s, semi-naive datalog 1.2s,
+game of life 242s, 15-puzzle 486s, temperature 365s, n-queens 546s (~38 min).
+proofs/pipeline/*.smt2 and zipper-egg-tests/pipeline/*.egg regenerated by this
+clean run.  Change complete: laws suite, functional battery, 1M-pair corpus
+validation, TrieBench asymptotics, executor-overhead bench, and the certified
+equivalence pipeline all green.

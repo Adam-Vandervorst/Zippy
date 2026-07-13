@@ -37,11 +37,6 @@ object Trie:
   /** the singleton set {ε} containing just the empty path */
   val epsilon: Trie = Trie(true, TreeMap.empty)
 
-  /** Canonical node constructor: drops empty children so `isEmpty`/`==` stay exact. */
-  def node(terminal: Boolean, children: TreeMap[PathItem, Trie]): Trie =
-    val pruned = children.filter((_, c) => c.nonEmpty)
-    Trie(terminal, pruned)
-
   def singleton(items: List[PathItem]): Trie = items.foldRight(epsilon)((it, acc) => Trie(false, TreeMap(it -> acc)))
   def singleton(p: PathValue): Trie = singleton(p.items)
 
@@ -88,33 +83,162 @@ object Trie:
         n.children.iterator.flatMap((k, c) => go(c, k :: acc))
     go(t, Nil)
 
+  // ---- algebraic results ------------------------------------------------------
+
+  /** Per-node outcome of a set-algebraic operation, RELATIVE to its arguments — the set-only
+   *  analogue of pathmap's `AlgebraicResult<V>` (ring.rs).  A space is a pure SET of paths (no
+   *  attached values), so stronger laws hold and the ops below decide these cases at EVERY level
+   *  of the trie:
+   *
+   *    - `Identity(mask)` — the result IS an argument (LEFT bit / RIGHT bit; both bits assert the
+   *      arguments denote the same set).  The caller reuses the argument node unchanged: no
+   *      allocation, no re-traversal, structural sharing preserved all the way up.
+   *    - `Empty` — the result is the empty set; the parent prunes the key instead of storing an
+   *      empty child.  Where both `Empty` and `Identity` hold (all arguments empty), `Empty`
+   *      takes precedence — the ring.rs convention.
+   *    - `Bespoke(t)` — the result genuinely mixes the arguments; a fresh node was built.
+   *
+   *  Case inventory (all set-equalities below are exact characterizations):
+   *    union         Identity(L) ⟺ b ⊆ a;  Identity(R) ⟺ a ⊆ b;  both ⟺ a == b;
+   *                  Empty ⟺ both arguments empty;  Bespoke: elements from both sides.
+   *    intersection  Identity ⟺ that argument is contained in the other (necessarily the smaller
+   *                  one);  Empty ⟺ disjoint (an empty argument is the degenerate case);
+   *                  Bespoke: partial overlap.
+   *    subtraction   Identity(L) ⟺ a ∩ b == ∅ ("right was empty" is the special case);
+   *                  Empty ⟺ a ⊆ b (incl. a empty);  Bespoke: some but not all of a removed.
+   *                  Result == right is NOT a case: a\b == b forces b ⊆ a\b, so b == ∅ and then
+   *                  a\b == b needs a == ∅ — that is `Empty`.  (ring.rs's non-commutative rule:
+   *                  never set the counter bit.)
+   *    restriction   Identity(L) ⟺ every left path extends some right prefix (ε ∈ right is the
+   *                  degenerate case: everything kept);  Identity(R) ⟺ the result equals right
+   *                  as a set — every right path is matched by an EQUAL left path and no longer
+   *                  ones;  Empty ⟺ either side empty, or no left path extends any right prefix;
+   *                  Bespoke: some left paths kept, some dropped.
+   *    raffination   (a \| b == a \ (a <| b), fused into ONE traversal — the definition re-walks
+   *                  `a` twice)  Identity(L) ⟺ no left path extends a right prefix;  Empty ⟺
+   *                  every left path does (ε ∈ right annihilates);  Bespoke otherwise.
+   *    composition   Identity(L) ⟺ b == {ε};  Identity(R) ⟺ a == {ε};  Empty ⟺ either side
+   *                  empty.  Exact: a finite non-empty set is never closed under appending a
+   *                  non-ε path, so `a·b == a` cannot happen any other way.
+   *
+   *  Mask completeness: a SET bit is always true.  An UNSET bit is also exact — `Bespoke` really
+   *  differs from both arguments — with ONE exception (mirroring ring.rs's allowance): when
+   *  restriction short-circuits on ε ∈ right it returns `Identity(LEFT)` without checking whether
+   *  left == right, so restriction's RIGHT bit is sound but may under-report.  Tests assert
+   *  soundness everywhere and completeness for every other op/bit (see TrieAlgebra). */
+  enum AlgebraicResult:
+    case Empty
+    case Identity(mask: Int)
+    case Bespoke(t: Trie)
+
+  object AlgebraicResult:
+    inline val LEFT = 1
+    inline val RIGHT = 2
+    inline val BOTH = 3
+
+  import AlgebraicResult.{LEFT, RIGHT, BOTH}
+  private val IdentL = AlgebraicResult.Identity(LEFT)
+  private val IdentR = AlgebraicResult.Identity(RIGHT)
+  private val IdentB = AlgebraicResult.Identity(BOTH)
+
+  /** Materialize a result against the arguments it is relative to.  `Identity` resolves to the
+   *  argument OBJECT (left preferred when both bits are set), keeping sharing exact. */
+  private def pick(r: AlgebraicResult, a: Trie, b: Trie): Trie = r match
+    case AlgebraicResult.Empty => empty
+    case AlgebraicResult.Identity(m) => if (m & LEFT) != 0 then a else b
+    case AlgebraicResult.Bespoke(t) => t
+
   // ---- ring of sets ---------------------------------------------------------
+  // Each op is a thin wrapper over its `...R` form, which reports the algebraic case; the `R`
+  // forms recurse on themselves so identity/emptiness propagates bottom-up: a node whose children
+  // all come back Identity(LEFT) (and whose terminal is unaffected) is itself Identity(LEFT) —
+  // the whole subtree is reused with zero allocation.  Child updates are buffered so that the
+  // no-change case never touches the TreeMap.
 
-  def union(a: Trie, b: Trie): Trie =
-    if a.isEmpty then b else if b.isEmpty then a
+  def union(a: Trie, b: Trie): Trie = pick(unionR(a, b), a, b)
+  def unionR(a: Trie, b: Trie): AlgebraicResult =
+    if a eq b then (if a.isEmpty then AlgebraicResult.Empty else IdentB)
+    else if b.isEmpty then (if a.isEmpty then AlgebraicResult.Empty else IdentL)
+    else if a.isEmpty then IdentR
     else
-      var ch = a.children
+      var allL = a.terminal || !b.terminal      // does b add ε?
+      var allR = b.terminal || !a.terminal
+      var overlap = 0
+      var updates: List[(PathItem, Trie)] = Nil
       for (k, bc) <- b.children do
-        ch = ch.updatedWith(k) { case Some(ac) => Some(union(ac, bc)); case None => Some(bc) }
-      Trie(a.terminal || b.terminal, ch)
+        a.children.get(k) match
+          case None => allL = false; updates = (k -> bc) :: updates
+          case Some(ac) =>
+            overlap += 1
+            unionR(ac, bc) match
+              case AlgebraicResult.Identity(m) =>
+                if (m & LEFT) == 0 then { allL = false; updates = (k -> bc) :: updates }
+                if (m & RIGHT) == 0 then allR = false
+              case AlgebraicResult.Bespoke(t) => allL = false; allR = false; updates = (k -> t) :: updates
+              case AlgebraicResult.Empty => throw IllegalStateException("union of non-empty children is non-empty")
+      if overlap < a.children.size then allR = false    // a has keys b lacks
+      if allL then (if allR then IdentB else IdentL)
+      else if allR then IdentR
+      else
+        var ch = a.children
+        for (k, t) <- updates do ch = ch.updated(k, t)
+        AlgebraicResult.Bespoke(Trie(a.terminal || b.terminal, ch))
 
-  def intersection(a: Trie, b: Trie): Trie =
-    if a.isEmpty || b.isEmpty then empty
+  def intersection(a: Trie, b: Trie): Trie = pick(intersectionR(a, b), a, b)
+  def intersectionR(a: Trie, b: Trie): AlgebraicResult =
+    if a eq b then (if a.isEmpty then AlgebraicResult.Empty else IdentB)
+    else if a.isEmpty || b.isEmpty then AlgebraicResult.Empty
     else
-      val (small, large) = if a.children.size <= b.children.size then (a, b) else (b, a)
-      var ch = TreeMap.empty[PathItem, Trie]
-      for (k, sc) <- small.children; lc <- large.children.get(k) do
-        val r = intersection(sc, lc); if r.nonEmpty then ch = ch.updated(k, r)
-      Trie(a.terminal && b.terminal, ch)
+      val term = a.terminal && b.terminal
+      var allL = a.terminal == term             // a loses ε?
+      var allR = b.terminal == term
+      val fromA = a.children.size <= b.children.size
+      val (small, large) = if fromA then (a, b) else (b, a)
+      var kept: List[(PathItem, Trie)] = Nil
+      var keptN = 0
+      for (k, sc) <- small.children do
+        large.children.get(k) match
+          case None => ()                       // key dropped; counted via keptN below
+          case Some(lc) =>
+            val (ac, bc) = if fromA then (sc, lc) else (lc, sc)
+            intersectionR(ac, bc) match
+              case AlgebraicResult.Empty => allL = false; allR = false
+              case AlgebraicResult.Identity(m) =>
+                if (m & LEFT) == 0 then allL = false
+                if (m & RIGHT) == 0 then allR = false
+                kept = (k -> (if (m & LEFT) != 0 then ac else bc)) :: kept; keptN += 1
+              case AlgebraicResult.Bespoke(t) => allL = false; allR = false; kept = (k -> t) :: kept; keptN += 1
+      if keptN < a.children.size then allL = false
+      if keptN < b.children.size then allR = false
+      if allL then (if allR then IdentB else IdentL)
+      else if allR then IdentR
+      else if keptN == 0 && !term then AlgebraicResult.Empty
+      else AlgebraicResult.Bespoke(Trie(term, TreeMap.from(kept)))
 
-  def subtraction(a: Trie, b: Trie): Trie =
-    if a.isEmpty then empty else if b.isEmpty then a
+  def subtraction(a: Trie, b: Trie): Trie = pick(subtractionR(a, b), a, b)
+  def subtractionR(a: Trie, b: Trie): AlgebraicResult =
+    if a eq b then AlgebraicResult.Empty
+    else if a.isEmpty then AlgebraicResult.Empty
+    else if b.isEmpty then IdentL
     else
-      var ch = a.children
-      for (k, ac) <- a.children; bc <- b.children.get(k) do
-        val r = subtraction(ac, bc)
-        ch = if r.isEmpty then ch - k else ch.updated(k, r)
-      Trie(a.terminal && !b.terminal, ch)
+      val term = a.terminal && !b.terminal
+      var allL = term == a.terminal             // does b remove ε?
+      var removals: List[PathItem] = Nil
+      var updates: List[(PathItem, Trie)] = Nil
+      for (k, bc) <- b.children do
+        a.children.get(k) match
+          case None => ()
+          case Some(ac) =>
+            subtractionR(ac, bc) match
+              case AlgebraicResult.Empty => allL = false; removals = k :: removals
+              case AlgebraicResult.Identity(_) => ()          // only LEFT is possible
+              case AlgebraicResult.Bespoke(t) => allL = false; updates = (k -> t) :: updates
+      if allL then IdentL
+      else
+        var ch = a.children
+        for k <- removals do ch = ch - k
+        for (k, t) <- updates do ch = ch.updated(k, t)
+        if ch.isEmpty && !term then AlgebraicResult.Empty else AlgebraicResult.Bespoke(Trie(term, ch))
 
   // ---- n-ary join-all / meet-all (the asymptotically interesting ones) ------
 
@@ -169,25 +293,76 @@ object Trie:
 
   /** composition (concatenation product) {p ++ q : p ∈ a, q ∈ b}: graft b at every terminal of
    *  a.  With persistent sharing, each graft reuses the SAME b — O(#terminals of a) new nodes. */
-  def composition(a: Trie, b: Trie): Trie =
-    if a.isEmpty || b.isEmpty then empty
+  def composition(a: Trie, b: Trie): Trie = pick(compositionR(a, b), a, b)
+  def compositionR(a: Trie, b: Trie): AlgebraicResult =
+    if a.isEmpty || b.isEmpty then AlgebraicResult.Empty
+    else if b.terminal && b.children.isEmpty then       // a · {ε} == a
+      if a.terminal && a.children.isEmpty then IdentB else IdentL
+    else if a.terminal && a.children.isEmpty then IdentR // {ε} · b == b
     else
       val mapped = Trie(false, a.children.map((k, ac) => k -> composition(ac, b)))
-      if a.terminal then union(mapped, b) else mapped
+      AlgebraicResult.Bespoke(if a.terminal then union(mapped, b) else mapped)
 
   /** restriction x <| prefixes: keep x-paths that start with some path in `prefixes` (keeping
    *  the prefix).  Walk x guided by the prefixes trie; when a prefix ends (`pref.terminal`),
    *  keep the entire x-subtree below. */
-  def restriction(x: Trie, prefixes: Trie): Trie =
-    if x.isEmpty || prefixes.isEmpty then empty
-    else if prefixes.terminal then x
+  def restriction(x: Trie, prefixes: Trie): Trie = pick(restrictionR(x, prefixes), x, prefixes)
+  def restrictionR(x: Trie, prefixes: Trie): AlgebraicResult =
+    if x eq prefixes then (if x.isEmpty then AlgebraicResult.Empty else IdentB)  // every path prefixes itself
+    else if x.isEmpty || prefixes.isEmpty then AlgebraicResult.Empty
+    else if prefixes.terminal then IdentL               // ε prefixes everything: all of x kept
     else
-      var ch = TreeMap.empty[PathItem, Trie]
-      for (k, xc) <- x.children; pc <- prefixes.children.get(k) do
-        val r = restriction(xc, pc); if r.nonEmpty then ch = ch.updated(k, r)
-      Trie(false, ch) // a path shorter than the prefix does not start with it
+      var allL = !x.terminal                            // ε ∈ x has no prefix here (ε ∉ prefixes)
+      var allR = true                                   // result terminal (false) == prefixes.terminal
+      var matched = 0
+      var kept: List[(PathItem, Trie)] = Nil
+      var keptN = 0
+      for (k, xc) <- x.children do
+        prefixes.children.get(k) match
+          case None => allL = false                     // whole x-subtree dropped
+          case Some(pc) =>
+            matched += 1
+            restrictionR(xc, pc) match
+              case AlgebraicResult.Empty => allL = false; allR = false
+              case AlgebraicResult.Identity(m) =>
+                if (m & LEFT) == 0 then allL = false
+                if (m & RIGHT) == 0 then allR = false
+                kept = (k -> (if (m & LEFT) != 0 then xc else pc)) :: kept; keptN += 1
+              case AlgebraicResult.Bespoke(t) => allL = false; allR = false; kept = (k -> t) :: kept; keptN += 1
+      if matched < prefixes.children.size then allR = false  // some prefix served nothing at all
+      if allL then (if allR then IdentB else IdentL)
+      else if allR then IdentR
+      else if keptN == 0 then AlgebraicResult.Empty     // nothing prefixed (both sides non-empty)
+      else AlgebraicResult.Bespoke(Trie(false, TreeMap.from(kept)))  // a path shorter than the prefix does not start with it
 
-  def raffination(x: Trie, y: Trie): Trie = subtraction(x, restriction(x, y))
+  /** raffination x \| y == x \ (x <| y): drop every x-path that extends some y-prefix.  Fused
+   *  into a single traversal of the y-guided part of x — the defining formula walks x twice
+   *  (once to build the restriction, once to subtract it). */
+  def raffination(x: Trie, y: Trie): Trie = pick(raffinationR(x, y), x, y)
+  def raffinationR(x: Trie, y: Trie): AlgebraicResult =
+    if x.isEmpty then AlgebraicResult.Empty
+    else if x eq y then AlgebraicResult.Empty           // every path prefixes itself
+    else if y.isEmpty then IdentL
+    else if y.terminal then AlgebraicResult.Empty       // ε prefixes everything: all of x dropped
+    else
+      val term = x.terminal                             // ε survives: ε ∉ y here
+      var allL = true
+      var removals: List[PathItem] = Nil
+      var updates: List[(PathItem, Trie)] = Nil
+      for (k, yc) <- y.children do
+        x.children.get(k) match
+          case None => ()
+          case Some(xc) =>
+            raffinationR(xc, yc) match
+              case AlgebraicResult.Empty => allL = false; removals = k :: removals
+              case AlgebraicResult.Identity(_) => ()    // only LEFT is possible
+              case AlgebraicResult.Bespoke(t) => allL = false; updates = (k -> t) :: updates
+      if allL then IdentL
+      else
+        var ch = x.children
+        for k <- removals do ch = ch - k
+        for (k, t) <- updates do ch = ch.updated(k, t)
+        if ch.isEmpty && !term then AlgebraicResult.Empty else AlgebraicResult.Bespoke(Trie(term, ch))
 
   /** TailsUnion: drop one head and union the tails = join-all of the child subtries. */
   def tailsUnion(s: Trie): Trie = joinAll(s.children.values)
@@ -276,7 +451,9 @@ def evalT(s: Space)(using pc: PathContext = PathContextMap(Map.empty),
       var stop = false
       while !stop do
         val nxt = evalT(body)(using pc, tc.updated(rec, cur), rc)
-        if nxt == cur then stop = true else { acc = Trie.union(acc, nxt); cur = nxt }
+        // identity-preserving ops make `eq` the common convergence signal — check it before
+        // the structural comparison
+        if (nxt eq cur) || nxt == cur then stop = true else { acc = Trie.union(acc, nxt); cur = nxt }
       acc
     case Space.Fold(src, initial, acc, symbol, rest, body, update) =>
       val t = evalT(src)

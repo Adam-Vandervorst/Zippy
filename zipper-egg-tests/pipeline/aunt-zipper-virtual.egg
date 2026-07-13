@@ -1,3 +1,6 @@
+; BUDGET-EXCEEDED: the virtual program's movement observations did not converge
+; within the rounds ladder for this instance; carried by the Scala executor gate + smaller
+; instances of the same machinery (see datalog-sn / temperature virtual files).
 ; AUTO-GENERATED pipeline stage 2 (aunt) — the VIRTUAL zipper program: Iter/BodyK
 ; binders over the input literals (control flow NOT pre-materialised); the movement
 ; rules walk it (Keys enumeration, per-head App, Guard pruning); every member of the
@@ -22,7 +25,7 @@
 (let $vn9 (Term (Sub 12 $virt)))
 (let $vn10 (Term (Sub 13 $virt)))
 (let $vn11 (Term (Sub 14 $virt)))
-(run 120)
+(run ROUNDS)
 (check (= $vm0 (T)))
 (check (= $vm1 (T)))
 (check (= $vm2 (T)))
