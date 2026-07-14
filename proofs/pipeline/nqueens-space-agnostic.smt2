@@ -6,9 +6,9 @@
 ; certificates are the proofs/ files named per pair below.
 ; LAW-JUSTIFIED pair 0: reduce-join: constant-ops
 ;   certificate(s): constant-ops ⟶ GROUND — per-op threeway_*/impl_* characterizations, eval-gated (registry: constant-ops)
-; LAW-JUSTIFIED pair 1: reduce-join
-;   certificate(s): reduce-join ⟶ certified law set
-; LAW-JUSTIFIED pair 2: reduce-join
-;   certificate(s): reduce-join ⟶ certified law set
-; LAW-JUSTIFIED pair 3: reduce-join
-;   certificate(s): reduce-join ⟶ certified law set
+; LAW-JUSTIFIED pair 1: reduce-join: constant-ops + iterate-literal-union + singleton-space-op-path-op + algebraic-identities + comp-lit-to-wraps
+;   certificate(s): constant-ops ⟶ GROUND — per-op threeway_*/impl_* characterizations, eval-gated (registry: constant-ops); iterate-literal-union ⟶ proofs/keyfold_iter.smt2 (SCHEMATIC: exact ground keys); singleton-space-op-path-op ⟶ proofs/laws/law_wrap_set.smt2 + proofs/laws/law_unwrap_set.smt2; algebraic-identities ⟶ proofs/laws/law_{union_unit,inter_empty,sub_empty,union_idem,inter_idem,sub_self}.smt2; comp-lit-to-wraps ⟶ proofs/laws/law_comp_lit_wraps.smt2
+; LAW-JUSTIFIED pair 2: reduce-join: constant-ops + iterate-literal-union + singleton-space-op-path-op + algebraic-identities + comp-lit-to-wraps
+;   certificate(s): constant-ops ⟶ GROUND — per-op threeway_*/impl_* characterizations, eval-gated (registry: constant-ops); iterate-literal-union ⟶ proofs/keyfold_iter.smt2 (SCHEMATIC: exact ground keys); singleton-space-op-path-op ⟶ proofs/laws/law_wrap_set.smt2 + proofs/laws/law_unwrap_set.smt2; algebraic-identities ⟶ proofs/laws/law_{union_unit,inter_empty,sub_empty,union_idem,inter_idem,sub_self}.smt2; comp-lit-to-wraps ⟶ proofs/laws/law_comp_lit_wraps.smt2
+; LAW-JUSTIFIED pair 3: reduce-join: constant-ops + iterate-literal-union + singleton-space-op-path-op + comp-lit-to-wraps
+;   certificate(s): constant-ops ⟶ GROUND — per-op threeway_*/impl_* characterizations, eval-gated (registry: constant-ops); iterate-literal-union ⟶ proofs/keyfold_iter.smt2 (SCHEMATIC: exact ground keys); singleton-space-op-path-op ⟶ proofs/laws/law_wrap_set.smt2 + proofs/laws/law_unwrap_set.smt2; comp-lit-to-wraps ⟶ proofs/laws/law_comp_lit_wraps.smt2

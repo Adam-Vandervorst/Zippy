@@ -211,11 +211,27 @@ object SpaceFuzzer:
   /** `sargs`/`pargs` are the program's free SPACE and PATH arguments (any number); leaves reference a
    *  random one.  Defaults to the single space input `x` and no path input (the original behaviour). */
   def genProg(arg: SpaceValue, maxDepth: Int,
-              sargs: Vector[SpaceMention] = Vector(argM), pargs: Vector[PathRef] = Vector.empty): Dist[Space] = new Dist[Space]:
+              sargs: Vector[SpaceMention] = Vector(argM), pargs: Vector[PathRef] = Vector.empty,
+              poolShare: Int = 3): Dist[Space] = new Dist[Space]:
     private val paths = arg.paths.toVector
     private val firstItems = paths.flatMap(_.items.headOption).distinct
     private type Scope = Vector[(PathRef, SpaceMention)]   // enclosing iteration binders (head var, tail-set var)
-    def sample(using rng: Random): Space = rec(maxDepth, Vector.empty)
+    def sample(using rng: Random): Space = { pool.clear(); rec(maxDepth, Vector.empty) }
+
+    // ---- the subterm POOL: operands are drawn from what was already built (scope-compatibly)
+    // rather than always generated independently, so programs actually SHARE subterms — the
+    // correlated shapes (x ∪ (x∩y), containment chains, partitions) a relational analysis or a
+    // sharing-aware optimizer feeds on almost never arise from independent draws.  An entry
+    // built under binder scope `sc` may be reused wherever `sc` is still a prefix of the current
+    // scope (all its binders remain bound; its own inner binders travel with it as the identical
+    // subtree).  `poolShare`/10 of operand positions try the pool first. ----
+    private val pool = collection.mutable.ArrayBuffer.empty[(Space, Scope)]
+    private def built(node: Space, scope: Scope): Space = { pool += ((node, scope)); node }
+    private def fromPool(scope: Scope)(using rng: Random): Option[Space] =
+      val ok = pool.filter((_, sc) => scope.startsWith(sc))
+      if ok.isEmpty then None else Some(pick(ok.toVector)._1)
+    private def operand(d: Int, scope: Scope)(using rng: Random): Space =
+      if rng.nextInt(10) < poolShare then fromPool(scope).getOrElse(rec(d, scope)) else rec(d, scope)
 
     private def pick[T](v: Vector[T])(using rng: Random): T = v(rng.nextInt(v.length))
     private def someArg(using rng: Random): SpaceValue =                       // a non-empty subset of the argument
@@ -252,38 +268,39 @@ object SpaceFuzzer:
       val body: Space = Space.Singleton((0 until tlen).map(_ => (Path.Deref(hs(rng.nextInt(k))): Path)).reduceLeft(Path.Concat(_, _)))
       var node = body; var i = k - 1
       while i >= 0 do
-        node = Space.Iteration(if i == 0 then rec(d - 1, scope) else Space.Mention(ts(i - 1)), hs(i), ts(i), node); i -= 1
+        node = Space.Iteration(if i == 0 then operand(d - 1, scope) else Space.Mention(ts(i - 1)), hs(i), ts(i), node); i -= 1
       node
 
     // a binary op's SECOND operand: usually a full sub-program (so every term type can occur here too),
     // sometimes a dependency-anchored leaf that keeps the result overlapping the argument.  Not
     // homogeneous, but no longer pinned to a single type.
     private def side(d: Int, scope: Scope, anchor: => Space)(using rng: Random): Space =
-      if rng.nextInt(5) < 3 then rec(d - 1, scope) else anchor
+      if rng.nextInt(5) < 3 then operand(d - 1, scope) else anchor
     // composition's right operand: same idea, but DEPTH-BOUNDED — composition is multiplicative in
     // size, so an unbounded right side would blow up evaluation.
     private def compRhs(d: Int, scope: Scope)(using rng: Random): Space =
-      if rng.nextInt(5) < 3 then rec(math.min(d - 1, 2), scope) else Space.Singleton(constP(pick(paths)))
+      if rng.nextInt(5) < 3 then operand(math.min(d - 1, 2), scope) else Space.Singleton(constP(pick(paths)))
 
     private def rec(d: Int, scope: Scope)(using rng: Random): Space =
-      if d <= 0 then leaf(scope)
-      else Categorical.ratios(Seq(
+      if d <= 0 then built(leaf(scope), scope)
+      else built(Categorical.ratios(Seq(
         "leaf" -> 2, "union" -> 2, "inter" -> 2, "sub" -> 2, "wrap" -> 2, "unwrap" -> 2, "comp" -> 1,
         "restr" -> 2, "iter" -> 3, "tails" -> 1, "range" -> 1, "reorder" -> 1)).sample match
         case "leaf"  => leaf(scope)
-        case "union" => Space.Union(rec(d - 1, scope), rec(d - 1, scope))
-        case "inter" => Space.Intersection(rec(d - 1, scope), side(d, scope, Space.Literal(someArg)))            // overlaps the argument
-        case "sub"   => Space.Subtraction(rec(d - 1, scope), side(d, scope, Space.Singleton(constP(pick(paths)))))
-        case "wrap"  => Space.Wrap(rec(d - 1, scope), constP(freshTag))                         // tag every path
-        case "unwrap"=> Space.Unwrap(rec(d - 1, scope), constP(PathValue(List(pick(firstItems)))))  // strip a real head
-        case "comp"  => Space.Composition(rec(d - 1, scope), compRhs(d, scope))
-        case "restr" => Space.Restriction(rec(d - 1, scope), side(d, scope, somePrefixLit))
-        case "tails" => Space.TailsUnion(rec(d - 1, scope))
-        case "range" => val lo = rng.nextInt(3); Space.Range(rec(d - 1, scope), lo, lo + 1 + rng.nextInt(3))
+        case "union" => Space.Union(operand(d - 1, scope), operand(d - 1, scope))
+        case "inter" => Space.Intersection(operand(d - 1, scope), side(d, scope, Space.Literal(someArg)))        // overlaps the argument
+        case "sub"   => Space.Subtraction(operand(d - 1, scope), side(d, scope, Space.Singleton(constP(pick(paths)))))
+        case "wrap"  => Space.Wrap(operand(d - 1, scope), constP(freshTag))                     // tag every path
+        case "unwrap"=> Space.Unwrap(operand(d - 1, scope), constP(PathValue(List(pick(firstItems)))))  // strip a real head
+        case "comp"  => Space.Composition(operand(d - 1, scope), compRhs(d, scope))
+        case "restr" => Space.Restriction(operand(d - 1, scope), side(d, scope, somePrefixLit))
+        case "tails" => Space.TailsUnion(operand(d - 1, scope))
+        case "range" => val lo = rng.nextInt(3); Space.Range(operand(d - 1, scope), lo, lo + 1 + rng.nextInt(3))
         case "reorder" => reorder(d, scope)
         case _ =>                                                                              // iteration: binds a fresh var, visible in the body
           val hpr = PathRef("h" + rng.nextInt(1000000)).known(1); val tv = SpaceMention("t" + rng.nextInt(1000000))
-          Space.Iteration(rec(d - 1, scope), hpr, tv, rec(d - 1, scope :+ (hpr -> tv)))
+          Space.Iteration(operand(d - 1, scope), hpr, tv, operand(d - 1, scope :+ (hpr -> tv)))
+      , scope)
 
   private def evalEx(p: Space, arg: SpaceValue): Example =
     Example(p, arg, eval(p)(using PathContextMap(Map.empty), SpaceContextMap(Map(argM -> arg)), PartialFunction.empty))

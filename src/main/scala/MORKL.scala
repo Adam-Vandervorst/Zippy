@@ -1602,7 +1602,7 @@ object Lower:
       Path.Constant(PathValue(xs ++ ys))
   })
 
-  private def pathHeaded(p: Path): Boolean = p match
+  private[morkl] def pathHeaded(p: Path): Boolean = p match
     case Path.Constant(PathValue(items)) => items.nonEmpty
     case Path.Deref(pr) => pr.lengthHint >= 1
     case Path.Concat(l, r) => pathHeaded(l) || pathHeaded(r)   // ≥1 item on either side ⇒ the concat has a head
@@ -1685,7 +1685,10 @@ object Lower:
         val window = if a == 0 && b > 0 then Some(b.toLong) else if b == 0 && a < 0 then Some(-a.toLong) else None
         window match
           case Some(w) => SizeBounds(sub.lo min w, 0, sub.hi min w)        // exactly min(size, w) paths
-          case None => SizeBounds(0, 0, sub.hi)
+          case None =>
+            // same-sign slice: at most b − a paths (Range(count, k, k+1) — the exactly-k idiom)
+            val width = if (a > 0 && b >= a) || (a < 0 && b <= 0 && b >= a) then (b - a).toLong else INF
+            SizeBounds(0, 0, sub.hi min width)
     case Space.Iteration(src, _, rest, body) =>
       val sb = sizeBounds(src, env)
       val benv = if rest.s == "_" then env else env.updated(rest, SizeBounds(0, 0, sb.hi))
@@ -1928,7 +1931,7 @@ object Lower:
     case other => (other, Nil)
 
   /** statically-known ITEM length of a path expression (constants; single-item binders). */
-  private def pathItemLen(p: Path): Option[Int] = p match
+  private[morkl] def pathItemLen(p: Path): Option[Int] = p match
     case Path.Constant(pv) => Some(pv.items.length)
     case Path.Deref(pr) if pr.lengthHint == 1 => Some(1)
     case Path.Concat(l, r) => for a <- pathItemLen(l); b <- pathItemLen(r) yield a + b
@@ -1940,7 +1943,7 @@ object Lower:
     so.isEmpty && po.isEmpty
   private def cleanPath(p: Path, prs: Set[String], sms: Set[String]): Boolean =
     cleanSpace(Space.Singleton(p), prs, sms)
-  private def constPath(p: Path): Boolean = p match
+  private[morkl] def constPath(p: Path): Boolean = p match
     case Path.Constant(_) => true
     case Path.Concat(l, r) => constPath(l) && constPath(r)
     case _ => false

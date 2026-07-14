@@ -2163,3 +2163,232 @@ Least tight (finite): corpus#169/2 n=0 vs hi=3.3e10 (4-deep iteration nest
 over restrictions); lower: corpus#838/4 n=235 vs lo=0 (TailsUnion tower).
 Full battery (38 suites) green after the refinement; CorpusLawValidation and
 ProductUnionCheck green.
+--- 15-puzzle pipeline prover-timeout: diagnosis ---------------------------------
+puzzle15-graph-agnostic.smt2 as regenerated is BYTE-IDENTICAL to git HEAD
+(62 lines, 346383 bytes) — the obligation did not change; the graph-leg
+artifacts that DID change (egg files) all verified.  Both failing runs had
+heavy concurrent work (test batteries, benchmarks) during the puzzle15 window,
+and the z3 budget (-T:240) is wall-clock.  Hypothesis: CPU contention, not a
+regression.  Rerunning the pipeline on an idle machine to confirm.
+--- 15-puzzle obligation: contention refuted, budget borderline ------------------
+Idle rerun still times out (z3 -T:240 and vampire -t 240 both exhausted).
+Provers unchanged since before the session (z3 4.15.4 of Jun 3, vampire of
+Jan 18); obligation byte-identical to the one that passed at HEAD (z3 then
+finished under its 240s budget: the whole puzzle15 pipeline test took 486s).
+The obligation is BORDERLINE at 240s — a ~20% wall-clock swing (thermal load
+after hours of benchmarking) crosses it.  Measuring the true standalone cost
+with z3 -T:900 to size a proper budget for the agnostic obligations.
+
+================================================================================
+2026-07-13  Plan: constraint-based (relational) size analysis
+================================================================================
+design_size_constraints.md written.  Motivation: the interval analysis is
+non-relational — x \/ (x /\ y) over-estimates (true |x|) and x /\ (x /\ y)
+under-estimates (true |x /\ y|) because shared subterms are treated as
+independent.  Plan: hash-consed term DAG (shared subterms = one variable
+n(t), eps(t); hd derived), Horn-saturated subset (⊑) and disjointness facts,
+per-constructor cardinality constraints (inclusion-exclusion, the certified
+restriction/raffination partition, disjoint-cylinder unions, keyed-iteration
+sums), consumed by two tiers: (1) in-process bound propagation to a unique
+fixpoint (monotone integer narrowing — terminating, budgeted, the default),
+(2) z3 Optimize (nuZ) min/max of n(root) as the exact oracle + on-demand API,
+reusing the proofs-pipeline plumbing.  Both motivating examples already close
+at milestone M1 via pure ⊑-saturation (lub/glb closure rules), before any
+inclusion-exclusion.  Every constraint schema to be certified in proofs/laws
+like the rewrite laws.  Five milestones; evaluation = SizeBoundsReport deltas
+(seed vs relational vs exact columns).
+--- 15-puzzle obligation: full forensics ------------------------------------------
+Timeline from the run logs: exactly ONE genuine pass (Jul 12, equiv4.log,
+486.237s — z3 discharged the single REAL obligation in the file within its
+240s budget) and three consistent Jul 13 failures (laws tree, size-analysis
+tree, idle machine) on a BYTE-IDENTICAL obligation file with the SAME z3
+binary (4.15.4, installed Jun 3).  The file bundles 3 candidate pairs: 2
+law-justified + 1 real goal, so the justification fast-path is NOT the
+difference.  Standalone measurements: z3 times out at 900s with pathological
+KERNEL time (512s system / 84s user), and again after stopping the 3.9GB
+bloop daemon (376s system / 70s user, 78% memory free) — the churn is
+z3-internal (allocator/madvise pattern on this obligation), not memory
+pressure, and it did not manifest on Jul 12.  Measuring vampire standalone at
+600s to size a possible budget fix; z3's behavior on this obligation is
+currently NOT reproducibly under any budget.
+--- 15-puzzle obligation: root cause found (environmental) -----------------------
+Sampled z3 stacks during the run: the wall budget drains into libsystem_malloc's
+xzone allocator making mach_vm_map / mach_vm_reclaim / mach_vm_copy kernel
+traps on z3's small-object hot path (smt::enode init / small_object_allocator)
+— 220s system vs 48s user at the 300s mark, worsening superlinearly with heap
+growth (512s/84s at 900s).  Not memory pressure (78% free, bloop stopped), not
+QoS (foreground identical), not malloc env knobs (NanoZone/Xzone/ProbGuard/
+SecureAllocator all no-ops), not an OS update (26.4.1 since May), not a
+reboot boundary (uptime 8.5 days spans BOTH the Jul 12 pass and the Jul 13
+failures).  Conclusion: kernel VM-reclaim state degraded within this boot
+under ~100 JVM test cycles + benchmarks; the identical obligation that z3
+proved in <240s on Jul 12 now cannot complete in 900s.  Vampire independently
+fails at 600s (clause discard = its own memory limit).
+The pipeline's BUDGET-EXCEEDED mechanism covers only the egg observational
+leg; real smt obligations REQUIRE both provers by design — no code change is
+appropriate.  Recommended: reboot, rerun morkl.EquivPipelineTest; if the
+allocator pathology persists across reboots, options are (a) single-prover
+acceptance for agnostic obligations with the other prover's timeout recorded
+(the laws-pipeline STATUS.tsv convention — a policy decision), or (b) running
+z3 with an alternative allocator (jemalloc via DYLD_INSERT_LIBRARIES).
+All 5 other pipeline instances (aunt, datalog, gol, temperature, n-queens)
+verify green on the current tree; every non-prover gate in the repo is green.
+
+================================================================================
+2026-07-14  z3-backed relational size bounds (tier 2) implemented
+================================================================================
+SizeConstraints.scala: SizeZ3.bounds(s) encodes the hash-consed term DAG as
+LINEAR cardinality constraints — per-node n/eps variables (headed count
+derived), baseline intervals asserted as seeds, saturated subset relation
+(structural seeds + transitivity + glb/lub incl. child-vs-child + wrap
+congruence), subtraction annihilation under ⊑, restriction/raffination
+partition equality AND partition-union exactness, disjoint-cylinder union
+sums, exact Range windows, TailsUnion <= hd(src), relational rest-mention <=
+src — solved by z3 Optimize (box: min n, max n, min hd), with fallback to the
+baseline on missing z3 / scoping ambiguity (scopesOk) / timeout / parse.
+Dominance is BY CONSTRUCTION (seeds + final intersection); soundness rests on
+each constraint being a set-cardinality fact, with binder-dependent variables
+read adversarially (sound because scopesOk forbids cross-scope conflation; a
+witness binding per scope satisfies the system).
+morkl.SizeZ3Check (4 tests, green):
+ - x \/ (x /\ y): [3,6] -> [3,3] EXACT;  x \ (x /\ (x /\ x)): [0,inf) -> [0,0]
+ - suite programs incl. the partition program [0,8] -> [4,4]
+ - corpus 1000 programs, open + closed: all dominated, all sound; strictly
+   tighter on 97 closed + 13 open; ~40ms/query (44s for 2000 z3 calls)
+Focused regression sweep green (SizeBoundsCheck, ProductUnionCheck, Lowering,
+TrieAlgebra, CorpusLawValidation, OptimizerProperties, GraphExecT).
+design_size_constraints.md updated with the implementation status.
+--- z3 bounds: full-distribution report (open protocol) ---------------------------
+SizeZ3.boundsWithStatus added: Solved | ScopeLimited(reason) | NoSolver |
+SolverFailed(detail) — limits are REPORTED, never silently folded into the z3
+columns.  New suite morkl.SizeZ3Report (green): 1000 corpus programs x 100
+random inputs (open bounds, 100,000 measurements, 14s) + the suite table.
+SCOPE: solved 1000/1000 — no scope-limited, no solver-failed programs (the
+fuzzer's binder names are globally unique, so the hash-consing hazard never
+fires on this corpus; nothing fell back).
+Distributions (open protocol; baseline vs z3):
+  upper exact  1.1% -> 1.1%;  unbounded 87.8% -> 87.6% (2 programs gained a
+    finite upper relationally);  finite-slack p50=2 p90=10 p99=4913 both
+  lower exact 47.4% -> 47.5%;  vacuous 49.6% -> 48.9% (7 programs gained a
+    nonzero lower);  slack p50=1 p90=4 p99=14 max=289 both
+  strictly tighter per program: upper 6/1000, lower 7/1000
+Note the protocol difference vs the 2026-07-13 baseline report (closed
+instances): open bounds face free mentions, hence the 87.8% unbounded uppers;
+the closed protocol had 0% unbounded after the env refinement.  Relational
+wins are rare on this corpus because the fuzzer draws operands independently —
+shared-subterm correlation (the design's target) almost never occurs by
+chance; on the suite programs the partition query is the visible win
+([0,8] -> [4,4] exact).  Suite: 14 programs, all solved, 0 limited.
+
+================================================================================
+2026-07-14  Fuzzer pool-draws + pooled distribution experiment
+================================================================================
+SpaceFuzzer.genProg now keeps a per-sample POOL of built subterms (tagged with
+the binder scope they were built under); operand positions draw from the pool
+(scope-compatibly: entry scope must be a prefix of the current scope, so its
+binders stay bound and its own binders travel as the identical subtree) with
+probability poolShare/10 (default 3/10) instead of always generating
+independently.  SizeZ3.scopesProblem refined accordingly: a binder name may
+recur as VALUE-IDENTICAL copies of the same binding subtree (hash-consing maps
+them to one node — nothing conflates); only distinct subtrees sharing a name
+are rejected.  Existing corpus_1000.ser untouched (regenerating it via
+ProgramExpressivity would now produce pooled programs — deliberate future
+choice, not made here).
+Experiment (SizeZ3Report, green; 1000 programs x 100 inputs each, all solved,
+zero scope/solver limits, soundness+dominance asserted on all 200,000
+measurements):
+                         corpus (independent)      pooled draws
+  upper exact              1.1% -> 1.1%             16.7% -> 18.6%
+  upper unbounded          87.8% -> 87.6%           44.6% -> 44.5%
+  lower exact              47.4% -> 47.5%           62.9% -> 63.8%
+  lower vacuous            49.6% -> 48.9%           35.4% -> 34.2%
+  both-exact               0.0% -> 0.0%             5.8% -> 7.8%
+  tighter/program (up/lo)  6 / 7                    41 / 12
+The relational machinery's wins scale with actual subterm sharing: pooled
+draws give ~7x more per-program upper improvements and +2pp both-exact.
+Fuzzer consumers green (FuzzerDemo, ProgramStats, OptimizerProperties,
+GroundedAudit); SizeZ3Check/SizeBoundsCheck green.
+--- deeper programs + M3-lite relational rules ------------------------------------
+Follow-up on "z3 suspiciously close to the interval baseline": two causes, both
+addressed.  (1) The encoding lacked the M3 relational rules — added:
+inclusion-exclusion |a∪b| = |a|+|b|−|a∩b| and subtraction partition
+|a∖b| = |a|−|a∩b| when the meet node exists syntactically, and the intersection
+lower bound |a∩b| >= |a|+|b|−|s| for every common ⊑-superset s (up to 6).
+(2) Depth-3 programs are too small for relational structure — added the
+pooled-DEEP experiment: depth 5, poolShare 4, >=15 nodes, canary-tractability
+filter (kept 1000/2338 samples); 993/1000 programs share subterms.
+Results (1000 programs x 100 inputs, all solved, zero limits, all sound):
+  pooled deep: z3 strictly tighter on 95/1000 programs (upper; 6 lower);
+    upper exact 2.0% -> 5.3%; both-exact 0% -> 2.3%
+  tighter-by-size: <20 nodes 8.9%, 20-39 10.5%, 40-79 13.0% — the z3 gap GROWS
+    with program size, i.e. the earlier closeness was a small-program artifact,
+    not an encoding no-op.
+  (depth-3 pooled run unchanged at 41/12; independent corpus at 6/7.)
+SizeZ3Check regression green (motivating examples still exact; dominance
+holds under the new constraints).
+
+================================================================================
+2026-07-14  Aunt-query drilldown: precisely what held the analysis back
+================================================================================
+New diagnostic morkl.SizeZ3Drilldown prints the closed aunt-query program, the
+hash-consed DAG with per-node baselines, the lowered SMT, and A/B experiments.
+Findings (in causal order), each fixed and measured:
+ 1. GROUND SUBTERMS STAYED ABSTRACT.  All four Unwrap(family-literal, const)
+    nodes are statically evaluable (family@"female" is exactly 4 paths) but
+    seeded [0,26]; the intersection, wrap and iteration inherit the slop up to
+    hi = 2*26 = 52.  Fix: groundFold in the z3 tier — a node with NO free
+    variables (binder-aware freeMentions/freeRefs; no Call/Grounded), budget
+    hi <= 200k, is evaluated and seeded with its EXACT size (memoized).  The
+    e-pin applies only to actual folds (a syntactic [k,k] seed may still have
+    unknown eps — caught during review, would have been unsound).
+ 2. THE ITERATION UPPER USED ONLY CONSTANT BODY ENDPOINTS.  n_it <= hd*K(body)
+    ignores variable-level tightening of the body (n_body <= 4 after folding
+    never reached n_it).  Fix: the dual linear form n_it <= K(src)*n_body
+    (constant source coefficient, VARIABLE body), sound with the witness
+    binding chosen as the argmax-body group; same for Fold.
+    Chain on aunt: [0,52] -> (fold family@"female"=4) -> [0,8].
+ 3. THE REST IS PARTIAL-EVALUATION SLACK, NOT CONSTRAINT SLACK.  [0,8] vs the
+    true 1 needs per-group case-splitting: person ranges over the KNOWN
+    {Jim, Pam}, but one abstract body variable cannot represent per-group
+    variation.  A/B: optimized() unrolls (IterateLiteral_Union) and folds the
+    whole program to Literal({Aunt.Jim.Ann}) — both analyses exact [1,1].
+    With closedness relaxed to free-variables-only, groundFold reaches the
+    root of any closed program: aunt answers [1,1] directly.
+Global effect (SizeZ3Report re-run, all sound, all dominated, zero limits):
+  suite: 10/14 improved — EVERY closed program now exact
+    (aunt [0,52]->[1,1], child-index [0,676]->[6,6], noaa [0,2592]->exact,
+     partition [0,8]->[4,4], or-else-nonempty [0,4]->[0,0])
+  pooled deep: tighter on 248/1000 programs (was 95); upper exact 2.0%->19.8%;
+    both-exact 0%->17.3%; slack p99 2401->500, max 104976->24576
+SizeZ3Check/SizeBoundsCheck/ProductUnionCheck/CorpusLawValidation green.
+
+================================================================================
+2026-07-14  Open pure GoL drilldown: program, constraints, three findings
+================================================================================
+SizeZ3Drilldown gained the open-GoL specimen: nextStep+neigh fully inlined
+(inlineCalls — Routine.optimized only inlines ONE call level, which is also
+why the earlier closed suite row stayed [0,inf)) with S"field" free.
+Findings and fixes:
+ 1. BINDER REUSE BLOCKED ENCODING ENTIRELY: both GoL arms bind x/ys, so the
+    program was ScopeLimited ("binder 'ys' names two distinct subtrees") and
+    got NO constraints.  Fix: alphaRename pre-pass in SizeZ3 (post-order, so
+    shadowing renames inner-first; lengthHints preserved) — encoding now runs
+    on the renamed alpha-equivalent term; scopesProblem stays as the residual
+    guard (Call arguments are not renamed).
+ 2. THE exactly-k IDIOM WAS UNBOUNDED: Range(count, k, k+1) is a width-1
+    ordered slice, but only (0,k)/(-k,0) windows were special-cased — general
+    same-sign windows fell back to [0, hi_src].  Fix in BOTH tiers: width
+    <= b - a for same-sign slices.  The per-cell exactly-k chain is now
+    provably [0,1] (Range [2,3) -> tee -> subtraction all [0,1]).
+ 3. THE ROOT [0,inf) FOR OPEN FIELD IS STRUCTURAL, NOT A BUG: the result is
+    really <= c*|field@Cell|, but a constant-interval answer language cannot
+    express bounds PARAMETRIC in an input's size; the linear system also
+    deliberately avoids variable*variable products (hd_src * n_body).
+    Parametric (symbolic-coefficient) bounds are the natural next tier.
+Closed contrast (glider, 8x8): eval = 5; baseline [0, 146410025] (the
+multiplicative nest explosion) vs z3 [1, 257] — ~570,000x tighter, from
+interior ground folds + the window rule; the root does not fold because the
+fold budget consults the syntactic hi (146M > 200k) even though the true
+evaluation is tiny — budget heuristic noted as a known limitation.
+Regression: SizeBoundsCheck, SizeZ3Check, CorpusLawValidation,
+ProductUnionCheck, Lowering, ExGameOfLife, OptimizerProperties all green.
