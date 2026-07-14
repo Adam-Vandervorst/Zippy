@@ -151,7 +151,7 @@ class TrieBench extends FunSuite:
     emit("domains are pure algebra; PathItems are interned to Ints before evaluation (no PathItem")
     emit("is touched during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.\n")
     val avgSpeedup = geomean(ex.map(_.suEval))
-    val f = new java.io.File(Loaders.repoRoot, "BENCHMARKS.md")
+    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
     val header = if f.exists then "" else "# MORKL trie vs reference benchmarks\n\n`eval` = reference Set[List[PathItem]] evaluator; `evalT` = TreeMap[PathItem] trie; `evalI` = interned IntMap trie (PathItems interned to Ints before evaluation).\nevalI/eval and evalI/evalT are speedups (higher = evalI faster).\n"
     val w = new java.io.FileWriter(f, true); try { w.write(header); w.write(out.toString) } finally w.close()
     assert(avgSpeedup > 1.0, f"expected trie to be faster on average, got ${avgSpeedup}%.2fx")

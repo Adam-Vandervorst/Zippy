@@ -183,7 +183,7 @@ class GraphBench extends FunSuite:
     System.out.println(f"GEOMEAN comp+run = $geo%.4f ms ; run-only = $geoR%.4f ms over ${crVals.size} benchmarks  [$tag]")
     emit(f"\n**comp+run geomean = $geo%.3f ms ; run-only geomean = $geoR%.3f ms** over ${crVals.size} benchmarks ($tag).")
 
-    val f = new java.io.File(Loaders.repoRoot, "BENCHMARKS.md")
+    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
     val w = new java.io.FileWriter(f, true); try w.write(out.toString) finally w.close()
   }
 end GraphBench
@@ -259,7 +259,7 @@ class SubgraphHoistBench extends FunSuite:
       row("n-queens place(6)", R"q"() := b.program, Map.empty, b.defs)
     }
 
-    val f = new java.io.File(Loaders.repoRoot, "BENCHMARKS.md")
+    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
     val w = new java.io.FileWriter(f, true); try w.write(out.toString) finally w.close()
   }
 end SubgraphHoistBench
@@ -373,7 +373,7 @@ class SCOptBench extends FunSuite:
       run("gol step 12x12", R"g"() := call, Map.empty, rules.defs)
     }
 
-    val f = new java.io.File(Loaders.repoRoot, "BENCHMARKS.md")
+    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
     val w = new java.io.FileWriter(f, true); try w.write(out.toString) finally w.close()
   }
 end SCOptBench
@@ -477,7 +477,7 @@ class AblationStages extends FunSuite:
       row("temperature 1024", Union(Restriction(world, Literal(NOAA.interval(0, 128, 10))), Restriction(world, ss"VW")), Map.empty, PartialFunction.empty)
     }
 
-    val f = new java.io.File(Loaders.repoRoot, "BENCHMARKS.md")
+    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
     val w = new java.io.FileWriter(f, true); try w.write(out.toString) finally w.close()
   }
 end AblationStages
