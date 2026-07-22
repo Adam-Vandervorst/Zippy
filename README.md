@@ -6,7 +6,7 @@ words, and a handful of set/monoid operators (union, intersection, subtraction, 
 prefix restriction, wrap/unwrap, tails, iteration, recursion) express relational queries,
 Datalog fixed points, graph algorithms, and trie-indexed search.
 
-**Start with [ALGEBRA.md](ALGEBRA.md)** — a self-contained functional-pearl-style paper that
+**Start with [ALGEBRA.md](docs/ALGEBRA.md)** — a self-contained functional-pearl-style paper that
 develops the core algebra, relates it to semirings, Kleene algebras, complex-object query
 languages, and trie automata, and works through five case studies. This repository is the
 executable and machine-checked counterpart of that paper.
