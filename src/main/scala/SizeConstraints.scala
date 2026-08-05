@@ -68,7 +68,7 @@ object SizeZ3:
   /** Rename every binder apart (post-order, so an inner binder shadowing the same name is
    *  renamed first and the outer substitution cannot capture).  α-equivalence preserves sizes,
    *  and unique binders are what make value-level hash-consing scope-safe. */
-  private def alphaRename(root: Space): Space =
+  private[morkl] def alphaRename(root: Space): Space =
     var k = 0
     def freshP(old: PathRef): PathRef =
       k += 1
@@ -145,7 +145,7 @@ object SizeZ3:
     walk(s, Set.empty)
     problem
 
-  private def children(s: Space): List[Space] = s match
+  private[morkl] def children(s: Space): List[Space] = s match
     case Space.Union(a, b) => List(a, b)
     case Space.Intersection(a, b) => List(a, b)
     case Space.Subtraction(a, b) => List(a, b)
@@ -357,7 +357,7 @@ object SizeZ3:
     Enc(sb.toString)
 
   // ---- z3 plumbing ----------------------------------------------------------------------------
-  private def runZ3(smt: String, timeoutSec: Int): String =
+  private[morkl] def runZ3(smt: String, timeoutSec: Int): String =
     val f = java.io.File.createTempFile("sizebounds", ".smt2")
     try
       val w = new java.io.FileWriter(f); try w.write(smt) finally w.close()

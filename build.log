@@ -2433,3 +2433,53 @@ ENVIRONMENT NOTE: the ProgramExpressivity expressivity CENSUS (Slow, not run sin
 StackOverflowError in ITrie recursion under the default JVM stack; the census path (fuzz draw +
 evalI) reads no hints, so this is pre-existing, not caused by this change. Battery + corpus regen
 ran with --java-opt -Xss512m; use that for ITrie-recursion-heavy runs.
+
+================================================================================
+2026-08-05  Path-LENGTH bounds: two-tier analysis (Lower.lenBounds + LenZ3)
+================================================================================
+The length twin of the size analysis, same architecture and dominance contract.
+
+TIER 1 — Lower.lenBounds (MORKL.scala, next to sizeBounds): compositional interval
+`∀ p ∈ eval(s): lo ≤ |p| ≤ hi` over ALL constructs. The statement is ∀-quantified, so any
+interval is vacuously sound for an empty space; `lo > hi` is the canonical provably-empty marker
+(LenBounds.empty) and COMPOSES: min/max at unions (an empty operand's (INF,0) marker drops out),
+max/min at meets (a crossing marker = provable length-emptiness), saturating + at compositions.
+Transfers: union hull; intersection max/min; subtraction/raffination/range = left/src;
+restriction lo = max(lo_x, lo_prefixes) (a kept path HAS a prefix in y); composition/wrap = sum
+(wrap ≡ Singleton(p)·src); unwrap/tails = shift down (ε-only source ⇒ tails empty); iteration
+AND fold = body bounds with rest ↦ tail-lengths of src (both output ⋃ per-group body evals; a
+src with hi=0 has no heads ⇒ empty); fixpoint = hull(init, body); mention/call/grounded
+unknown. pathLenBounds(p) gives path-expression intervals; pathItemLen generalized to honor ANY
+lengthHint (was ==1 only) — hints are trusted contracts.
+
+TIER 2 — LenZ3 (LengthConstraints.scala): per hash-consed node lo/hi/emp variables + a unary
+define-fun `len_i(l)` OVER-APPROXIMATING the node's length set, keeping the DISJUNCTIVE
+structure the hull loses: literals/singletons emit exact length sets (≤64 distinct, else
+interval), meets conjoin child predicates, wrap/unwrap/tails SHIFT the child predicate when the
+prefix length is exact. Witnesses: ¬emp ⇒ the extreme lengths satisfy len_i and the baseline
+interval (dominance by construction). Emptiness: structural TRUE-direction facts (union/comp/
+wrap exact; ⇒-only elsewhere) + cross-facts from sizeBounds (hi=0 ⇒ emp; lo≥1 ⇒ ¬emp); the
+objectives run under ¬emp_root (bounds are vacuous for ∅; unsat ⇒ provably empty ⇒ baseline).
+Soundness model: every reality induces a model with true extremes/emptiness (binder vars read
+as GLOBAL extremes over all bindings, the argmax-witness idea from SizeZ3), so min lo_root /
+max hi_root are outer bounds. Macro discipline: define-funs expand exponentially under DAG
+sharing (x∪x doubles per level; the pooled fuzzer builds exactly that) — nodes whose estimated
+expansion exceeds 50k degrade to their interval predicate (cost 1). Reuses SizeZ3's
+alphaRename/scopesProblem/children/runZ3/Status (relaxed to private[morkl]); ground-fold twin
+seeds exact length sets for closed nodes (same closedness + size≤200k budget).
+
+MOTIVATING EXAMPLE (LenBoundsCheck): ((({len10} ∪ {len25}) ∩ {len15}) ∪ {ε}) x {len2, len3·len3}.
+The meet's predicate (l=10 ∨ l=25) ∧ (l=15) is UNSAT ⇒ emp forced ⇒ union collapses to {ε} ⇒
+composition pinned to the right factor: z3 [2, 6]. The hull baseline can only say [2, 21]
+(meet hulls to [15,15] since 15 ∈ [10,25]). Verified BOTH closed (ground-foldable) and OPEN
+(len-25 free path variable via lengthHint — pure constraint reasoning, no fold possible).
+
+VALIDATION (LenBoundsCheck, 4 tests green): the example closed+open; transfer pins (wrap shift,
+unwrap, tails −1, ε-only tails empty, restriction prefix lower, iteration head+tail, empty
+composition, hinted variable exact); corpus gate — 5000 closed instances: every path length
+inside closed AND open baseline intervals; 200 open corpus programs through LenZ3: 200 solved,
+0 scope limits, dominance everywhere, 1000 random-input soundness checks clean. z3 strictly
+tighter than baseline on only 1/200 corpus programs — expected: fuzzed literals draw lengths
+1-2, so hulls are already tight; the z3 win is length-disjoint meets (the example shape).
+Regression: SizeBoundsCheck, SizeZ3Check, AlgebraicLaws, ProductUnionCheck, CorpusLawValidation
+(100k) all green after the pathItemLen generalization.

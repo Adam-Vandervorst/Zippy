@@ -1716,6 +1716,82 @@ object Lower:
       else SizeBounds(b.lo max m.sizeHint, b.loHeaded max relu(m.sizeHint - 1), b.hi min m.sizeHint)
     case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => SizeBounds.unknown
 
+  // ---- path-LENGTH bounds (tier-1 baseline; the z3 tier is LenZ3) -----------------------------
+  /** `∀ p ∈ eval(s): lo ≤ |p| ≤ hi` (item counts).  The statement is universally quantified, so
+   *  any interval is (vacuously) sound for an empty space; `lo > hi` is the canonical
+   *  provably-empty marker ([[LenBounds.empty]]) and composes: `min`/`max` at unions, `max`/`min`
+   *  at intersections, saturating `+` at compositions all treat it correctly. */
+  final case class LenBounds(lo: Long, hi: Long):
+    def isEmpty: Boolean = lo > hi
+  object LenBounds:
+    val INF: Long = Long.MaxValue
+    val unknown: LenBounds = LenBounds(0, INF)
+    val empty: LenBounds = LenBounds(INF, 0)
+
+  /** interval of possible ITEM lengths of a path expression (hints trusted like [[pathItemLen]]). */
+  private[morkl] def pathLenBounds(p: Path): LenBounds = pathItemLen(p) match
+    case Some(k) => LenBounds(k, k)
+    case None => p match
+      case Path.Concat(l, r) =>
+        val (a, b) = (pathLenBounds(l), pathLenBounds(r))
+        LenBounds(satAdd(a.lo, b.lo), satAdd(a.hi, b.hi))
+      case _ => LenBounds.unknown
+
+  def lenBounds(s: Space): LenBounds = lenBounds(s, Map.empty)
+  /** env refines binder mentions: an iteration/fold `rest` is the TAIL-set of one head-group of
+   *  its source (each tail = a source path minus its single head item). */
+  private[morkl] def lenBounds(s: Space, env: Map[SpaceMention, LenBounds]): LenBounds = s match
+    case Space.Empty => LenBounds.empty
+    case Space.Singleton(p) => pathLenBounds(p)
+    case Space.Literal(SpaceValue(ps)) =>
+      if ps.isEmpty then LenBounds.empty
+      else LenBounds(ps.iterator.map(_.items.length).min, ps.iterator.map(_.items.length).max)
+    case Space.Union(a, b) =>
+      val x = lenBounds(a, env); val y = lenBounds(b, env)
+      LenBounds(x.lo min y.lo, x.hi max y.hi)
+    case Space.Intersection(a, b) =>
+      val x = lenBounds(a, env); val y = lenBounds(b, env)
+      LenBounds(x.lo max y.lo, x.hi min y.hi)                  // lo > hi ⇒ provably length-empty
+    case Space.Subtraction(a, _) => lenBounds(a, env)
+    case Space.Restriction(x, y) =>
+      val a = lenBounds(x, env); val b = lenBounds(y, env)     // a kept path has a prefix in y
+      LenBounds(a.lo max b.lo, a.hi)
+    case Space.Raffination(x, _) => lenBounds(x, env)          // x \ (x <| y) ⊆ x
+    case Space.Composition(a, b) =>
+      val x = lenBounds(a, env); val y = lenBounds(b, env)
+      if x.isEmpty || y.isEmpty then LenBounds.empty
+      else LenBounds(satAdd(x.lo, y.lo), satAdd(x.hi, y.hi))
+    case Space.Wrap(src, p) =>                                  // ≡ Composition(Singleton p, src)
+      val x = lenBounds(src, env); val k = pathLenBounds(p)
+      if x.isEmpty then LenBounds.empty else LenBounds(satAdd(k.lo, x.lo), satAdd(k.hi, x.hi))
+    case Space.Unwrap(src, p) =>
+      val x = lenBounds(src, env); val k = pathLenBounds(p)     // kept: orig startsWith p, drop |p|
+      if x.isEmpty then LenBounds.empty
+      else
+        val hi = if x.hi == LenBounds.INF then LenBounds.INF else x.hi - k.lo
+        if hi < 0 then LenBounds.empty else LenBounds(relu(if k.hi == LenBounds.INF then 0 else x.lo - k.hi), hi)
+    case Space.TailsUnion(src) => tailLen(lenBounds(src, env))
+    case Space.TailsIntersection(src) => tailLen(lenBounds(src, env))
+    case Space.Range(x, _, _) => lenBounds(x, env)              // positional slice ⊆ x
+    case Space.Iteration(src, _, rest, body) =>
+      val sb = lenBounds(src, env)
+      if sb.isEmpty || sb.hi == 0 then LenBounds.empty          // no headed source path ⇒ no groups
+      else lenBounds(body, if rest.s == "_" then env else env.updated(rest, tailLen(sb)))
+    case Space.Fold(src, _, _, _, rest, body, _) =>             // output = ⋃ per-group body evals
+      val sb = lenBounds(src, env)
+      if sb.isEmpty || sb.hi == 0 then LenBounds.empty
+      else lenBounds(body, if rest.s == "_" then env else env.updated(rest, tailLen(sb)))
+    case Space.Fixpoint(init, _, body) =>                       // init ∪ all iterates
+      val x = lenBounds(init, env); val y = lenBounds(body, env)
+      LenBounds(x.lo min y.lo, x.hi max y.hi)
+    case Space.Mention(m) => env.getOrElse(m, LenBounds.unknown)
+    case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => LenBounds.unknown
+
+  /** lengths of the tails of the HEADED paths of a set with lengths in `b` (drop 1 item). */
+  private def tailLen(b: LenBounds): LenBounds =
+    if b.isEmpty || b.hi == 0 then LenBounds.empty
+    else LenBounds(relu(b.lo - 1), if b.hi == LenBounds.INF then LenBounds.INF else b.hi - 1)
+
   /** "this space has at least one path" / "…at least one path with a head" — via [[sizeBounds]];
    *  only ever true when CERTAIN, so the IterUnion hoist below stays sound. */
   def provablyNonEmpty(s: Space): Boolean = sizeBounds(s).lo >= 1
@@ -1941,10 +2017,10 @@ object Lower:
     case Space.Unwrap(inner, q) => val (b, qs) = unwrapSpine(inner); (b, qs :+ q)
     case other => (other, Nil)
 
-  /** statically-known ITEM length of a path expression (constants; single-item binders). */
+  /** statically-known ITEM length of a path expression (constants; length-hinted binders). */
   private[morkl] def pathItemLen(p: Path): Option[Int] = p match
     case Path.Constant(pv) => Some(pv.items.length)
-    case Path.Deref(pr) if pr.lengthHint == 1 => Some(1)
+    case Path.Deref(pr) if pr.lengthHint >= 0 => Some(pr.lengthHint)
     case Path.Concat(l, r) => for a <- pathItemLen(l); b <- pathItemLen(r) yield a + b
     case _ => None
 
