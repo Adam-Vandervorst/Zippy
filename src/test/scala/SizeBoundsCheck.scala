@@ -114,6 +114,52 @@ class SizeBoundsCheck extends FunSuite:
     assertEquals(Lower.sizeBounds(fix).hi, Lower.SizeBounds.INF)
   }
 
+  test("sizeHint: an exact-cardinality contract on a mention narrows both tiers") {
+    val x5 = Space.Mention(SpaceMention("x").known(5))
+    // hint is exact: [5, 5], of which at most one path is ε ⇒ ≥ 4 headed
+    assertEquals(Lower.sizeBounds(x5), Lower.SizeBounds(5, 4, 5))
+    // equality ignores the hint (an annotation, not identity) — contexts still resolve by name
+    assertEquals(SpaceMention("x").known(5), SpaceMention("x"))
+    val v = SpaceValue("a", "b.c", "d", "e.f.g", "h")
+    check(x5, "hinted-mention")(using SpaceContextMap(Map(SpaceMention("x") -> v)))
+    // flows through operators: hinted ∪ hinted is [5, 10]; hinted \ small keeps a real lower bound
+    val u = Space.Union(x5, Space.Mention(SpaceMention("y").known(5)))
+    assertEquals((Lower.sizeBounds(u).lo, Lower.sizeBounds(u).hi), (5L, 10L))
+    val s = Space.Subtraction(x5, Space.Literal(SpaceValue("a")))
+    assertEquals((Lower.sizeBounds(s).lo, Lower.sizeBounds(s).hi), (4L, 5L))
+    // a hint ≥ 2 makes the mention provably headed, so guarded hoists can fire on open programs
+    assert(Lower.provablyHeaded(x5))
+    assert(!Lower.provablyHeaded(Space.Mention(SpaceMention("z").known(1))))  // the 1 path may be ε
+    // tier 2 keeps dominance: z3 bounds sit inside the hinted baseline
+    if SizeZ3.available then
+      val (zb, st) = SizeZ3.boundsWithStatus(u, timeoutSec = 5)
+      assert(zb.lo >= 5L && zb.hi <= 10L, s"z3 $zb outside hinted baseline [5, 10] ($st)")
+  }
+
+  test("lengthHint: head-binders are tagged everywhere (guards, DSL fold, graph round-trip)") {
+    def binderHints(s: Space): List[Int] = s match
+      case Space.Iteration(src, sym, _, b) => sym.lengthHint :: binderHints(src) ::: binderHints(b)
+      case Space.Fold(src, _, _, sym, _, b, _) => sym.lengthHint :: binderHints(src) ::: binderHints(b)
+      case Space.Union(a, b) => binderHints(a) ::: binderHints(b)
+      case Space.Intersection(a, b) => binderHints(a) ::: binderHints(b)
+      case Space.Range(a, _, _) => binderHints(a)
+      case _ => Nil
+    // the emptiness guards' probe binders
+    assertEquals(binderHints(Lower.headedGuard(S"u")), List(1))
+    assert(binderHints(Lower.nonEmptyGuard(S"u")).forall(_ == 1))
+    // the fold DSL's head symbol
+    val fo = Space.Literal(SpaceValue("a", "b")).fold(Path.ZERO, "acc", "h", "t", S"t", Path.ZERO)
+    assertEquals(binderHints(fo), List(1))
+    // untranspile restores the tag the op-graph encoding drops
+    val prog = Space.Literal(SpaceValue("a", "b.c")).iter(P"h", S"t", Space.Singleton(P"h" x "w"))
+    val g = transpile(R"rt"() := prog)
+    val st = scala.collection.mutable.Stack(new Array[Path | Space | Null](g.nodes.length))
+    untranspile(g, st)
+    val round = st.top.last.asInstanceOf[Space]
+    assertEquals(binderHints(round), List(1))
+    assertEquals(eval(round), eval(prog))
+  }
+
   test("SizeEmpty: a provably-empty interval rewrites to Empty through any nesting") {
     val dead = Space.Union(
       Space.Wrap(Space.Restriction(S"u", Space.Intersection(Space.Empty, S"v")), Path.Constant(PathValue(List("k")))),

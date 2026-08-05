@@ -128,7 +128,12 @@ object SpaceContext:
     val pm = m
     override def resolve(pr: SpaceMention): SpaceValue = pm(pr)
 
-case class SpaceMention(s: String)
+/** `sizeHint`, like [[PathRef.lengthHint]], is an out-of-equality annotation: the author's
+ *  contract that this mention is only ever bound to spaces of exactly that many paths.
+ *  Trusted by the size analysis (a wrong hint yields wrong bounds, like a wrong lengthHint). */
+case class SpaceMention(s: String):
+  val sizeHint = -1L
+  def known(size: Long): SpaceMention = new SpaceMention(s) { override val sizeHint = size }
 
 enum Space:
   case Empty
@@ -672,7 +677,8 @@ def untranspile(rog: RecursiveOpGraph,
             stack.push(new Array(sg.nodes.length))
             untranspile(sg, stack, index)
             val popped = stack.pop()
-            s(c) = Space.Iteration(inputs(0).sget, popped(0).asInstanceOf[Path.Deref].pr, popped(1).asInstanceOf[Space.Mention].variable, popped.last.asInstanceOf[Space])
+            // an Iteration binder always binds a single head item — restore the length-1 tag lost by encoding
+            s(c) = Space.Iteration(inputs(0).sget, popped(0).asInstanceOf[Path.Deref].pr.known(1), popped(1).asInstanceOf[Space.Mention].variable, popped.last.asInstanceOf[Space])
           case "Fixpoint" =>   // inverse of transpile's Fixpoint lowering: slot 0 = ExtractSpaceMention(rec)
             stack.push(new Array(sg.nodes.length))
             untranspile(sg, stack, index)
@@ -1534,7 +1540,7 @@ object Lower:
   val TailsUnion_Iteration = subs(_: Space)(PartialFunction.empty, {
     case Space.TailsUnion(src) =>
       val name = SpaceMention("s" + src.hashCode().toHexString)
-      Space.Iteration(src, PathRef("_"), name, Space.Mention(name))
+      Space.Iteration(src, PathRef("_").known(1), name, Space.Mention(name))
   })
 
   val Literal_ConstantsUnion = subs(_: Space)(PartialFunction.empty, {
@@ -1702,7 +1708,12 @@ object Lower:
       val sb = sizeBounds(src, env)
       val benv = if rest.s == "_" then env else env.updated(rest, SizeBounds(0, 0, sb.hi))
       SizeBounds(0, 0, satMul(sb.hi, sizeBounds(body, benv).hi))
-    case Space.Mention(m) => env.getOrElse(m, SizeBounds.unknown)
+    case Space.Mention(m) =>
+      // a sizeHint is the author's exact-cardinality contract; at most one path is ε, so ≥ k−1
+      // are headed.  Intersect with the binder refinement (both are true facts when the hint is).
+      val b = env.getOrElse(m, SizeBounds.unknown)
+      if m.sizeHint < 0 then b
+      else SizeBounds(b.lo max m.sizeHint, b.loHeaded max relu(m.sizeHint - 1), b.hi min m.sizeHint)
     case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => SizeBounds.unknown
 
   /** "this space has at least one path" / "…at least one path with a head" — via [[sizeBounds]];
@@ -1723,14 +1734,14 @@ object Lower:
    *  the Range(0,1) probe iterates the FIRST path only. */
   def nonEmptyGuard(x: Space): Space =
     Space.Union(Space.Intersection(x, Space.Singleton(Path.ZERO)),
-                Space.Iteration(Space.Range(x, 0, 1), PathRef("_"), SpaceMention("_"), Space.Singleton(Path.ZERO)))
+                Space.Iteration(Space.Range(x, 0, 1), PathRef("_").known(1), SpaceMention("_"), Space.Singleton(Path.ZERO)))
   /** `{ε}` iff `x` has ≥1 HEADED path (i.e. an iteration over `x` runs), else `∅` — O(one path).
    *  This is the factor an iteration hoist needs, NOT [[nonEmptyGuard]]: `x == {ε}` is non-empty
    *  but runs zero iterations, so the nonEmpty factor would leak the hoisted branch.  ε sorts
    *  FIRST in the canonical path order, so the LAST path (`Range(x, -1, 0)`) is headed iff any
    *  path is. */
   def headedGuard(x: Space): Space =
-    Space.Iteration(Space.Range(x, -1, 0), PathRef("_"), SpaceMention("_"), Space.Singleton(Path.ZERO))
+    Space.Iteration(Space.Range(x, -1, 0), PathRef("_").known(1), SpaceMention("_"), Space.Singleton(Path.ZERO))
 
   /** Conservative "every path of `s` is ε", i.e. `s ⊆ {ε}` — true for the guards above and their
    *  compositions.  Lets a guard factor commute with Wrap (see [[EpsGuard_Wrap]]): a ⊆{ε} factor
@@ -2458,7 +2469,7 @@ object Syntax:
 //      if rhs(Path.ZERO) != Space.Empty then println(s"iter${k} wrapper=${Space.Empty.iterk(k, t, {case _ => Space.Empty}).show}")
       res
     infix def fold(initial: Path, acc: String, symbol: String, rest: String, rhs: Space, update: Path): Space =
-      Space.Fold(x, initial, PathRef(acc), PathRef(symbol), SpaceMention(rest), rhs, update)
+      Space.Fold(x, initial, PathRef(acc), PathRef(symbol).known(1), SpaceMention(rest), rhs, update)
     def iterh(h: Path.Deref, run: Space): Space = x.iter(h, S"_", run)
     def itert(t: Space.Mention, run: Space): Space = x.iter(P"_", t, run)
     def tee(run: Space): Space = x.iter(P"_", S"_", run)

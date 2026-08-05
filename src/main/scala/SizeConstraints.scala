@@ -73,21 +73,24 @@ object SizeZ3:
     def freshP(old: PathRef): PathRef =
       k += 1
       if old.lengthHint >= 0 then PathRef(s"~a$k").known(old.lengthHint) else PathRef(s"~a$k")
+    def freshM(old: SpaceMention): SpaceMention =
+      k += 1
+      if old.sizeHint >= 0 then SpaceMention(s"~m$k").known(old.sizeHint) else SpaceMention(s"~m$k")
     def go(sp: Space): Space = sp match
       case Space.Iteration(src, sym, rest, b) =>
         val b1 = go(b)
-        val (ns, nr) = (freshP(sym), SpaceMention(s"~m${ k += 1; k }"))
+        val (ns, nr) = (freshP(sym), freshM(rest))
         Space.Iteration(go(src), ns, nr,
           subs(b1)(spre = { case Space.Mention(m) if m == rest => Space.Mention(nr) },
                    ppre = { case Path.Deref(pr) if pr == sym => Path.Deref(ns) }))
       case Space.Fold(src, init, acc, sym, rest, b, upd) =>
         val b1 = go(b)
-        val nr = SpaceMention(s"~m${ k += 1; k }")
+        val nr = freshM(rest)
         Space.Fold(go(src), init, acc, sym, nr,
           subs(b1)(spre = { case Space.Mention(m) if m == rest => Space.Mention(nr) }), upd)
       case Space.Fixpoint(init, rec, b) =>
         val b1 = go(b)
-        val nr = SpaceMention(s"~m${ k += 1; k }")
+        val nr = freshM(rec)
         Space.Fixpoint(go(init), nr,
           subs(b1)(spre = { case Space.Mention(m) if m == rec => Space.Mention(nr) }))
       case Space.Union(a, b) => Space.Union(go(a), go(b))

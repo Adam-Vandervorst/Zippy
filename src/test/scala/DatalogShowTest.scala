@@ -107,6 +107,7 @@ object Expand:
   def item(pi: PathItem): String = s""""$pi""""
   def pv(p: PathValue): String = s"PathValue(List(${p.items.map(item).mkString(", ")}))"
   def ref(pr: PathRef): String = if pr.lengthHint < 0 then s"""PathRef("${pr.s}")""" else s"""PathRef("${pr.s}").known(${pr.lengthHint})"""
+  def men(m: SpaceMention): String = if m.sizeHint < 0 then s"""SpaceMention("${m.s}")""" else s"""SpaceMention("${m.s}").known(${m.sizeHint})"""
   def path(p: Path): String = p match
     case Path.Deref(pr)    => s"Path.Deref(${ref(pr)})"
     case Path.Constant(x)  => s"Path.Constant(${pv(x)})"
@@ -119,7 +120,7 @@ object Expand:
     def bin(name: String, x: Space, y: Space) = s"Space.$name(\n$q${space(x, ind + 1)},\n$q${space(y, ind + 1)})"
     s match
       case Empty            => "Space.Empty"
-      case Mention(m)       => s"""Space.Mention(SpaceMention("${m.s}"))"""
+      case Mention(m)       => s"Space.Mention(${men(m)})"
       case Singleton(pt)    => s"Space.Singleton(${path(pt)})"
       case Literal(v)       => s"Space.Literal(${sv(v)})"
       case Union(x, y)         => bin("Union", x, y)
@@ -132,7 +133,7 @@ object Expand:
       case TailsUnion(src)  => s"Space.TailsUnion(\n$q${space(src, ind + 1)})"
       case TailsIntersection(src) => s"Space.TailsIntersection(\n$q${space(src, ind + 1)})"
       case Iteration(src, sym, rest, tmpl) =>
-        s"""Space.Iteration(\n$q${space(src, ind + 1)},\n$q${ref(sym)}, SpaceMention("${rest.s}"),\n$q${space(tmpl, ind + 1)})"""
+        s"""Space.Iteration(\n$q${space(src, ind + 1)},\n$q${ref(sym)}, ${men(rest)},\n$q${space(tmpl, ind + 1)})"""
       case Call(rp, refs, ms) =>
         val r = if refs.isEmpty then "Vector()" else s"Vector(${refs.map(path).mkString(", ")})"
         val m = if ms.isEmpty then "Vector()" else s"Vector(\n$q${ms.map(space(_, ind + 1)).mkString(s",\n$q")})"
@@ -140,5 +141,5 @@ object Expand:
       case other            => other.toString
   def routine(r: Routine): String =
     val refs = r.refs.map(pr => s"""PathRef("${pr.s}")""").mkString(", ")
-    val ms   = r.mentions.map(m => s"""SpaceMention("${m.s}")""").mkString(", ")
+    val ms   = r.mentions.map(men).mkString(", ")
     s"""Routine(RoutinePtr("${r.name.s}"), Vector($refs), Vector($ms),\n  ${space(r.body, 1)})"""

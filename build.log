@@ -2392,3 +2392,44 @@ fold budget consults the syntactic hi (146M > 200k) even though the true
 evaluation is tiny — budget heuristic noted as a known limitation.
 Regression: SizeBoundsCheck, SizeZ3Check, CorpusLawValidation,
 ProductUnionCheck, Lowering, ExGameOfLife, OptimizerProperties all green.
+
+================================================================================
+2026-08-05  lengthHint tagging completed; SpaceMention.sizeHint added (analogous)
+================================================================================
+lengthHint completion — an Iteration/Fold head-binder always binds a single head item, so every
+fresh-binder creation site now tags .known(1):
+  - untranspile's Iteration reconstruction (MORKL ~675): restores the tag the op-graph string
+    encoding drops (graph round-trips previously came back untagged, disabling guarded laws).
+  - TailsUnion_Iteration, nonEmptyGuard, headedGuard probe binders (PathRef("_").known(1)).
+  - the fold DSL's head symbol (Syntax .fold).
+  - Supercompiler subst capture-renames and canon: fresh Iteration/Fold syms tagged known(1);
+    Fold acc and rest/rec binders PRESERVE their existing hints through renames (keepP/keepM).
+    canon numbering order unchanged, and hints are outside case-class equality, so matching
+    (instanceOf/embeds/msg) is unaffected.
+Free path refs (msg #g holes, DSL path vars) stay untagged — length genuinely unknown.
+
+SpaceMention.sizeHint — same mechanism as PathRef.lengthHint: out-of-equality annotation
+(val sizeHint = -1L; .known(size) anonymous-subclass override), the author's contract that the
+mention only binds spaces of EXACTLY that many paths. Consumers:
+  - Lower.sizeBounds Mention case: intersect env refinement with [k, relu(k-1), k] (at most one
+    path is ε, so ≥ k−1 headed). A hint ≥ 2 makes an open mention provablyHeaded, so guarded
+    hoists (IterUnion_Indep) can fire on open programs; hint 0 feeds SizeEmpty.
+  - SizeZ3 picks hints up automatically via the baseline seeds; alphaRename's fresh rest/rec
+    mentions preserve hints (freshM, mirroring freshP).
+  - Expand pretty-printer round-trips .known for both hints (men() alongside ref()).
+
+CORPUS REGENERATED: adding the sizeHint field changed SpaceMention's implicit serialVersionUID
+-> corpus_1000.ser stale (the known trap; loader failed actionably). Reran morkl.ProgramExpressivity
+(1000 programs, ~8s).
+
+VALIDATION: 18 suites green: SizeBoundsCheck (incl. 2 new tests: sizeHint narrows both tiers +
+provablyHeaded on open mentions; head-binders tagged through guards/DSL fold/graph round-trip),
+SizeZ3Check, ProductUnionCheck, AlgebraicLaws, CorpusLawValidation (100k checks — guards now fire
+on MORE programs, no law regression), SCMatching/SCDriver/SCGeneralization/SCHardening/SCFacade,
+GraphExecT, TrieTest, OptimizerProperties, ZipperTest, FuzzerDemo, DatalogShowTest, SCDegeneracies,
+CorpusValidation (1M pairs, 7 executors).
+
+ENVIRONMENT NOTE: the ProgramExpressivity expressivity CENSUS (Slow, not run since 06-26) hits a
+StackOverflowError in ITrie recursion under the default JVM stack; the census path (fuzz draw +
+evalI) reads no hints, so this is pre-existing, not caused by this change. Battery + corpus regen
+ran with --java-opt -Xss512m; use that for ITrie-recursion-heavy runs.

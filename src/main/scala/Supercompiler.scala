@@ -111,6 +111,10 @@ object Matching:
     def freshName(avoid: Set[String], kind: String): String =
       while avoid(s"~$kind$fresh") do fresh += 1
       val r = s"~$kind$fresh"; fresh += 1; r
+    // renames preserve hints: a binder's lengthHint (an Iteration/Fold symbol is always a length-1
+    // head, tagged at the rename site) and any author sizeHint carry over to the fresh name
+    def keepP(f: PathRef, old: PathRef): PathRef = if old.lengthHint >= 0 then f.known(old.lengthHint) else f
+    def keepM(f: SpaceMention, old: SpaceMention): SpaceMention = if old.sizeHint >= 0 then f.known(old.sizeHint) else f
     def rangeMentions(asm: Map[SpaceMention, Space], apm: Map[PathRef, Path]): Set[SpaceMention] =
       asm.valuesIterator.flatMap(freeMentions).toSet ++ apm.valuesIterator.flatMap(p => freeMentions(Space.Singleton(p))).toSet
     def rangeRefs(asm: Map[SpaceMention, Space], apm: Map[PathRef, Path]): Set[PathRef] =
@@ -137,15 +141,15 @@ object Matching:
         val capM = rangeMentions(sm2, pm2).contains(rest)
         val capP = rangeRefs(sm2, pm2).contains(sym)
         if capM || capP then
-          val nr = if capM then SpaceMention(freshName(rangeMentions(sm2, pm2).map(_.s) ++ freeMentions(body).map(_.s), "m")) else rest
-          val ns = if capP then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ freeRefs(body).map(_.s), "p")) else sym
+          val nr = if capM then keepM(SpaceMention(freshName(rangeMentions(sm2, pm2).map(_.s) ++ freeMentions(body).map(_.s), "m")), rest) else rest
+          val ns = if capP then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ freeRefs(body).map(_.s), "p")).known(1) else sym
           val body1 = recs(body, if capM then Map(rest -> Space.Mention(nr)) else Map.empty, if capP then Map(sym -> Path.Deref(ns)) else Map.empty)
           Space.Iteration(recs(src, sm, pm), ns, nr, recs(body1, sm2, pm2))
         else Space.Iteration(recs(src, sm, pm), sym, rest, recs(body, sm2, pm2))
       case Space.Fixpoint(init, rec, body) =>
         val sm2 = sm - rec   // rec (a mention) shadows mention substitution in body; refs unaffected
         if rangeMentions(sm2, pm).contains(rec) then
-          val nr = SpaceMention(freshName(rangeMentions(sm2, pm).map(_.s) ++ freeMentions(body).map(_.s), "m"))
+          val nr = keepM(SpaceMention(freshName(rangeMentions(sm2, pm).map(_.s) ++ freeMentions(body).map(_.s), "m")), rec)
           val body1 = recs(body, Map(rec -> Space.Mention(nr)), Map.empty)
           Space.Fixpoint(recs(init, sm, pm), nr, recs(body1, sm2, pm))
         else Space.Fixpoint(recs(init, sm, pm), rec, recs(body, sm2, pm))
@@ -158,9 +162,9 @@ object Matching:
         if capR || capA || capS then
           val bodyVars = freeMentions(body).map(_.s) ++ freeMentions(Space.Singleton(upd)).map(_.s)
           val refVars = freeRefs(body).map(_.s) ++ freeRefs(Space.Singleton(upd)).map(_.s)
-          val nr = if capR then SpaceMention(freshName(rangeMentions(sm2, pm2).map(_.s) ++ bodyVars, "m")) else rest
-          val na = if capA then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ refVars, "p")) else acc2
-          val nsy = if capS then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ refVars, "p")) else sym
+          val nr = if capR then keepM(SpaceMention(freshName(rangeMentions(sm2, pm2).map(_.s) ++ bodyVars, "m")), rest) else rest
+          val na = if capA then keepP(PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ refVars, "p")), acc2) else acc2
+          val nsy = if capS then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ refVars, "p")).known(1) else sym
           val renS = if capR then Map(rest -> Space.Mention(nr)) else Map.empty[SpaceMention, Space]
           val renP = (if capA then Map(acc2 -> Path.Deref(na)) else Map.empty[PathRef, Path]) ++ (if capS then Map(sym -> Path.Deref(nsy)) else Map.empty)
           val body1 = recs(body, renS, renP)
@@ -193,15 +197,17 @@ object Matching:
     def recs(x: Space): Space = x match
       case Space.Iteration(src, sym, rest, body) =>
         val s2 = recs(src)
-        val p = freshP(); val r = freshS()
+        val p = freshP().known(1); val r = if rest.sizeHint >= 0 then freshS().known(rest.sizeHint) else freshS()
         Space.Iteration(s2, p, r, recs(subst(body, Map(rest -> Space.Mention(r)), Map(sym -> Path.Deref(p)))))
       case Space.Fold(src, init, acc2, sym, rest, body, upd) =>
         val s2 = recs(src); val i2 = recp(init)
-        val a = freshP(); val p = freshP(); val r = freshS()
+        val a = if acc2.lengthHint >= 0 then freshP().known(acc2.lengthHint) else freshP()
+        val p = freshP().known(1)
+        val r = if rest.sizeHint >= 0 then freshS().known(rest.sizeHint) else freshS()
         val pm = Map(acc2 -> Path.Deref(a), sym -> Path.Deref(p)); val smm = Map(rest -> Space.Mention(r))
         Space.Fold(s2, i2, a, p, r, recs(subst(body, smm, pm)), recp(subst2(upd, smm, pm)))
       case Space.Fixpoint(init, rec, body) =>
-        val i2 = recs(init); val r = freshS()
+        val i2 = recs(init); val r = if rec.sizeHint >= 0 then freshS().known(rec.sizeHint) else freshS()
         Space.Fixpoint(i2, r, recs(subst(body, Map(rec -> Space.Mention(r)), Map.empty)))
       case Space.Mention(_) | Space.Empty | Space.Literal(_) => x
       case Space.Singleton(p) => Space.Singleton(recp(p))
