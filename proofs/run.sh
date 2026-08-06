@@ -1,10 +1,15 @@
 #!/bin/sh
-# Discharge every proof obligation with BOTH z3 and vampire (independent cross-validation).
+# Discharge every proof obligation with z3 AND vampire, recording BOTH verdicts per file.
 # Every file asserts the NEGATION of its theorem, so per prover:
-#   z3 "unsat" / vampire "Refutation found"  = PROVED
+#   z3 "unsat" / vampire "Refutation found"  = that prover proved it
 #   z3 "sat"                                 = COUNTERMODEL — the stated theorem is FALSE (hard
 #                                              failure: a wrong statement must never sit quietly)
 #   timeout/unknown on both                  = OPEN
+# A file is labelled PROVED when EITHER prover succeeds — the z3 and vampire columns of STATUS.tsv
+# record which one(s) did, so a single-prover result stays visible instead of being implied to be
+# cross-validated.  (Requiring both would flip most datatype/arithmetic files to OPEN: default-mode
+# vampire has no theory portfolio — see docs/traps.md.  Where cross-validation is load-bearing — the
+# per-program equivalence obligations — EquivPipelineTest demands both provers itself.)
 # The verdict per file is written to STATUS.tsv (file <TAB> z3 <TAB> vampire <TAB> verdict) —
 # the MACHINE-READABLE source of truth consumed by scripts/check_obligations.py, so an
 # admitted-unproved obligation is distinguishable from a proved one by every tool in the repo.

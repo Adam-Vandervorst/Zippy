@@ -1661,7 +1661,7 @@ object Lower:
    *  `|rest| ≤ ⌈src⌉` — without it every nested rest-iteration widens to [0, ∞).  Binders named
    *  `_` are never bound (contexts ignore the throwaway binder), and a Fixpoint's rec stays
    *  unknown (its iterates are unbounded). */
-  private def sizeBounds(s: Space, env: Map[SpaceMention, SizeBounds],
+  private[morkl] def sizeBounds(s: Space, env: Map[SpaceMention, SizeBounds],
                          rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
                          stack: Set[RoutinePtr] = Set.empty): SizeBounds = s match
     case Space.Empty => SizeBounds(0, 0, 0)

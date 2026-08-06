@@ -451,13 +451,18 @@ sp("sp_class_ie_tighter",
    """(forall ((l Int)) (=> (>= (cI l) 1) (< (cU l) (+ (cA l) (cB l)))))""",
    extra=MEASURE, lemmas=False)
 
-sp("sp_galois",
-   "GALOIS CONNECTION: γ∘α is the identity on a concrete histogram, and α∘γ ⊑ id (per class)",
-   """(forall ((l Int) (blo Int) (bhi Int))
-       (and (and (<= (cA l) (cA l)) (>= (cA l) (cA l)))                    ; c ∈ γ(α c)
-            (=> (and (<= blo (cA l)) (<= (cA l) bhi))                      ; c ∈ γ(t) ⇒ α(c) ⊑ t
-                (and (<= blo (cA l)) (<= (cA l) bhi)))))""",
-   extra=MEASURE, lemmas=False)
+# The concretization order.  The FIRST conjunct is what a post-fixpoint argument needs: t1 ⊑ t2 must
+# imply γ(t1) ⊆ γ(t2).  The SECOND is a refutation kept deliberately: the UPPER-ENVELOPE-only
+# comparison that `SpaceType.within` computes does NOT imply γ-containment, so the code's fixpoint
+# check is not this order and must justify its lower bounds separately (it takes them from `init`).
+sp("sp_gamma_order",
+   "CONCRETIZATION ORDER: interval inclusion (both endpoints) implies gamma-containment, and an UPPER-ENVELOPE-only comparison does NOT — the exact gap between the certified order and SpaceType.within",
+   """(and (forall ((alo Int) (ahi Int) (blo Int) (bhi Int) (c Int))
+            (=> (and (<= blo alo) (<= ahi bhi) (<= alo c) (<= c ahi))
+                (and (<= blo c) (<= c bhi))))
+       (not (forall ((alo Int) (ahi Int) (blo Int) (bhi Int) (c Int))
+              (=> (and (<= ahi bhi) (<= alo c) (<= c ahi))
+                  (and (<= blo c) (<= c bhi))))))""", lemmas=False)
 
 # ---------------------------------------------------------------- emit
 for name, desc, body in LATS:
@@ -515,7 +520,7 @@ REG = [
     ("cardinality bridge", "DEFINITIONAL", "spatial/sp_class_bounds.smt2", "4 finite-measure axioms asserted; the per-class bounds PROVED on top"),
     ("per-class bounds", "FILE", "spatial/sp_class_bounds.smt2", "union/inter/sub class bounds from the measure axioms"),
     ("inclusion–exclusion strength", "FILE", "spatial/sp_class_ie_tighter.smt2", "IE beats the additive bound on overlap — the strengthening"),
-    ("Galois connection", "FILE", "spatial/sp_galois.smt2", "α ⊣ γ per class"),
+    ("concretization order", "FILE", "spatial/sp_gamma_order.smt2", "interval inclusion ⇒ γ-containment; upper-envelope alone does NOT (refuted) — bounds what `within` licenses"),
 ]
 with open(outdir / "REGISTRY.tsv", "w") as f:
     f.write("law\tkind\tcertificates\tnote\n")

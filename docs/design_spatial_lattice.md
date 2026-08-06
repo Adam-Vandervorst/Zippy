@@ -11,6 +11,16 @@ The point is not to record trivia. Three of these laws *changed the code*: the `
 corrected the lattice's bottom, and the subsumption + self-restriction families became a new
 relational layer that measurably tightens the analysis (§6).
 
+**Scope — read this before the word "certified".** These files are *supporting lemmas about a model
+of the domain*, not a proof of the Scala implementation. The model and the code differ in ways that
+matter, and §7 lists them: the proof lattice's `ijoin` is the interval hull while the code's `join`
+is the set-union cardinality transfer; the proof's `∞` is a datatype constructor while the code uses
+a `Long.MaxValue` sentinel; the model has no spill bucket, no `normalize`, no binders, calls,
+`Range`, `Fold`, or syntactic subsumption. No mechanical check ties a transfer in
+`SpatialTypes.scala` to its counterpart here. Treat the corpus as *evidence for the algebra the
+transfers assume*, and the differential suites (`SpillSoundness`, `SpatialTypeCheck`,
+`CornerstoneTypes`) as the evidence about the code.
+
 ---
 
 ## 0. The standing invariant: no evaluation
@@ -33,8 +43,11 @@ went with it. Anything that looks exact now is derived.
 | Class | `Ivl = Cnt × Cnt` (a count interval) | `a ⊑ b ⟺ lo b ≤ lo a ∧ hi a ≤ hi b` (inclusion) |
 | Type | `len ⇀ Ivl` (+ one spill bucket) | pointwise `⊑` |
 
-`∞` is a **datatype constructor**, not a sentinel integer — the count domain is genuinely complete,
-which is what makes `⊤ = [0, ∞]` a real greatest element rather than an arithmetic accident.
+`∞` is a **datatype constructor in the model**, so the modelled count domain is genuinely complete
+and `⊤ = [0, ∞]` is a real greatest element. **The code does not do this**: `Ivl.INF` is
+`Long.MaxValue`, a sentinel, and the ∞ behaviour holds only because `Ivl.add`/`Ivl.mul` saturate on
+it explicitly. The lattice results below therefore transfer to the code only insofar as that
+saturating arithmetic matches the modelled operations — checked by reading, not mechanically.
 
 **⊥ is the inconsistent interval `(∞, 0)`** — "no count is possible", i.e. the provably-empty
 marker `LenBounds.empty`. This is *not* `[0,0]`: γ([0,0]) = {0} ⊄ γ([2,5]), so `[0,0]` is an ordinary
@@ -71,19 +84,30 @@ old one. This is why `LenBounds.empty = (INF, 0)` composes correctly through `mi
 - **Monotonicity of every per-class transfer** — `lat_transfer_mono_binary` (∪, ∩, ∖),
   `lat_transfer_mono_unary` (restriction kill/keep, tails), `lat_transfer_mono_scale`
   (iteration/fold scaling). This is the precondition for the fixpoint iteration to make sense.
-- **Local soundness** — each transfer's interval contains the true class count, given the concrete
-  per-class facts (`lat_transfer_sound`).
+- **Local soundness, for three transfers only** — `lat_transfer_sound` covers the per-class
+  union/intersection/subtraction intervals given the concrete per-class facts. Composition, wrap,
+  unwrap, tails, restriction, raffination, `Range`, iteration, fold, subsumption and the spill
+  handling are **not** in that file; their supporting *path* facts are in §5, but the transfers
+  themselves are checked only differentially.
 - **POST-FIXPOINT theorem** (`lat_postfixpoint`, via an explicit nat-induction schema):
-  `F#` monotone ∧ `init ⊑ T` ∧ `F#(T) ⊑ T` ⇒ every Kleene iterate `⊑ T`. **This is the theorem the
-  `Fixpoint` transfer rests on** — the analysis checks exactly those two premises and falls back
-  when the check fails, so this certificate is what makes that fallback logic principled rather
-  than hopeful.
+  `F#` monotone ∧ `init ⊑ T` ∧ `F#(T) ⊑ T` ⇒ every Kleene iterate `⊑ T`. This is the *shape* of the
+  argument the `Fixpoint` transfers use, but **it is not a theorem about the code's operations**:
+  the certificate's `ijoin` is the interval hull and its `⊑` is two-endpoint inclusion, whereas the
+  code accumulates with the union-cardinality `join` and checks `within`, which compares **upper
+  envelopes only**. `sp_gamma_order` proves that two-endpoint inclusion implies γ-containment *and
+  refutes* the upper-envelope version, so what the code's check licenses is precisely the **upper**
+  half of the result; its lower bounds come separately from `init` (the accumulator only grows from
+  the initial set). Stated that way the transfer is sound, but the citation is to an argument
+  pattern, not to a verified model of `SpatialTypes.Fixpoint`.
 - **Widening soundness** (`lat_widen_sound`): count-widening and class-spilling only ever loosen.
 - **Projection monotonicity** (`lat_proj_mono`): a tighter type gives tighter size *and* length
   bounds; disjoint classes add.
 - **MEET-DOMINATES** (`lat_meet_dominates`): meeting two sound intervals stays sound and is at
   least as tight as either — the theorem behind `bestSize`/`bestLen`.
-- **Galois connection** (`sp_galois`): `c ∈ γ(α c)` and `c ∈ γ(t) ⇒ α(c) ⊑ t`, i.e. `α∘γ ⊑ id`.
+- **Concretization order** (`sp_gamma_order`): interval inclusion implies γ-containment, and the
+  upper-envelope-only comparison does not (a deliberate refutation). This replaced an earlier
+  `sp_galois` file that was a **tautology** (`P ⇒ P` over an already-declared count) and proved
+  nothing — it should never have been listed as a Galois connection.
 
 ## 5. Concrete path facts each transfer needs (certified: `sp_*`)
 

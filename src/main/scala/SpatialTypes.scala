@@ -91,8 +91,11 @@ object SpaceType:
   val unknown: SpaceType = SpaceType(sorted(Nil), Ivl.unknown, LenBounds.unknown)
   /** exactly `n` paths, all of length `l` */
   def exact(l: Long, n: Long): SpaceType = SpaceType(sorted(List(l -> Ivl(n, n))), Ivl.zero, LenBounds.empty)
-  /** closed support: the given classes and nothing else */
-  def closed(cs: (Long, Ivl)*): SpaceType = SpaceType(sorted(cs), Ivl.zero, LenBounds.empty)
+  /** Closed support: the given classes and nothing else.  Routed through the analysis' widening so
+   *  the documented class cap actually holds — a literal (or a declared input type) with more than
+   *  `MaxClasses` distinct lengths used to build an oversized map that bypassed `normalize`. */
+  def closed(cs: (Long, Ivl)*): SpaceType =
+    SpatialTypes.widen(SpaceType(sorted(cs), Ivl.zero, LenBounds.empty))
   def of(v: SpaceValue): SpaceType =
     closed(v.paths.groupBy(_.items.length.toLong).view.mapValues(ps => Ivl(ps.size, ps.size)).toSeq*)
   /** at most `n` paths, lengths anywhere in `b` (the shape of an unwrap/restriction result) */
@@ -120,7 +123,10 @@ object SpatialTypes:
   val MaxClasses = 24
   val MaxLen = 8192
 
-  /** widen: keep the map small and the lengths bounded by spilling classes into `rest` */
+  /** the public widening: spill to keep the caps, then enforce the disjointness invariant */
+  private[morkl] def widen(t: SpaceType): SpaceType = disjoin(normalize(t))
+
+  /** spill classes into `rest` to keep the map small and the lengths bounded */
   private def normalize(t: SpaceType): SpaceType =
     val live = t.byLen.filter(_._2.hi > 0)
     val (keep, spill) =
@@ -142,7 +148,31 @@ object SpatialTypes:
 
   private def lensOf(a: SpaceType, b: SpaceType): Vector[Long] = (a.byLen.keySet ++ b.byLen.keySet).toVector.sorted
   private def build(cs: Iterable[(Long, Ivl)], rest: Ivl, restLens: LenBounds): SpaceType =
-    normalize(SpaceType(SortedMap.from(cs.filter(_._2.hi > 0)), rest, if rest.hi == 0 then LenBounds.empty else restLens))
+    disjoin(normalize(SpaceType(SortedMap.from(cs.filter(_._2.hi > 0)), rest,
+                                if rest.hi == 0 then LenBounds.empty else restLens)))
+
+  /** ENFORCE THE REPRESENTATION INVARIANT: the spill bucket counts the paths at lengths NOT in
+   *  `byLen`, so `restLens` must not cover a tracked length.  `at` and `size` both rely on that —
+   *  `at(l)` answers from the tracked class alone — so an overlap makes the per-length claim FALSE,
+   *  not merely imprecise: a transfer can route part of a length's paths into the spill (composition
+   *  puts every rest-involving product there) while the tracked class counts only the rest.
+   *
+   *  Any tracked class the spill range covers is therefore folded INTO the spill.  Counts are
+   *  combined with `max` on the lower end, not `+`: if the buckets did overlap, the two claims may
+   *  describe the same paths, and only the maximum is guaranteed.  Precision is lost exactly where
+   *  widening had already given up (a type only has a spill once it exceeded `MaxClasses`/`MaxLen`),
+   *  so terms under the caps — every cornerstone and every corpus program — are unaffected. */
+  private def disjoin(t: SpaceType): SpaceType =
+    if t.rest.hi == 0 || t.restLens.isEmpty then t
+    else
+      val (overlap, keep) = t.byLen.partition((l, _) => t.restLens.lo <= l && l <= t.restLens.hi)
+      if overlap.isEmpty then t
+      else
+        var lo = t.rest.lo
+        var hi = t.rest.hi
+        for (_, c) <- overlap do { lo = lo max c.lo; hi = Ivl.add(hi, c.hi) }
+        SpaceType(SortedMap.from(keep), Ivl(lo, hi),
+                  LenBounds(t.restLens.lo min overlap.keysIterator.min, t.restLens.hi max overlap.keysIterator.max))
   private def restUnion(a: SpaceType, b: SpaceType): (Ivl, LenBounds) =
     val c = Ivl(a.rest.lo max b.rest.lo, Ivl.add(a.rest.hi, b.rest.hi))
     if c.hi == 0 then (Ivl.zero, LenBounds.empty)
@@ -324,7 +354,10 @@ object SpatialTypes:
 
       case Space.Iteration(src, sym, rest, body) =>
         val x = rec(src)
-        val sb = Lower.sizeBounds(src)
+        // the group count comes from the SPATIAL source type met with the baseline: using only
+        // `Lower.sizeBounds(src)` threw away a declared input type, so iterating over a mention
+        // typed "exactly two length-1 paths" still reported [0, inf) (review.md)
+        val sb = meetSize(x.size, Lower.sizeBounds(src, envSizes(env), env.routines, env.active))
         if x.isProvablyEmpty || x.len.hi == 0 then SpaceType.empty  // no HEADED path ⇒ no groups
         else
           val benv = env.withPath(sym -> LenBounds(1, 1))           // an iteration head is ONE item
@@ -336,7 +369,7 @@ object SpatialTypes:
 
       case Space.Fold(src, _, acc, sym, rest, body, _) =>
         val x = rec(src)
-        val sb = Lower.sizeBounds(src)
+        val sb = meetSize(x.size, Lower.sizeBounds(src, envSizes(env), env.routines, env.active))
         if x.isProvablyEmpty || x.len.hi == 0 then SpaceType.empty
         else
           val benv = env.withPath(sym -> LenBounds(1, 1))
@@ -345,7 +378,14 @@ object SpatialTypes:
 
       case Space.Fixpoint(init, recm, body) =>
         val i0 = rec(init)
-        // Kleene iteration with widening, then a POST-FIXPOINT check: if F(T) ⊑ T then lfp ⊑ T.
+        // The concrete fixpoint returns the UNION of all iterates, so the check has to hold for the
+        // union, not just for one application: `join(t, F#(t)) ⊑ t`.  Since `join`'s per-class upper
+        // ADDS counts, a finite-count candidate can only satisfy that when the body contributes
+        // nothing — every other case must have its counts widened to ∞ first.  Earlier this held
+        // only as a side effect of the widening schedule (widenCounts kicked in at k ≥ 2), which is
+        // exactly the kind of accidental soundness review.md warned about; it is now required
+        // explicitly.  The SUPPORT (which lengths occur) is what survives widening, and that is the
+        // real result here — the reachable-state-space fixpoints are length-homogeneous.
         var t = i0
         var k = 0
         var ok = false
@@ -354,15 +394,27 @@ object SpatialTypes:
           val j = join(t, f)
           if j.within(t) then ok = true
           else
-            t = if k >= 2 then widenCounts(j) else j                 // widen counts, keep the support
+            t = if k >= 2 then widenCounts(j) else j
             k += 1
-        val verified = ok || go(body, env + (recm -> t), depth + 1).within(t)
+        // re-verify on the UNION, and if a finite-count candidate cannot carry it, widen and retry
+        def unionClosed(c: SpaceType): Boolean = join(c, go(body, env + (recm -> c), depth + 1)).within(c)
+        val (cand, verified) =
+          if ok || unionClosed(t) then (t, true)
+          else
+            val w = widenCounts(t)
+            if unionClosed(w) then (w, true) else (w, false)
         if verified then
-          // the result contains init and is contained in t: keep t's envelope, init's lower bounds
-          build(t.byLen.map((l, c) => l -> Ivl(i0.at(l).lo, c.hi)), Ivl(0, t.rest.hi), t.restLens)
+          // the result contains init and is contained in cand: cand's envelope, init's lower bounds
+          build(cand.byLen.map((l, c) => l -> Ivl(i0.at(l).lo, c.hi)), Ivl(0, cand.rest.hi), cand.restLens)
         else
-          val lb = Lower.lenBounds(s)
-          if lb.isEmpty then SpaceType.empty else SpaceType(SortedMap.from(Nil), Ivl(i0.size.lo, Ivl.INF), lb)
+          // no verified post-fixpoint ⇒ counts unbounded, but keep every length fact the supplied
+          // env and routine table still justify (the old fallback recomputed lenBounds with an
+          // EMPTY env, discarding exactly the information the caller had provided — review.md).
+          val lb = Lower.lenBounds(s, envLens(env), env.paths, env.routines, env.active)
+          val hull = if lb.isEmpty then i0.len else if i0.len.isEmpty then lb
+                     else LenBounds(lb.lo min i0.len.lo, lb.hi max i0.len.hi)
+          if hull.isEmpty then SpaceType.empty
+          else SpaceType(SortedMap.from(Nil), Ivl(i0.size.lo, Ivl.INF), hull)
 
       // an explicit input type wins; otherwise honour the mention's `sizeHint` contract (exactly
       // that many paths, at lengths we know nothing about) — the same hint tier-1 sizeBounds trusts
@@ -382,6 +434,10 @@ object SpatialTypes:
 
       case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => SpaceType.unknown
 
+  /** both are sound bounds on the same count, so the meet is sound and at least as tight */
+  private def meetSize(a: SizeBounds, b: SizeBounds): SizeBounds =
+    SizeBounds(a.lo max b.lo, a.loHeaded max b.loHeaded, a.hi min b.hi)
+
   private def widenCounts(t: SpaceType): SpaceType =
     SpaceType(SortedMap.from(t.byLen.map((l, c) => l -> Ivl(c.lo, Ivl.INF))),
               if t.rest.hi == 0 then Ivl.zero else Ivl(t.rest.lo, Ivl.INF), t.restLens)
@@ -397,17 +453,94 @@ object SpatialTypes:
     else build(t.byLen.map((l, c) => l -> Ivl(if gLo >= 1 then c.lo else 0L, Ivl.mul(c.hi, gHi))),
                Ivl(if gLo >= 1 then t.rest.lo else 0L, Ivl.mul(t.rest.hi, gHi)), t.restLens)
 
+  // ---- intermediate-space elimination ----------------------------------------------------------
+  /** A named fact the abstract interpretation established, and what it let us delete. */
+  final case class Removed(fact: String, subterm: String, nodes: Int)
+  /** The residual program plus the facts that justify it. */
+  final case class Elimination(residual: Space, removed: Vector[Removed]):
+    def nodesRemoved: Int = removed.map(_.nodes).sum
+
+  private def nodeCount(sp: Space): Int = 1 + SizeZ3.children(sp).map(nodeCount).sum
+
+  /** ELIMINATE INTERMEDIATE SPACES from a function body, using ONLY facts this abstract
+   *  interpretation derives from the function's ANNOTATED INPUTS.
+   *
+   *  Nothing here evaluates a subterm: a subterm is deleted when its inferred spatial type is
+   *  `⊥` (no class can hold a path), which the transfers derive from the term's syntax, the
+   *  annotations in `env`, and the certified relational laws.  Deleting it removes the whole
+   *  computation that produced it — the point of the exercise — and the ordinary `Lower` laws then
+   *  propagate `Empty` through its parents (`x ∪ ∅ = x`, `∅ · y = ∅`, …).
+   *
+   *  CONTRACT: the residual agrees with the original on every input SATISFYING `env`.  With an empty
+   *  `env` the annotations are vacuous, so the rewrite is unconditional; with annotations the result
+   *  is a SPECIALISATION and is only valid where they hold.  This is strictly stronger than the
+   *  syntactic `Lower.SizeEmpty` law, which sees only `sizeBounds(sp).hi == 0`: the spatial tier also
+   *  proves emptiness from length-disjointness (`{len 10} ∩ {len 15}`), from restriction
+   *  annihilation (every path shorter than the shortest prefix), and from a declared input type. */
+  def eliminate(s: Space, env: SpatialEnv): Elimination =
+    val out = Vector.newBuilder[Removed]
+    def go2(sp: Space, e: SpatialEnv, depth: Int): Space =
+      if depth > 64 then sp
+      else if sp != Space.Empty && infer(sp, e).isProvablyEmpty then
+        out += Removed("provably-empty", sp.show.take(90), nodeCount(sp))
+        Space.Empty
+      else sp match
+        case Space.Union(a, b) => Space.Union(go2(a, e, depth + 1), go2(b, e, depth + 1))
+        case Space.Intersection(a, b) => Space.Intersection(go2(a, e, depth + 1), go2(b, e, depth + 1))
+        case Space.Subtraction(a, b) => Space.Subtraction(go2(a, e, depth + 1), go2(b, e, depth + 1))
+        case Space.Restriction(a, b) => Space.Restriction(go2(a, e, depth + 1), go2(b, e, depth + 1))
+        case Space.Raffination(a, b) => Space.Raffination(go2(a, e, depth + 1), go2(b, e, depth + 1))
+        case Space.Composition(a, b) => Space.Composition(go2(a, e, depth + 1), go2(b, e, depth + 1))
+        case Space.Wrap(a, p) => Space.Wrap(go2(a, e, depth + 1), p)
+        case Space.Unwrap(a, p) => Space.Unwrap(go2(a, e, depth + 1), p)
+        case Space.TailsUnion(a) => Space.TailsUnion(go2(a, e, depth + 1))
+        case Space.TailsIntersection(a) => Space.TailsIntersection(go2(a, e, depth + 1))
+        case Space.Range(a, x, y) => Space.Range(go2(a, e, depth + 1), x, y)
+        case Space.Iteration(src, sym, rest, body) =>
+          // the body sees the loop's bindings, exactly as the analysis binds them
+          val benv = e.withPath(sym -> LenBounds(1, 1))
+            .copy(spaces = if rest.s == "_" then e.spaces else e.spaces + (rest -> tailsOf(infer(src, e))))
+          Space.Iteration(go2(src, e, depth + 1), sym, rest, go2(body, benv, depth + 1))
+        case Space.Fold(src, init, acc, sym, rest, body, upd) =>
+          val benv = e.withPath(sym -> LenBounds(1, 1))
+            .copy(spaces = if rest.s == "_" then e.spaces else e.spaces + (rest -> tailsOf(infer(src, e))))
+          Space.Fold(go2(src, e, depth + 1), init, acc, sym, rest, go2(body, benv, depth + 1), upd)
+        case Space.Fixpoint(init, recm, body) =>
+          // the recursive mention is only ⊤-bound here: the accumulated type is not available to a
+          // one-pass rewrite, and assuming anything stronger would not be justified
+          val benv = e.copy(spaces = e.spaces - recm)
+          Space.Fixpoint(go2(init, e, depth + 1), recm, go2(body, benv, depth + 1))
+        case other => other                       // Call bodies belong to their own routine
+    val r = go2(s, env, 0)
+    Elimination(r, out.result())
+
+  /** the same, on a FUNCTION: annotate the parameters, get a specialised routine plus its facts */
+  def eliminateIn(r: Routine, env: SpatialEnv): (Routine, Vector[Removed]) =
+    val e = eliminate(r.body, env)
+    (Routine(r.name, r.refs, r.mentions, e.residual), e.removed)
+
   // ---- projections, clamped by the dedicated analyses ------------------------------------------
+  // Every one of these passes the caller's ROUTINE TABLE down to the tier-1/z3 analyses.  Not doing
+  // so silently discarded the interprocedural information the caller supplied, so a "sharpest
+  // answer" could be LOOSER than plain `Lower.sizeBounds(s, rc)` — see review.md.  Declared input
+  // TYPES still reach only the spatial tier: the other two take mention bounds through their own
+  // env, so `envSizes`/`envLens` translate what is translatable (a `SpaceType` down to its size and
+  // length projections) instead of dropping it.
+  private def envSizes(env: SpatialEnv): Map[SpaceMention, SizeBounds] =
+    env.spaces.view.mapValues(_.size).toMap
+  private def envLens(env: SpatialEnv): Map[SpaceMention, LenBounds] =
+    env.spaces.view.mapValues(_.len).toMap
+
   /** the size projection, intersected with the tier-1 size analysis (never worse than either) */
   def sizeOf(s: Space, env: SpatialEnv = SpatialEnv()): SizeBounds =
     val t = infer(s, env).size
-    val b = Lower.sizeBounds(s)
+    val b = Lower.sizeBounds(s, envSizes(env), env.routines, Set.empty)
     SizeBounds(t.lo max b.lo, t.loHeaded max b.loHeaded, t.hi min b.hi)
 
   /** the length projection, intersected with the tier-1 length analysis */
   def lenOf(s: Space, env: SpatialEnv = SpatialEnv()): LenBounds =
     val t = infer(s, env).len
-    val b = Lower.lenBounds(s)
+    val b = Lower.lenBounds(s, envLens(env), env.paths, env.routines, Set.empty)
     if t.isEmpty || b.isEmpty then LenBounds.empty else LenBounds(t.lo max b.lo, t.hi min b.hi)
 
   /** The sharpest sound answers available: the spatial projection meet the dedicated tiers.
@@ -418,19 +551,27 @@ object SpatialTypes:
    *  them is sound (both over-approximate the same value) and dominates each, so these are what a
    *  consumer should use; they also make "the spatial projection falls within the z3 bounds" hold
    *  by construction. */
+  /** a z3 answer is usable when it was fully solved OR partly solved — a `PartiallySolved` result
+   *  has baseline endpoints where an objective failed and optimal ones elsewhere, so it still
+   *  dominates the baseline and meeting with it can only tighten.  Discarding it threw away real
+   *  information (review.md). */
+  private def usable(st: SizeZ3.Status): Boolean = st match
+    case SizeZ3.Status.Solved | SizeZ3.Status.PartiallySolved(_) => true
+    case _ => false
+
   def bestSize(s: Space, env: SpatialEnv = SpatialEnv(), timeoutSec: Int = 8): SizeBounds =
     val a = sizeOf(s, env)
     if !SizeZ3.available then a
     else
-      val (z, st) = SizeZ3.boundsWithStatus(s, timeoutSec)
-      if st != SizeZ3.Status.Solved then a
+      val (z, st) = SizeZ3.boundsWithStatus(s, timeoutSec, env.routines)
+      if !usable(st) then a
       else SizeBounds(a.lo max z.lo, a.loHeaded max z.loHeaded, a.hi min z.hi)
 
   def bestLen(s: Space, env: SpatialEnv = SpatialEnv(), timeoutSec: Int = 8): LenBounds =
     val a = lenOf(s, env)
     if !LenZ3.available then a
     else
-      val (z, st) = LenZ3.boundsWithStatus(s, timeoutSec)
-      if st != SizeZ3.Status.Solved || z.isEmpty || a.isEmpty then a
+      val (z, st) = LenZ3.boundsWithStatus(s, timeoutSec, env.routines)
+      if !usable(st) || z.isEmpty || a.isEmpty then a
       else LenBounds(a.lo max z.lo, a.hi min z.hi)
 end SpatialTypes

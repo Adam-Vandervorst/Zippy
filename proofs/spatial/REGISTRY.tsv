@@ -43,4 +43,4 @@ iteration key length	FILE	spatial/sp_iter_head_one.smt2	group keys are single it
 cardinality bridge	DEFINITIONAL	spatial/sp_class_bounds.smt2	4 finite-measure axioms asserted; the per-class bounds PROVED on top
 per-class bounds	FILE	spatial/sp_class_bounds.smt2	union/inter/sub class bounds from the measure axioms
 inclusion–exclusion strength	FILE	spatial/sp_class_ie_tighter.smt2	IE beats the additive bound on overlap — the strengthening
-Galois connection	FILE	spatial/sp_galois.smt2	α ⊣ γ per class
+concretization order	FILE	spatial/sp_gamma_order.smt2	interval inclusion ⇒ γ-containment; upper-envelope alone does NOT (refuted) — bounds what `within` licenses

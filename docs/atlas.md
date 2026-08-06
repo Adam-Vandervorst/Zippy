@@ -317,16 +317,37 @@ Reuses `SizeZ3`'s `alphaRename`/`scopesProblem`/`children`/`runZ3`/`Status`.
 
 **`SpaceType` / `SpatialTypes` / `SpatialEnv` / `Ivl`** — `src/main/scala/SpatialTypes.scala`
 Abstracts a Space as a **length-indexed count domain** — a count interval per path length, plus one
-spill bucket — mapping an input environment (`SpaceMention → SpaceType`, `PathRef → LenBounds`) to an
-output type. Its two projections are the analyses above: summing the classes gives a size bound,
-the support hull gives a length bound, and `bestSize`/`bestLen` meet those with the z3 tiers
-(certified MEET-DOMINATES). Per-length counts express what neither can alone: a restriction
-annihilates classes shorter than its shortest prefix, wrap shifts classes bijectively, raffination
-keeps short classes exactly. A **relational layer** (`subsumes`, `partitionOf`) applies the certified
-subsumption/partition/self-restriction laws so `x ∪ (x ∩ y)` is not double counted. `Fixpoint` uses
-Kleene iteration with widening plus a **post-fixpoint check**, licensed by `lat_postfixpoint`.
-The lattice, every transfer's soundness/monotonicity, and the concrete path facts are certified in
-[`proofs/spatial/`](../proofs/spatial) — see [design_spatial_lattice.md](design_spatial_lattice.md).
+spill bucket — mapping an input environment (`SpaceMention → SpaceType`, `PathRef → LenBounds`,
+routine table) to an output type. Its two projections are the analyses above: summing the classes
+gives a size bound, the support hull gives a length bound, and `bestSize`/`bestLen` meet those with
+the z3 tiers. Per-length counts express what neither can alone: a restriction annihilates classes
+shorter than its shortest prefix, wrap shifts classes bijectively, raffination keeps short classes
+exactly. A **relational layer** (`subsumes`, `partitionOf`) applies the certified subsumption /
+partition / self-restriction laws so `x ∪ (x ∩ y)` is not double counted. `Fixpoint` uses Kleene
+iteration with widening plus an upper-envelope post-fixpoint check.
+
+**Status and scope (deliberately stated).** This is a cardinality-and-length pass, *not* a shape
+domain and *not* a cost model: it tracks how many paths of each length a term can denote, and can
+distinguish nothing else — two paths of the same length are indistinguishable, so heads, prefixes,
+tags and values are invisible (`Unwrap(Literal({b}), "a")` is `∅` but the analysis only says
+`{len 0: [0,1]}`). Bounds are concrete `Long`s, so there are no size variables, cost expressions,
+recurrences or asymptotic orders. **Consumer.** `eliminate`/`eliminateIn` are the one consumer: given a function and *abstract
+annotations for its inputs*, they return a residual body plus the named facts that justify it,
+deleting any subterm whose inferred type is `⊥`. That removes the whole computation feeding it, and
+the ordinary `Lower` laws then propagate `Empty` upward. It is strictly stronger than the syntactic
+`Lower.SizeEmpty` law (which only sees `sizeBounds.hi == 0`): the spatial tier also proves emptiness
+from length-disjointness, restriction annihilation, and input annotations — on the 1000-program
+corpus it fires on 133 programs and removes 2308 AST nodes with no annotations at all. The residual
+agrees with the original on every input *satisfying* the annotations; with an empty environment that
+is unconditional, with annotations it is a specialisation. It is **not** wired into the default
+optimizer pipeline — a caller opts in — and the optimizer's own guards still call `Lower.sizeBounds`. The
+caps (`MaxClasses = 24`, `MaxLen = 8192`) make precision input-size dependent by construction, and
+once a type spills, `SpatialTypes.widen` folds any tracked class the spill range covers *into* the
+spill — the invariant `at`/`size` depend on (see `SpillSoundness`, which exists because violating it
+produced genuinely unsound per-length upper bounds, not merely loose ones).
+The lattice/law corpus in [`proofs/spatial/`](../proofs/spatial) certifies the *algebra the transfers
+assume*, not this implementation — see [design_spatial_lattice.md](design_spatial_lattice.md) for
+the model-vs-code gaps.
 Supersedes the partial `otypes`/`itypes` experiment (`MORKL.scala:2393/2455`, `???` at
 TailsUnion/Fixpoint), which is left in place unused.
 

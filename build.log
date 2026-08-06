@@ -2841,3 +2841,123 @@ ALSO FIXED: my puzzle8 test was asserting ground truth via evalT on the 181440-s
 30+ minutes, it was the CornerstoneTypes failure in the previous battery. It now checks the bounds
 against the KNOWN 9!/2 = 181440 and length 9 (a fact about the puzzle, already pinned by execution in
 ExSlidingPuzzle). All three analyses answer in 5ms, independent of the state-space size.
+
+================================================================================
+2026-08-06  review.md response: STOP-SHIP soundness bug fixed; over-claims corrected
+================================================================================
+STOP-SHIP CONFIRMED AND FIXED. The reviewer's reproducer is real: on
+  Composition(Composition(lit(25 distinct lengths), same), lit{eps, len 12})
+12 of 61 length classes violated their UPPER bounds (len 24: actual 36 vs claimed [1,25]).
+ROOT CAUSE exactly as diagnosed: the representation invariant is "rest counts the paths at lengths
+NOT in byLen", and `at(l)` answers from the tracked class alone for a tracked l -- but nothing ever
+enforced that `restLens` excludes the tracked keys. Composition routes every rest-involving product
+into the spill while the tracked class keeps only the tracked x tracked convolution, so the tracked
+class omitted real paths. Unsound, not imprecise.
+FIX: SpatialTypes.disjoin, applied in `build` (hence after every transfer) and in a new public
+`widen` -- any tracked class the spill range covers is folded INTO the spill, combining lowers with
+`max` (if the buckets did overlap, the two claims may describe the same paths, so only the max is
+guaranteed) and uppers with saturating `+`. Precision is lost only where widening had already given
+up; terms under the caps are unaffected. Also: SpaceType.of/closed bypassed normalize, so the
+documented 24-class cap did not hold -- both now route through `widen`.
+NEW GATES (src/test/scala/SpillSoundness.scala): the reviewer's reproducer; 19 widened-operator
+cases (composition both sides/self, union, intersection, subtraction both directions, wrap, unwrap,
+tails-union/intersection, restriction, raffination, range, iteration, nested iteration, and two deep
+compositions); >MaxLen paths; the class-cap check; 60 randomised spill/track collisions. Every case
+checks per-length bounds, both projections, AND the representation invariant itself.
+
+PRECISION BUGS FROM THE REVIEW, ALSO FIXED (src/test/scala/SpillSoundness.scala::ReviewFindings):
+ * Iteration/Fold took the group count from `Lower.sizeBounds(src)` only, discarding a declared
+   input type: iterating `{h}` over a mention typed "exactly two length-1 paths" reported [0, inf).
+   Now the spatial source type's own size projection is MET with the baseline.
+ * sizeOf/lenOf/bestSize/bestLen dropped the caller's env and routine table, so the "sharpest
+   answer" could be looser than plain `Lower.sizeBounds(s, rc)`; they now pass routines down and
+   translate declared SpaceTypes into mention bounds for the other two tiers.
+ * bestSize/bestLen discarded `PartiallySolved` z3 answers, which still dominate the baseline.
+ * the Fixpoint fallback recomputed lenBounds with an EMPTY env; it now keeps the supplied env.
+
+OVER-CLAIMS CORRECTED (docs, not code):
+ * design_spatial_lattice.md gains a SCOPE paragraph: the corpus is supporting lemmas about a MODEL
+   of the domain, not a proof of the Scala implementation, and lists the model-vs-code gaps.
+ * the proof `ijoin` is the interval HULL; the code's `join` is the set-union cardinality transfer
+   and `within` compares UPPER ENVELOPES only -- so `lat_postfixpoint` is an argument PATTERN, not a
+   theorem about the code's operations. Documented as such.
+ * `∞` is a datatype constructor in the model but `Long.MaxValue` in the code -- stated.
+ * `lat_transfer_sound` covers three transfers (union/inter/sub), not all -- stated.
+ * sp_galois WAS A TAUTOLOGY (`P => P` over an already-declared count). DELETED. Replaced by
+   sp_gamma_order, which PROVES interval inclusion => gamma-containment and REFUTES the
+   upper-envelope-only version -- i.e. it pins exactly what the code's `within` does and does not
+   license. PROVED.
+ * atlas 9.5 now states the scope plainly: cardinality-and-length only, NOT a shape domain (the
+   reviewer's `Unwrap(Literal({b}), "a")` = empty example is quoted), NOT a cost model (concrete
+   Longs, no size variables/recurrences/asymptotics), NO production consumer, caps make precision
+   input-size dependent.
+ * proofs/run.sh's header claimed BOTH provers while line 33 labels PROVED on EITHER. Header now
+   describes the actual rule and points at the per-prover columns; EquivPipelineTest remains the
+   place that genuinely demands both.
+ * proofs/STATUS.tsv had 0 spatial rows for 44 committed files -- the spatial family is being
+   discharged into it so the committed table demonstrates the corpus was run.
+
+FIXPOINT: the review says the transfer needs concrete monotonicity. I do not think that is the gap:
+with upper-envelope-monotone transfers (lat_transfer_mono_*) and local soundness, each iterate is
+bounded without any monotonicity of the Zippy body. The REAL gap was that the concrete fixpoint
+returns the UNION of all iterates, and `join`'s per-class upper ADDS counts, so a finite-count
+candidate can only be a post-fixpoint when the body contributes nothing -- previously that held only
+as a side effect of the widening schedule (widenCounts at k>=2). It is now REQUIRED explicitly:
+`unionClosed(t) = join(t, F#(t)).within(t)`, and a finite candidate that fails it is widened and
+re-checked before acceptance. Accidental soundness replaced by a checked condition.
+
+ACCEPTED, NOT DONE (the review is right and these are not small): a shape/prefix-cylinder domain with
+head sets and may/must membership; a worklist fixpoint with narrowing; abstracting the Fold
+accumulator; a symbolic cost domain with size variables and recurrences; any production consumer
+(residual programs / rewrite decisions). The honest description of the current state is the
+reviewer's: a length-indexed cardinality-bound pass with some certified local algebra -- now with a
+sound spill path and gates that prove it.
+OPEN QUESTION for the user: the review argues that banning closed-term evaluation outright is an
+overcorrection, and that an explicit, budgeted, provenance-labelled partial-evaluation component
+kept DISTINCT from the abstract domain is the direct way to remove known intermediate spaces. That
+contradicts the standing no-evaluation instruction, so it is not implemented; it needs a decision.
+
+================================================================================
+2026-08-06  Intermediate-space elimination — driven by abstract interpretation over
+            FUNCTIONS with ABSTRACT ANNOTATED INPUTS (the sanctioned route)
+================================================================================
+Direction settled: removing intermediate spaces is legitimate, but ONLY as a function of abstract
+interpretation over functions whose inputs carry abstract annotations. So no separate
+partial-evaluation component (the reviewer's suggestion is declined on that basis); instead the
+analysis now returns FACTS PLUS A RESIDUAL, which is also review.md item 4.
+
+SpatialTypes.eliminate(body, env) / eliminateIn(routine, env) -> (residual, Vector[Removed]).
+Nothing evaluates a subterm. A subterm is deleted when its inferred spatial type is BOTTOM (no class
+can hold a path) — derived from the term's syntax, the annotations in `env`, and the certified
+relational laws. Deleting it removes the entire computation that produced it; the ordinary Lower laws
+then propagate Empty through the parents. Binder envs mirror the analysis exactly (iteration/fold
+bind sym to length 1 and rest to the source's tails); a Fixpoint body is rewritten with the recursive
+mention UNBOUND (a one-pass rewrite has no accumulated type and assuming one would not be justified);
+Call bodies are never touched — they belong to their own routine.
+
+CONTRACT: the residual agrees with the original on every input SATISFYING `env`. Empty env ⇒ the
+annotations are vacuous ⇒ unconditional rewrite. With annotations the result is a SPECIALISATION and
+is only valid where they hold — the test asserts an annotation-violating input DISAGREES, so the
+annotation is provably load-bearing rather than decorative.
+
+STRICTLY STRONGER than the syntactic Lower.SizeEmpty law (`sizeBounds(sp).hi == 0`). The spatial tier
+also proves emptiness from
+  * LENGTH-DISJOINTNESS: {len 10} ∩ {len 15} — sizeBounds only gets [0,1], SizeEmpty leaves it alone
+    (asserted as a precondition in the test so the comparison cannot silently rot);
+  * RESTRICTION ANNIHILATION: every path shorter than the shortest prefix;
+  * INPUT ANNOTATIONS: `xs : {len 2}` restricted by a length-4 prefix set is empty.
+
+MEASURED (SpatialElimination, 6 tests green):
+  * length-disjoint meet buried under a wrap+composition: 6 AST nodes of dead work removed
+  * restriction annihilation: whole term to Empty
+  * annotated function f(xs : len 2, ys : len 3): both branches provably empty, body collapses to
+    Empty under SC.reduce; 40 conforming random inputs agree
+  * CORPUS, no annotations at all: fires on 133/1000 programs, 2308 AST nodes removed, 2000
+    differential checks clean (unconditional meaning preservation)
+  * negative controls: no fact ⇒ no rewrite; Calls left intact; overlapping length classes kept
+
+This is the first consumer of SpatialTypes, so review.md's "no production consumer" is now partly
+answered — honestly: it is an OPT-IN entry point, not wired into the default optimizer pipeline, and
+the optimizer's own guards still call Lower.sizeBounds. Only the EMPTINESS fact is exploited so far;
+the other facts review.md lists (exact prefix, singleton/head set, exact bounded iteration) need the
+shape components the domain does not have yet.
