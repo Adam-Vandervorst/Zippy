@@ -38,8 +38,10 @@ object LenZ3:
 
   def bounds(s: Space, timeoutSec: Int = 8): LenBounds = boundsWithStatus(s, timeoutSec)._1
 
-  def boundsWithStatus(s0: Space, timeoutSec: Int = 8): (LenBounds, SizeZ3.Status) =
-    val base = Lower.lenBounds(s0)
+  /** `rc` makes the per-node baseline seeds interprocedural — see the SizeZ3 twin. */
+  def boundsWithStatus(s0: Space, timeoutSec: Int = 8,
+                       rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): (LenBounds, SizeZ3.Status) =
+    val base = Lower.lenBounds(s0, rc)
     if !available then return (base, SizeZ3.Status.NoSolver)
     if base.isEmpty then return (base, SizeZ3.Status.Solved)   // provably empty: bounds vacuous
     val s = SizeZ3.alphaRename(s0)
@@ -47,7 +49,7 @@ object LenZ3:
       case Some(reason) => (base, SizeZ3.Status.ScopeLimited(reason))
       case None =>
         try
-          val out = SizeZ3.runZ3(encode(s).text, timeoutSec)
+          val out = SizeZ3.runZ3(encode(s, rc).text, timeoutSec)
           if out.linesIterator.exists(_.trim == "unsat") then (base, SizeZ3.Status.Solved)  // root provably ∅
           else parseObjectives(out) match
             case Some((zlo, zhi)) =>
@@ -63,39 +65,16 @@ object LenZ3:
   /** the lowered SMT text (diagnostics/tooling) — exactly what the solver sees */
   private[morkl] def encodeText(s: Space): String = encode(SizeZ3.alphaRename(s)).text
 
-  // ---- ground folding ---------------------------------------------------------------------
-  /** exact length facts of a CLOSED subterm (same closedness + size budget as SizeZ3's fold):
-   *  (isEmpty, min, max, distinct length set — None when over [[LenSetCap]]). */
-  private val foldCache = new java.util.concurrent.ConcurrentHashMap[Space, Option[(Boolean, Long, Long, Option[Vector[Long]])]]()
-  private def groundFold(sp: Space): Option[(Boolean, Long, Long, Option[Vector[Long]])] =
-    foldCache.computeIfAbsent(sp, { sp =>
-      val closed =
-        val (calls, _) = collect(sp)(
-          { case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => () },
-          PartialFunction.empty)
-        calls.isEmpty && Matching.freeMentions(sp).isEmpty && Matching.freeRefs(sp).isEmpty
-      if !closed || Lower.sizeBounds(sp).hi > 200000 then None
-      else
-        try
-          val lens = eval(sp).paths.iterator.map(_.items.length.toLong).toVector
-          if lens.isEmpty then Some((true, 0L, 0L, None))
-          else
-            val d = lens.distinct.sorted
-            Some((false, d.head, d.last, if d.length <= LenSetCap then Some(d) else None))
-        catch case _: Throwable => None
-    })
-
   // ---- encoding ------------------------------------------------------------------------------
   private final case class Enc(text: String)
 
-  private def encode(root: Space): Enc =
+  private def encode(root: Space, rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Enc =
     val ids = collection.mutable.LinkedHashMap.empty[Space, Int]
     def id(sp: Space): Int = ids.getOrElseUpdate(sp, { SizeZ3.children(sp).foreach(id); ids.size })
     id(root)
     val nodes = ids.toVector.sortBy(_._2)
-    val base = nodes.map((sp, _) => Lower.lenBounds(sp))
-    val sizeB = nodes.map((sp, _) => Lower.sizeBounds(sp))
-    val folded = nodes.map((sp, _) => groundFold(sp))
+    val base = nodes.map((sp, _) => Lower.lenBounds(sp, rc))
+    val sizeB = nodes.map((sp, _) => Lower.sizeBounds(sp, rc))
     // rest-binder refinement: a rest mention's paths are one head-group's tails of the source
     val restSrc = collection.mutable.Map.empty[SpaceMention, Space]
     for (sp, _) <- nodes do sp match
@@ -114,10 +93,7 @@ object LenZ3:
     val degraded = new Array[Boolean](nodes.length)
     for (sp, i) <- nodes do
       def c(x: Space): Long = cost(ids(x))
-      val structural: Long = folded(i) match
-        case Some((_, _, _, Some(d))) => d.length.toLong
-        case Some(_) => 1L
-        case None => sp match
+      val structural: Long = sp match
           case Space.Union(a, b) => 1 + c(a) + c(b)
           case Space.Intersection(a, b) => 1 + c(a) + c(b)
           case Space.Fixpoint(init, _, b) => 1 + c(init) + c(b)
@@ -143,13 +119,9 @@ object LenZ3:
       sb ++= s"(declare-const lo$i Int)\n(declare-const hi$i Int)\n(declare-const emp$i Bool)\n"
 
       // the length predicate: folded-exact > degraded-interval > structural
-      val body: String = folded(i) match
-        case Some((true, _, _, _)) => "false"
-        case Some((false, mn, mx, Some(d))) =>
-          if d.length == 1 then s"(= l ${d.head})" else s"(or ${d.map(v => s"(= l $v)").mkString(" ")})"
-        case Some((false, mn, mx, None)) => s"(and (>= l $mn) (<= l $mx))"
-        case None if degraded(i) => s"(and (>= l lo$i) (<= l hi$i))"
-        case None => sp match
+      val body: String =
+        if degraded(i) then s"(and (>= l lo$i) (<= l hi$i))"
+        else sp match
           case Space.Empty => "false"
           case Space.Singleton(p) =>
             val k = Lower.pathLenBounds(p)
@@ -204,10 +176,6 @@ object LenZ3:
       // size-analysis cross-facts: provable emptiness / nonemptiness
       if sizeB(i).hi == 0 then sb ++= s"(assert emp$i)\n"
       if sizeB(i).lo >= 1 then sb ++= s"(assert (not emp$i))\n"
-      folded(i) match
-        case Some((true, _, _, _)) => sb ++= s"(assert emp$i)\n"
-        case Some((false, mn, mx, _)) => sb ++= s"(assert (and (not emp$i) (= lo$i $mn) (= hi$i $mx)))\n"
-        case None => ()
 
       // structural emptiness facts (only the TRUE directions)
       sp match

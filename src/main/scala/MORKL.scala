@@ -1651,41 +1651,49 @@ object Lower:
   private def relu(a: Long): Long = if a < 0 then 0 else a
 
   def sizeBounds(s: Space): SizeBounds = sizeBounds(s, Map.empty)
+  /** INTERPROCEDURAL entry: `Call` nodes are analysed by binding the callee's parameters to the
+   *  argument bounds (sound — a body denotes a function of its parameters); a routine already on the
+   *  call stack is not re-entered, so recursion widens to unknown instead of diverging.  The
+   *  no-`rc` entry above keeps the law guards' behaviour exactly as before. */
+  def sizeBounds(s: Space, rc: PartialFunction[RoutinePtr, Routine]): SizeBounds =
+    sizeBounds(s, Map.empty, rc, Set.empty)
   /** `env` refines binder mentions: an iteration's rest-set is ONE head-group of its source, so
    *  `|rest| ≤ ⌈src⌉` — without it every nested rest-iteration widens to [0, ∞).  Binders named
    *  `_` are never bound (contexts ignore the throwaway binder), and a Fixpoint's rec stays
    *  unknown (its iterates are unbounded). */
-  private def sizeBounds(s: Space, env: Map[SpaceMention, SizeBounds]): SizeBounds = s match
+  private def sizeBounds(s: Space, env: Map[SpaceMention, SizeBounds],
+                         rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
+                         stack: Set[RoutinePtr] = Set.empty): SizeBounds = s match
     case Space.Empty => SizeBounds(0, 0, 0)
     case Space.Singleton(p) => SizeBounds(1, if pathHeaded(p) then 1 else 0, 1)
     case Space.Literal(SpaceValue(ps)) => SizeBounds(ps.size, ps.count(_.items.nonEmpty), ps.size)
     case Space.Union(a, b) =>
-      val x = sizeBounds(a, env); val y = sizeBounds(b, env)
+      val x = sizeBounds(a, env, rc, stack); val y = sizeBounds(b, env, rc, stack)
       SizeBounds(x.lo max y.lo, x.loHeaded max y.loHeaded, satAdd(x.hi, y.hi))
     case Space.Intersection(a, b) =>
-      SizeBounds(0, 0, sizeBounds(a, env).hi min sizeBounds(b, env).hi)
+      SizeBounds(0, 0, sizeBounds(a, env, rc, stack).hi min sizeBounds(b, env, rc, stack).hi)
     case Space.Subtraction(a, b) =>
-      val x = sizeBounds(a, env); val y = sizeBounds(b, env)
+      val x = sizeBounds(a, env, rc, stack); val y = sizeBounds(b, env, rc, stack)
       SizeBounds(relu(x.lo - y.hi), relu(x.loHeaded - y.hi), x.hi)
     case Space.Restriction(a, b) =>
-      val x = sizeBounds(a, env)
-      SizeBounds(0, 0, if sizeBounds(b, env).hi == 0 then 0 else x.hi)
+      val x = sizeBounds(a, env, rc, stack)
+      SizeBounds(0, 0, if sizeBounds(b, env, rc, stack).hi == 0 then 0 else x.hi)
     case Space.Raffination(a, b) =>
-      val x = sizeBounds(a, env); val y = sizeBounds(b, env)
+      val x = sizeBounds(a, env, rc, stack); val y = sizeBounds(b, env, rc, stack)
       if y.hi == 0 then x else SizeBounds(0, 0, x.hi)
     case Space.Composition(a, b) =>
-      val x = sizeBounds(a, env); val y = sizeBounds(b, env)
+      val x = sizeBounds(a, env, rc, stack); val y = sizeBounds(b, env, rc, stack)
       val lo = if x.lo >= 1 && y.lo >= 1 then x.lo max y.lo else 0
       val loH = (if y.lo >= 1 then x.loHeaded else 0) max (if x.lo >= 1 then y.loHeaded else 0)
       SizeBounds(lo, loH, satMul(x.hi, y.hi))
     case Space.Wrap(src, p) =>
-      val x = sizeBounds(src, env)
+      val x = sizeBounds(src, env, rc, stack)
       SizeBounds(x.lo, if pathHeaded(p) then x.lo else x.loHeaded, x.hi)
-    case Space.Unwrap(src, _) => SizeBounds(0, 0, sizeBounds(src, env).hi)
-    case Space.TailsUnion(src) => SizeBounds(0, 0, sizeBounds(src, env).hi)
-    case Space.TailsIntersection(src) => SizeBounds(0, 0, sizeBounds(src, env).hi)
+    case Space.Unwrap(src, _) => SizeBounds(0, 0, sizeBounds(src, env, rc, stack).hi)
+    case Space.TailsUnion(src) => SizeBounds(0, 0, sizeBounds(src, env, rc, stack).hi)
+    case Space.TailsIntersection(src) => SizeBounds(0, 0, sizeBounds(src, env, rc, stack).hi)
     case Space.Range(x, a, b) =>
-      val sub = sizeBounds(x, env)
+      val sub = sizeBounds(x, env, rc, stack)
       if a == 0 && b == 0 then sub                                        // the whole space
       else
         val window = if a == 0 && b > 0 then Some(b.toLong) else if b == 0 && a < 0 then Some(-a.toLong) else None
@@ -1696,24 +1704,33 @@ object Lower:
             val width = if (a > 0 && b >= a) || (a < 0 && b <= 0 && b >= a) then (b - a).toLong else INF
             SizeBounds(0, 0, sub.hi min width)
     case Space.Iteration(src, _, rest, body) =>
-      val sb = sizeBounds(src, env)
+      val sb = sizeBounds(src, env, rc, stack)
       val benv = if rest.s == "_" then env else env.updated(rest, SizeBounds(0, 0, sb.hi))
-      val bb = sizeBounds(body, benv)                                     // one head-group: |rest| ≤ ⌈src⌉
+      val bb = sizeBounds(body, benv, rc, stack)                                     // one head-group: |rest| ≤ ⌈src⌉
       val runs = sb.loHeaded >= 1                                         // ≥1 head-group ⇒ the body's union has ≥1 term
-      SizeBounds(if runs then bb.lo else 0, if runs then bb.loHeaded else 0, satMul(sb.hi, bb.hi))
+      // Naively the union over groups costs ⌈src⌉ · ⌈body⌉, but when the body's own work is an
+      // iteration over THIS loop's rest-set that double-counts: the head-groups PARTITION the
+      // headed paths (certified: proofs/spatial/sp_head_partition.smt2), so Σ_g |rest_g| =
+      // |headed src| — the whole nest costs ⌈src⌉ · ⌈innermost body⌉, LINEAR in the source, not
+      // ⌈src⌉^depth.  `restChainBody` peels the rest-iteration chain to find that innermost body.
+      val hi = satMul(sb.hi, restChainBody(body, rest, benv, rc, stack).hi)
+      SizeBounds(if runs then bb.lo else 0, if runs then bb.loHeaded else 0, hi min satMul(sb.hi, bb.hi))
     case Space.Fixpoint(init, _, _) =>
-      val ib = sizeBounds(init, env)                                           // the accumulator only grows from init
+      val ib = sizeBounds(init, env, rc, stack)                                           // the accumulator only grows from init
       SizeBounds(ib.lo, ib.loHeaded, INF)
     case Space.Fold(src, _, _, _, rest, body, _) =>
-      val sb = sizeBounds(src, env)
+      val sb = sizeBounds(src, env, rc, stack)
       val benv = if rest.s == "_" then env else env.updated(rest, SizeBounds(0, 0, sb.hi))
-      SizeBounds(0, 0, satMul(sb.hi, sizeBounds(body, benv).hi))
+      SizeBounds(0, 0, satMul(sb.hi, sizeBounds(body, benv, rc, stack).hi))
     case Space.Mention(m) =>
       // a sizeHint is the author's exact-cardinality contract; at most one path is ε, so ≥ k−1
       // are headed.  Intersect with the binder refinement (both are true facts when the hint is).
       val b = env.getOrElse(m, SizeBounds.unknown)
       if m.sizeHint < 0 then b
       else SizeBounds(b.lo max m.sizeHint, b.loHeaded max relu(m.sizeHint - 1), b.hi min m.sizeHint)
+    case Space.Call(rp, _, mentions) if rc.isDefinedAt(rp) && !stack(rp) =>
+      val Routine(_, _, mentionns, body) = rc(rp)
+      sizeBounds(body, mentionns.zip(mentions.map(m => sizeBounds(m, env, rc, stack))).toMap, rc, stack + rp)
     case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => SizeBounds.unknown
 
   // ---- path-LENGTH bounds (tier-1 baseline; the z3 tier is LenZ3) -----------------------------
@@ -1729,63 +1746,109 @@ object Lower:
     val empty: LenBounds = LenBounds(INF, 0)
 
   /** interval of possible ITEM lengths of a path expression (hints trusted like [[pathItemLen]]). */
-  private[morkl] def pathLenBounds(p: Path): LenBounds = pathItemLen(p) match
-    case Some(k) => LenBounds(k, k)
-    case None => p match
-      case Path.Concat(l, r) =>
-        val (a, b) = (pathLenBounds(l), pathLenBounds(r))
-        LenBounds(satAdd(a.lo, b.lo), satAdd(a.hi, b.hi))
-      case _ => LenBounds.unknown
+  private[morkl] def pathLenBounds(p: Path, penv: Map[PathRef, LenBounds] = Map.empty): LenBounds = p match
+    case Path.Deref(pr) if penv.contains(pr) => penv(pr)
+    case _ => pathItemLen(p) match
+      case Some(k) => LenBounds(k, k)
+      case None => p match
+        case Path.Concat(l, r) =>
+          val (a, b) = (pathLenBounds(l, penv), pathLenBounds(r, penv))
+          LenBounds(satAdd(a.lo, b.lo), satAdd(a.hi, b.hi))
+        case _ => LenBounds.unknown
 
   def lenBounds(s: Space): LenBounds = lenBounds(s, Map.empty)
+  /** INTERPROCEDURAL entry (see the sizeBounds twin). */
+  def lenBounds(s: Space, rc: PartialFunction[RoutinePtr, Routine]): LenBounds =
+    lenBounds(s, Map.empty, Map.empty, rc, Set.empty)
   /** env refines binder mentions: an iteration/fold `rest` is the TAIL-set of one head-group of
    *  its source (each tail = a source path minus its single head item). */
-  private[morkl] def lenBounds(s: Space, env: Map[SpaceMention, LenBounds]): LenBounds = s match
+  private[morkl] def lenBounds(s: Space, env: Map[SpaceMention, LenBounds],
+                              penv: Map[PathRef, LenBounds] = Map.empty,
+                              rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
+                              stack: Set[RoutinePtr] = Set.empty): LenBounds = s match
     case Space.Empty => LenBounds.empty
-    case Space.Singleton(p) => pathLenBounds(p)
+    case Space.Singleton(p) => pathLenBounds(p, penv)
     case Space.Literal(SpaceValue(ps)) =>
       if ps.isEmpty then LenBounds.empty
       else LenBounds(ps.iterator.map(_.items.length).min, ps.iterator.map(_.items.length).max)
     case Space.Union(a, b) =>
-      val x = lenBounds(a, env); val y = lenBounds(b, env)
+      val x = lenBounds(a, env, penv, rc, stack); val y = lenBounds(b, env, penv, rc, stack)
       LenBounds(x.lo min y.lo, x.hi max y.hi)
     case Space.Intersection(a, b) =>
-      val x = lenBounds(a, env); val y = lenBounds(b, env)
+      val x = lenBounds(a, env, penv, rc, stack); val y = lenBounds(b, env, penv, rc, stack)
       LenBounds(x.lo max y.lo, x.hi min y.hi)                  // lo > hi ⇒ provably length-empty
-    case Space.Subtraction(a, _) => lenBounds(a, env)
+    case Space.Subtraction(a, _) => lenBounds(a, env, penv, rc, stack)
     case Space.Restriction(x, y) =>
-      val a = lenBounds(x, env); val b = lenBounds(y, env)     // a kept path has a prefix in y
+      val a = lenBounds(x, env, penv, rc, stack); val b = lenBounds(y, env, penv, rc, stack)     // a kept path has a prefix in y
       LenBounds(a.lo max b.lo, a.hi)
-    case Space.Raffination(x, _) => lenBounds(x, env)          // x \ (x <| y) ⊆ x
+    case Space.Raffination(x, _) => lenBounds(x, env, penv, rc, stack)          // x \ (x <| y) ⊆ x
     case Space.Composition(a, b) =>
-      val x = lenBounds(a, env); val y = lenBounds(b, env)
+      val x = lenBounds(a, env, penv, rc, stack); val y = lenBounds(b, env, penv, rc, stack)
       if x.isEmpty || y.isEmpty then LenBounds.empty
       else LenBounds(satAdd(x.lo, y.lo), satAdd(x.hi, y.hi))
     case Space.Wrap(src, p) =>                                  // ≡ Composition(Singleton p, src)
-      val x = lenBounds(src, env); val k = pathLenBounds(p)
+      val x = lenBounds(src, env, penv, rc, stack); val k = pathLenBounds(p, penv)
       if x.isEmpty then LenBounds.empty else LenBounds(satAdd(k.lo, x.lo), satAdd(k.hi, x.hi))
     case Space.Unwrap(src, p) =>
-      val x = lenBounds(src, env); val k = pathLenBounds(p)     // kept: orig startsWith p, drop |p|
+      val x = lenBounds(src, env, penv, rc, stack); val k = pathLenBounds(p, penv)     // kept: orig startsWith p, drop |p|
       if x.isEmpty then LenBounds.empty
       else
         val hi = if x.hi == LenBounds.INF then LenBounds.INF else x.hi - k.lo
         if hi < 0 then LenBounds.empty else LenBounds(relu(if k.hi == LenBounds.INF then 0 else x.lo - k.hi), hi)
-    case Space.TailsUnion(src) => tailLen(lenBounds(src, env))
-    case Space.TailsIntersection(src) => tailLen(lenBounds(src, env))
-    case Space.Range(x, _, _) => lenBounds(x, env)              // positional slice ⊆ x
+    case Space.TailsUnion(src) => tailLen(lenBounds(src, env, penv, rc, stack))
+    case Space.TailsIntersection(src) => tailLen(lenBounds(src, env, penv, rc, stack))
+    case Space.Range(x, _, _) => lenBounds(x, env, penv, rc, stack)              // positional slice ⊆ x
     case Space.Iteration(src, _, rest, body) =>
-      val sb = lenBounds(src, env)
+      val sb = lenBounds(src, env, penv, rc, stack)
       if sb.isEmpty || sb.hi == 0 then LenBounds.empty          // no headed source path ⇒ no groups
       else lenBounds(body, if rest.s == "_" then env else env.updated(rest, tailLen(sb)))
     case Space.Fold(src, _, _, _, rest, body, _) =>             // output = ⋃ per-group body evals
-      val sb = lenBounds(src, env)
+      val sb = lenBounds(src, env, penv, rc, stack)
       if sb.isEmpty || sb.hi == 0 then LenBounds.empty
       else lenBounds(body, if rest.s == "_" then env else env.updated(rest, tailLen(sb)))
-    case Space.Fixpoint(init, _, body) =>                       // init ∪ all iterates
-      val x = lenBounds(init, env); val y = lenBounds(body, env)
-      LenBounds(x.lo min y.lo, x.hi max y.hi)
+    case Space.Fixpoint(init, rec, body) =>
+      // Kleene-iterate with `rec` bound to the running candidate, then CHECK the candidate is a
+      // post-fixpoint (F(t) ⊆ t): with init ⊆ t that proves every iterate — hence the lfp — has
+      // its lengths in t (certified: proofs/spatial/lat_postfixpoint.smt2).  Binding rec is what
+      // matters: the old `hull(init, body)` left rec unbound, so one recursive mention widened the
+      // whole fixpoint to [0, ∞) even when every iterate is length-homogeneous (the sliding-puzzle
+      // state space).  Unverified ⇒ fall back to unknown.
+      def step(t: LenBounds): LenBounds =
+        lenBounds(body, if rec.s == "_" then env else env.updated(rec, t), penv, rc, stack)
+      var t = lenBounds(init, env, penv, rc, stack)
+      var k = 0
+      var stable = false
+      while k < 8 && !stable do
+        val j = joinLen(t, step(t))
+        if within(j, t) then stable = true else { t = j; k += 1 }
+      if !t.isEmpty && within(step(t), t) then t else LenBounds.unknown
     case Space.Mention(m) => env.getOrElse(m, LenBounds.unknown)
+    case Space.Call(rp, refs, mentions) if rc.isDefinedAt(rp) && !stack(rp) =>
+      val Routine(_, refns, mentionns, body) = rc(rp)
+      lenBounds(body, mentionns.zip(mentions.map(m => lenBounds(m, env, penv, rc, stack))).toMap,
+                refns.zip(refs.map(p => pathLenBounds(p, penv))).toMap, rc, stack + rp)
     case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => LenBounds.unknown
+
+  /** Peel a chain of iterations whose SOURCE is the enclosing loop's rest-mention and return the
+   *  bounds of the innermost body.  Licensed by the head-group partition
+   *  (proofs/spatial/sp_head_partition.smt2): summed over the outer groups the inner sources are
+   *  disjoint slices of one source, so the nest's total is ⌈src⌉ · ⌈innermost⌉ rather than a power
+   *  of ⌈src⌉.  A body that is NOT such a chain returns its own bounds, leaving the naive product. */
+  private def restChainBody(body: Space, rest: SpaceMention,
+                            env: Map[SpaceMention, SizeBounds],
+                            rc: PartialFunction[RoutinePtr, Routine], stack: Set[RoutinePtr]): SizeBounds =
+    body match
+      case Space.Iteration(Space.Mention(m), _, r2, inner) if m == rest && rest.s != "_" =>
+        val ienv = if r2.s == "_" then env else env.updated(r2, env.getOrElse(rest, SizeBounds.unknown))
+        restChainBody(inner, r2, ienv, rc, stack)
+      case other => sizeBounds(other, env, rc, stack)
+
+  /** the join (hull) of two length intervals; the empty marker is the lattice ⊥ and drops out. */
+  private[morkl] def joinLen(a: LenBounds, b: LenBounds): LenBounds =
+    if a.isEmpty then b else if b.isEmpty then a else LenBounds(a.lo min b.lo, a.hi max b.hi)
+  /** `a ⊑ b` — a's lengths are contained in b's (⊥ is below everything). */
+  private[morkl] def within(a: LenBounds, b: LenBounds): Boolean =
+    a.isEmpty || (!b.isEmpty && b.lo <= a.lo && a.hi <= b.hi)
 
   /** lengths of the tails of the HEADED paths of a set with lengths in `b` (drop 1 item). */
   private def tailLen(b: LenBounds): LenBounds =

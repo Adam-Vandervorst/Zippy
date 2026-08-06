@@ -58,6 +58,13 @@ run_family "" pointwise wrap1 restriction keyfolds \
 if [ -d laws ]; then
   run_family "laws/" $(ls laws/law_*.smt2 2>/dev/null | sed 's|laws/||;s|\.smt2$||')
 fi
+# spatial-type lattice + concretion (see docs/design_spatial_lattice.md).  The lat_* half is
+# datatypes+arithmetic, where default-mode vampire has no theory portfolio and predictably times
+# out (docs/traps.md) — z3 is the prover of record there; the sp_* half is pure FOL over paths and
+# both provers are tried.  Verdicts still land in STATUS.tsv, so a regression is visible.
+if [ -d spatial ]; then
+  run_family "spatial/" $(ls spatial/*.smt2 2>/dev/null | sed 's|spatial/||;s|\.smt2$||')
+fi
 echo "-----"
 echo "certified: $pass  expected-open: $open_exp  countermodels: $cm  unexpected-open: $fail"
 echo "status table: proofs/STATUS.tsv"

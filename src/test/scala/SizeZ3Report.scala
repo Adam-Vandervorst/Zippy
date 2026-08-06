@@ -107,6 +107,7 @@ class SizeZ3Report extends FunSuite:
         case SizeZ3.Status.ScopeLimited(reason) =>
           limits.updateWith(reason.replaceAll("'[^']*'", "'*'"))(c => Some(c.getOrElse(0) + 1))
           if limitExamples.size < 3 then limitExamples += s"#$pi: $reason"
+        case SizeZ3.Status.PartiallySolved(d) => limits.updateWith(s"partial: $d")(c => Some(c.getOrElse(0) + 1))
         case SizeZ3.Status.SolverFailed(d) => limits.updateWith(s"solver: $d")(c => Some(c.getOrElse(0) + 1))
         case SizeZ3.Status.NoSolver => limits.updateWith("no solver")(c => Some(c.getOrElse(0) + 1))
       if isSolved then
@@ -221,6 +222,7 @@ class SizeZ3Report extends FunSuite:
           assert(zb.lo >= base.lo && zb.hi <= base.hi, s"$name: not dominated")
           if zb.lo > base.lo || zb.hi < base.hi then { improved += 1; "solved+" } else "solved"
         case SizeZ3.Status.ScopeLimited(r) => limited += 1; s"LIMIT: $r"
+        case SizeZ3.Status.PartiallySolved(d) => limited += 1; s"PARTIAL: $d"
         case SizeZ3.Status.SolverFailed(d) => limited += 1; s"FAILED: $d"
         case SizeZ3.Status.NoSolver => "no solver"
       println(f"  $name%-30s n=$n%-6d base=${fmt(base)}%-14s z3=${fmt(zb)}%-14s $statusStr")

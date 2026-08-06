@@ -11,7 +11,7 @@ The durable disciplines that would have prevented — or caught for pennies — 
 - Do: For every law, combinator, and transfer function, write the degenerate inputs — `{∅, {ε}, ε-inside-a-literal, single-item source, empty operand}` — as explicit arms *before* the general case, and make the function total on each.
 - Do: Gate a hoist on *headedness* via the reusable `headedGuard(x) = Range(x,-1,0).iter(_,_,{ε})`, not `nonEmpty` (`{ε}` is non-empty yet runs zero head-groups).
 - Do: Use the `keyedBy` guard for set-op (∩/\) merges.
-- Do: Detect known-ε with an actual ground-fold check, never a `[k,k]`-size proxy.
+- Do: Detect known-ε with an actual ground-fold check, never a `[k,k]`-size proxy. (Historical: closed-subterm folding was later removed from every analysis — an abstract interpretation must not consult evaluation output. See docs/design_spatial_lattice.md §0.)
 - Never: Confuse ∅ ("no tails") with `{ε}` ("one empty tail") in any arm.
 - Never: Assume every path has a head.
 - Never: Let an empty operand vanish from a meet.

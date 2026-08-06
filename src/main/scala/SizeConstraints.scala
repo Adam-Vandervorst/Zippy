@@ -30,6 +30,10 @@ object SizeZ3:
    *  show the limits in scope instead of silently mixing in the syntactic approximation. */
   enum Status:
     case Solved
+    /** SOME objectives were established and the rest kept their baseline endpoint: the answer is
+     *  still sound and still dominates the baseline, but it is not the full optimum, so it is
+     *  reported separately rather than passed off as `Solved`. */
+    case PartiallySolved(detail: String)
     case ScopeLimited(reason: String)
     case NoSolver
     case SolverFailed(detail: String)
@@ -43,25 +47,36 @@ object SizeZ3:
 
   def bounds(s: Space, timeoutSec: Int = 8): SizeBounds = boundsWithStatus(s, timeoutSec)._1
 
-  def boundsWithStatus(s0: Space, timeoutSec: Int = 8): (SizeBounds, Status) =
-    val base = Lower.sizeBounds(s0)
+  /** `rc` makes the per-node BASELINE seeds interprocedural (Call parameters bound to argument
+   *  bounds), so this tier stays at least as tight as tier-1 when a routine table is available. */
+  def boundsWithStatus(s0: Space, timeoutSec: Int = 8,
+                       rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): (SizeBounds, Status) =
+    val base = Lower.sizeBounds(s0, rc)
     if !available then return (base, Status.NoSolver)
     val s = alphaRename(s0)   // binder reuse (e.g. both GoL arms binding `ys`) must not block encoding
     scopesProblem(s) match
       case Some(reason) => (base, Status.ScopeLimited(reason))
       case None =>
         try
-          val enc = encode(s)
-          val out = runZ3(enc.text, timeoutSec)
-          parseObjectives(out) match
-            case Some((lo, hi, loHd)) =>
-              val hi2 = hi.fold(base.hi)(h => h min base.hi)
-              val lo2 = (lo.getOrElse(0L) max base.lo) min hi2
-              val loHd2 = (loHd.getOrElse(0L) max base.loHeaded) min lo2
-              (SizeBounds(lo2, loHd2, hi2), Status.Solved)
-            case None =>
-              val head = out.linesIterator.filter(_.nonEmpty).take(1).mkString
-              (base, Status.SolverFailed(if head.isEmpty then "no output" else head))
+          val enc = encode(s, rc)
+          // Each objective gets its OWN solver call.  z3's box-mode multi-objective search was the
+          // dominant cost, not the constraint system: on the expanded n-queens one box solve took
+          // 12.2s while the three single-objective solves take ~1.7s together, and the expanded
+          // puzzle-3 went from a hard timeout to a complete answer that also BEATS the baseline
+          // upper (17445 vs 18469).  A per-objective failure degrades that one endpoint to the
+          // baseline instead of losing the whole query.
+          val lo = solveObjective(enc, s"(minimize ${enc.root})", timeoutSec)
+          val hi = solveObjective(enc, s"(maximize ${enc.root})", timeoutSec)
+          val loHd = solveObjective(enc, s"(minimize ${enc.hdRoot})", timeoutSec)
+          if lo.isEmpty && hi.isEmpty && loHd.isEmpty then (base, Status.SolverFailed("all objectives failed"))
+          else
+            val hi2 = hi.flatten.fold(base.hi)(h => h min base.hi)
+            val lo2 = (lo.flatten.getOrElse(0L) max base.lo) min hi2
+            val loHd2 = (loHd.flatten.getOrElse(0L) max base.loHeaded) min lo2
+            val missing = List(("min" -> lo), ("max" -> hi), ("minHd" -> loHd)).collect { case (k, None) => k }
+            val st = if missing.isEmpty then Status.Solved
+                     else Status.PartiallySolved(s"kept baseline for ${missing.mkString(",")}")
+            (SizeBounds(lo2, loHd2, hi2), st)
         catch case e: Throwable => (base, Status.SolverFailed(e.getClass.getSimpleName))
 
   // ---- α-renaming ---------------------------------------------------------------------------
@@ -167,49 +182,25 @@ object SizeZ3:
   /** the lowered SMT text (diagnostics/tooling) — exactly what the solver sees */
   private[morkl] def encodeText(s: Space): String = encode(s).text
 
-  // ---- ground folding -------------------------------------------------------------------------
-  /** A CLOSED node (no mentions, refs, calls or grounded functions anywhere below) denotes one
-   *  fixed set — evaluate it and seed the EXACT size instead of the syntactic interval.  This is
-   *  what the aunt-query drilldown identified as the dominant precision loss: `family@"female"`
-   *  is statically 4 paths, but the abstract unwrap transfer can only say [0, |family|], and the
-   *  whole chain above inherits the slop.  Budgeted: only when the syntactic upper bound is
-   *  finite and small enough that evaluation is certainly cheap; memoized globally. */
-  private val foldCache = new java.util.concurrent.ConcurrentHashMap[Space, Option[SizeBounds]]()
-  private def groundFold(sp: Space): Option[SizeBounds] =
-    foldCache.computeIfAbsent(sp, { sp =>
-      val closed =
-        val (calls, _) = collect(sp)(
-          { case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => () },
-          PartialFunction.empty)
-        calls.isEmpty && Matching.freeMentions(sp).isEmpty && Matching.freeRefs(sp).isEmpty
-      if !closed || Lower.sizeBounds(sp).hi > 200000 then None
-      else
-        try
-          val v = eval(sp)
-          val nn = v.paths.size.toLong
-          Some(SizeBounds(nn, v.paths.count(_.items.nonEmpty).toLong, nn))
-        catch case _: Throwable => None
-    })
-  private def nodeBounds(sp: Space): SizeBounds = groundFold(sp).getOrElse(Lower.sizeBounds(sp))
-
   // ---- encoding -------------------------------------------------------------------------------
-  private final case class Enc(text: String)
+  /** the assertion body (no objectives) plus the root's variable names; each objective is solved
+   *  in its OWN solver call — see [[solveObjective]] for why. */
+  private final case class Enc(body: String, root: String, hdRoot: String):
+    /** the full text for ONE objective, so a caller can see exactly what the solver saw */
+    def text(objective: String): String = s"$body$objective\n(check-sat)\n(get-objectives)\n"
+    def text: String = text(s"(minimize $root)")
 
-  private def encode(root: Space): Enc =
+  private def encode(root: Space, rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Enc =
     val ids = collection.mutable.LinkedHashMap.empty[Space, Int]
     def id(sp: Space): Int = ids.getOrElseUpdate(sp, { children(sp).foreach(id); ids.size })
     id(root)
     val nodes = ids.toVector.sortBy(_._2)
-    val based = nodes.map((sp, _) => groundFold(sp) match
-      case Some(b) => (b, true)
-      case None => (Lower.sizeBounds(sp), false))
-    val base = based.map(_._1)
+    val base = nodes.map((sp, _) => Lower.sizeBounds(sp, rc))
     inline def n(i: Int) = s"n$i"
     inline def e(i: Int) = s"e$i"
     inline def hd(i: Int) = s"(- n$i e$i)"
 
     val sb = new StringBuilder
-    sb ++= "(set-option :opt.priority box)\n"
     for (_, i) <- nodes do
       sb ++= s"(declare-const n$i Int)\n(declare-const e$i Int)\n"
       sb ++= s"(assert (and (>= e$i 0) (<= e$i 1) (<= e$i n$i)))\n"
@@ -217,8 +208,6 @@ object SizeZ3:
       sb ++= s"(assert (>= n$i ${b.lo}))\n"                     // baseline/folded seeds ⇒ never looser
       if b.hi != INF then sb ++= s"(assert (<= n$i ${b.hi}))\n"
       if b.loHeaded > 0 then sb ++= s"(assert (>= ${hd(i)} ${b.loHeaded}))\n"
-      if based(i)._2 then sb ++= s"(assert (= e$i ${b.lo - b.loHeaded}))\n"   // an actual FOLD pins ε exactly
-                                                                                 // (a syntactic [k,k] seed may still have unknown ε)
 
     // subset relation: structural seeds + glb/lub/transitive/wrap-congruence closure
     val sub = collection.mutable.Set.empty[(Int, Int)]        // (t, s): t ⊑ s
@@ -255,9 +244,18 @@ object SizeZ3:
         case _ => ()
       for (p1, a1, w1) <- wrapsByPath; (p2, a2, w2) <- wrapsByPath
           if w1 != w2 && p1 == p2 && sub((a1, a2)) do grew |= addSub(w1, w2)        // wrap congruence
-    for (t, u) <- sub do
+    // Emit the TRANSITIVE REDUCTION, not the closure.  The closure is needed INTERNALLY (the
+    // glb/lub rules and `uppersOf`/`common` below read it), but every edge implied by a two-step
+    // path is derivable by the solver's own arithmetic transitivity, so emitting it only adds
+    // redundant rows: on the expanded puzzle-3 that is 2505 edges cut to 218, on n-queens 494 to
+    // 136, and the reduced system solves several times faster.
+    val succ: Map[Int, Set[Int]] = sub.toVector.groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
+    val reduction = sub.filterNot { (a, c) =>
+      succ.getOrElse(a, Set.empty).exists(b => b != c && b != a && succ.getOrElse(b, Set.empty).contains(c))
+    }
+    for (t, u) <- reduction do
       sb ++= s"(assert (<= ${n(t)} ${n(u)}))\n(assert (<= ${e(t)} ${e(u)}))\n"
-    val uppersOf: Map[Int, Set[Int]] = sub.toVector.groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
+    val uppersOf: Map[Int, Set[Int]] = succ
 
     val restrictionAt = nodes.collect { case (Space.Restriction(x, y), i) => ((x, y), i) }.toMap
     val interAt = nodes.collect { case (Space.Intersection(a, b), i) => ((a, b), i) }.toMap
@@ -353,10 +351,28 @@ object SizeZ3:
 
     val r = ids(root)
     sb ++= s"(declare-const hdroot Int)\n(assert (= hdroot (- n$r e$r)))\n"
-    sb ++= s"(minimize n$r)\n(maximize n$r)\n(minimize hdroot)\n(check-sat)\n(get-objectives)\n"
-    Enc(sb.toString)
+    Enc(sb.toString, n(r), "hdroot")
 
   // ---- z3 plumbing ----------------------------------------------------------------------------
+  /** Solve ONE objective.  `None` = this endpoint could not be established (timeout/unknown/parse
+   *  failure) and the caller keeps the baseline for it; `Some(None)` = the objective is unbounded. */
+  private def solveObjective(enc: Enc, objective: String, timeoutSec: Int): Option[Option[Long]] =
+    val out = runZ3(enc.text(objective), timeoutSec)
+    if !out.linesIterator.exists(_.trim == "sat") then None else parseObjective(out)
+
+  /** the single value of a one-objective `(get-objectives)` block; `oo` ⇒ unbounded ⇒ Some(None) */
+  private def parseObjective(out: String): Option[Option[Long]] =
+    val ix = out.indexOf("(objectives")
+    if ix < 0 then return None
+    val body = out.substring(ix)
+    raw"\(\s*[^()\s]+\s+(\(- \d+\)|\(?\*? ?\(?-? ?1?\)? ?oo\)?|-?\d+)\s*\)".r.findFirstMatchIn(body).map(_.group(1)) match
+      case None => None
+      case Some(v) =>
+        val t = v.trim
+        if t.contains("oo") then Some(None)
+        else if t.startsWith("(-") then Some(Some(-t.stripPrefix("(-").stripSuffix(")").trim.toLong))
+        else t.toLongOption.map(Some(_))
+
   private[morkl] def runZ3(smt: String, timeoutSec: Int): String =
     val f = java.io.File.createTempFile("sizebounds", ".smt2")
     try

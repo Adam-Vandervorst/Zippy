@@ -2483,3 +2483,361 @@ tighter than baseline on only 1/200 corpus programs — expected: fuzzed literal
 1-2, so hulls are already tight; the z3 win is length-disjoint meets (the example shape).
 Regression: SizeBoundsCheck, SizeZ3Check, AlgebraicLaws, ProductUnionCheck, CorpusLawValidation
 (100k) all green after the pathItemLen generalization.
+
+================================================================================
+2026-08-06  SPATIAL TYPES: length-indexed count abstract interpretation (input -> output)
+================================================================================
+The unifying tier above the size and path-length analyses: abstract a Space as a LENGTH-INDEXED
+COUNT domain (per path-length count interval), from an input environment to an output type.
+SpatialTypes.scala: Ivl (count interval), SpaceType(byLen: SortedMap[len, Ivl], rest, restLens),
+SpatialEnv(spaces: Map[SpaceMention, SpaceType], paths: Map[PathRef, LenBounds]).
+
+WHY IT UNIFIES: the two projections ARE the existing analyses --
+  SpaceType.size = sum of the per-length intervals  (domain of Lower.sizeBounds / SizeZ3)
+  SpaceType.len  = the support hull                 (domain of Lower.lenBounds / LenZ3)
+Keeping counts PER LENGTH is what neither can express alone, e.g. a restriction by a length-3
+prefix set ANNIHILATES the length-2 class (a path cannot start with a longer prefix) while
+leaving longer classes, and TailsUnion then shifts survivors down by exactly one item.
+`rest == Ivl.zero` means the support is exactly byLen's keys (closed) -- the informative case.
+
+TRANSFERS (each a true cardinality fact): union pointwise [max lo, lo+hi]; intersection per-class
+min (a class present on only one side => 0, so length-disjoint meets are PROVABLY EMPTY);
+subtraction relu; restriction kills classes shorter than the shortest prefix; RAFFINATION keeps
+short classes EXACTLY (they can never be restricted away); composition = per-class-pair
+convolution, upper = sum of products over pairs, lower = MAX over pairs (different (a,b) pairs
+with a+b=L can collide, so no summing; within one pair concat is injective for a fixed side);
+wrap = exact class SHIFT (bijection); unwrap/tails = shift down; iteration/fold = scaled union of
+the body type with rest |-> tails-of-src and the head sym bound to LENGTH EXACTLY 1 (always true,
+a real precision win from the lengthHint work); fixpoint = Kleene iteration with count widening
+plus a POST-FIXPOINT CHECK (F(T) subset-of T => lfp subset-of T; unverified => widen to
+lenBounds-with-unbounded-counts). Widening keeps <=24 classes / lengths <=8192 by spilling to
+`rest` (only loosens). Supersedes the partial otypes/itypes experiment (which is ??? at
+TailsUnion/Fixpoint) with a total, sound analysis; otypes left in place, not deleted.
+
+VALIDATION (SpatialTypeCheck, 4 tests green):
+ - input->output example: xs : {len2 |-> K, len4 |-> N, len6 |-> M}, ys : size 0, k : len 3;
+   \/(xs <| (ys \/ {k})) infers EXACTLY {len 3: [0,N], len 5: [0,M]}, len-1 class annihilated,
+   size hi = N+M, len [3,5] -- matches the requested upper type. Ground truth on a matching
+   instantiation is {3 |-> N, 5 |-> M}. NOTE: the sound LOWER bound is 0 per class, not 1: nothing
+   in the declared input types says xs's long paths actually start with k, so the restriction may
+   filter everything. Getting lower 1 needs a "the restriction is non-vacuous" premise.
+ - control-flow s||g: reproduces the derivation exactly. s={} => size [3,3] AND the per-length
+   classes of g exactly; s nonempty (2 paths) => [2,5]. Both never looser than Lower.sizeBounds.
+ - per-length precision: wrap shifts classes as a bijection, unwrap shifts back, length-disjoint
+   meet provably empty, raffination exact on short classes, tails dedupe [1, N].
+ - 3000 closed corpus instances: per-length counts SOUND (both closed and open-with-env forms);
+   strictly tighter than tier-1 on size 1308/3000 and on length 60/3000.
+
+CROSS-VALIDATION vs BOTH z3 TIERS (150 corpus programs): length projection within LenZ3 on
+150/150; size projection within SizeZ3 on 148/150. The analyses are INCOMPARABLE by design and
+the 2 outliers show why (reported, not hidden):
+   #21  spatial [0,20] vs z3 [0,15]  -- z3's inclusion-exclusion |a∪b| = |a|+|b|-|a∩b| on
+        overlapping union operands; a per-length count domain cannot see sibling overlap.
+   #130 spatial [0,inf) vs z3 [1,inf) -- z3's subset saturation proves nonemptiness through
+        `(x <| x)` shapes; spatial's per-class lower stays 0.
+Both were CONSISTENT with spatial everywhere (asserted), i.e. both sound. Resolution:
+SpatialTypes.bestSize/bestLen return the MEET of spatial ⊓ tier-1 ⊓ z3, which dominates each by
+construction (asserted) and is the answer a consumer should use; meet soundness re-checked on 40
+closed programs. Regression: LenBoundsCheck, SizeBoundsCheck, SizeZ3Check, AlgebraicLaws,
+CorpusLawValidation, CorpusValidation green.
+
+NOT YET DONE (deliberate): no dependent/relational information (the {min,max,avg}E(P"v") degree
+queries need per-key counts, i.e. indexing classes by head as well as length) -- the natural next
+tier, noted as requested.
+
+================================================================================
+2026-08-06  Spatial-type LATTICE formalized: 42 FOL/SMT obligations, all PROVED
+================================================================================
+Formalized the spatial abstract interpretation and certified it: scripts/gen_spatial_obligations.py
+-> proofs/spatial/*.smt2 (42 files) + proofs/spatial/REGISTRY.tsv (43 rows, no orphans either way);
+wired into proofs/run.sh as a new family; docs/design_spatial_lattice.md enumerates every property
+used, every law, and its verdict; atlas.md S9 rewritten to cover the three analyses (size, path
+length, spatial types) incl. the two files it predated (LengthConstraints.scala, SpatialTypes.scala).
+
+RESULT: 42/42 PROVED (z3), of which vampire independently proved 19 -- all the pure-FOL sp_*
+concretion files except sp_tails_shift / sp_comp_collision / sp_isprefix_len. Default-mode vampire
+has no theory portfolio, so on the datatypes+arithmetic lat_* half it predictably times out and z3
+is the prover of record (documented in run.sh and traps.md); budgets are 15s lat_* / 60s sp_*.
+
+LAYER lat_* (20 files) -- THE LATTICE. Counts are N u {inf} as a DATATYPE (inf a real top, not a
+sentinel Int); intervals over it ordered by inclusion; a spatial type is a pointwise-indexed family.
+Proved: Cnt total order; ⊑ a partial order; join/meet ARE lub/glb; ⊥/⊤; idempotence/commutativity/
+absorption; DISTRIBUTIVITY; saturating +/x/relu- laws (incl. "0 beats inf" and monotone-DOWN in the
+subtrahend); MONOTONICITY of every per-class transfer (binary/unary/scale, the scale case lifting a
+separately-certified nonlinear Int core); per-transfer local soundness; MEET-DOMINATES (the
+bestSize/bestLen theorem); widening soundness; projection monotonicity; pointwise type order/join;
+and the POST-FIXPOINT theorem (F#(T) ⊑ T and init ⊑ T => every Kleene iterate ⊑ T, via an explicit
+nat-induction schema) -- the theorem the Fixpoint transfer actually rests on.
+
+COUNTERMODEL FOUND (a real catch, not a formality): the first draft asserted [0,0] is the lattice
+bottom; z3 returned SAT. gamma([0,0]) = {0} is NOT a subset of gamma([2,5]), so [0,0] is an ORDINARY
+element ("this class is empty") and ⊥ is the INCONSISTENT interval (inf, 0) -- exactly the
+LenBounds.empty marker the code already used. lat_ivl_bounds now proves the corrected statement AND
+the refutation of the old one. (Second, smaller catch: the ⊥ conjunct needs an okc guard, else a
+negative-count interval refutes it.)
+
+LAYER sp_* (22 files) -- THE CONCRETION, over the same set-of-paths denotation as proofs/laws plus
+len. Proved: len(append) additivity and isPrefix => len <= (induction schemas); RESTRICTION
+ANNIHILATES classes shorter than the shortest prefix; RAFFINATION KEEPS those classes EXACTLY;
+restriction/raffination PARTITION x; length-disjoint sets have EMPTY meet; wrap is an injective
+length-shift (into) producing nothing else (onto); unwrap/tails shift down with >=1 tail per
+nonempty class; composition adds lengths with a witnessing pair and is injective for a fixed left
+factor; the COMPOSITION COLLISION theorem (ground witness: {a}.{aa} and {aa}.{a} both yield a.a.a)
+-- why the per-class lower bound must be a MAX and never a sum; iteration keys have length exactly
+1; the subsumption family; SELF-RESTRICTION x <| x = x and x \| x = {} (isPrefix reflexive); the
+per-class union/inter/sub bounds; inclusion-exclusion strictly beats the additive bound on overlap;
+and the Galois connection (c in gamma(alpha c), alpha . gamma ⊑ id).
+The CARDINALITY BRIDGE is 4 standard finite-set axioms (inclusion-exclusion, meet ⊆ both, x\y = x
+minus meet, non-negativity), asserted explicitly and marked DEFINITIONAL; everything on top is
+proved, nothing else assumed.
+
+THE PAYOFF -- three certified law families became code (SpatialTypes.scala):
+  * subsumes(x,y): syntactic ⊆ (∩/∖/<|/\| ⊆ left operand; operands ⊆ union; transitive) driving
+    relational cases -- y ⊆ x => x∪y = x, x∩y = y, x∖y = {} when x ⊆ y. Kills the double counting
+    on x ∪ (x∩y), the exact shape where SizeZ3's relational facts beat the spatial analysis.
+  * partitionOf: (x<|y) ∪ (x\|y) = x EXACTLY, per class (the per-length analogue of SizeZ3's
+    partitionPair).
+  * self-restriction identities.
+Also fixed a precision bug the formalization exposed: an unknown-LENGTH Singleton was typed [0,1]
+when a singleton always holds EXACTLY one path (boundedExact), and TailsUnion's spill bucket can
+promise >=1 tail when every length in it is headed.
+MEASURED: strictly tighter than tier-1 on 1480/3000 closed corpus instances for size (was 1308) and
+87 for length (was 60). All 5 SpatialTypeCheck tests green (a new one pins the relational cases);
+regression LenBoundsCheck / SizeBoundsCheck / SizeZ3Check / AlgebraicLaws / CorpusLawValidation green.
+
+HONEST LIMITS (documented in design_spatial_lattice.md S7, unchanged by this work): no per-class
+MEET variable, so sibling overlap needs syntactic subsumption to be visible -- SizeZ3 stays strictly
+tighter on 2/150 corpus programs (bestSize meets both, so consumers lose nothing); the single spill
+bucket loses per-class headedness (a loHeaded component would recover it); widening is proved SOUND
+but its termination argument is structural, not certified.
+
+================================================================================
+2026-08-06  Abstract interpretation of the six cornerstones (CornerstoneTypes)
+================================================================================
+New gate+report src/test/scala/CornerstoneTypes.scala: runs all three analyses (size tier-1/SizeZ3,
+length tier-1/LenZ3, spatial types) on the SIX pipeline cornerstones, asserting soundness and
+dominance on every row and printing the numbers beside the ground-truth histogram. Each cornerstone
+is reported in BOTH forms; the contrast is the finding.
+
+AS WRITTEN (open): every cornerstone answers [0,inf) for size. Correct, not a bug -- inputs live in
+the SpaceContext (free Mentions) and datalog/gol/puzzle15/nqueens are Call nodes, all of which the
+analyses widen to unknown by design. Lengths do better where the query shape forces them (aunt
+[2,inf), temperature [2,inf), nqueens [4,inf)).
+
+STAGE-0 EXPANDED (EquivPipeline.expand -> ground local algebra, gated eval(expanded)==eval(prog),
+i.e. the same artifact the proof pipeline certifies):
+  cornerstone  |eval|  size tier-1     size z3     spatial size   length (all tiers)
+  aunt            3    [0, 182]        [3, 3]      [0, 84]        [3, 3]   exact
+  datalog-sn      6    [6, 20]         [6, 6]      [6, 14]        [2, 2]   exact
+  gol             3    [1, 3]          [3, 3]      [1, 3]         [3, 3]   exact
+  puzzle15        2    [0, inf)        [1, 2]      [0, inf)       [16, 16] exact
+  temperature     9    [0, 32]         [9, 9]      [9 -> [0,32]]  [5, 5]   exact
+  nqueens        32    [15, 230]       [32, 32]    [15, 230]      [6, 6]   exact
+Observations:
+ * The LENGTH analysis is EXACT on all six at tier 1 already -- every cornerstone is a relational or
+   grid encoding whose paths are uniform-length, and lenBounds nails the single class. LenZ3 agrees
+   (nothing left to tighten).
+ * SizeZ3 is EXACT on 5 of 6: the expanded forms are closed, so groundFold evaluates them. puzzle15
+   is the exception ([1,2], true 2) -- its syntactic hi is inf, so the fold budget (hi<=200k) never
+   fires and z3 works from constraints alone. That is the fold-budget-consults-syntactic-hi
+   limitation already logged on 2026-07-14, now visible on a cornerstone.
+ * SPATIAL beats tier-1's upper on aunt (84 vs 182) and datalog-sn (14 vs 20) -- per-length classes
+   plus the certified subsumption tightening. It matches tier-1 elsewhere and does NOT beat SizeZ3
+   on these closed programs (no ground folding in the spatial tier); bestSize meets all three.
+ * The spatial CLASSES are a single length class per cornerstone, which is the real spatial content
+   here: these programs are length-homogeneous.
+
+OPEN forms WITH a declared input type (what input->output typing buys):
+ * temperature, world : 16 paths of length 5  =>  {len 5: [0, 32]}, size [0,32], length [5,5]
+   (32 = two cylinder restrictions x 16) -- from [0,inf)/[2,inf) with no input type.
+ * aunt, family : {len 2: 14, len 3: 12}  =>  {len 3: [0, inf)}, length pinned to [3,3] exactly but
+   the count upper stays inf: the nested-iteration scaling multiplies by an unknown group count.
+   WEAKNESS worth recording -- a per-class group-count bound (or binding `people`'s type) would fix
+   it; tier-1/z3 are also [0,inf) there, so nothing regressed.
+All three tests green. No production code changed by this entry.
+
+--- 2026-08-06 (addendum) puzzle3 / puzzle8 FULL expansion added to CornerstoneTypes -------------
+The six pipeline cornerstones contain no unbounded search (puzzle15 is ONE BFS expansion), so the
+analyses never met a Space.Fixpoint. Added the sliding-puzzle reachable-state closure:
+  puzzleFixpoint(r,c) = Fixpoint(Singleton(initial), reach, reach \/ expandStep(reach)) then
+  lowerCalls to inline superpose/collapse so the term is Call-free.
+NOTE the library's own two-argument `explore` routine is NOT lowerable to a Fixpoint (both args
+change per step -- the documented honest-residual case; my first attempt asserted otherwise and the
+test correctly failed), hence writing the closure in the union-saturating Fixpoint form directly.
+
+puzzle3-full (2x2, 4!/2 = 12 states, in the default test):
+  form         size tier-1      size z3     spatial size     length tier-1  LenZ3     spatial length
+  Fixpoint     [1, inf)         [1, inf)    [1, inf)         [0, inf)       [0, inf)  [4, 4] EXACT
+  expanded     [11, 18469]      [12, 12]    [11, 14885]      [4, 4]         [4, 4]    [4, 4]
+THE RESULT WORTH HAVING: on the unexpanded Fixpoint the SPATIAL analysis proves the length is
+EXACTLY 4 (classes {len 4: [1, inf)}) while BOTH length tiers answer [0, inf). Cause: tier-1
+lenBounds takes hull(init, body) with rec |-> unknown, so the recursive mention poisons it; the
+spatial tier instead runs Kleene iteration and the POST-FIXPOINT CHECK (proofs/spatial/
+lat_postfixpoint.smt2) verifies F#(T) subset-of T with support {4}, proving length-homogeneity of
+the WHOLE reachable set from a term whose size is unbounded. That certificate is now load-bearing
+on a real cornerstone, not just a lattice nicety. Follow-up worth doing: give tier-1 lenBounds the
+same iterate-and-check treatment (cheap, no solver) so it stops reporting [0, inf) here.
+
+puzzle8-full (3x3, 9!/2 = 181440 states) added as a Slow test: the ABSTRACT interpretation is
+size-independent (same shape of answer as puzzle3, computed in milliseconds); only the ground truth
+is expensive, so it uses evalT. Asserts every tier contains the truth.
+
+================================================================================
+2026-08-06  Cornerstone bound analysis -> SIX improvements to the abstract interpretation
+================================================================================
+Diagnosed every loose cornerstone bound to a root cause and implemented the fix for each.
+
+(1) SPATIAL GROUND FOLDING (SpatialTypes.groundFold). A closed subterm denotes one fixed set, so
+    evaluate it and take the EXACT per-length HISTOGRAM -- strictly more information than SizeZ3's
+    exact count, and no solver needed. Consulted at every node before the structural transfers.
+(2) WORK-BUDGETED FOLD. The syntactic gate (sizeBounds.hi <= 200k) misses terms whose syntactic
+    upper is inf but whose true result is tiny (the expanded 15-puzzle: true size 2, syntactic inf --
+    the limitation logged 2026-07-14). Added a fallback: when the syntactic bound is unusable, gate
+    on a LITERAL-WEIGHT proxy (total literal paths below the term <= 4000, since every output path is
+    built from them) and evaluate under a 150ms wall cap on a DAEMON thread, abandoned if it
+    overruns. Any failure returns None and the transfers take over.
+(3) FIXPOINT LENGTH via iterate-and-check (Lower.lenBounds). Was hull(init, body) with `rec`
+    UNBOUND, so one recursive mention widened every fixpoint to [0, inf). Now Kleene-iterates with
+    rec bound to the running candidate and verifies the post-fixpoint condition F(t) subset-of t
+    (certified: proofs/spatial/lat_postfixpoint.smt2); unverified falls back to unknown.
+(4) INTERPROCEDURAL CALLS in all three analyses. `Lower.sizeBounds(s, rc)`, `Lower.lenBounds(s, rc)`
+    and `SpatialEnv(routines = rc)` analyse a Call by binding the callee's parameters to the ARGUMENT
+    types (sound: a body denotes a function of its parameters); an `active`/`stack` set stops
+    re-entry so recursion widens to unknown instead of diverging. lenBounds also gained a PATH env so
+    ref parameters bind (puzzle15's superpose takes a path). The no-rc entries are unchanged, so the
+    law guards (provablyNonEmpty/provablyHeaded) behave exactly as before.
+(5) rc THREADED INTO BOTH z3 TIERS so their per-node baseline seeds are interprocedural too --
+    without this the tier-1 answer could be TIGHTER than the z3 baseline and dominance broke (caught
+    immediately by the CornerstoneTypes gate on gol).
+(6) SPATIAL now honours SpaceMention.sizeHint (exactly k paths at unknown lengths). It was ignoring
+    the hint tier-1 already trusted -- found by re-testing the s||g derivation on an open term.
+ALSO a precision bug fixed in `join`: when one side had a spill bucket its paths were materialised
+into the output's tracked classes AND left in the output rest -- the same paths twice, which inflated
+the certified s||g bracket [2,5] to [2,11]. With a spill present the join now collapses to one bucket
+carrying summed totals and the hull of both length ranges.
+
+CORNERSTONE RESULTS (expanded / ground local algebra), spatial size before -> after:
+  aunt        [0, 84]      -> [3, 3]     EXACT (truth 3)
+  datalog-sn  [6, 14]      -> [6, 6]     EXACT (truth 6)
+  gol         [1, 3]       -> [3, 3]     EXACT (truth 3)
+  puzzle15    [0, inf)     -> [1, 2]     (truth 2; root fold times out, subterm folds tighten)
+  temperature [0, 32]      -> [9, 9]     EXACT (truth 9)
+  puzzle3     [11, 14885]  -> [12, 12]   EXACT (truth 12)
+  nqueens     [15, 230]    -> [32, 32]   EXACT (truth 32)
+Open forms: gol length [0,inf) -> [3,3] EXACT in ALL THREE tiers (interprocedural); nqueens spatial
+length [4,inf) -> [6,6] EXACT; puzzle3 Fixpoint length [0,inf) -> [4,4] and spatial size -> [12,12];
+puzzle8 (181440 states) spatial length [9,9] in milliseconds. Sizes stay [0,inf) where the INPUT is a
+free mention -- inherent, not a gap (no input type, no output bound).
+CORPUS: spatial strictly tighter than tier-1 on 2555/3000 (was 1480) for size and 468 (was 87) for
+length. Soundness and dominance still assert on every measurement.
+
+Tier-1 sizeBounds deliberately NOT given ground folding: it is the cheap syntactic tier the law
+guards call inside the optimizer fixpoint, where evaluating subterms would be a performance cliff.
+Two SpatialTypeCheck expectations had encoded the OLD abstract intervals and now fail against the
+exact folded answers -- updated to assert the exact value AND to exercise the transfer chain on open
+terms the fold cannot touch (the brittle-assertion trap from traps.md, hit in my own tests).
+
+================================================================================
+2026-08-06  CORRECTION: removed ALL evaluation from the abstract interpretation
+================================================================================
+Standing invariant (docs/design_spatial_lattice.md S0): an abstract interpretation strictly
+propagates ANNOTATED (spatial) types. It must never call eval/evalI/evalT on a subterm -- a bound
+obtained by running the program is an evaluation result, not an inferred one, and presenting it as an
+inferred bound misrepresents what the analysis knows.
+
+REMOVED (three sites, all of them):
+  * SpatialTypes.groundFold + isClosed/literalWeight/timedEval/foldCache and the work budget --
+    added earlier TODAY; it was the source of the "exact on 6 of 7 cornerstones" claim.
+  * SizeZ3.groundFold + nodeBounds + the per-node fold seeds and the e-pin that depended on an
+    actual fold (added 2026-07-14 from the aunt drilldown) -- this is where most of the cornerstone
+    exactness ACTUALLY came from, including the [3,3]/[9,9]/[32,32] figures.
+  * LenZ3.groundFold and the folded branches of its length predicate / emptiness facts.
+Verified by grep: no eval/evalI/evalT/exec call remains in SpatialTypes.scala, SizeConstraints.scala
+or LengthConstraints.scala (only the soundness statement in a doc comment mentions eval).
+
+WHAT SURVIVES from the improvement batch (all pure propagation, all kept):
+  (3) Fixpoint length by Kleene-iterate + post-fixpoint check   -- pure, certified
+  (4) interprocedural Call analysis in all three tiers          -- pure
+  (5) rc threaded into both z3 tiers' baseline seeds            -- pure
+  (6) spatial honours SpaceMention.sizeHint                     -- ANNOTATION propagation, the
+      canonical legitimate precision source
+  + the join double-counting fix                                -- pure
+
+HONEST CORNERSTONE NUMBERS (expanded ground local algebra), size:
+  cornerstone  tier-1          SizeZ3          spatial         truth
+  aunt         [0, 182]        [0, 182]        [0, 84]         3
+  datalog-sn   [6, 20]         [6, 14]         [6, 14]         6
+  gol          [1, 3]          [1, 3]          [1, 3]          3
+  puzzle15     [0, inf)        [0, inf) TIMEOUT [0, inf)       2
+  temperature  [0, 32]         [0, 16]         [0, 32]         9
+  puzzle3-full [11, 18469]     [11,18469] TIMEOUT [11, 14885]  12
+  nqueens      [15, 230]       [15, 230] TIMEOUT [15, 230]     32
+LENGTH is still EXACT on every cornerstone in every tier ([3,3] [2,2] [3,3] [16,16] [5,5] [4,4]
+[6,6], and puzzle3 Fixpoint [4,4] / puzzle8 [9,9]) -- that was never fold-derived, it is pure
+propagation, and it is the strongest genuine result here.
+Genuine SOLVER wins now visible where folding used to mask them: datalog-sn [6,20]->[6,14],
+temperature [0,32]->[0,16]. Three programs now report solver-failed(timeout) at the report's 10s
+budget: folding used to collapse whole subtrees to constants, so the constraint systems are bigger
+now. Reported as a status, never silently folded into the numbers.
+CORPUS (honest): spatial strictly tighter than tier-1 on 1480/3000 for size and 87 for length -- the
+2555/468 figures in the previous entry were fold-driven and are WITHDRAWN. Spatial within SizeZ3 on
+149/150 (up from 148: z3 lost its fold-derived exactness too).
+
+Two SpatialTypeCheck expectations churned twice today (abstract -> folded-exact -> abstract). Net:
+they are back to asserting the DERIVED intervals, which is what they should have asserted all along.
+Battery: SpatialTypeCheck, LenBoundsCheck, SizeBoundsCheck, SizeZ3Check, ProductUnionCheck,
+AlgebraicLaws, CorpusLawValidation green (CornerstoneTypes still running at time of writing).
+
+================================================================================
+2026-08-06  Solver timeouts: diagnosed and FIXED; two new certified laws
+================================================================================
+DIAGNOSIS (dumped the lowered SMT and profiled it rather than guessing):
+  nqueens-expanded  141 nodes, 2265 lines, 494 subset + 529 eps edges -> box solve 12.2s
+  puzzle3-expanded  297 nodes, 7844 lines, 2505 subset + 2721 eps edges -> box solve TIMEOUT
+Not a size problem (141 nodes!). Two causes, both measured:
+ 1. The emitted subset relation was the full TRANSITIVE CLOSURE. Every edge implied by a two-step
+    path is derivable by the solver's own arithmetic, so they were pure redundant rows: 67% of
+    puzzle3's constraint lines.
+ 2. z3's BOX-MODE multi-objective search was the dominant cost -- not the constraint system.
+Experiments: transitive reduction alone 494->136 / 2505->218 edges, nqueens 12.2s -> 5.3s.
+SPLITTING the three objectives into separate single-objective solves: nqueens 12.2s -> 0.71 + 0.94s;
+puzzle3 TIMEOUT -> 1.72 + 13.97s COMPLETE. A REAL (LRA) relaxation was tried and REJECTED: it is
+100x faster but loses the upper entirely (max n = oo vs 230) -- integrality is load-bearing there,
+so it would have traded the answer for speed.
+
+IMPLEMENTED in SizeZ3:
+ * emit the transitive REDUCTION of the ⊑ relation (closure still computed internally, since the
+   glb/lub rules and uppersOf/common read it);
+ * one solver call per objective, each budgeted separately; a per-objective failure degrades THAT
+   endpoint to its baseline instead of losing the whole query;
+ * new Status.PartiallySolved(detail) so a partly-established answer is never passed off as
+   `Solved` -- found because puzzle15 was reporting "solved" while silently keeping the baseline
+   upper. Consumers updated; the gates accept it (it still dominates the baseline).
+RESULT: every cornerstone now gets an answer, and puzzle3's upper is genuinely TIGHTENED past the
+baseline: 18469 -> 17445. puzzle15 honestly reports PARTIAL(kept baseline for max).
+
+TWO NEW CERTIFIED LAWS (proofs/spatial, both PROVED):
+ * sp_head_partition -- a path's head and tail are unique and group h's tail-set is exactly
+   {t : cons h t in A}, so the group tail-sets are disjoint and cover: Sigma_g |rest_g| =
+   |headed A|. CONSEQUENCE IMPLEMENTED (Lower.sizeBounds + restChainBody): a nested iteration whose
+   inner source is the OUTER loop's rest-mention costs ⌈src⌉·⌈innermost body⌉ -- LINEAR in the
+   source -- not ⌈src⌉^depth. Guarded by `min` with the old product so it can only tighten.
+ * sp_iter_disjoint_cylinders -- bodies keyed by distinct group heads cannot share a path.
+Soundness re-gated: SizeBoundsCheck (5000 closed corpus instances), SizeZ3Check, LenBoundsCheck,
+SpatialTypeCheck, AlgebraicLaws, CorpusLawValidation, ProductUnionCheck all green.
+
+WHERE THE REMAINING LOOSENESS ACTUALLY IS (honest):
+ * nqueens [15, 230] vs truth 32: the z3 optimum EQUALS the baseline, so the search is not the
+   problem -- the constraint system holds no more information. The gap is the attack-filter's
+   SELECTIVITY (a subtraction removing most candidates), which no cardinality abstraction can bound
+   without semantic knowledge of the filter. Not a missing law.
+ * The nested-iteration law does NOT move the expanded cornerstones, because EquivPipeline.expand
+   unrolls every iteration into ground unions -- there are no Iteration nodes left to bound. It pays
+   on UNEXPANDED, annotated programs (the real use case).
+ * Expanded unions of ground alternatives (nqueens 230, puzzle3 17445) are loose because the
+   alternatives OVERLAP and inclusion-exclusion needs the meets, which are not in the term.
+   Computing the overlap would mean folding the literals = evaluation, which is out of bounds.
+ALSO FIXED: my puzzle8 test was asserting ground truth via evalT on the 181440-state Fixpoint --
+30+ minutes, it was the CornerstoneTypes failure in the previous battery. It now checks the bounds
+against the KNOWN 9!/2 = 181440 and length 9 (a fact about the puzzle, already pinned by execution in
+ExSlidingPuzzle). All three analyses answer in 5ms, independent of the state-space size.

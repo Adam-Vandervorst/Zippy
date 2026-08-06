@@ -253,7 +253,16 @@ The source-level "link" step that turns recognizable self- and mutual-recursion 
 
 ---
 
-## 9. Size analysis
+## 9. Static analysis (size, path length, spatial types)
+
+Three analyses over one design: a compositional tier-1 interval, a z3 tier that refines it, and
+above both a length-indexed count domain whose two projections *are* the size and length analyses.
+
+| Analysis | Tier-1 (compositional) | Tier-2 (z3) | Answer |
+|---|---|---|---|
+| **Space size** `\|eval(s)\|` | `Lower.sizeBounds` (§9.1) | `SizeZ3` (§9.2) | `SizeBounds(lo, loHeaded, hi)` |
+| **Path length** `∀p ∈ eval(s). \|p\|` | `Lower.lenBounds` (§9.3) | `LenZ3` (§9.4) | `LenBounds(lo, hi)`; `lo > hi` = provably empty |
+| **Spatial type** counts PER length | `SpatialTypes.infer` (§9.5) | — (meets the two above) | `SpaceType(byLen, rest, restLens)` |
 
 A two-tier abstract interpretation of a Space's cardinality. **Tier-1** (`Lower.sizeBounds`) is a compositional interval abstraction `lo ≤ |eval(s)| ≤ hi` plus `loHeaded`, computed by per-constructor cardinality laws. **Tier-2** (`SizeZ3`) translates a term's per-node cardinality facts plus the saturated subset relation into a LINEAR z3 optimization problem, reading the root's interval off the objectives — tighter-everywhere / unsound-nowhere by construction (it asserts every tier-1 interval, so any sat optimum is equal-or-tighter). Design in [design_size_constraints.md](design_size_constraints.md), motivated by the tightness numbers in `build.log`.
 
@@ -277,11 +286,49 @@ Umbrella object; refines the tier-1 interval by encoding cardinality facts + the
 | **`alphaRename`** | `SizeConstraints.scala:71` | Post-order rename of every binder to a unique fresh name so value-level hash-consing is scope-safe (reused binder names don't block encoding). Post-order guarantees no capture. |
 | **`scopesProblem`** | `SizeConstraints.scala:111` | Gatekeeper: `Some(reason)` if hash-consing could conflate distinct bindings (duplicate binder names over different subtrees, out-of-scope/`_` references), else `None`. Ensures each hash-consed node stands for exactly one binding (adversarial min/max soundness). |
 | **`children`** | `SizeConstraints.scala:145` | Structural sub-space accessor (drops binder metadata) for generic recursion; used by `scopesProblem`, `encode`'s post-order id closure. |
-| **`groundFold` / `nodeBounds` / `foldCache`** | `SizeConstraints.scala:174-190` | Exact-evaluation seed for CLOSED subterms (no mentions/refs/calls/grounded below): `eval` it and seed the exact `[k,k]` size + exact headed count, gated by a budget (`baseline.hi ≤ 200000`). Memoized. Recovers precision the abstract unwrap transfer loses. |
+| ~~`groundFold`~~ | *removed* | A closed-subterm `eval` seed once supplied exact sizes here (and in `LenZ3`/`SpatialTypes`). **Removed on principle**: an abstract interpretation must propagate annotated types, never consult evaluation output — a bound obtained by running the program is an evaluation result, not an inferred one. All three analyses are now evaluation-free; tightness on closed terms comes from the transfers and the solver, and on open terms from declared input types. |
 | **`encode` (core encoder)** | `SizeConstraints.scala:195` | Heart of tier-2: hash-cons every distinct subterm to a node with vars `n` (size) and `e ∈ {0,1}` (is-ε); assert baseline/ground seeds, the saturated ⊑ relation (transitivity + Intersection GLB / Union LUB / wrap-congruence rules), per-constructor cardinality laws (disjoint-cylinder exact sums, inclusion-exclusion via `meetOf`, partition equalities, LINEAR dual uppers for composition/iteration using `K(c)=baseline.hi` as the only multiplicative coefficient), and box-mode objectives (`minimize n_r`, `maximize n_r`, `minimize hdroot`). |
 | **`encodeText`** | `SizeConstraints.scala:165` | Diagnostics accessor (`encode(s).text`); only consumer is `SizeZ3Drilldown`. |
 | **`runZ3`** | `SizeConstraints.scala:357` | Writes SMT to a temp file, runs `z3 -T:<timeout>`, captures combined output, deletes the file. |
 | **`parseObjectives`** | `SizeConstraints.scala:369` | Parses z3 box-mode output into `(minN, maxN, minHd)` (None = unbounded `oo`); any unexpected shape → None → baseline. Feeds the tightening join. |
+
+### 9.3 Path-length tier-1
+
+**`Lower.lenBounds` + `LenBounds`** — `src/main/scala/MORKL.scala`
+Compositional interval `∀p ∈ eval(s): lo ≤ |p| ≤ hi` over every construct. The statement is
+∀-quantified, so it is vacuously true of the empty space and `lo > hi` becomes a *composable*
+provably-empty marker (`LenBounds.empty`, certified as the lattice ⊥ — see
+[design_spatial_lattice.md](design_spatial_lattice.md)). Transfers: union hull; intersection
+`max`/`min` (a crossing marks length-disjointness); composition/wrap add; unwrap/tails shift down;
+restriction's lower bound comes from the prefix operand; iteration/fold take the body's bounds with
+`rest ↦ tail lengths`. `pathLenBounds`/`pathItemLen` honour any `PathRef.lengthHint`.
+
+### 9.4 Path-length tier-2
+
+**`LenZ3`** — `src/main/scala/LengthConstraints.scala`
+Per hash-consed node: `lo`/`hi`/`emp` variables plus a `define-fun` length **predicate** that keeps
+the DISJUNCTIVE length set the interval hull loses (literals emit exact length sets, meets conjoin
+child predicates, wrap/unwrap/tails shift them). Objectives run under `¬emp_root` because the bounds
+are ∀-quantified over paths; `unsat` ⇒ provably empty ⇒ baseline. Predicates are macros, so nodes
+over an expansion cap degrade to interval predicates (DAG sharing would otherwise blow up).
+Reuses `SizeZ3`'s `alphaRename`/`scopesProblem`/`children`/`runZ3`/`Status`.
+
+### 9.5 Spatial types (the unifying tier)
+
+**`SpaceType` / `SpatialTypes` / `SpatialEnv` / `Ivl`** — `src/main/scala/SpatialTypes.scala`
+Abstracts a Space as a **length-indexed count domain** — a count interval per path length, plus one
+spill bucket — mapping an input environment (`SpaceMention → SpaceType`, `PathRef → LenBounds`) to an
+output type. Its two projections are the analyses above: summing the classes gives a size bound,
+the support hull gives a length bound, and `bestSize`/`bestLen` meet those with the z3 tiers
+(certified MEET-DOMINATES). Per-length counts express what neither can alone: a restriction
+annihilates classes shorter than its shortest prefix, wrap shifts classes bijectively, raffination
+keeps short classes exactly. A **relational layer** (`subsumes`, `partitionOf`) applies the certified
+subsumption/partition/self-restriction laws so `x ∪ (x ∩ y)` is not double counted. `Fixpoint` uses
+Kleene iteration with widening plus a **post-fixpoint check**, licensed by `lat_postfixpoint`.
+The lattice, every transfer's soundness/monotonicity, and the concrete path facts are certified in
+[`proofs/spatial/`](../proofs/spatial) — see [design_spatial_lattice.md](design_spatial_lattice.md).
+Supersedes the partial `otypes`/`itypes` experiment (`MORKL.scala:2393/2455`, `???` at
+TailsUnion/Fixpoint), which is left in place unused.
 
 ---
 
