@@ -3615,3 +3615,256 @@ and the SpatialLawCheck dispatcher assertion). Every per-suite number in section
 exactly. Totals: 304 PASS / 0 FAIL / 0 IGNORED across those 30 suites; plus the widened executor
 sweep at 94 PASS / 0 FAIL / 4 pre-existing IGNORED (Imperative 2, Unification 1, UnionFind 1).
 GRAND TOTAL OBSERVED THIS INCREMENT: 398 PASS, 0 FAIL, 0 ignores added.
+
+================================================================================
+2026-08-07  review.md's four remaining items: integration, verification, docs
+================================================================================
+This increment did not add a feature. Four concurrent agents landed review.md items 1-4; my job was
+to compile the union of their work, run the gates, fix what the integration broke, and make the docs
+match the measurements. Everything below is a number I observed on this tree, in a log I kept.
+
+--------------------------------------------------------------------------------
+1. COMPILE: no interface drift
+--------------------------------------------------------------------------------
+`scala-cli compile src` and the test scope both compile clean on the union of the four agents' work
+(warnings only, all pre-existing exhaustivity/unreachable-case warnings in MORKL.scala). No consumer
+needed adapting for a signature change.
+
+ENVIRONMENT, and it cost 25 minutes before I diagnosed it: the FIRST test-scope compile after
+MORKL.scala changed drove the bloop server to `java.lang.OutOfMemoryError: Java heap space` (visible
+only in ~/Library/Caches/ScalaCli/bloop/daemon/output, not in the client's output, which simply
+hangs). `scala-cli --power bloop exit` then re-running with `--bloop-java-opt -Xmx6g` compiles in
+about four minutes. RECOMMENDATION: use `--bloop-java-opt -Xmx6g` on this project after a
+MORKL.scala change. A wedged bloop looks exactly like a slow compile.
+
+--------------------------------------------------------------------------------
+2. THE ONE REAL INTEGRATION FAILURE, AND THE FIX
+--------------------------------------------------------------------------------
+SpatialCheckCheck failed 4 of 25 (4a, 4b, 4c, 6b) on the merged tree. It is not in the four agents'
+file sets, so nobody ran it; both failures are consequences of the order-completeness work.
+
+(a) 6b, "the order mirror agrees with `leq` on every pair" — A GENUINE DEFECT, now fixed.
+`SpatialChannels.histOrderFailures` (SpatialCheck.scala) RE-STATED `leqSpace`'s clauses in order to
+attribute a rejection to a channel. When `leqSpace` was completed for the spill-vs-tracked partition
+(canonSpace + the window decomposition in `leqSpaceMask`), the mirror kept rejecting pairs the order
+now proves, and 6b caught it: `leq=true, channels=length class 1, spill length window, spill
+aggregate count`. A duplicated order in the diagnosis layer is exactly how this drifts, so the fix
+removes the duplication rather than resynchronising it: `histOrderFailures` now takes the VERDICT
+from `SpatialGamma.leqSpaceMask` itself, uses the set bits to select which channels to report, and
+quotes the CANONICAL forms the order actually compared. A mask of 0 returns no failures by
+construction. A set bit that the per-length loop cannot localise still yields one generic failure, so
+a rejected pair can never come back with an empty explanation (4d gates that).
+  MEASURED AFTER: the mirror agrees with `leq` on 2000 of 2000 pairs (1855 rejected, each with at
+  least one named channel). Note the verdict path in `SpatialCheck.types` branches on
+  `SpatialType.leq` and never on `failures.isEmpty`, so this change moves DIAGNOSIS only, never a
+  Proved/Refuted/Unknown decision.
+
+(b) 4a/4b/4c, "the false negative is REAL" — THE TEST WAS ASSERTING A REPAIRED BUG.
+Its witness was `{; other lens [1,2]: [1,1]} ⊑ {len 1: [0,1]; len 2: [0,1]}`, which is literally one
+of the two pairs SpatialLawCheck now prints as `REPAIRED`. I re-pointed the three tests instead of
+re-breaking the order. First I MEASURED whether any false negative survives for the type the old
+routine inferred: over a 174-type pool, ZERO — and zero for every point type alpha(v), v in U. The
+surviving class is PRODUCT INTERACTION, so 4a-4c now pin an instance of it:
+
+    a = shape {eps!, a.{eps!}, b.{eps!}}  lens {; other lens [0,1]: [3,3]}
+    b = shape {eps!, a.{eps!}, b.{eps!}}  lens {len 0: [1,1]; len 1: [2,2]}
+
+Both carry the same shape, which pins the value to exactly {eps; a; b}, so gamma(a) = gamma(b) = one
+space and containment holds OUTRIGHT, not merely on a finite universe (asserted: each admits exactly
+one member of U, and that member is the same). The histogram halves are not in the order either way
+(a.lens admits the count vector "0 at length 0, 3 at length 1", which b.lens rejects); the shape
+halves are EQUAL. So the containment is visible only to the conjunction, and no componentwise order
+-- and `SpatialType.leq` is `Shape.leqStrong x leqSpace` -- can see it. This one is NOT repairable
+inside `leqSpace`; the previous occupant of these tests was, and was repaired.
+  4c now reaches it through a real routine the honest way: `routine(s) = s` over a declared mention
+  infers its input's type exactly, so `SpatialCheck.report` sees the same pair. The assumption it is
+  Unknown MODULO changes from InputPathAnnotation to InputSpaceAnnotation; 5-series coverage of
+  InputPathAnnotation is unaffected (it is emitted at SpatialCheckCheck.scala:510 as well).
+
+(c) ONE SEMANTIC ADDITION, in `orderFailures`, because 4b's contract demanded an honest answer:
+when ONE component of the product order is PROVED contained and the other is not, every clause from
+the failing component is marked `sufficientOnly` and says why. That is a true statement, not a
+convenience: the contained component may exclude exactly the values the other's clause objects to.
+It is also the difference between the checker saying "the bounded universe cannot see a witness, so
+nothing is claimed" and "this is the order's documented incompleteness, not a violation" -- and on a
+pair where gamma(a) = gamma(b) the second is the correct sentence.
+
+FILES I EDITED THIS INCREMENT: src/main/scala/SpatialCheck.scala,
+src/test/scala/SpatialCheckCheck.scala, docs/atlas.md, docs/design_spatial_lattice.md, build.log.
+Nothing else. The four agents' files are untouched by me.
+
+--------------------------------------------------------------------------------
+3. THE BATTERY, SERIALLY, ONE JVM PER SUITE
+--------------------------------------------------------------------------------
+61 suites, 453 PASS, 2 FAIL, 0 ignores added by this increment. The two failures are pre-existing and
+documented in this file already (see section 5). Every number below was observed, not inferred.
+
+SOUNDNESS AND EXECUTOR GATES (run first, because two agents instrumented executors and one changed
+`Routine.optimized`, which the whole suite goes through):
+  CorpusValidation 1  -- 1000 programs x 1000 inputs = 1,000,000 pairs, 7 executors all agree, 35.1 s
+  CorpusLawValidation 1 -- 1000 programs x 100 envs = 100,000 checks; laws changed 954/1000 programs
+  TrieOps 5, TrieEval 6, TrieAlgebra 4, ITrieEval 5, ITrieOps 2, GraphExecT 25, ZipperTest 3
+  AlgebraicLaws 1, OptimizerProperties 2, SpillSoundness 5, SizeBoundsCheck 6, LenBoundsCheck 4
+  SpatialShapeCheck 18, SpatialSoundnessHunt 13, SpatialLawCheck 22
+
+THROUGH `Routine.optimized` (the hook is DEFAULT ON for all of these):
+  SCHardening 7, SCFacade 7, SCDriver 4, MORKL2Space 8, Unification 9, Imperative 6, Routines 5
+  ExGameOfLife 4, ExNQueens 10, ExAuntMetta 1, ExDatalog 4, ExSlidingPuzzle 4 (442 s)
+
+SPATIAL:
+  SpatialAcceptance 18, SpatialPipelineCheck 28, SpatialFactsCheck 26, SpatialCheckCheck 25,
+  SpatialLawCheck 22, SpatialCostCheck 20, SpatialAnalysisCheck 19, SpatialRecursionCheck 18,
+  SpatialShapeCheck 18, SpatialEventsCheck 17, SpatialSoundnessHunt 13, SpatialLawsCheck 11,
+  SpatialElimination 6, SpatialTypeCheck 5, ProductUnionCheck 7, CornerstoneTypes 4, SpacialType 2
+
+WIDER SWEEP: AuntQuery 7, SCMatching 7, ZipperEggTest 7, Grounded 6, Permutations 4, ReviewFindings 3,
+  GroundedAudit 3, SCGeneralization 3, Datalog 2, Lowering 2, AblationStages 1, Poly 1, Fuzzy 1,
+  SCDegeneracies 1, ProgramStats 1, DatalogShowTest 1.
+  (`morkl.IV` and `morkl.UnionFind` match no runnable suite under --test-only; both report 0 tests.)
+
+I RE-RAN the two suites that depend on SpatialCheck.scala AFTER my edit to it: SpatialLawCheck 22/0
+and SpatialAcceptance 18/0. SpatialCheckCheck went 21 pass / 4 fail -> 25 pass / 0 fail.
+
+--------------------------------------------------------------------------------
+4. THE FOUR ITEMS, WITH THE NUMBER THAT SETTLES EACH
+--------------------------------------------------------------------------------
+ITEM 1 (effort oracle; tightness not only containment) -- ADDRESSED, and the tightness is BAD and
+  gated at bad. `evalI`, `FreshTrieNode` at the single `ITrie.node` site, and the new `Touch`
+  component (`TrieNodeVisit` + `PatriciaVisit`) close the uncounted work. 22 events, 19 calibrated,
+  3 explanatory. Fuzzer corpus: 200 cases, 3000 points, 100% containment, and -- the review's
+  headline complaint -- 0 predictions skipped, against 177/200 zipper programs excluded before.
+  Four backends now, not three. p95/worst slack per (backend, component) is GATED and a
+  (backend, component) with no gate, or a gate no row exercises, FAILS:
+     reference Work 2.56/14.44   Alloc 5.50/23.00   Rounds 1.42/5.99   Touch -- (declared gap)
+     trie      Work 1.27/ 6.53   Alloc 11.70/22.75  Rounds 1.42/5.99   Touch 23.71/69.55
+     graph     Work 1.90/ 7.69   Alloc 7.57/16.02   Rounds 1.42/5.99   Touch 25.29/69.55
+     zipper    Work 11.47/36.07  Alloc 17.44/151.00 Rounds 1.42/5.99   Touch 26.77/110.33
+  CORNERSTONES: 6 cases, 66 points, 100% containment, 0 skipped -- and the numbers are embarrassing,
+  which is why they are published rather than filtered: reference 5,368x / 55,648x / 3,175x; trie and
+  zipper 3,839x / 213,465x / 3,175x and Touch 3,962,335x. The review's 5,368x/55,660x/3,201x is
+  therefore essentially UNCHANGED: instrumenting the delegated trie work made four backends
+  MEASURABLE, it did not make them TIGHT. `Cost.touch` is not a runtime predictor at cornerstone
+  scale and the docs now say so in both places.
+  Two named exclusions only (datalog-sn, puzzle15), each with a structural reason, and the exclusion
+  set is asserted EQUAL to the observed-unbounded set in both directions. The single touch-oracle gap
+  is declared in the MODEL (`ReferenceCost.touchNoOracle`), pinned by test to `reference` alone, and
+  its premise measured: `eval` emitted 0 trie-touch events over all 200 corpus programs and all 6
+  cornerstones.
+
+ITEM 2 (semantic laws as production inputs) -- ADDRESSED. `SpatialLaws.scala` (new) carries the
+  channel on `SpatialConfig.laws`, so every stage that took annotations takes laws with no new
+  plumbing. The safety argument is a MEET, so gamma(refined) subset-of gamma(unrefined) by
+  construction (checked on 4096 random values) and a contradictory law is DROPPED. The acceptance
+  evidence is a routine changing, not a law validated beside the analyzer:
+    6a: the datalog cornerstone's size [.,inf] -> [3,9], length [.,inf] -> [2,2], gains the TrieUnroll
+        candidate; on `closure /\ {length-3 literal}` it licenses EliminateEmpty -- residual 6 -> 1
+        nodes, warm work UNBOUNDED -> 1 -- and `eval` confirms the eliminated subterm really is empty
+        on all 512 digraphs on 3 nodes.
+    6b: 512 3x3 Life fields establish the radius-1 image bound; 64 law-refined analyses of the real
+        `nextStep`, every one gamma-admitting `eval`. The bound 9|S| is SOUND AND LOOSE: worst
+        observed ratio 1.75.
+    6c: exact n-queens counts n=1..8, zero Zippy events, raising size.lo off 0.
+    6d: PatternImage and chainBound are law INPUTS now; chainBound at depth 3 tightens the inner
+        binder 64 -> 16 paths and under the cheap config tightens the root transfer 50 -> 10.
+  HONEST: chainBound at depth 2 under the default config records `Unchanged` -- the Iteration count
+  transfer already applies the same Sum-K law. That is reported, not hidden.
+
+ITEM 3 (install the integration; finish the config) -- ADDRESSED, and `Routine.optimized` genuinely
+  consumes spatial facts. It now runs `SpatialHook.rewrite(body, rc)` BEFORE `Lower.inline`, default
+  ON. The evidence is behavioural, not structural: SpatialPipelineCheck's "INTEGRATION: `Routine.
+  optimized` itself consumes the unconditional emptiness proof" and "the hook fires through
+  `optimized` INTERPROCEDURALLY, and never on a big body" both pass, and the SOUNDNESS test does 250
+  programs x 25 envs = 6250 differential checks of the HOOKED `optimized` against `eval`.
+  COST, measured per call over 11 representative routines: worst absolute +26.7 ms (n-queens
+  place(8), 1106.6 -> 1133.3 ms); worst ratio 7.5x on a >1 ms call and 1.02x on a >20 ms call; whole
+  table 1216/1159 ms = 1.049x; process total 115 calls, 0 over budget, 37 changed, 0 RAISED.
+  BUYS, on 250 fuzzed corpus programs: 71 rewritten, 8710 -> 7796 compiled nodes for 199 ms over 250
+  calls. On the CLOSED cornerstones it saves nothing (nodes-saved 0 on all nine) because
+  Lower.ConstantOps is a partial evaluator and folds those anyway. It pays on OPEN bodies and is a
+  small tax on closed ones -- that is the honest summary and it is in atlas 9.14.
+  CONFIG: `inline` DELETED (it had no channel) rather than left unconsumed; `summaryKeys`/`unroll`
+  reach SpatialRecursion.Limits and the fact budgets reach SpatialFacts.Config through
+  SpatialAnnotations.limits/factConfig, which are now PROJECTIONS of `config` rather than separate
+  fields; `shapeDepth`/`shapeWidth` are consumed per analysis by SpatialAnalysis.narrow. The residual
+  caveat is one-directional and structural: Shape.MaxDepth/MaxHeads are carrier vals, so a
+  per-analysis value can only NARROW, and a value at or above the cap is a no-op the analysis reports
+  in its notes. Section 9 item 1 of the previous entry is closed except for that caveat.
+
+ITEM 4 (precision and latency budgets; fewer avoidable Unknowns) -- ADDRESSED.
+  PRECISION: the `shape.isTop`-accepting gate is gone. Each cornerstone declares required facts
+  (value-equal), size/length CEILINGS, an exact spine and required candidates, and an explicit
+  expected-TOP ledger with a reason per channel -- and the test FAILS if a channel recorded as an
+  honest TOP becomes bounded, so the record cannot rot in either direction. datalog-sn can no longer
+  pass by returning nothing: its five TOP channels are named, with the law that closes them.
+  LATENCY: puzzle15's decorated analysis is 1305 ms against the review's 38.6 s for the same 295-node
+  term, gated at 4000 ms -- and gated STRUCTURALLY at 12x the plain `SpatialTyping.infer` query it
+  decorates (measured 6.49x; it was 170x before the incremental join). The 1023-node union tree the
+  old test allowed 60,000 ms for takes 264 ms against a 1500 ms budget, and the ratio does not grow
+  with n (1.94/1.28/1.07/1.04x at 255/511/1023/2047 nodes).
+  AVOIDABLE UNKNOWNS: the review's named cause was REFUTED by measurement and then found to be
+  already fixed. Of the 202 residual false negatives on the wide random pool: 150 are TRUE NEGATIVES
+  (a member of gamma(a)\gamma(b) exists off the finite universe -- `leq` is right and U is too
+  small), 52 are PRODUCT INTERACTION (no componentwise order can see them), and 0 are AVOIDABLE. The
+  spill-vs-tracked partition the review named scored ZERO. On universes that DECIDE containment for
+  their class both orders now measure 0 false negatives: leqSpace 0/1950 contained pairs (420 types,
+  8400 pairs, 512 count vectors) and Shape.leqStrong 0/9947 (240 shapes, 14400 pairs, decided on 8192
+  spaces). Price measured too: leqSpace 109 -> 166 ns/call on a 41%-spill pool, 218 -> 262 ns/call
+  with no spill, reached on 2.2% of SpatialType.leq calls (leq end to end 55 ns/call).
+
+--------------------------------------------------------------------------------
+5. THE TWO RED SUITES, BOTH PRE-EXISTING, NEITHER IGNORED BY ME
+--------------------------------------------------------------------------------
+I marked NOTHING `.ignore` this increment. Both failures are already diagnosed in this file.
+
+(a) EquivPipelineTest -- 5 pass / 1 fail: `puzzle15-graph-agnostic.smt2: z3=Some(timeout)
+    vampire=240 s elapsed` after 792 s. This is the prover-capacity item at build.log section
+    "15-puzzle obligation: contention refuted, budget borderline": the obligation is byte-identical
+    to HEAD, contention was refuted by an idle rerun, both provers are unchanged, and the prior
+    conclusion was "no code change is appropriate". My run reproduces it exactly, including the five
+    green instances. NOT a spatial regression: the failing leg is an SMT obligation about the
+    op-graph, and my only main-source edit (SpatialCheck.scala diagnosis) is not on that path.
+
+(b) ProgramExpressivity -- 0 pass / 1 fail: `java.lang.OutOfMemoryError: Java heap space` on the
+    Slow-tagged census. Previously recorded here as failing pre-existingly with a StackOverflowError
+    under the default stack; I ran WITH `-Xss512m` and it now dies on HEAP instead, at 48 s. I
+    RE-RAN IT WITH `--java-opt -Xmx10g` AND IT STILL OOMs, after 1029 s. The census default is
+    `expr.n = 100000` programs accumulated into one CSV StringBuilder; it reads no spatial code at
+    all (grep: zero `Spatial` references in ProgramExpressivity.scala). So this is a census sizing
+    problem on a 16 GB machine, not a finding. Whoever owns the census should either lower the
+    default `expr.n` or stream the CSV to disk instead of a StringBuilder.
+
+--------------------------------------------------------------------------------
+6. WHAT REMAINS OPEN AFTER THIS INCREMENT
+--------------------------------------------------------------------------------
+1. COST TIGHTNESS ON THE CORNERSTONES IS THE BIGGEST HONEST GAP. 3,962,335x on trie/zipper `Touch`,
+   213,465x on `Alloc`. Containment at 100% says nothing about usefulness at that slack. The two
+   structural fixes named by the measurement are (a) a fixpoint over the size lattice / an
+   interprocedural size summary for datalog-sn, and (b) bounding a rest-chained nest by the PREFIX
+   PROFILE (Sum of K_d) instead of the per-level product for puzzle15 -- raising SpatialCost.MaxDepth
+   was TRIED and saturates to inf because a 16-level product overflows the algebra's Long.
+2. THE LAW CHANNEL HAS NO BOMB-SUBTERM TEST OF ITS OWN. Nothing prevents a CALLER-supplied law from
+   calling `eval` inside its `bound`; for user laws the no-evaluation invariant is a contract, not a
+   check. The shipped laws are covered indirectly (SpatialAcceptance 6a-6d run the law-refined
+   pipeline inside `noEval`), but a sentinel on the channel itself is open work.
+3. NO LAW IS SMT-PROVED. Every law in the library is `ExecutableChecked` by exhaustive finite search
+   (512 digraphs; 512 Life fields; exact n-queens counts n<=8). `SmtProved` and `Assumed` exist as
+   labels with no current occupant in the shipped library. Nothing generates a Scala law from a
+   proof obligation.
+4. THE PRODUCT ORDER'S RESIDUAL INCOMPLETENESS IS STRUCTURAL, not a missing clause: 52 of 202
+   measured false negatives are containments visible only to the conjunction of shape and histogram.
+   Closing them needs a non-componentwise order (or a shape-aware histogram clause), which is a
+   design change, not a repair.
+5. THE REDUCER STILL HAS NO SMT OBLIGATION AND NO TERMINATION PROOF (carried forward unchanged).
+6. Shape.MaxDepth/MaxHeads remain carrier-wide vals, so `shapeDepth`/`shapeWidth` narrow only.
+   Threading a config through Shape's constructors is still the fix, and it is still not done.
+7. The two red suites in section 5.
+
+--------------------------------------------------------------------------------
+CONFIRMATION (same increment): re-run AFTER the last source edit (SpatialCheck.scala)
+--------------------------------------------------------------------------------
+The only two suites that reference SpatialCheck/SpatialChannels/SpatialSignature (grep over
+src/test/scala: SpatialCheckCheck, SpatialLawCheck, SpatialAcceptance) were re-run after the edit:
+SpatialCheckCheck 25/0, SpatialLawCheck 22/0, SpatialAcceptance 18/0. The soundness gate was then
+re-run cold as a final check: CorpusValidation 1/0 ("1000 programs x 1000 inputs = 1000000 pairs, 7
+executors each agree", 34.8 s), SpatialShapeCheck 18/0, SpatialSoundnessHunt 13/0, SpillSoundness 5/0.
+No suite regressed. Nothing was marked .ignore.

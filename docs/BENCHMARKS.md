@@ -3541,3 +3541,88 @@ reference Set, and 3.7x vs the TreeMap trie (evalT). All six
 domains are pure algebra; PathItems are interned to Ints before evaluation (no PathItem
 is touched during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.
 
+
+## Benchmark run (2026-08-07)
+
+| domain | scale | eval ms | evalT ms | evalI ms | evalI/eval | evalI/evalT | note |
+|---|---|---:|---:|---:|---:|---:|---|
+| datalog-TC       | chain n=16 (|TC|=136) |       2.6 |       1.6 |       0.9 |     2.9x |    1.7x |  |
+| datalog-TC       | chain n=32 (|TC|=528) |      16.5 |       4.0 |       1.0 |    15.8x |    3.9x |  |
+| datalog-TC       | chain n=64 (|TC|=2080) |     178.7 |      13.3 |       2.9 |    62.5x |    4.6x |  |
+| datalog-TC       | chain n=128 (|TC|=8256) |    2595.4 |      88.5 |      12.6 |   205.6x |    7.0x |  |
+| aunt-query       | family n=150         |      13.1 |       1.1 |       0.3 |    40.9x |    3.3x |  |
+| aunt-query       | family n=400         |      93.2 |       5.5 |       0.3 |   279.6x |   16.5x |  |
+| aunt-query       | family n=800         |     455.6 |      27.7 |       0.7 |   643.6x |   39.1x |  |
+| aunt-query       | family n=1600        |    1990.3 |      84.1 |       1.1 |  1850.0x |   78.2x |  |
+| game-of-life     | 16x16 2 steps (68 live) |      33.1 |      13.5 |       8.3 |     4.0x |    1.6x |  |
+| game-of-life     | 24x24 2 steps (193 live) |     104.7 |      18.6 |      10.8 |     9.7x |    1.7x |  |
+| game-of-life     | 32x32 2 steps (321 live) |     261.9 |      28.9 |      14.8 |    17.7x |    2.0x |  |
+| temperature      | 1024 cells (resident) |       0.1 |       0.0 |       0.0 |    17.8x |    1.7x |  |
+| temperature      | 4096 cells (resident) |       0.4 |       0.0 |       0.0 |    99.8x |    0.9x |  |
+| temperature      | 16384 cells (resident) |       1.4 |       0.0 |       0.0 |  3157.1x |    3.9x |  |
+| sliding-puzzle   | 2x2 depth 6 (pure)   |      31.8 |      15.8 |      14.3 |     2.2x |    1.1x |  |
+| sliding-puzzle   | 3x3 depth 4 (pure)   |     108.1 |      36.1 |      26.4 |     4.1x |    1.4x |  |
+| n-queens         | n=6 (4 sols, pure)   |      23.7 |       3.4 |       2.4 |    10.0x |    1.4x |  |
+| n-queens         | n=7 (40 sols, pure)  |     141.9 |      12.3 |       6.4 |    22.1x |    1.9x |  |
+| n-queens         | n=8 (92 sols, pure)  |     706.4 |      53.9 |      28.2 |    25.0x |    1.9x |  |
+| join-all         | k=200 m=200          |       0.0 |      -1.0 |       0.0 |     2.6x |    0.0x | reduce(union) vs joinAll |
+| join-all         | k=800 m=300          |       0.0 |      -1.0 |       0.0 |     0.9x |    0.0x | reduce(union) vs joinAll |
+| meet-all         | k=40 core=400 +tiny  |       0.0 |      -1.0 |       0.0 |     0.2x |    0.0x | reduce(meet) vs meetAll |
+| meet-all         | k=120 core=600 +tiny |       0.0 |      -1.0 |       0.0 |     0.2x |    0.0x | reduce(meet) vs meetAll |
+
+Geometric-mean evalI speedup over the six example domains: 38.8x vs the
+reference Set, and 3.3x vs the TreeMap trie (evalT). All six
+domains are pure algebra; PathItems are interned to Ints before evaluation (no PathItem
+is touched during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.
+
+
+## Pipeline-stage ablation (2026-08-07)
+
+Time to evaluate each example through five increasingly-compiled paths (ms, best of N; modest
+inputs so the Set `eval` reference and supercompilation are feasible).  `eval(def)` = Set
+reference; `evalI(def)` = interned-trie interpreter; `evalI(SC)` = interpret the supercompiled
+residual; `execT(opt)` = lower→transpile→optimize op-graph; `execT(SC+opt)` = supercompile then
+graph-optimize.  All stages verified equal to the reference.
+
+| example | eval(def) | evalI(def) | evalI(SC) | execT(opt) | execT(SC+opt) |
+|---|---:|---:|---:|---:|---:|
+| aunt (lot)         |    1.120 |    0.913 |    0.688 |    1.912 |    1.547 |
+| datalog tc (n=15)  |    3.057 |    0.774 |    0.071 |    1.235 |    0.193 |
+| gol step (glider)  |    3.167 |    2.329 |    1.105 |    5.445 |    3.858 |
+| sliding 3x3 step   |    9.669 |    7.252 |    0.133 |   33.465 |    1.300 |
+| n-queens n=6       |   32.933 |    7.838 |    2.771 |    5.532 |    6.270 |
+| temperature 1024   |    0.238 |    0.075 |    0.073 |    0.178 |    0.105 |
+
+## Pipeline-stage ablation (2026-08-07)
+
+Time to evaluate each example through five increasingly-compiled paths (ms, best of N; modest
+inputs so the Set `eval` reference and supercompilation are feasible).  `eval(def)` = Set
+reference; `evalI(def)` = interned-trie interpreter; `evalI(SC)` = interpret the supercompiled
+residual; `execT(opt)` = lower→transpile→optimize op-graph; `execT(SC+opt)` = supercompile then
+graph-optimize.  All stages verified equal to the reference.
+
+| example | eval(def) | evalI(def) | evalI(SC) | execT(opt) | execT(SC+opt) |
+|---|---:|---:|---:|---:|---:|
+| aunt (lot)         |    1.366 |    0.946 |    0.530 |    2.560 |    1.594 |
+| datalog tc (n=15)  |    3.212 |    0.698 |    0.063 |    0.982 |    0.158 |
+| gol step (glider)  |    2.901 |    2.466 |    0.937 |    5.982 |    2.165 |
+| sliding 3x3 step   |    7.898 |    3.789 |    0.163 |   21.494 |    0.929 |
+| n-queens n=6       |   24.834 |    4.376 |    2.164 |    5.232 |    5.448 |
+| temperature 1024   |    0.145 |    0.090 |    0.041 |    0.114 |    0.068 |
+
+## Pipeline-stage ablation (2026-08-07)
+
+Time to evaluate each example through five increasingly-compiled paths (ms, best of N; modest
+inputs so the Set `eval` reference and supercompilation are feasible).  `eval(def)` = Set
+reference; `evalI(def)` = interned-trie interpreter; `evalI(SC)` = interpret the supercompiled
+residual; `execT(opt)` = lower→transpile→optimize op-graph; `execT(SC+opt)` = supercompile then
+graph-optimize.  All stages verified equal to the reference.
+
+| example | eval(def) | evalI(def) | evalI(SC) | execT(opt) | execT(SC+opt) |
+|---|---:|---:|---:|---:|---:|
+| aunt (lot)         |    1.206 |    0.800 |    0.488 |    2.191 |    1.285 |
+| datalog tc (n=15)  |    2.391 |    0.592 |    0.048 |    0.992 |    0.151 |
+| gol step (glider)  |    3.225 |    2.407 |    0.857 |    3.901 |    2.375 |
+| sliding 3x3 step   |    6.682 |    3.771 |    0.177 |   25.323 |    1.085 |
+| n-queens n=6       |   23.412 |    4.582 |    2.448 |    5.211 |    5.080 |
+| temperature 1024   |    0.696 |    0.066 |    0.065 |    0.144 |    0.096 |

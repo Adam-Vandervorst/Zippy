@@ -3,12 +3,12 @@ package morkl
 /** ==============================================================================================
  *  EFFORT EVENTS — the "actual steps" oracle review.md finding 2 says the effort model is missing.
  *
- *  THE PROBLEM.  `SpatialCost` predicts `work`/`alloc`/`rounds`, but until now nothing in the tree
- *  DEFINED those units operationally, so "is the prediction close?" was unanswerable and the only
- *  empirical evidence was a Spearman rank check against wall-clock time on 16 programs.  Wall time
- *  validates an ordering; it cannot validate a component.
+ *  THE PROBLEM.  `SpatialCost` predicts `work`/`alloc`/`rounds`/`touch`, but until now nothing in
+ *  the tree DEFINED those units operationally, so "is the prediction close?" was unanswerable and
+ *  the only empirical evidence was a Spearman rank check against wall-clock time on 16 programs.
+ *  Wall time validates an ordering; it cannot validate a component.
  *
- *  WHAT THIS FILE IS.  A closed vocabulary of source-level events, each with (a) exactly one
+ *  WHAT THIS FILE IS.  A closed vocabulary of source-level events, each with (a) at least one
  *  emitting site in a real executor and (b) exactly one cost component it belongs to.  A cost model
  *  is then calibratable: evaluate its symbolic components at the concrete input sizes, count the
  *  matching events for a real run, and report containment (`lower <= actual <= upper`) and slack
@@ -21,34 +21,54 @@ package morkl
  *  THE DISABLED PATH.  `effort` is an `inline def` guarding a call behind one load of a static
  *  non-final boolean.  When no counting region is open the branch is never taken and nothing else
  *  runs.  That claim is MEASURED, not asserted, in `SpatialEventsCheck`
- *  ("the disabled sink costs nothing measurable").
+ *  ("the disarmed sink's cost is measured, not asserted"), both per hook in a tight loop and at
+ *  executor level with the hook count of the workload in hand.
  *
- *  WHAT IS NOT COUNTED, and why it matters.  Three sources of real work are outside this
- *  vocabulary because their code is not instrumented:
+ *  WHAT IS COUNTED NOW, AND WHAT IS STILL NOT (review.md item 1).  The three gaps the previous
+ *  revision admitted — `evalI` node dispatches, `ITrie`/`IntTrieOps` per-node descent, and trie-node
+ *  allocation — are CLOSED: IntTrie.scala and IntTrieOps.scala carry hooks
+ *  ([[EffortEvent.TrieDispatch]], [[EffortEvent.TriePathDispatch]], [[EffortEvent.TrieNodeVisit]],
+ *  [[EffortEvent.PatriciaVisit]], [[EffortEvent.FreshTrieNode]], [[EffortEvent.ReusedSubtrie]], and
+ *  `evalI`'s own [[EffortEvent.LoopBodyEntry]]/[[EffortEvent.FixpointRound]]/[[EffortEvent.CallEntry]]).
+ *  All FOUR backends therefore have counted runs, and `touch` — previously an oracle-free component —
+ *  is a CALIBRATED component on the three trie-shaped backends.
  *
- *   1. `scala.collection.immutable.Set`/`Map` internals behind the reference evaluator — hash
- *      probes, bucket copies.  A `Set` union of two 1000-element sets therefore counts ONE
- *      `AstDispatch` and nothing else.  Whatever a model claims about element touches has no
- *      oracle; `Cost.touch` carries such claims and is explicitly excluded from calibration.
- *   2. `ITrie` / `IntTrieOps` node visits and node allocations (IntTrie.scala, IntTrieOps.scala).
- *      Executors call into them; the calls are counted ([[EffortEvent.TrieOpEntry]]) but the
- *      per-node descent inside them is not.
- *   3. `evalI` node dispatches (IntTrie.scala).
+ *  THREE GAPS REMAIN, all named and all bounded:
  *
- *  Those three gaps mean the Trie backend model is UNCALIBRATED and the Graph/Zipper models are
- *  calibrated on dispatch/frame/cursor/allocation events only.  Synthesising an "actual" count from
- *  operand sizes would make the numbers look better and mean nothing, so it is not done. */
+ *   1. `scala.collection.immutable.Set`/`Map` internals behind the REFERENCE evaluator (`eval` over
+ *      `Set[PathValue]`) — hash probes, bucket copies.  A `Set` union of two 1000-element sets counts
+ *      ONE `AstDispatch` and nothing else.  `eval` performs no `ITrie` work at all, so the reference
+ *      backend's `touch` component has NO ORACLE.  That is declared IN THE MODEL
+ *      (`CostModel.touchNoOracle`), it is the ONLY named exclusion from the tightness gate, and
+ *      `SpatialEventsCheck` asserts the exclusion list is exactly that one entry so it cannot grow
+ *      silently.  Synthesising an "actual" count from operand sizes would make the numbers look
+ *      better and mean nothing, so it is not done.
+ *   2. `IntMap` (Patricia) NODE ALLOCATION inside the standard library — `updated`, `updateWith`,
+ *      `- k`, `IntMapUtils.join`.  [[EffortEvent.FreshTrieNode]] counts `ITrie` nodes, not the
+ *      `IntMap` spines that hold their children.  The gap is bounded, not open-ended: every `IntMap`
+ *      node lives on the child map of exactly one `ITrie` node and a Patricia tree over `k` keys has
+ *      at most `2k-1` nodes, so `IntMap` allocation is at most `2 x (child edges) <= 2 x` the counted
+ *      `FreshTrieNode` total in the same operation — the same order, with a constant this file
+ *      states rather than hides.  The same `2k-1` fact is what makes the `touch` upper bounds in
+ *      `SpatialCost` sound (see `TrieAlgebraCost.tPer`).
+ *   3. The per-node child-key sort inside `ITrie.range` uses the standard library's `sortBy`, so its
+ *      comparisons are not counted.  The models keep the `log` factor anyway (it is real work), which
+ *      shows up as slack on `Range` rather than as an unsound bound. */
 enum EffortComponent:
   /** elementary steps the executor itself performs: node dispatches, cursor reads, item comparisons */
   case Work
-  /** materialisation: a fresh path, a fresh trie node, a fresh executor frame */
+  /** materialisation: a fresh path, a fresh `ITrie` node, a fresh executor frame */
   case Alloc
   /** dynamic frames: loop-body entries, fixpoint rounds, routine calls */
   case Rounds
+  /** the per-node descent INSIDE the trie algebra: `ITrie`-level recursive entries and `IntMap`
+   *  Patricia node visits.  Counted for the three trie-shaped executables; the reference evaluator
+   *  performs none of it, which is why `ReferenceCost` declares `touchNoOracle`. */
+  case Touch
   /** counted for EXPLANATION only — never summed into a calibrated component (it would double-count) */
   case Explain
 
-/** One counted unit of executor effort.  Every case names its emitting executor; a case with no
+/** One counted unit of executor effort.  Every case names its emitting executable(s); a case with no
  *  emitter is not allowed to exist (review.md finding 6 on `Fact.PrefixAbsent`: a public promise
  *  nothing ever produces is worse than no promise). */
 enum EffortEvent(val component: EffortComponent, val emitter: String):
@@ -57,6 +77,10 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
   case AstDispatch extends EffortEvent(EffortComponent.Work, "eval")
   /** one `Path` node visited by `eval.recp` (MORKL.scala) */
   case PathDispatch extends EffortEvent(EffortComponent.Work, "eval")
+  /** one `Space` node visited by `evalI` (IntTrie.scala) — the trie interpreter's own dispatch */
+  case TrieDispatch extends EffortEvent(EffortComponent.Work, "evalI")
+  /** one `Path` subterm visited by `pathItemsI` (IntTrie.scala) */
+  case TriePathDispatch extends EffortEvent(EffortComponent.Work, "evalI")
   /** one operation-graph slot executed by `execT` (GraphExec.scala) */
   case GraphNodeDispatch extends EffortEvent(EffortComponent.Work, "execT")
   /** one `Space` node lifted into a zipper by `transpileZ` (Zipper.scala) */
@@ -68,17 +92,30 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
   case PathItemComparison extends EffortEvent(EffortComponent.Work, "eval")
 
   // ---- trie / cursor reads ---------------------------------------------------------------------
-  /** one entry into an `ITrie` algebra operation from an executor (the descent INSIDE it is not
-   *  counted — see the file header) */
+  /** one entry into an `ITrie` algebra operation FROM AN EXECUTOR SLOT.  `execT` emits it per space
+   *  slot and `transpileZ` per `Range`; `evalI` does NOT (its per-node [[TrieDispatch]] already
+   *  covers the node), which is why `TrieCostModel.opEntry` is 0 and `GraphCost.opEntry` is 1. */
   case TrieOpEntry extends EffortEvent(EffortComponent.Work, "execT,execZ")
   /** one `terminal` / `children` / `descend` query on a (possibly virtual) zipper cursor */
   case ZipperCursorRead extends EffortEvent(EffortComponent.Work, "execZ")
   /** one non-`Lit` node visited by `SpaceZipper.materialize` */
   case ZipperMaterializeNode extends EffortEvent(EffortComponent.Work, "execZ")
 
+  // ---- the descent inside the trie algebra (IntTrie.scala / IntTrieOps.scala) -------------------
+  /** one recursive `ITrie`-level entry: a node examined by `union`/`intersection`/`subtraction`/
+   *  `restriction`/`composition`/`unwrap`/`wrap`/`joinAll`/`meetAll`/`suffixClosure`/`head`, or one
+   *  node walked by `size`/`nodeCount`/`prefixCount`/`toPaths`/`range`. */
+  case TrieNodeVisit extends EffortEvent(EffortComponent.Touch, "evalI,execT,execZ")
+  /** one recursive entry into an `IntTrieOps` Patricia descent (`unionTries`/`intersectTries`/
+   *  `diffTries`/`restrictTries`) — the simultaneous two-sided walk the algebra is built on */
+  case PatriciaVisit extends EffortEvent(EffortComponent.Touch, "evalI,execT,execZ")
+
   // ---- allocation ------------------------------------------------------------------------------
   /** one fresh `PathValue` built into a result by `eval` */
   case FreshPath extends EffortEvent(EffortComponent.Alloc, "eval")
+  /** one fresh `ITrie` node allocated by the `ITrie` algebra itself (IntTrie.scala).  Disjoint from
+   *  [[FreshNode]]: `SpaceZipper.materialize` builds its nodes in Zipper.scala, not here. */
+  case FreshTrieNode extends EffortEvent(EffortComponent.Alloc, "evalI,execT,execZ")
   /** one fresh `ITrie` node allocated by `SpaceZipper.materialize` */
   case FreshNode extends EffortEvent(EffortComponent.Alloc, "execZ")
   /** one `Array[Any | Null]` executor frame allocated by `execT` */
@@ -86,20 +123,28 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
 
   // ---- dynamic frames --------------------------------------------------------------------------
   /** one iteration/fold head-group body entry */
-  case LoopBodyEntry extends EffortEvent(EffortComponent.Rounds, "eval,execT")
+  case LoopBodyEntry extends EffortEvent(EffortComponent.Rounds, "eval,evalI,execT")
   /** one fixpoint round, INCLUDING the terminating round that discovers the iterate is unchanged */
-  case FixpointRound extends EffortEvent(EffortComponent.Rounds, "eval,execT")
+  case FixpointRound extends EffortEvent(EffortComponent.Rounds, "eval,evalI,execT")
   /** one routine call entered */
-  case CallEntry extends EffortEvent(EffortComponent.Rounds, "eval,execT")
+  case CallEntry extends EffortEvent(EffortComponent.Rounds, "eval,evalI,execT")
 
   // ---- explanatory -----------------------------------------------------------------------------
-  /** an identity / pointer-equality short circuit was taken (`x ∪ x`, `x ∖ x`, an `eq` subtrie) */
+  /** an identity / pointer-equality short circuit was taken at the ZIPPER level (`x ∪ x`, `x ∖ x`) */
   case ReusedSpace extends EffortEvent(EffortComponent.Explain, "execZ")
+  /** an `a eq b` short circuit fired inside the `ITrie` algebra (a shared sub-trie was accepted or
+   *  pruned whole instead of being descended) */
+  case ReusedSubtrie extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
   /** `transpileZ` gave up on fusion and materialised a subterm through `evalI` */
   case ZipperFallbackToEvalI extends EffortEvent(EffortComponent.Explain, "execZ")
 
 object EffortEvent:
+  /** the executables a hook may name — the closure test in `SpatialEventsCheck` checks against this */
+  val executables: Vector[String] = Vector("eval", "evalI", "execT", "execZ")
   def ofComponent(c: EffortComponent): Vector[EffortEvent] = values.iterator.filter(_.component == c).toVector
+  /** the components whose totals a cost model's prediction is compared against */
+  val calibratedComponents: Vector[EffortComponent] =
+    Vector(EffortComponent.Work, EffortComponent.Alloc, EffortComponent.Rounds, EffortComponent.Touch)
 
 /** A counted event vector.  Absent keys are zero; addition is saturating (a corpus run cannot make
  *  a count wrap into a small number and silently claim a tight model). */
@@ -107,18 +152,19 @@ final case class Events(counts: Map[EffortEvent, Long]):
   def apply(e: EffortEvent): Long = counts.getOrElse(e, 0L)
   def component(c: EffortComponent): Long =
     EffortEvent.ofComponent(c).foldLeft(0L)((n, e) => Ivl.add(n, apply(e)))
-  /** the three CALIBRATED projections (whispers §7) */
+  /** the four CALIBRATED projections (whispers §7, extended with `touch`) */
   def work: Long = component(EffortComponent.Work)
   def alloc: Long = component(EffortComponent.Alloc)
   def rounds: Long = component(EffortComponent.Rounds)
-  def total: Long = Ivl.add(Ivl.add(work, alloc), rounds)
+  def touch: Long = component(EffortComponent.Touch)
+  def total: Long = Ivl.add(Ivl.add(Ivl.add(work, alloc), rounds), touch)
   def +(o: Events): Events =
     Events((counts.keySet ++ o.counts.keySet).iterator.map(e => e -> Ivl.add(apply(e), o.apply(e))).toMap)
   def nonZero: Vector[(EffortEvent, Long)] = counts.toVector.filter(_._2 != 0L).sortBy(_._1.ordinal)
   def show: String =
     if nonZero.isEmpty then "(no events)"
     else nonZero.map((e, n) => s"${e}=$n").mkString(" ")
-  def showComponents: String = s"work=$work alloc=$alloc rounds=$rounds"
+  def showComponents: String = s"work=$work alloc=$alloc rounds=$rounds touch=$touch"
 
 object Events:
   val zero: Events = Events(Map.empty)
@@ -146,14 +192,19 @@ object EffortSink:
    *  branch that is never taken while counting is off, and the JIT cannot fold it away only because
    *  the field is mutable — which is the entire cost.  It is deliberately NOT volatile: the counter
    *  itself is thread-local, so a thread that never opened a region simply has no counter and every
-   *  `record` is a no-op there.  The overhead claim is measured in `SpatialEventsCheck`. */
-  private[morkl] var armed: Boolean = false
+   *  `record` is a no-op there.  The overhead claim is measured in `SpatialEventsCheck`.
+   *
+   *  PUBLIC BY NECESSITY, not by design: `IntTrieOps` must live in `scala.collection.immutable` to
+   *  see `IntMap`'s Patricia structure, and an `inline` hook expanded there cannot reach a
+   *  `private[morkl]` field.  Only [[count]] may WRITE it. */
+  var armed: Boolean = false
   private val active = new ThreadLocal[Counter]
   private var openRegions: Int = 0
 
   def isCounting: Boolean = armed && active.get != null
 
-  private[morkl] def record(e: EffortEvent, n: Long): Unit =
+  /** public for the same reason as [[armed]] */
+  def record(e: EffortEvent, n: Long): Unit =
     val c = active.get
     if c != null then c.add(e, n)
 
@@ -226,16 +277,26 @@ final case class CountedRun(backend: String, phase: ExecutionPhase, events: Even
 final case class Calibration(label: String, component: EffortComponent,
                              actual: Long, lower: Double, upper: Double):
   def contains: Boolean = lower <= actual.toDouble + 1e-9 && actual.toDouble <= upper + 1e-9
-  /** how many times larger the predicted upper is than the truth; `1.0` is exact */
+  /** is the prediction FINITE?  An `Amount.Unbounded` contains trivially and says nothing. */
+  def bounded: Boolean = !upper.isInfinite
+  /** how many times larger the predicted upper is than the truth; `1.0` is exact.  Undefined (`inf`)
+   *  when nothing was counted, which is why [[slack]] exists and is what the gate uses. */
   def upperSlack: Double =
     if actual == 0L then (if upper == 0.0 then 1.0 else Double.PositiveInfinity)
     else upper / actual.toDouble
+  /** THE GATED SLACK: `(upper + 1) / (actual + 1)`.
+   *
+   *  Additively smoothed so it is finite whenever the prediction is, including the very common
+   *  `actual = 0` rows (a program that allocates nothing, a term with no loop).  It agrees with
+   *  [[upperSlack]] to within `1/actual`, never hides a large absolute over-prediction (`actual = 0,
+   *  upper = 1000` still reports 1001), and is never larger than `upperSlack` when `actual >= 1`. */
+  def slack: Double = (upper + 1.0) / (actual.toDouble + 1.0)
   /** how many times smaller the predicted lower is than the truth; `1.0` is exact */
   def lowerSlack: Double =
     if lower <= 0.0 then (if actual == 0L then 1.0 else Double.PositiveInfinity)
     else actual.toDouble / lower
   def show: String = f"$label%-28s ${component}%-6s actual=$actual%10d  in [$lower%.0f, $upper%.0f]  " +
-    (if contains then "OK  " else "OUT ") + f"slack=${upperSlack}%.2f"
+    (if contains then "OK  " else "OUT ") + f"slack=${slack}%.2f"
 
 object Calibration:
   /** the q-quantile of a non-empty sample, nearest-rank (infinities are kept, not dropped: an
@@ -249,20 +310,32 @@ object Calibration:
   def p95(xs: Vector[Double]): Double = quantile(xs, 0.95)
 
   /** Aggregate a bag of calibration points into the table review.md asks for: containment rate plus
-   *  median and p95 upper slack, keyed by whatever `label` the caller grouped by. */
+   *  median, p95 and WORST slack (the two the tightness gate reads), keyed by whatever `label` the
+   *  caller grouped by.  `unbounded` and `zeroActual` are reported so a tight-looking row cannot be
+   *  tight only because most of its predictions said nothing. */
   final case class Summary(key: String, n: Int, contained: Int, medianSlack: Double, p95Slack: Double,
-                           worst: Double):
+                           worst: Double, unbounded: Int, zeroActual: Int):
     def containmentRate: Double = if n == 0 then 1.0 else contained.toDouble / n
     def show: String =
       f"$key%-34s n=$n%5d  contained=${100.0 * containmentRate}%5.1f%%  " +
-      f"median slack=${fmt(medianSlack)}%9s  p95=${fmt(p95Slack)}%9s  worst=${fmt(worst)}%9s"
+      f"median=${fmt(medianSlack)}%9s  p95=${fmt(p95Slack)}%9s  worst=${fmt(worst)}%9s" +
+      (if unbounded == 0 then "" else s"  UNBOUNDED=$unbounded") +
+      (if zeroActual == 0 then "" else s"  actual=0 on $zeroActual")
     private def fmt(d: Double): String = if d.isInfinite then "inf" else f"$d%.2f"
 
-  def summarize(key: String, cs: Vector[Calibration]): Summary =
-    if cs.isEmpty then Summary(key, 0, 0, 1.0, 1.0, 1.0)
+  /** the gated summary: over [[Calibration.slack]] */
+  def summarize(key: String, cs: Vector[Calibration]): Summary = summarize(key, cs, _.slack)
+
+  /** the same over the RAW multiplicative slack, for rows where something was actually counted */
+  def summarizeRaw(key: String, cs: Vector[Calibration]): Summary =
+    summarize(key, cs.filter(_.actual > 0L), _.upperSlack)
+
+  def summarize(key: String, cs: Vector[Calibration], f: Calibration => Double): Summary =
+    if cs.isEmpty then Summary(key, 0, 0, 1.0, 1.0, 1.0, 0, 0)
     else
-      val slacks = cs.map(_.upperSlack)
-      Summary(key, cs.length, cs.count(_.contains), median(slacks), p95(slacks), slacks.max)
+      val xs = cs.map(f)
+      Summary(key, cs.length, cs.count(_.contains), median(xs), p95(xs), xs.max,
+              cs.count(!_.bounded), cs.count(_.actual == 0L))
 
   /** Spearman rank correlation — kept, but DEMOTED to a secondary trend metric (review.md 2). */
   def spearman(xs: Vector[Double], ys: Vector[Double]): Double =

@@ -7,9 +7,13 @@ package morkl
  *  Everything the spatial subsystem knows was reachable only by a caller who already knew which of
  *  `SpatialTyping.infer` / `SpatialAnalysis.of` / `SpatialFacts.specializations` /
  *  `SpatialTypes.eliminate` / `SpatialRecursion.residualise` / `SpatialCost.analyze` to call, in
- *  which order, with which of six budget constants.  `Routine.optimized` (MORKL.scala:228) consumed
- *  none of it; `transpile`, graph `optimize`, `execT` and `execZ` consumed none of it.  The subsystem
- *  was an island.
+ *  which order, with which of six budget constants.  `Routine.optimized` consumed none of it;
+ *  `transpile`, graph `optimize`, `execT` and `execZ` consumed none of it.  The subsystem was an
+ *  island.
+ *
+ *  `Routine.optimized` (MORKL.scala:248-251) no longer is one of those: it runs [[SpatialHook.rewrite]]
+ *  on every body it compiles, which is the unconditional half of stage 2 under a measured budget.  See
+ *  [[SpatialHook]] for the policy, the switch and the numbers.
  *
  *  ==THE THREE STAGES==
  *  {{{
@@ -70,12 +74,11 @@ final case class SpatialAnnotations(
   paths: Map[PathRef, PathValue] = Map.empty,
   pathLens: Map[PathRef, Lower.LenBounds] = Map.empty,
   routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
-  /** every budget the shape/histogram/reduction stages spend */
+  /** EVERY budget EVERY stage spends — one value (review.md finding 6).  The fact stage's
+   *  `SpatialFacts.Config` and the residualiser's `SpatialRecursion.Limits` are PROJECTIONS of it
+   *  ([[factConfig]], [[limits]]) and no longer separate fields, so a caller who narrows the analysis
+   *  cannot leave the two downstream stages on their defaults by accident. */
   config: SpatialConfig = SpatialConfig.default,
-  /** every budget the fact/profile/candidate stage spends */
-  factConfig: SpatialFacts.Config = SpatialFacts.defaults,
-  /** every budget the recursion residualiser spends */
-  limits: SpatialRecursion.Limits = SpatialRecursion.Limits(),
   /** the largest exact value the pipeline will fold a subterm to.  `SpatialFacts.exactValue`
    *  ENUMERATES the pinned space, so folding is only attempted where the type already bounds its
    *  cardinality — otherwise a 12-wide 4-deep closed shape would be enumerated at every node. */
@@ -110,6 +113,11 @@ final case class SpatialAnnotations(
   ordinaryLower: Boolean = true,
 ):
   import Lower.LenBounds
+
+  /** the fact/profile/candidate stage's budgets — a PROJECTION of [[config]], not a second value */
+  def factConfig: SpatialFacts.Config = config.facts
+  /** the recursion residualiser's budgets — likewise */
+  def limits: SpatialRecursion.Limits = config.recursion
 
   /** the shape/histogram environment.  `active` marks routines whose ordinary interprocedural
    *  transfer must not be entered (see the note on self-recursion in
@@ -413,10 +421,14 @@ object SpatialPipeline:
     val ann = analysis.annotations
     val notes = Vector.newBuilder[String]
     notes ++= analysis.notes
-    // THE FALLBACK: the artifact the ordinary pipeline would install with no spatial input at all, so
-    // choosing it never costs the program an optimization it would otherwise have had.  With
-    // `ordinaryLower = false` there is no ordinary pass to run, so the fallback is the original.
-    val fallback = if ann.ordinaryLower then r.optimized else r
+    // THE FALLBACK: the artifact the ordinary pipeline would install with NO SPATIAL INPUT AT ALL, so
+    // choosing it never costs the program an optimization it would otherwise have had.  It is
+    // `optimizedPlain` and not `optimized` because `optimized` now runs the unconditional spatial tier
+    // itself (`SpatialHook`): taking that as the baseline would make `changed` mean "beyond the
+    // unconditional tier" and would pay for a second decorated analysis here.  The residual gets the
+    // hook anyway, through stage 4 below.  With `ordinaryLower = false` there is no ordinary pass to
+    // run, so the fallback is the original.
+    val fallback = if ann.ordinaryLower then r.optimizedPlain else r
     if !ann.ordinaryLower then
       notes += "ordinaryLower = false: the `Lower` rule list did NOT run, so the residual is the " +
                "purely spatial rewrite and the fallback is the unmodified routine"
@@ -453,7 +465,7 @@ object SpatialPipeline:
       // ---- 2 + 3. per-node elimination and constant folding -------------------------------------
       val base = recAnalysis match
         case Some(a) if a.consistent =>
-          val (b2, rs) = rewriteNodes(afterRec.body, a, ann)
+          val (b2, rs) = rewriteNodes(afterRec.body, a.decorated, ann)
           applied ++= rs
           Routine(afterRec.name, afterRec.refs, afterRec.mentions, b2)
         case Some(_) =>
@@ -544,7 +556,7 @@ object SpatialPipeline:
     else backend match
       // -- GRAPH: exact constant folding, then transpile + the graph optimizer -------------------
       case Backend.Graph =>
-        val (b2, rs) = foldExactNodes(body, a, ann)
+        val (b2, rs) = foldExactNodes(body, a.decorated, ann)
         val rootFold = a.candidates.collectFirst {
           case SpecializationCandidate(g: SpatialSpecialization.GraphConstantFold, _, _) => g
         }
@@ -645,19 +657,19 @@ object SpatialPipeline:
   // THE HOOK FOR THE ORDINARY OPTIMIZER
   // ------------------------------------------------------------------------------------------------
 
-  /** THE ONE-LINE HOOK for `Routine.optimized` (MORKL.scala:228-232).
+  /** THE HOOK `Routine.optimized` RUNS (MORKL.scala:248-251), as one function.
    *
    *  It consumes ONLY unconditional facts — it is called with no input annotation, so every rewrite it
-   *  performs is valid for every input — and it calls NOTHING inside `Routine.optimized`, so it can be
-   *  composed into it without recursion.  The intended edit is one line:
+   *  performs is valid for every input — and it calls NOTHING inside `Routine.optimized`, so composing
+   *  it into that method cannot recurse.  The installed edit is one line:
    *
    *  {{{
-   *  //  all_forever(Lower.inline(...)(body), List(Lower.ConstantOps, ...))
-   *      all_forever(Lower.inline(...)(SpatialPipeline.unconditionalRewrite(body, ctx)), List(...))
+   *  //  all_forever(Lower.inline(using rc)(body), List(Lower.ConstantOps, ...))
+   *      all_forever(Lower.inline(using rc)(SpatialHook.rewrite(body, rc)), List(Lower.ConstantOps, ...))
    *  }}}
    *
-   *  Cost: one decorated spatial analysis per `optimized` call.  Pass `SpatialConfig.cheap` (via
-   *  [[unconditionalRewriteCheap]]) on a hot compilation path. */
+   *  Cost: one decorated spatial analysis per `optimized` call, under [[SpatialHook]]'s policy (the
+   *  cheap config and a body-size budget).  [[SpatialHook]] owns that policy and the measurements. */
   def unconditionalRewrite(body: Space,
                            rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Space =
     rewriteUnconditional(body, SpatialAnnotations.open(rc))
@@ -666,10 +678,14 @@ object SpatialPipeline:
                                 rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Space =
     rewriteUnconditional(body, SpatialAnnotations.cheap(rc))
 
-  private def rewriteUnconditional(body: Space, ann: SpatialAnnotations): Space =
+  /** the rewrite itself.  It goes through [[SpatialAnalysis.of]] rather than [[analyzeRoutine]] on
+   *  purpose: the two per-node rewrites need only the DECORATED analysis, while `analyzeRoutine`
+   *  additionally runs `SpatialFacts.specializations` at every node — useful to a backend, pure
+   *  overhead on a compilation path that will not consume a candidate. */
+  private[morkl] def rewriteUnconditional(body: Space, ann: SpatialAnnotations): Space =
     require(!ann.restrictsInput, "unconditionalRewrite must be called with no input annotation")
-    val a = analyzeTerm(body, ann)
-    if !a.consistent then body else rewriteNodes(body, a, ann)._1
+    val d = SpatialAnalysis.of(body, ann.env(), ann.config)
+    if d.root.uninhabited then body else rewriteNodes(body, d, ann)._1
 
   /** REWRITE ONLY THE CALL SITES ALREADY PROVED TO SATISFY THE PRECONDITION — review.md finding 3's
    *  second option for conditional facts.
@@ -715,20 +731,22 @@ object SpatialPipeline:
   // THE PER-NODE REWRITES
   // ------------------------------------------------------------------------------------------------
 
-  /** elimination + constant folding, driven by the decorated analysis */
-  private def rewriteNodes(body: Space, a: RoutineAnalysis,
+  /** elimination + constant folding, driven by the decorated analysis.  It takes the DECORATED
+   *  analysis rather than the `RoutineAnalysis` wrapper because that is all it reads — which is what
+   *  lets the `Routine.optimized` hook skip the candidate stage entirely. */
+  private def rewriteNodes(body: Space, d: SpatialAnalysis,
                            ann: SpatialAnnotations): (Space, Vector[Rewrite]) =
-    val empties = a.decorated.provablyEmpty.iterator
+    val empties = d.provablyEmpty.iterator
       .filter(n => n.expression != Space.Empty)
       .map(n => (n.id, Space.Empty: Space,
                  Rewrite.EliminateEmpty(n.id, show(n.expression), nodeCount(n.expression)))).toVector
-    val exacts = exactEdits(a, ann)
+    val exacts = exactEdits(d, ann)
     apply(body, dropNested(empties ++ exacts))
 
   /** ONLY the exact-value folding (what the graph lowering consumes) */
-  private def foldExactNodes(body: Space, a: RoutineAnalysis,
+  private def foldExactNodes(body: Space, d: SpatialAnalysis,
                              ann: SpatialAnnotations): (Space, Vector[Rewrite]) =
-    apply(body, dropNested(exactEdits(a, ann)))
+    apply(body, dropNested(exactEdits(d, ann)))
 
   /** A node whose reduced product pins EXACTLY ONE concrete space folds to that `Literal`.
    *
@@ -738,9 +756,9 @@ object SpatialPipeline:
    *  observations, and each observation's γ is contained in the join's, so γ(observation) ⊆ {v}: the
    *  occurrence denotes `v` under EVERY binder environment it is analysed in, which is exactly what a
    *  rewrite of a binder body needs. */
-  private def exactEdits(a: RoutineAnalysis, ann: SpatialAnnotations)
+  private def exactEdits(d: SpatialAnalysis, ann: SpatialAnnotations)
       : Vector[(NodeId, Space, Rewrite)] =
-    a.decorated.nodes.iterator.flatMap { n =>
+    d.nodes.iterator.flatMap { n =>
       val sz = n.result.size
       if n.result.uninhabited || sz.hi == Ivl.INF || sz.hi > ann.maxFoldPaths then None
       else SpatialFacts.exactValue(n.result).flatMap { v =>
@@ -913,3 +931,122 @@ object SpatialPipeline:
   private def show(s: Space): String =
     try s.show.replace('\n', ' ').take(90) catch case _: Throwable => s.toString.take(90)
 end SpatialPipeline
+
+// ==================================================================================================
+// 7.  THE HOOK INSTALLED IN `Routine.optimized` — its policy, its switch, and its meter
+// ==================================================================================================
+
+/** THE SPATIAL TIER, ON THE ORDINARY COMPILATION PATH (review.md finding 3).
+ *
+ *  `Routine.optimized` (MORKL.scala:248-251) runs [[rewrite]] on the body before `Lower.inline` and
+ *  the ordinary rule list.  Only UNCONDITIONAL facts are available there — `optimized` takes no
+ *  annotation, so the analysis is run with none — which means every rewrite it performs is valid for
+ *  every input and needs no guard, no fallback and no dispatcher.  What it can prove is exactly what
+ *  the term's own syntax and the routine table support: a subterm the reduced product proves EMPTY
+ *  becomes `Space.Empty`, a subterm it pins to ONE concrete value becomes that `Literal`.
+ *
+ *  ==WHY IT IS SAFE TO PUT ON A HOT PATH==
+ *  Three limits, in the order they fire:
+ *
+ *   1. [[enabled]] — the switch.  `-Dmorkl.spatialHook=false` turns the tier off process-wide and
+ *      restores the byte-for-byte previous behaviour of `optimized`; the `var` is there so a
+ *      benchmark can measure both states in ONE process (that is how the numbers in
+ *      `SpatialPipelineCheck`'s cost test are produced).
+ *   2. [[config]] = `SpatialConfig.cheap` — the budgets, and this is the one that actually bounds the
+ *      price.  Body size is a POOR cost predictor here (n-queens `place(8)` is 137 nodes and used to
+ *      cost 4.4 s, because `SpatialTyping` re-analyses a binder body once per head group, inlines
+ *      `Call`s interprocedurally, and iterates a `Fixpoint` per Kleene round), so what the hook caps
+ *      is the number of TRANSFERS: `cheap.nodeBudget = 2000`, after which the traversal degrades the
+ *      remaining subterms to ⊤.  See `SpatialConfig.cheap` for the measured table.
+ *   3. [[maxBodyNodes]] — a second, cruder belt: a body past this many nodes is handed straight through
+ *      UNANALYSED.  A compile-time hook may lose an optimization; it may not lose a compile.
+ *
+ *  It also never propagates a failure: an analysis that raises is counted ([[Stats.raised]]) and
+ *  answered with the unmodified body.
+ *
+ *  ==WHAT IT COSTS AND WHAT IT BUYS==
+ *  Both are MEASURED, per call, by this object ([[stats]]), so the claim is a number and not an
+ *  argument.  `SpatialPipelineCheck` prints the per-routine table and gates three of those numbers
+ *  (worst absolute delta, the ratio on a call that was already expensive, and the whole table's total),
+ *  and its corpus test measures what the tier BUYS: on 250 fuzzed corpus programs it rewrote 71 of them
+ *  and took the compiled bodies from 8710 to 7796 nodes for 1.2 ms of analysis per call.  On the CLOSED
+ *  cornerstone routines it saves nothing at all — `Lower.ConstantOps` is a partial evaluator and folds
+ *  those anyway — so the honest summary is: it pays on OPEN bodies and is a small tax on closed ones. */
+object SpatialHook:
+  /** the switch.  Default ON; `-Dmorkl.spatialHook=false` restores the previous `optimized`. */
+  @volatile var enabled: Boolean = !sys.props.get("morkl.spatialHook").contains("false")
+  /** bodies with more nodes than this are handed through unanalysed (see the class comment).
+   *  `-Dmorkl.spatialHookMaxNodes=<n>` overrides it. */
+  @volatile var maxBodyNodes: Int =
+    sys.props.get("morkl.spatialHookMaxNodes").flatMap(_.toIntOption).getOrElse(600)
+  /** the budgets the hook's analysis runs under.  `SpatialConfig.cheap` plus a TRANSFER budget: the
+   *  cost of one analysis is bounded by how many shape transfers it is allowed to run, and on a
+   *  compilation path that bound is what makes the price predictable rather than program-dependent. */
+  @volatile var config: SpatialConfig = SpatialConfig.cheap
+
+  private val nCalls = new java.util.concurrent.atomic.AtomicLong(0L)
+  private val nSkipped = new java.util.concurrent.atomic.AtomicLong(0L)
+  private val nChanged = new java.util.concurrent.atomic.AtomicLong(0L)
+  private val nNanos = new java.util.concurrent.atomic.AtomicLong(0L)
+  private val nNodesIn = new java.util.concurrent.atomic.AtomicLong(0L)
+  private val nNodesOut = new java.util.concurrent.atomic.AtomicLong(0L)
+  private val nRaised = new java.util.concurrent.atomic.AtomicLong(0L)
+  @volatile private var lastError: String = ""
+
+  /** what the hook has done in this process: calls, calls skipped by the size budget, calls that
+   *  CHANGED the body, calls whose analysis RAISED (and were therefore no-ops), total time, and total
+   *  body nodes before/after.  `raised` is here so that a hook silently declining to work is a NUMBER
+   *  a test can assert on rather than something nobody notices. */
+  final case class Stats(calls: Long, skipped: Long, changed: Long, raised: Long, nanos: Long,
+                         nodesIn: Long, nodesOut: Long, lastError: String):
+    def millis: Double = nanos / 1e6
+    def perCallMicros: Double = if calls == 0 then 0.0 else nanos / 1000.0 / calls
+    def show: String =
+      f"$calls calls ($skipped over budget, $changed changed, $raised raised), ${millis}%.1f ms total, " +
+      f"${perCallMicros}%.0f us/call, $nodesIn -> $nodesOut nodes" +
+      (if lastError.isEmpty then "" else s"; last error: $lastError")
+  def stats: Stats = Stats(nCalls.get, nSkipped.get, nChanged.get, nRaised.get, nNanos.get,
+                           nNodesIn.get, nNodesOut.get, lastError)
+  def reset(): Unit =
+    for c <- Vector(nCalls, nSkipped, nChanged, nRaised, nNanos, nNodesIn, nNodesOut) do c.set(0L)
+    lastError = ""
+
+  /** run `body` with the hook forced into a given state, then restore it.  For benchmarks and for the
+   *  ONE place a caller legitimately wants the pre-existing behaviour: a differential test that has to
+   *  compare the spatial tier against the ordinary rule list alone. */
+  def withEnabled[A](on: Boolean)(f: => A): A =
+    val was = enabled
+    enabled = on
+    try f finally enabled = was
+
+  /** THE ENTRY POINT `Routine.optimized` CALLS.  Total: it never throws, and on any refusal (switch
+   *  off, body too big, analysis inconsistent) it returns `body` unchanged. */
+  def rewrite(body: Space, rc: PartialFunction[RoutinePtr, Routine]): Space =
+    if !enabled then body
+    else
+      val n = SpatialPipeline.nodeCount(body)
+      if n > maxBodyNodes then
+        nCalls.incrementAndGet(); nSkipped.incrementAndGet()
+        body
+      else
+        val t0 = System.nanoTime()
+        val out =
+          try SpatialPipeline.rewriteUnconditional(body,
+                SpatialAnnotations(routines = rc, config = config))
+          catch
+            // a compile-time hook is not allowed to break a compilation that used to work: the
+            // analysis raising anything at all means "no rewrite", never "no program".  It IS counted,
+            // and the message kept, so the failure is visible instead of merely harmless.
+            case e: StackOverflowError =>
+              nRaised.incrementAndGet(); lastError = "StackOverflowError"; body
+            case scala.util.control.NonFatal(e) =>
+              nRaised.incrementAndGet()
+              lastError = s"${e.getClass.getName}: ${Option(e.getMessage).getOrElse("").take(120)}"
+              body
+        nNanos.addAndGet(System.nanoTime() - t0)
+        nCalls.incrementAndGet()
+        nNodesIn.addAndGet(n.toLong)
+        nNodesOut.addAndGet(SpatialPipeline.nodeCount(out).toLong)
+        if out != body then nChanged.incrementAndGet()
+        out
+end SpatialHook

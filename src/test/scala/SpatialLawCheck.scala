@@ -165,10 +165,157 @@ class SpatialLawCheck extends FunSuite:
     println(s"GALOIS/α-monotone: $checked set pairs, γ-containment decided on all ${U.size} universe values each")
   }
 
+  /** A WIDER value pool than [[U]].  `U` is EVERY space value over {a,b} with paths of at most two
+   *  items, so for a type whose shape has a closed head set over {a,b} and whose histogram has no
+   *  spill bucket, `γ(t) ∩ U = γ(t)` and "contained on U" is containment.  That is NOT true once a
+   *  spill bucket or an open head set is present: such a type admits values `U` cannot express, so a
+   *  pair that looks contained on `U` may not be contained at all — and then `leq`'s "no" is CORRECT
+   *  and nothing should be done about it.  `Wide` exists to separate those two populations, because
+   *  otherwise every measurement of "avoidable Unknowns" is inflated by an artifact of `U`'s size.
+   *
+   *  It is a REFUTATION pool, not a universe: finding `v ∈ γ(a) ∖ γ(b)` in it PROVES non-containment;
+   *  finding none proves nothing, and is reported as "not refuted", never as "contained". */
+  private lazy val Wide: Vector[SpaceValue] =
+    val ps = SpatialGamma.allPaths(Vector("a", "b", "c"), 3)          // 40 paths, lengths 0..3
+    val byLen = (0 to 3).map(l => ps.filter(_.items.length == l)).toVector
+    val b = Vector.newBuilder[SpaceValue]
+    b ++= U
+    // structured values that probe ONE class count and ONE spill aggregate at a time
+    for l <- 0 to 3; k <- 0 to byLen(l).size do b += SpaceValue(byLen(l).take(k).toSet)
+    for l1 <- 0 to 3; k1 <- 0 to 5; l2 <- l1 + 1 to 3; k2 <- 0 to 5 do
+      b += SpaceValue((byLen(l1).take(k1) ++ byLen(l2).take(k2)).toSet)
+    val rng = new java.util.Random(9099)
+    for _ <- 0 until 4000 do
+      val p = 1 + rng.nextInt(4)
+      b += SpaceValue(ps.filter(_ => rng.nextInt(p) == 0).toSet)
+    b.result().distinct
+
+  /** `Some(v)` PROVES `γ(a) ⊄ γ(b)` — so a `leq(a, b) = false` on such a pair is a TRUE negative and
+   *  the finite-`U` test's "contained" verdict is the artifact. */
+  private def refuteWide(a: SpatialType, b: SpatialType): Option[SpaceValue] =
+    val ga = gamma(a); val gb = gamma(b)
+    Wide.find(v => ga(v) && !gb(v))
+
+  /** is the COMPONENT contained, as far as `Wide` can tell?  A false negative whose component is not
+   *  contained is not the order's fault: only the CONJUNCTION of shape and histogram excludes the
+   *  witnesses, and a componentwise order can never see that. */
+  private def shapeContainedWide(a: Shape, b: Shape): Boolean =
+    !Wide.exists(v => Shape.contains(a, v) && !Shape.contains(b, v))
+  /** EXTREMAL members of γ(t) for the histogram component, materialised over fresh items: every
+   *  combination of the per-class endpoints, with the spill mass placed at its lower and at its upper
+   *  bound, one free length at a time.  Every constraint the right-hand side can state is a per-class
+   *  or an aggregate bound, so if containment fails one of these witnesses it. */
+  private def extremalMembers(t: SpaceType): Vector[SpaceValue] =
+    val cap = 12L
+    def paths(l: Long, n: Long): Vector[PathValue] =
+      if l == 0L then (if n >= 1 then Vector(PathValue(Nil)) else Vector.empty)
+      else (0 until math.min(n, cap).toInt).toVector
+        .map(i => PathValue(("e" + i) :: List.fill(l.toInt - 1)("e0")))
+    val tracked = t.byLen.keys.filter(_ <= 6L).toVector.sorted
+    if tracked.sizeIs > 6 then Vector.empty
+    else
+      val free =
+        if t.rest.hi > 0 && !t.restLens.isEmpty then
+          (t.restLens.lo to math.min(t.restLens.hi, 6L)).filter(l => !t.byLen.contains(l)).toVector
+        else Vector.empty
+      val combos = tracked.foldLeft(Vector(Vector.empty[(Long, Long)])) { (acc, l) =>
+        val c = t.byLen(l)
+        val opts = Vector(c.lo, if c.hi == Ivl.INF then cap else math.min(c.hi, cap)).distinct
+        acc.flatMap(v => opts.map(n => v :+ (l -> n)))
+      }
+      val plans =
+        if free.isEmpty then Vector(Vector.empty[(Long, Long)])
+        else
+          val amounts = Vector(t.rest.lo, if t.rest.hi == Ivl.INF then cap else math.min(t.rest.hi, cap)).distinct
+          (for w <- free; n <- amounts yield Vector(w -> n)) :+ Vector.empty[(Long, Long)]
+      val out = Vector.newBuilder[SpaceValue]
+      for cb <- combos; sp <- plans do
+        val v = SpaceValue((cb ++ sp).flatMap((l, n) => paths(l, n)).toSet)
+        if gammaSpace(t, v) then out += v
+      out.result().distinct
+
+  /** the histogram component gets `UC` and its own extremal members as well as `Wide`: `Wide`'s
+   *  alphabet reaches three paths of a given length only by accident, and `UC` caps counts at three,
+   *  so a class bound above that is refutable only by a witness built from the type itself. */
+  private def spaceContainedWide(a: SpaceType, b: SpaceType): Boolean =
+    !(Wide.iterator ++ UC.iterator ++ extremalMembers(a).iterator)
+      .exists(v => gammaSpace(a, v) && !gammaSpace(b, v))
+
+  /** do the two histograms PARTITION the lengths differently — one tracking a class the other only
+   *  covers with its spill bucket?  This is review.md 4's named suspect. */
+  private def partitionsDiffer(x: SpaceType, y: SpaceType): Boolean =
+    (x.rest.hi > 0 || y.rest.hi > 0) && x.byLen.keySet != y.byLen.keySet
+
+  // ---------------------------------------------------------------------------------------------
+  // A γ-DIRECTED MEMBER SEARCH.  `U` and `Wide` are fixed pools, so for a type that needs paths
+  // LONGER than they carry (a `Composition` result needs length-4 paths; `Wide` stops at 3) they
+  // contain no member of γ at all — and then "contained on U" is vacuous, and calling the pair a
+  // false negative of `leq` is wrong.  Telling the two apart needs members constructed FROM the
+  // type, which is what this does.
+  // ---------------------------------------------------------------------------------------------
+
+  /** every path the shape may admit, fresh items standing in for untracked heads.  Every member of
+   *  γ(sh) is a subset of this up to renaming those items, so a witness lives among its subsets. */
+  private def shapeLanguage(sh: Shape, d: Int, tag: String): Vector[PathValue] =
+    if sh.definitelyEmpty || d < 0 then Vector.empty
+    else
+      val e = if sh.eps.mayBe then Vector(PathValue(Nil)) else Vector.empty
+      val hs = sh.heads.toVector.flatMap((h, c) => shapeLanguage(c, d - 1, tag).map(p => PathValue(h :: p.items)))
+      val os =
+        if sh.others.hi <= 0 || d <= 0 then Vector.empty
+        else
+          val k = ((sh.others.hi min 3L).toInt) max 1
+          (0 until k).toVector.flatMap { i =>
+            val h: PathItem = tag + i
+            val tails = sh.otherTail match
+              case Some(t) => shapeLanguage(t, d - 1, tag + "z")
+              case None => SpatialGamma.allPaths(Vector(tag + "y0", tag + "y1"), d - 1)
+            tails.map(p => PathValue(h :: p.items))
+          }
+      e ++ hs ++ os
+
+  private def shuffled(v: Vector[PathValue], rng: java.util.Random): Vector[PathValue] =
+    val a = v.toArray
+    var i = a.length - 1
+    while i > 0 do { val j = rng.nextInt(i + 1); val t = a(i); a(i) = a(j); a(j) = t; i -= 1 }
+    a.toVector
+
+  /** MEMBERS of γ(t), built rather than found: take the shape's language and choose, per length, a
+   *  count inside the histogram's interval for that length.  Only γ-accepted values are returned, so
+   *  every element is a genuine member and an empty result is evidence (not proof) of ⊥. */
+  private def sampleMembers(t: SpatialType, n: Int, rng: java.util.Random): Vector[SpaceValue] =
+    val lang = shapeLanguage(t.shape, Shape.MaxDepth + 2, "u").distinct
+    if lang.isEmpty then Vector.empty
+    else
+      val byLen = lang.groupBy(_.items.length.toLong).toVector
+      val g = gamma(t)
+      val out = Vector.newBuilder[SpaceValue]
+      // the whole language, and the must-only core, are the two extremal candidates
+      for cand <- Vector(SpaceValue(lang.toSet)) if g(cand) do out += cand
+      for _ <- 0 until n do
+        val picked = Vector.newBuilder[PathValue]
+        for (l, ps) <- byLen do
+          val c = t.lens.at(l)
+          val hi = (if c.hi == Ivl.INF then ps.size.toLong else c.hi min ps.size.toLong).toInt
+          val lo = (c.lo min hi.toLong).toInt
+          val k = if hi < 0 then 0 else lo + rng.nextInt(hi - lo + 1)
+          picked ++= shuffled(ps, rng).take(k)
+        val v = SpaceValue(picked.result().toSet)
+        if g(v) then out += v
+      out.result().distinct
+
   test("galois: leq ⇒ γ-containment (γ monotone), and leq's incompleteness measured") {
     val rng = new java.util.Random(1003)
     val pool = abstractPool(rng, 1200)
     var sound = 0; var leqTrue = 0; var contTrue = 0; var incomplete = 0
+    // THE CAUSE HISTOGRAM (review.md 4, second half).  Every false negative is attributed, and a
+    // pair may carry several labels — the totals below are therefore label counts, not pair counts;
+    // the pair counts are the `fault:` rows.
+    val cause = scala.collection.mutable.LinkedHashMap.empty[String, Int]
+    def bump(k: String): Unit = cause(k) = cause.getOrElse(k, 0) + 1
+    val witness = scala.collection.mutable.LinkedHashMap.empty[String, String]
+    def wit(k: String, s: => String): Unit = if !witness.contains(k) then witness(k) = s
+    var trueNeg = 0; var vacuous = 0; var product = 0; var avoidable = 0
     for a <- pool; _ <- 0 until 12 do
       val b = pool(rng.nextInt(pool.size))
       val l = leq(a, b); val c = gammaLeqOn(U)(a, b)
@@ -178,10 +325,462 @@ class SpatialLawCheck extends FunSuite:
                   s"  witness ${gammaLeqWitness(U)(a, b).map(_.pretty)}")
         sound += 1
       if c then contTrue += 1
-      if c && !l then incomplete += 1
+      if c && !l then
+        incomplete += 1
+        val mrng = new java.util.Random(770000 + incomplete)
+        val members = sampleMembers(a, 120, mrng) ++ Wide.filter(gamma(a))
+        val off = refuteWide(a, b).orElse(members.find(v => !gamma(b)(v)))
+        if off.nonEmpty then
+          trueNeg += 1
+          bump("TRUE NEGATIVE (refuted off U — leq is right, U is too small)")
+          wit("off-U", s"a = ${a.show}\n        b = ${b.show}\n        v = ${off.get.pretty}")
+        else if members.isEmpty then
+          // no member of γ(a) could be exhibited anywhere: containment on U is VACUOUS.  `a` is ⊥ in
+          // fact but not in representation, so the order is asked a question with a trivial answer.
+          vacuous += 1
+          bump(s"VACUOUS: γ(a) = ∅ (no member exhibited); reduce(a) proves ⊥: " +
+               s"${SpatialType.reduce(a).uninhabited}")
+          wit("vacuous", s"a = ${a.show}\n        reduce(a) = ${SpatialType.reduce(a).show}")
+        else if b.uninhabited then { product += 1; bump("b is ⊥ (uninhabited)") }
+        else
+          val sm = Shape.leqStrongMask(a.shape, b.shape)
+          val lm = SpatialGamma.leqSpaceMask(a.lens, b.lens)
+          val sc = sm == 0 || shapeContainedWide(a.shape, b.shape)
+          val lc = lm == 0 || spaceContainedWide(a.lens, b.lens)
+          bump(s"fault: ${if sm != 0 then "shape" else "-"}/${if lm != 0 then "lens" else "-"}" +
+               s"  contained: ${if sc then "shape" else "-"}/${if lc then "lens" else "-"}")
+          if sc && sm != 0 || lc && lm != 0 then avoidable += 1 else product += 1
+          if sm != 0 then
+            if sc then
+              for n <- Shape.LeqShapeWhy.show(sm) do bump("AVOIDABLE " + n)
+              wit("shape", s"a = ${a.shape.show}\n        b = ${b.shape.show}  [${Shape.LeqShapeWhy.show(sm).mkString(",")}]")
+            else bump("component not contained: shape (product interaction)")
+          if lm != 0 then
+            if lc then
+              val tag = if partitionsDiffer(a.lens, b.lens) then " [partitions differ]" else ""
+              for n <- SpatialGamma.LeqSpaceWhy.show(lm) do bump("AVOIDABLE " + n + tag)
+              wit("lens" + tag, s"a = ${a.lens.show}\n        b = ${b.lens.show}  [${SpatialGamma.LeqSpaceWhy.show(lm).mkString(",")}]")
+            else
+              bump("component not contained: lens (product interaction)")
+              // the ONE remaining class of genuine checker `Unknown`s, so it is worth a named witness:
+              // the histogram component alone is NOT contained, and only its conjunction with the
+              // shape makes containment hold.  No componentwise order can accept it.
+              wit("product-interaction", s"a = ${a.show}\n        b = ${b.show}\n        " +
+                s"γ(a) ⊆ γ(b) on U, but γ_hist(a.lens) ⊄ γ_hist(b.lens) — witness for the lens alone: " +
+                (UC.iterator ++ extremalMembers(a.lens).iterator)
+                  .find(v => gammaSpace(a.lens, v) && !gammaSpace(b.lens, v)).map(_.pretty).getOrElse("?"))
     println(f"GALOIS/γ-monotone: ${pool.size * 12} pairs; leq held $leqTrue%d (all γ-sound); " +
       f"γ-contained-on-U $contTrue%d; leq incomplete on $incomplete%d " +
       f"(${100.0 * incomplete / math.max(1, contTrue)}%.1f%% of contained pairs)")
+    // THE HONEST DECOMPOSITION.  The headline percentage is NOT a precision figure: `U` cannot express
+    // a member of γ(a) for most of these pairs, so "contained on U" is vacuous there and `leq`'s "no"
+    // is correct.  What the order can be blamed for is the AVOIDABLE column, and only that.
+    println(f"  of $incomplete: TRUE NEGATIVE (a member of γ(a) ∖ γ(b) exists outside U) $trueNeg%d; " +
+      f"γ(a) = ∅ so containment is vacuous $vacuous%d; " +
+      f"PRODUCT INTERACTION (neither component is contained — only the conjunction is, which no " +
+      f"componentwise order can see) $product%d; AVOIDABLE $avoidable%d " +
+      f"(${100.0 * avoidable / math.max(1, contTrue)}%.2f%% of contained pairs)")
+    println(s"  CAUSE HISTOGRAM of the $incomplete false negatives (Wide pool = ${Wide.size} values):")
+    for (k, v) <- cause.toVector.sortBy(-_._2) do println(f"    $v%5d  $k")
+    for (k, s) <- witness do println(s"    witness/$k: $s")
+    // THE GATE.  Every false negative must be attributable to something other than the order: a
+    // witness outside `U`, an empty γ(a), or a product interaction.  A pair where a COMPONENT is
+    // contained and the component order still says no is an avoidable `Unknown` for the checker, and
+    // there are to be none.
+    assertEquals(trueNeg + vacuous + product + avoidable, incomplete, "a false negative went unclassified")
+    assertEquals(avoidable, 0, s"avoidable false negatives: see the AVOIDABLE rows above")
+  }
+
+  // =============================================================================================
+  // 1b. THE HISTOGRAM ORDER, DECIDED EXACTLY — where review.md 4's named suspect actually lives
+  // =============================================================================================
+  //
+  // `U` is every space value over {a,b} with paths of ≤2 items.  For a SPILL-CARRYING histogram that
+  // is useless in both directions: `U` has only two paths per length and no path longer than two, so
+  // it can neither confirm nor refute containment for the population review.md 4 blames — and the
+  // cause histogram above shows the consequence (73% of the "false negatives" on `U` are pairs where
+  // `U` cannot express any member of γ(a) at all).
+  //
+  // This universe is built for the histogram component instead: EVERY count vector with `c_0 ≤ 1`
+  // and `c_l ≤ CountMaxCnt` for `1 ≤ l ≤ CountMaxLen`, materialised as a space value over fresh
+  // items and paired with `Shape.top` (which admits everything, so the shape channel is vacuous).
+  // For a type whose every bound fits inside those caps — `expressible` — γ(t) is FULLY represented,
+  // so containment on this universe IS containment.  No sampling, no artifact, and the spill/tracked
+  // partition cases are generated on purpose.
+  private val CountMaxLen = 4
+  private val CountMaxCnt = 3
+
+  private lazy val UC: Vector[SpaceValue] =
+    val byLen: Vector[Vector[PathValue]] = (0 to CountMaxLen).toVector.map { l =>
+      if l == 0 then Vector(PathValue(Nil))
+      else (0 until CountMaxCnt).toVector.map(i => PathValue(("c" + i) :: List.fill(l - 1)("c0")))
+    }
+    def go(l: Int): Vector[Vector[PathValue]] =
+      if l > CountMaxLen then Vector(Vector.empty)
+      else
+        val hi = if l == 0 then 1 else CountMaxCnt
+        for rest <- go(l + 1); k <- (0 to hi).toVector yield byLen(l).take(k) ++ rest
+    go(0).map(ps => SpaceValue(ps.toSet))
+
+  /** is γ(t) FULLY inside [[UC]]?  Then containment decided on `UC` is containment. */
+  private def expressible(t: SpaceType): Boolean =
+    t.byLen.forall((l, c) => l <= CountMaxLen && c.hi <= CountMaxCnt) &&
+      t.rest.hi <= CountMaxCnt && (t.rest.hi == 0 || t.restLens.isEmpty || t.restLens.hi <= CountMaxLen)
+
+  /** histograms in every representation the carrier has: closed supports, spill-only windows,
+   *  tracked classes ALONGSIDE a disjoint spill window (the partition cases), and lub/meet results. */
+  private def randHist(rng: java.util.Random, depth: Int): SpaceType =
+    def iv(): Ivl =
+      val x = rng.nextInt(CountMaxCnt + 1); Ivl(x, x + rng.nextInt(CountMaxCnt + 1 - x))
+    def win(): LenBounds =
+      val x = rng.nextInt(CountMaxLen + 1); LenBounds(x, x + rng.nextInt(CountMaxLen + 1 - x))
+    rng.nextInt(if depth <= 0 then 4 else 6) match
+      case 0 => SpaceType.closed((0 to CountMaxLen).filter(_ => rng.nextBoolean()).map(l => l.toLong -> iv())*)
+      case 1 => SpaceType.bounded(win(), rng.nextInt(CountMaxCnt + 1))
+      case 2 => SpaceType.boundedExact(win(), rng.nextInt(CountMaxCnt + 1))
+      case 3 =>
+        val w = win()
+        val cs = (0 to CountMaxLen).filter(l => l < w.lo || l > w.hi).filter(_ => rng.nextBoolean())
+          .map(l => l.toLong -> iv())
+        SpatialTypes.widen(SpaceType(scala.collection.immutable.SortedMap.from(cs), iv(), w))
+      case 4 => lubSpace(randHist(rng, depth - 1), randHist(rng, depth - 1))
+      case _ => meetSpace(randHist(rng, depth - 1), randHist(rng, depth - 1)).getOrElse(SpaceType.empty)
+
+  /** WHY γ(t) is empty, when it is — so "the order cannot see that its left side is ⊥" can be split
+   *  into the cases a cheap syntactic check catches and the ones needing real reasoning. */
+  private def botReason(t: SpaceType): String =
+    if t.byLen.exists((_, c) => c.lo > c.hi) then "a class interval is empty (lo > hi)"
+    else if t.at(0).lo >= 2 then "the ε class demands ≥2 paths of length 0, and only ONE path has length 0"
+    else if t.rest.lo > t.rest.hi then "the spill interval is empty (lo > hi)"
+    else if t.rest.lo >= 1 && t.restLens.isEmpty then "a FORCED spill with no window to put it in"
+    else if t.rest.lo >= 2 && t.restLens.lo == 0 && t.restLens.hi == 0 then
+      "the spill window is {0} and demands ≥2 paths of length 0"
+    else "needs real reasoning"
+
+  private def acceptedBits(t: SpaceType): java.util.BitSet =
+    val bs = new java.util.BitSet(UC.size)
+    for i <- UC.indices if gammaSpace(t, UC(i)) do bs.set(i)
+    bs
+  private def subsetOf(x: java.util.BitSet, y: java.util.BitSet): Boolean =
+    val z = x.clone().asInstanceOf[java.util.BitSet]; z.andNot(y); z.isEmpty
+
+  test("regression: the two REPAIRED false negatives, each decided by exhausting a universe") {
+    // These are the two witnesses `SpatialCheckCheck` 4a–4c and 6b are built around.  Before the
+    // canonical form, `leqSpace` rejected both because it required the LEFT side's spill window to
+    // NEST inside the right side's — and here the right side TRACKS those lengths instead, carrying no
+    // spill bucket at all.  Containment is decided below by exhausting every subset of the paths
+    // either side can mention, so "the order is right now" is a proof on these two pairs and not an
+    // appeal to the aggregate measurement.  THEY ARE THE PAIRS THAT MAKE SpatialCheckCheck 4a/4b/4c
+    // AND 6b FAIL, and they are why those four need updating (see the report).
+    def decide(a: SpatialType, b: SpatialType, ps: Vector[PathValue]): Option[SpaceValue] =
+      var bad: Option[SpaceValue] = None
+      for sub <- ps.toSet.subsets() if bad.isEmpty do
+        val v = SpaceValue(sub)
+        if gamma(a)(v) && !gamma(b)(v) then bad = Some(v)
+      bad
+
+    // ---- witness 1 (SpatialCheckCheck 4a-4c): one path, length 1 or 2, exactly one head ----------
+    val oneHead = Shape(Presence.No, scala.collection.immutable.SortedMap.empty, Ivl(1, 1), None)
+    val a1 = SpatialType(oneHead, SpaceType.boundedExact(LenBounds(1, 2), 1))
+    val b1 = SpatialType(oneHead, SpaceType.closed(1L -> Ivl(0, 1), 2L -> Ivl(0, 1)))
+    val u1 = Vector(PathValue(Nil), PathValue(List("x")), PathValue(List("y")),
+      PathValue(List("x", "x")), PathValue(List("x", "y")), PathValue(List("y", "x")),
+      PathValue(List("x", "x", "x")))
+    assertEquals(decide(a1, b1, u1), None, s"precondition: ${a1.show} really is contained in ${b1.show}")
+    assert(leq(a1, b1), s"the order must now see it: ${a1.show} ⊑ ${b1.show}")
+
+    // ---- witness 2 (SpatialCheckCheck 6b): 12 forced heads + one untracked, 13 length-1 paths -----
+    val hs = scala.collection.immutable.SortedMap.from((0 until 12).map(i => (("h" + i): PathItem) -> Shape.epsOnly))
+    val mayHs = scala.collection.immutable.SortedMap.from(hs.view.mapValues(_ =>
+      Shape(Presence.May, scala.collection.immutable.SortedMap.empty, Ivl.zero, None)))
+    val a2 = SpatialType(Shape(Presence.No, hs, Ivl(1, 1), None), SpaceType.boundedExact(LenBounds(1, 1), 13))
+    val b2 = SpatialType(Shape(Presence.No, mayHs, Ivl(0, 1), None), SpaceType.closed(1L -> Ivl(13, 13)))
+    val u2 = (0 until 12).toVector.map(i => PathValue(List("h" + i))) ++
+      Vector(PathValue(Nil), PathValue(List("z0")), PathValue(List("z1")), PathValue(List("h0", "t")))
+    assertEquals(decide(a2, b2, u2), None, s"precondition: ${a2.show} really is contained in ${b2.show}")
+    assert(leq(a2, b2), s"the order must now see it: ${a2.show} ⊑ ${b2.show}")
+
+    // …and the mechanism is the ALIGNMENT: a single-length spill window IS the tracked class, so the
+    // two histograms are literally the same type once canonicalised.
+    assertEquals(canonSpace(a2.lens), canonSpace(b2.lens),
+      "the spill and the tracked partition denote the same counts, so canonSpace must identify them")
+    println(s"REPAIRED: ${a1.lens.show} ⊑ ${b1.lens.show} and ${a2.lens.show} ⊑ ${b2.lens.show} — " +
+      s"both decided by exhausting ${1 << u1.size} and ${1 << u2.size} concrete spaces")
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // LATENCY of the order's histogram half.  `SpatialType.leq` runs inside every fixpoint, so a
+  // canonical form on that path must be paid for out of a MEASURED budget, not assumed free.
+  // `oldLeqSpace` is the pre-canonicalisation body, verbatim, so the comparison is head to head.
+  // ---------------------------------------------------------------------------------------------
+  private def oldLeqSpace(a: SpaceType, b: SpaceType): Boolean =
+    val keys = (a.byLen.keySet ++ b.byLen.keySet).toVector
+    val pointwise = keys.forall { l => val (x, y) = (a.at(l), b.at(l)); y.lo <= x.lo && x.hi <= y.hi }
+    val windowOk =
+      a.rest.hi == 0 || a.restLens.isEmpty ||
+        (b.rest.hi > 0 && !b.restLens.isEmpty && b.restLens.lo <= a.restLens.lo && a.restLens.hi <= b.restLens.hi)
+    var hiOut = if a.rest.hi > 0 then a.rest.hi else 0L
+    var loOut =
+      if a.rest.lo == 0 || a.restLens.isEmpty then 0L
+      else if b.byLen.keysIterator.exists(l => a.restLens.lo <= l && l <= a.restLens.hi) then 0L
+      else a.rest.lo
+    for (l, c) <- a.byLen if !b.byLen.contains(l) do
+      hiOut = Ivl.add(hiOut, c.hi); loOut = Ivl.add(loOut, c.lo)
+    pointwise && windowOk && hiOut <= b.rest.hi && b.rest.lo <= loOut
+
+  test("leqSpace latency: the canonical form is paid for out of a measured budget") {
+    val rng = new java.util.Random(7)
+    def iv() = { val x = rng.nextInt(4); Ivl(x, x + rng.nextInt(4 - x)) }
+    val pool = (0 until 400).map { _ =>
+      rng.nextInt(3) match
+        case 0 => SpaceType.closed((0 to 4).filter(_ => rng.nextBoolean()).map(l => l.toLong -> iv())*)
+        case 1 => SpaceType.bounded(LenBounds(rng.nextInt(3), 2 + rng.nextInt(3)), rng.nextInt(4))
+        case _ => SpaceType.boundedExact(LenBounds(rng.nextInt(3), 2 + rng.nextInt(3)), rng.nextInt(4))
+    }.toVector
+    def run(f: (SpaceType, SpaceType) => Boolean): (Double, Int) =
+      var acc = 0
+      for _ <- 0 until 3; a <- pool; b <- pool do if f(a, b) then acc += 1
+      val t0 = System.nanoTime()
+      for _ <- 0 until 10; a <- pool; b <- pool do if f(a, b) then acc += 1
+      ((System.nanoTime() - t0).toDouble / (10L * pool.size * pool.size), acc)
+    val (oldNs, oldAcc) = run(oldLeqSpace)
+    val (newNs, newAcc) = run(SpatialGamma.leqSpace)
+    println(f"LEQSPACE LATENCY (41%% spill-carrying pool): old ${oldNs}%.0f ns/call, " +
+      f"new ${newNs}%.0f ns/call (${newNs / oldNs}%.2fx); accepts old $oldAcc new $newAcc " +
+      f"of ${13 * pool.size * pool.size} calls")
+
+    // the pool an ANALYSIS actually produces: a term stays under MaxClasses=24 unless it is huge, so
+    // its histogram has no spill bucket and `canonSpace` returns its argument unchanged
+    val closed = (0 until 400).map(_ =>
+      SpaceType.closed((0 to 4).filter(_ => rng.nextBoolean()).map(l => l.toLong -> iv())*)).toVector
+    def runOn(ps: Vector[SpaceType], f: (SpaceType, SpaceType) => Boolean): Double =
+      var acc = 0
+      for _ <- 0 until 3; a <- ps; b <- ps do if f(a, b) then acc += 1
+      val t0 = System.nanoTime()
+      for _ <- 0 until 10; a <- ps; b <- ps do if f(a, b) then acc += 1
+      (System.nanoTime() - t0).toDouble / (10L * ps.size * ps.size)
+    val co = runOn(closed, oldLeqSpace); val cn = runOn(closed, SpatialGamma.leqSpace)
+    println(f"LEQSPACE LATENCY (no spill — the common case): old ${co}%.0f ns/call, " +
+      f"new ${cn}%.0f ns/call (${cn / co}%.2fx)")
+
+    // and END TO END: `SpatialType.leq` also walks the shape tree, which is what the added histogram
+    // work has to be compared against
+    val prng = new java.util.Random(11)
+    def rv(): SpaceValue = SpaceValue((0 until prng.nextInt(6)).map(_ =>
+      PathValue(List.fill(prng.nextInt(4))("i" + prng.nextInt(4)))).toSet)
+    val prod = (0 until 300).map(_ => SpatialType.of(rv())).toVector
+    var pacc = 0
+    // `SpatialType.leq` is `Shape.leqStrong && leqSpace`, and `&&` SHORT-CIRCUITS — so on a pair the
+    // shape order already rejects, `leqSpace` is never called and the added cost is not paid at all.
+    var reached = 0
+    for a <- prod; b <- prod do if Shape.leqStrong(a.shape, b.shape) then reached += 1
+    def timed(n: Int)(f: (SpatialType, SpatialType) => Boolean): Double =
+      for _ <- 0 until 3; a <- prod; b <- prod do if f(a, b) then pacc += 1
+      val t0 = System.nanoTime()
+      for _ <- 0 until n; a <- prod; b <- prod do if f(a, b) then pacc += 1
+      (System.nanoTime() - t0).toDouble / (n.toLong * prod.size * prod.size)
+    val pNs = timed(6)((a, b) => SpatialType.leq(a, b))
+    val sNs = timed(6)((a, b) => Shape.leqStrong(a.shape, b.shape))
+    val lNs = timed(6)((a, b) => SpatialGamma.leqSpace(a.lens, b.lens))
+    println(f"SPATIALTYPE.LEQ END TO END on ${prod.size * prod.size} pairs: leq ${pNs}%.0f ns/call; " +
+      f"Shape.leqStrong alone ${sNs}%.0f ns; leqSpace alone ${lNs}%.0f ns; the shape order admits " +
+      f"$reached/${prod.size * prod.size} pairs, so leqSpace is REACHED on " +
+      f"${100.0 * reached / (prod.size * prod.size)}%.1f%% of calls")
+  }
+
+  test("canonSpace preserves γ EXACTLY and is idempotent; unsatSpace only ever proves ⊥") {
+    // The normalisation `leqSpace` compares through must not change the MEANING of a type, only its
+    // representation — otherwise the order it feeds is unsound in one direction or vacuous in the
+    // other.  γ is decided here on the count-vector universe (complete for `expressible` types) and
+    // on `U` and `Wide` (which reach shapes and lengths the count universe does not), so the
+    // agreement is DECIDED, not sampled.
+    val rng = new java.util.Random(1014)
+    val ts = (0 until 12000).iterator.map(_ => randHist(rng, 2)).toVector.distinct
+    val vs = UC ++ U ++ Wide.take(400)
+    var checked = 0L; var changed = 0; var nonIdem = 0; var unsat = 0; var unsatWrong = 0
+    var gammaDiff = 0; var firstDiff = ""
+    for t <- ts do
+      val c = canonSpace(t)
+      if c != t then changed += 1
+      // IDEMPOTENCE: the canonical form is a fixed point of the rewrite
+      if canonSpace(c) != c then
+        nonIdem += 1
+        if firstDiff.isEmpty then firstDiff = s"canon not idempotent on ${t.show}: ${c.show} -> ${canonSpace(c).show}"
+      // γ-PRESERVATION, value by value, in BOTH directions
+      for v <- vs do
+        val g0 = gammaSpace(t, v); val g1 = gammaSpace(c, v)
+        checked += 1
+        if g0 != g1 then
+          gammaDiff += 1
+          if firstDiff.isEmpty then firstDiff = s"γ CHANGED on ${v.pretty}: ${t.show} -> ${c.show}"
+      // unsatSpace must only ever claim ⊥ of a type that really has no member
+      if unsatSpace(t) then
+        unsat += 1
+        val w = vs.find(v => gammaSpace(t, v))
+        if w.nonEmpty then
+          unsatWrong += 1
+          if firstDiff.isEmpty then firstDiff = s"unsatSpace claimed ⊥ of ${t.show}, member ${w.get.pretty}"
+    println(s"CANON: ${ts.size} histograms, $changed rewritten, $checked (type, value) γ comparisons; " +
+      s"γ differences $gammaDiff; non-idempotent $nonIdem; unsatSpace fired $unsat times, wrongly $unsatWrong")
+    assertEquals(gammaDiff, 0, s"canonSpace is not γ-preserving: $firstDiff")
+    assertEquals(nonIdem, 0, s"canonSpace is not idempotent: $firstDiff")
+    assertEquals(unsatWrong, 0, s"unsatSpace is unsound: $firstDiff")
+    assert(changed > ts.size / 20, s"only $changed of ${ts.size} were rewritten — the check is vacuous")
+  }
+
+  test("the HISTOGRAM order decided EXACTLY: leqSpace is sound, and its false negatives classified") {
+    val rng = new java.util.Random(1013)
+    val pool = (0 until 6000).iterator.map(_ => randHist(rng, 2)).filter(expressible)
+      .toVector.distinct.take(420)
+    val acc = pool.map(acceptedBits)
+    val cause = scala.collection.mutable.LinkedHashMap.empty[String, Int]
+    def bump(k: String): Unit = cause(k) = cause.getOrElse(k, 0) + 1
+    val witness = scala.collection.mutable.LinkedHashMap.empty[String, String]
+    def wit(k: String, s: => String): Unit = if !witness.contains(k) then witness(k) = s
+    var pairs = 0; var held = 0; var contained = 0; var fn = 0; var unsound = 0
+    var withSpill = 0
+    for t <- pool if t.rest.hi > 0 do withSpill += 1
+    for i <- pool.indices; _ <- 0 until 20 do
+      val j = rng.nextInt(pool.size)
+      val (a, b) = (pool(i), pool(j))
+      pairs += 1
+      val c = subsetOf(acc(i), acc(j))
+      val l = leqSpace(a, b)
+      if l then
+        held += 1
+        // THE SOUNDNESS GATE.  `UC` decides containment for these types, so a `true` here that is not
+        // containment is a genuine refutation of the order — not an artifact of a small universe.
+        if !c then
+          unsound += 1
+          wit("UNSOUND", s"a = ${a.show}\n        b = ${b.show}\n        witness = " +
+            UC.find(v => gammaSpace(a, v) && !gammaSpace(b, v)).map(_.pretty).getOrElse("?"))
+      if c then
+        contained += 1
+        if !l then
+          fn += 1
+          val m = SpatialGamma.leqSpaceMask(a, b)
+          if acc(i).isEmpty then
+            bump("a is genuinely ⊥ (γ(a) = ∅ on a COMPLETE universe)")
+            bump("    ⊥ because: " + botReason(a))
+          else
+            for n <- SpatialGamma.LeqSpaceWhy.show(m) do bump(n)
+            if partitionsDiffer(a, b) then
+              bump("  …and the two length PARTITIONS differ (spill vs tracked)")
+              wit("partitions", s"a = ${a.show}\n        b = ${b.show}  [${SpatialGamma.LeqSpaceWhy.show(m).mkString(",")}]")
+            if a.rest.hi > 0 && !a.restLens.isEmpty && a.restLens.lo == a.restLens.hi then
+              bump("  …and a's spill window is a SINGLE length (exactly a tracked class)")
+            if a.at(0).hi > 1 || b.at(0).hi > 1 then
+              bump("  …and an ε class permits >1 path (only one path has length 0)")
+            wit("fn", s"a = ${a.show}\n        b = ${b.show}  [${SpatialGamma.LeqSpaceWhy.show(m).mkString(",")}]")
+    println(f"HISTOGRAM ORDER (exact): ${pool.size} types ($withSpill with a spill bucket), $pairs pairs " +
+      f"over ${UC.size} count vectors; leqSpace held $held; contained $contained; " +
+      f"false negatives $fn (${100.0 * fn / math.max(1, contained)}%.1f%% of contained pairs)")
+    for (k, v) <- cause.toVector.sortBy(-_._2) do println(f"    $v%5d  $k")
+    for (k, s) <- witness do println(s"    witness/$k: $s")
+    // SOUNDNESS first, then PRECISION.  Both are gates because this universe DECIDES containment for
+    // these types, so neither number is an estimate that a future change may legitimately move.
+    assertEquals(unsound, 0, s"leqSpace ACCEPTED a non-containment: ${witness.getOrElse("UNSOUND", "")}")
+    assertEquals(fn, 0, "leqSpace is incomplete on a universe that decides the question — see the rows above")
+    assert(withSpill > pool.size / 4, s"only $withSpill of ${pool.size} types carry a spill bucket; " +
+      "the spill/tracked partition case would go unexercised")
+  }
+
+  // =============================================================================================
+  // 1c. THE SHAPE ORDER, DECIDED — the other four channels review.md 4 names
+  // =============================================================================================
+  //
+  // `Shape.leqStrong`'s completeness has never been measured: the existing SHAPE ORDER test checks
+  // only that the MAY-ONLY sibling `Shape.leq` is γ_may-sound.  This one decides containment on a
+  // universe that is COMPLETE for a restricted class of shapes, and the restriction is the whole
+  // point — get it wrong and the measurement repeats the very artifact the cause histogram above
+  // exposes.  The class: tracked heads drawn from {a, b}, depth ≤ 2, at most ONE untracked head per
+  // node, and every open head set carrying a BOUNDED `otherTail` summary.
+  //
+  // Why that is complete on `U3` (every space value over {a, b, c} with paths of ≤2 items):
+  //   - bounded length.  A `None` summary (⊤) admits an untracked head with an ARBITRARY tail, hence
+  //     paths of unbounded length, which NO finite universe can express — so ⊤ summaries are excluded
+  //     and every admitted path then has at most 2 items.  (That case is genuinely out of scope here,
+  //     not silently assumed away: it is stated in the report.)
+  //   - bounded alphabet.  γ is invariant under renaming the items a shape does not name, and with at
+  //     most one untracked head per node a single representative (`c`) suffices at every level, so
+  //     every member of γ(sh) has a renaming inside `U3` and both sides only ever name {a, b}.
+  // `SpaceType` plays no part, so what is measured is the shape order alone.
+  private lazy val U3: Vector[SpaceValue] = SpatialGamma.universe(Vector("a", "b", "c"), 2)
+
+  private def randShapeD(rng: java.util.Random, d: Int): Shape =
+    def pres(): Presence = rng.nextInt(3) match
+      case 0 => Presence.No
+      case 1 => Presence.May
+      case _ => Presence.Must
+    if d <= 0 then Shape(pres(), scala.collection.immutable.SortedMap.empty, Ivl.zero, None)
+    else
+      val hs = scala.collection.immutable.SortedMap.from(
+        Vector[PathItem]("a", "b").filter(_ => rng.nextBoolean())
+          .map(k => k -> randShapeD(rng, d - 1)).filter(_._2.possiblyNonEmpty))
+      // an open head set ALWAYS carries a bounded summary here — see the note above
+      val ot = Some(Shape.weaken(randShapeD(rng, d - 1))).filter(_.possiblyNonEmpty)
+      val oHi = if ot.isEmpty then 0L else rng.nextInt(2).toLong
+      Shape(pres(), hs, Ivl(if oHi == 0 then 0L else rng.nextInt(2).toLong, oHi),
+            if oHi == 0 then None else ot)
+
+  test("the SHAPE order decided: leqStrong is sound, and its false negatives classified by channel") {
+    val rng = new java.util.Random(1015)
+    // LEFT operands come from the restricted (complete-on-U3) class.  RIGHT operands may be anything
+    // over the same alphabet — only γ(a) has to fit inside `U3` for a "not refuted" to mean contained —
+    // so the right side is drawn from the weakenings, joins and widenings of the left, which is where
+    // genuine containments live.  Comparing two independent random shapes almost never yields one.
+    val shapes = (0 until 1400).iterator.map(_ => randShapeD(rng, 2)).toVector.distinct.take(240)
+    val acc = shapes.map { sh =>
+      val bs = new java.util.BitSet(U3.size)
+      for i <- U3.indices if Shape.contains(sh, U3(i)) do bs.set(i)
+      bs
+    }
+    val cause = scala.collection.mutable.LinkedHashMap.empty[String, Int]
+    def bump(k: String): Unit = cause(k) = cause.getOrElse(k, 0) + 1
+    var wit = ""
+    var pairs = 0; var held = 0; var contained = 0; var fn = 0; var unsound = 0; var bot = 0
+    def bitsOf(sh: Shape): java.util.BitSet =
+      val bs = new java.util.BitSet(U3.size)
+      for i <- U3.indices if Shape.contains(sh, U3(i)) do bs.set(i)
+      bs
+    for i <- shapes.indices; _ <- 0 until 60 do
+      val j = rng.nextInt(shapes.size)
+      val a = shapes(i)
+      val b = rng.nextInt(6) match
+        case 0 => shapes(j)
+        case 1 => Shape.weaken(a)
+        case 2 => Shape.weaken(shapes(j))
+        case 3 => Shape.joinAlternatives(a, shapes(j))
+        case 4 => Shape.widen(a)
+        case _ => Shape.joinAlternatives(Shape.weaken(a), shapes(j))
+      pairs += 1
+      val c = subsetOf(acc(i), bitsOf(b))
+      val l = Shape.leqStrong(a, b)
+      if l then
+        held += 1
+        if !c then
+          unsound += 1
+          if wit.isEmpty then wit = s"UNSOUND ${a.show} ⊑ ${b.show}, witness " +
+            U3.find(v => Shape.contains(a, v) && !Shape.contains(b, v)).map(_.pretty).getOrElse("?")
+      if c then
+        contained += 1
+        if !l then
+          fn += 1
+          if acc(i).isEmpty then { bot += 1; bump("a admits NOTHING (γ(a) = ∅) — vacuous containment") }
+          else
+            val ns = Shape.LeqShapeWhy.show(Shape.leqStrongMask(a, b))
+            for n <- ns do bump(n)
+            val key = "w/" + ns.mkString(",")
+            if !cause.contains(key) then
+              cause(key) = 0
+              println(s"      $key: ${a.show}   ⊑   ${b.show}")
+    println(f"SHAPE ORDER (decided on ${U3.size} spaces): ${shapes.size} shapes, $pairs pairs; " +
+      f"leqStrong held $held; contained $contained; false negatives $fn " +
+      f"(${100.0 * fn / math.max(1, contained)}%.1f%% of contained pairs; $bot of them with γ(a) = ∅)")
+    for (k, v) <- cause.toVector.sortBy(-_._2) do println(f"    $v%5d  $k")
+    assertEquals(unsound, 0, s"Shape.leqStrong ACCEPTED a non-containment: $wit")
+    assertEquals(fn, 0, "Shape.leqStrong is incomplete on a universe that decides the question")
+    assert(contained > 1000, s"only $contained contained pairs — the completeness claim would be thin")
   }
 
   test("galois: α(γ t) ⊑ t — reductivity (a failure here is a genuine refutation)") {

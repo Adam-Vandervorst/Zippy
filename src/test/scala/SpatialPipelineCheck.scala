@@ -128,10 +128,13 @@ class SpatialPipelineCheck extends FunSuite:
   // ================================================================================================
   //  2.  THE ARTIFACT — unconditional vs guarded
   // ================================================================================================
-  /** An emptiness proof that is UNCONDITIONAL (`M` is free and untyped) and that no `Lower` rule can
-   *  make: the two operands are wrapped by DIFFERENT constant prefixes, so no path can be in both.
-   *  `Lower`'s literal folders cannot touch it (neither operand is a `Literal`) and `Lower.SizeEmpty`
-   *  reads only `sizeBounds`, which does not model prefix disjointness. */
+  /** An emptiness proof that is UNCONDITIONAL (`M` is free and untyped): the two operands are wrapped
+   *  by DIFFERENT constant prefixes, so no path can be in both.
+   *
+   *  It is NOT a spatial-only win, and the comment here used to claim it was.  The "spatial-vs-ordinary"
+   *  test below measures it as a TIE — the ordinary rule list reaches `Empty` too, through the
+   *  `Wrap`/`Unwrap` prefix algebra — so it is kept as a case where the two tiers AGREE.  The
+   *  spatial-only win on this fixture list is `selfSubtract`. */
   val prefixDisjoint: Space =
     Space.Intersection(Space.Wrap(Space.Mention(M), cp("x")), Space.Wrap(Space.Mention(M), cp("y")))
 
@@ -239,7 +242,9 @@ class SpatialPipelineCheck extends FunSuite:
     assert(g.pathPreconditionRepresentable, "this precondition has no path channel")
     // the fallback is the ORDINARY optimizer's output: choosing it costs nothing relative to not
     // having run the pipeline at all
-    assertEquals(g.fallback.body, walk.optimized(using walkTable).body)
+    // `optimizedPlain` and not `optimized`: the fallback is the program with NO spatial input at all,
+    // and `optimized` now runs the unconditional spatial tier itself (`SpatialHook`)
+    assertEquals(g.fallback.body, walk.optimizedPlain(using walkTable).body)
     // the dispatcher: conforming input -> residual, violating input -> fallback
     val ok = sv(p("a", "b"), p("c"))
     val tooLong = sv(p("a", "b", "c", "d", "e"))
@@ -574,6 +579,294 @@ class SpatialPipelineCheck extends FunSuite:
     val viaCall = Space.Union(lit(p("keep")), Space.Call(callee.name, Vector.empty, Vector.empty))
     val rc2 = SpatialPipeline.unconditionalRewrite(viaCall, rc)
     assertEquals(runWith(rc2, Map.empty, rc = rc), runWith(viaCall, Map.empty, rc = rc))
+    // and the function `Routine.optimized` actually calls is itself EVENT-FREE — the hook adds no
+    // evaluation to the compilation path; what evaluates there is the pre-existing `Lower.ConstantOps`
+    val bomb: Space = Space.Union(Space.Mention(M),
+      Space.GroundedSS(lit(p("a")), _ => throw RuntimeException("the hook evaluated its subject")))
+    assertEquals(noEvaluation("SpatialHook.rewrite")(SpatialHook.rewrite(bomb, rc)), bomb)
+  }
+
+  // ================================================================================================
+  //  8b.  THE HOOK, THROUGH `Routine.optimized` ITSELF — integration, meaning, and COST
+  // ================================================================================================
+
+  /** THE REPRESENTATIVE ROUTINES the suite actually compiles: the two datalog shapes, both
+   *  Game-of-Life routines, the n-queens board and the 3×3 sliding-puzzle explorer.  `optimized` is
+   *  called on these (or on routines their size) all over the test tree, so they are the population
+   *  whose compile time the hook is allowed to spend. */
+  def costCases: Vector[(String, Routine, PartialFunction[RoutinePtr, Routine])] =
+    val gol = new GoL.Rules(0, 6)
+    val board = NQueens.board(8)
+    val puz = Sliding.puzzle(3, 3)
+    Vector(
+      ("walk (self-recursive)", walk, walkTable),
+      ("aunts (datalog)", Routines.aunt_query_routine, Syntax.mod(Routines.child_routine)),
+      ("transitive (datalog)", Routines.transitive_routine, PartialFunction.empty),
+      ("reachable (datalog)", Routines.reachable_routine, PartialFunction.empty),
+      ("gol/neigh", gol.defs(RoutinePtr("neigh")), gol.defs),
+      ("gol/nextStep", gol.defs(RoutinePtr("nextStep")), gol.defs),
+      ("nqueens place(8)", Routine(RoutinePtr("place"), Vector.empty, Vector.empty, board.program),
+        board.defs),
+      ("puzzle3x3/superpose", puz.superpose, puz.defs),
+      ("puzzle3x3/explore", puz.explore, puz.defs),
+    )
+
+  /** THE COST GATE.  `Routine.optimized` is on the hot compilation path of the whole suite, so the
+   *  hook's price is measured — per routine, with the ordinary rule list alone (`optimizedPlain`) as
+   *  the baseline, interleaved and median-of-five after warming BOTH paths — and the numbers are
+   *  printed rather than argued about.  Both directions are reported: what the call cost, and how many
+   *  nodes the final body actually lost, because a hook that is cheap and never wins is not worth its
+   *  risk either.
+   *
+   *  What it prints, measured, and stated plainly because it is not the flattering answer: on the nine
+   *  CLOSED cornerstone routines the hook costs single-digit milliseconds and saves ZERO nodes — the
+   *  ordinary partial evaluator (`Lower.ConstantOps`) already folds everything the spatial tier proves
+   *  there.  The two OPEN rows at the end are where it pays: a free mention gives the partial evaluator
+   *  nothing to fold, and the spatial proof is then the only one available. */
+  test("COST: what the spatial hook adds to `Routine.optimized`, per representative routine") {
+    def median(xs: Vector[Double]): Double = xs.sorted.apply(xs.size / 2)
+    // two OPEN bodies (free mentions, nothing to partially evaluate) so the table shows the win too.
+    // `x ∖ x` is the win the "spatial-only wins" test above measures; `prefix-disjoint ∩` is NOT one —
+    // the ordinary list folds disjoint constant prefixes itself, and that test prints it as a tie.
+    val openCases = Vector[(String, Routine, PartialFunction[RoutinePtr, Routine])](
+      ("open: x ∖ x arm", Routine(RoutinePtr("o1"), Vector.empty, Vector(M, M2),
+        Space.Union(Space.Mention(M2), selfSubtract)), PartialFunction.empty),
+      ("open: iterate x ∖ x", Routine(RoutinePtr("o2"), Vector.empty, Vector(M),
+        Space.Iteration(selfSubtract, H, R, Space.Mention(R))), PartialFunction.empty),
+    )
+    println("\n[hook-cost]  routine                     nodes   plain ms  hooked ms     delta  nodes saved")
+    var worstAbs = 0.0
+    var worstRatio = 0.0
+    var worstRatioBig = 0.0
+    var totalPlain = 0.0
+    var totalHooked = 0.0
+    var fired = 0
+    var savedOpen = 0
+    for (name, r, rc) <- costCases ++ openCases do
+      given PartialFunction[RoutinePtr, Routine] = rc
+      val n = SpatialPipeline.nodeCount(r.body)
+      for _ <- 0 until 4 do { r.optimizedPlain; r.optimized }          // warm BOTH paths
+      val ps = Vector.newBuilder[Double]; val hs = Vector.newBuilder[Double]
+      val before = SpatialHook.stats
+      var pOut: Routine = null; var hOut: Routine = null
+      for _ <- 0 until 5 do
+        val t0 = System.nanoTime(); pOut = r.optimizedPlain; ps += (System.nanoTime() - t0) / 1e6
+        val t1 = System.nanoTime(); hOut = r.optimized;      hs += (System.nanoTime() - t1) / 1e6
+      val plain = median(ps.result()); val hooked = median(hs.result())
+      val after = SpatialHook.stats
+      if after.changed > before.changed then fired += 1
+      val dn = SpatialPipeline.nodeCount(pOut.body) - SpatialPipeline.nodeCount(hOut.body)
+      if name.startsWith("open") then savedOpen += dn
+      worstAbs = worstAbs max (hooked - plain)
+      totalPlain += plain; totalHooked += hooked
+      if plain > 1.0 then worstRatio = worstRatio max (hooked / plain)
+      if plain > 20.0 then worstRatioBig = worstRatioBig max (hooked / plain)
+      println(f"  $name%-28s $n%5d  $plain%9.2f $hooked%9.2f  ${hooked - plain}%+8.2f   " +
+              (if after.skipped > before.skipped then "over budget" else f"-$dn%d"))
+      // the ordinary rules run AFTER the hook, so a BIGGER result would mean the spatial rewrite
+      // fought them — the one outcome that would make this a pessimisation instead of a win
+      assert(dn >= 0, s"$name: the hooked body is BIGGER by ${-dn} nodes")
+    println(f"  => worst delta ${worstAbs}%.1f ms;  worst ratio ${worstRatio}%.1fx on a >1 ms call, " +
+            f"${worstRatioBig}%.2fx on a >20 ms call;  whole table ${totalHooked}%.0f/${totalPlain}%.0f ms " +
+            f"= ${totalHooked / totalPlain}%.3fx;  $fired of ${costCases.size + openCases.size} bodies rewritten")
+    println(s"  => process total ${SpatialHook.stats.show}")
+    // THE BUDGETS — measured numbers with headroom, not aspirations, and deliberately three of them
+    // because one number would flatter the hook.  The relative cost of a SMALL call is genuinely bad
+    // (a 2 ms `optimized` of `gol/nextStep` becomes ~15-20 ms, i.e. up to ~8x) and is left published
+    // rather than gated away: what bounds it is the absolute delta, since 20 ms of compile time is not
+    // a compile-time problem.  What must not regress is the delta on a call that is already expensive,
+    // and the total over the table — those two are gated tightly.
+    assert(worstAbs < 150.0, f"the hook added ${worstAbs}%.1f ms to a single `optimized` call")
+    assert(worstRatioBig < 1.5, f"the hook multiplied a >20 ms `optimized` call by ${worstRatioBig}%.2f")
+    assert(totalHooked / totalPlain < 1.25,
+           f"the hook cost ${100 * (totalHooked / totalPlain - 1)}%.0f%% of the whole table's compile time")
+    assert(savedOpen >= 4, s"the hook saved only $savedOpen nodes on the two open bodies")
+  }
+
+  /** THE INTEGRATION TEST review.md finding 3 asks for: not "the pipeline can rewrite this term", which
+   *  section 8 already showed, but "`Routine.optimized` — the method the whole tree compiles through —
+   *  now consumes the spatial proof".  Every assertion here goes through `r.optimized`.
+   *
+   *  The subject is `x ∖ x` under a FREE mention: `Lower.ConstantOps`' partial evaluator cannot touch it
+   *  (there is nothing to evaluate — `M` is unbound), and no syntactic rule in the list recognises the
+   *  idempotence law, which the printed `plain` line demonstrates rather than claims. */
+  test("INTEGRATION: `Routine.optimized` itself consumes the unconditional emptiness proof") {
+    val body = Space.Union(Space.Mention(M2), selfSubtract)
+    val r = Routine(RoutinePtr("hooked"), Vector.empty, Vector(M, M2), body)
+    val hooked = r.optimized
+    val plain = r.optimizedPlain
+    println(s"\n[integration] plain   ${plain.body.show}")
+    println(s"[integration] hooked  ${hooked.body.show}")
+    assertNotEquals(hooked.body, plain.body,
+      "`optimized` must consume the spatial proof the ordinary rule list cannot make")
+    assertEquals(hooked.body, Space.Union(Space.Mention(M2), Space.Empty): Space,
+      "the dead arm must become ∅ (the ordinary list has no `x ∪ ∅ = x` rule — see the report)")
+    assert(SpatialPipeline.nodeCount(hooked.body) < SpatialPipeline.nodeCount(plain.body),
+           s"${hooked.body.show} vs ${plain.body.show}")
+    // the routine's IDENTITY is untouched — the hook rewrites the body, nothing else
+    assertEquals(hooked.name, r.name); assertEquals(hooked.mentions, r.mentions)
+    assertEquals(hooked.refs, r.refs)
+    // MEANING PRESERVED on every input, against the original AND against the plain optimizer
+    val rng = new java.util.Random(20250807L)
+    for _ <- 0 until 300 do
+      val e = Map(M -> randInput(rng, 0, 3, 5), M2 -> randInput(rng, 0, 3, 5))
+      assertEquals(runWith(hooked.body, e), runWith(body, e), s"hooked body disagrees on $e")
+      assertEquals(runWith(hooked.body, e), runWith(plain.body, e))
+    // the switch really switches: with the tier off, `optimized` IS `optimizedPlain`
+    SpatialHook.withEnabled(false) {
+      assertEquals(r.optimized.body, plain.body, "`-Dmorkl.spatialHook=false` must restore the old path")
+    }
+    // and the whole optimizer is idempotent with the hook in it
+    assertEquals(Routine(r.name, r.refs, r.mentions, hooked.body).optimized.body, hooked.body)
+    // A ROOT-level proof goes all the way: the body itself is ∅, so the routine compiles to nothing
+    val allDead = Routine(RoutinePtr("dead"), Vector.empty, Vector(M), selfSubtract)
+    println(s"[integration] root-empty plain ${allDead.optimizedPlain.body.show} " +
+            s"=> hooked ${allDead.optimized.body.show}")
+    assertEquals(allDead.optimizedPlain.body, selfSubtract, "the ordinary list leaves it standing")
+    assertEquals(allDead.optimized.body, Space.Empty: Space)
+    for _ <- 0 until 100 do
+      val e = Map(M -> randInput(rng, 0, 3, 5))
+      assertEquals(runWith(allDead.optimized.body, e), runWith(selfSubtract, e))
+  }
+
+  test("INTEGRATION: the hook fires through `optimized` INTERPROCEDURALLY, and never on a big body") {
+    // an emptiness proof that needs the routine table: the callee denotes ∅, so the union arm goes
+    val nil = Routine(RoutinePtr("nil"), Vector.empty, Vector(M),
+                      Space.Subtraction(Space.Mention(M), Space.Mention(M)))
+    val rc: PartialFunction[RoutinePtr, Routine] = Map(nil.name -> nil)
+    val host = Routine(RoutinePtr("host"), Vector.empty, Vector(M2),
+                       Space.Union(Space.Mention(M2), Space.Wrap(Space.Call(nil.name, Vector.empty,
+                                                                           Vector(Space.Mention(M2))), cp("k"))))
+    val hooked = host.optimized(using rc)
+    println(s"\n[interprocedural] ${host.body.show}  =>  ${hooked.body.show}")
+    assertEquals(hooked.body, Space.Union(Space.Mention(M2), Space.Empty): Space,
+                 s"the ∅ callee's arm must be eliminated: ${hooked.body.show}")
+    val rng = new java.util.Random(31337L)
+    for _ <- 0 until 100 do
+      val e = Map(M2 -> randInput(rng, 0, 3, 4))
+      assertEquals(runWith(hooked.body, e, rc = rc), runWith(host.body, e, rc = rc))
+    // THE SIZE BUDGET: a body past `maxBodyNodes` is handed through unanalysed, and that is recorded
+    val big = Vector.fill(40)(Space.Subtraction(Space.Mention(M), Space.Mention(M)): Space)
+      .reduce((a, b) => Space.Union(a, b))
+    val n = SpatialPipeline.nodeCount(big)
+    val was = SpatialHook.maxBodyNodes
+    try
+      SpatialHook.maxBodyNodes = n - 1
+      val before = SpatialHook.stats
+      val out = Routine(RoutinePtr("big"), Vector.empty, Vector(M), big).optimized
+      assert(SpatialHook.stats.skipped > before.skipped, "the size budget must be recorded, not silent")
+      assertEquals(out.body, Routine(RoutinePtr("big"), Vector.empty, Vector(M), big).optimizedPlain.body,
+                   "over budget, `optimized` must be exactly the ordinary rule list")
+      SpatialHook.maxBodyNodes = n + 1
+      val small = Routine(RoutinePtr("big"), Vector.empty, Vector(M), big).optimized
+      assertEquals(small.body, Space.Empty: Space, s"under budget, all 40 arms are ∅: ${small.body.show}")
+      println(s"[budget] $n nodes: over budget => ${SpatialPipeline.nodeCount(out.body)} nodes, " +
+              s"under budget => ${SpatialPipeline.nodeCount(small.body)}")
+    finally SpatialHook.maxBodyNodes = was
+  }
+
+  /** THE SOUNDNESS GATE FOR THE NEW CONFIG KNOB.  `shapeDepth`/`shapeWidth` are per-analysis now
+   *  (`SpatialAnalysis.narrow`), and the width half is hand-written spill logic — the same recipe
+   *  `Shape.mk` uses, but a second copy of it, so it is gated directly rather than trusted.
+   *
+   *  The property is the only one that matters: narrowing may LOSE precision and may not lose values.
+   *  Both readings are checked — γ, with witnesses (`Shape.contains`), and the abstract strong order
+   *  (`Shape.leqStrong`, which is what `SpatialType.leq` publishes). */
+  test("the per-analysis trie caps only WEAKEN: γ(sh) ⊆ γ(narrow(sh, cfg)) on random shapes") {
+    val rng = new java.util.Random(4242L)
+    val cfgs = Vector(SpatialConfig.cheap,
+                      SpatialConfig.default.copy(shapeDepth = 1, shapeWidth = 1),
+                      SpatialConfig.default.copy(shapeWidth = 2),
+                      SpatialConfig.default.copy(shapeDepth = 2, shapeWidth = 3))
+    var checked = 0; var narrowed = 0; var admitted = 0
+    for _ <- 0 until 250 do
+      val v = randInput(rng, 0, 4, 8)
+      val w = randInput(rng, 0, 3, 4)
+      val shapes = Vector(Shape.of(v), Shape.weaken(Shape.of(v)),
+                          Shape.unionTransfer(Shape.of(v), Shape.of(w)),
+                          Shape.joinAlternatives(Shape.of(v), Shape.of(w)),
+                          SpatialTyping.infer(Space.Union(lit(v.paths.toSeq*), Space.Mention(M))).shape)
+      for sh <- shapes; cfg <- cfgs do
+        val n = SpatialAnalysis.narrow(sh, cfg)
+        checked += 1
+        if n != sh then narrowed += 1
+        for u <- Vector(v, w, SpaceValue(Set.empty), sv(PathValue(Nil))) do
+          if Shape.contains(sh, u) then
+            admitted += 1
+            assert(Shape.contains(n, u),
+                   s"narrow(${sh.show}, ${cfg.shapeDepth}x${cfg.shapeWidth}) = ${n.show} DROPPED " +
+                   s"${u.pretty}, which the original admits")
+        assert(Shape.leqStrong(sh, n),
+               s"narrow(${sh.show}) = ${n.show} is not above it in the strong order")
+    println(s"\n[narrow] $checked (shape, config) pairs, $narrowed actually narrowed, " +
+            s"$admitted γ-witnesses preserved, strong order holds in every case")
+    assert(narrowed > checked / 10, s"only $narrowed of $checked pairs narrowed — the test is inert")
+  }
+
+  /** THE SOUNDNESS GATE FOR THE HOOK — programs × inputs, against `eval`.
+   *
+   *  The hook is a new rewriting stage on the path every compilation takes, so it gets the same kind of
+   *  gate the law pipeline has (`CorpusLawValidation`): the fuzzed 1000-program corpus, each program
+   *  compiled through `Routine.optimized` and evaluated against `eval` of the ORIGINAL on random input
+   *  environments.  `eval` is ground truth here, not analysis input.
+   *
+   *  It also compares against `optimizedPlain` on every program, which is what makes it a gate on the
+   *  hook specifically rather than on the optimizer as a whole: a disagreement between the two is
+   *  attributable to the spatial tier and to nothing else.
+   *  Tunables: `-Dhookvalid.progs` (default 250), `-Dhookvalid.m` (envs per program, default 25). */
+  test("SOUNDNESS: the hooked `Routine.optimized` agrees with `eval` on the fuzzed corpus") {
+    val progLimit = sys.props.get("hookvalid.progs").map(_.toInt).getOrElse(250)
+    val perProg = sys.props.get("hookvalid.m").map(_.toInt).getOrElse(25)   // envs per program
+    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
+    assume(f.exists, s"corpus not found at ${f.getPath} — run morkl.ProgramExpressivity first")
+    val recs = locally {
+      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
+      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
+    }.take(progLimit)
+    val maxS = 3; val maxP = 3
+    val sNames = (0 until maxS).map(i => SpaceMention("s" + i)).toVector
+    val pNames = (0 until maxP).map(j => PathRef("p" + j)).toVector
+    val A = SpaceFuzzer.alphabet
+    val rng = new java.util.Random(90210L)
+    def randPath0(): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))
+    def smallTrie(): SpaceValue = SpaceValue((0 until (1 + rng.nextInt(6))).map(_ => randPath0()).toSet)
+    val envs = Array.fill(perProg)((Array.fill(maxS)(smallTrie()), Array.fill(maxP)(randPath0())))
+    var checks = 0L; var differ = 0; var nodesPlain = 0L; var nodesHooked = 0L
+    val before = SpatialHook.stats
+    val t0 = System.nanoTime()
+    for r <- recs do
+      val routine = Routine(RoutinePtr("main"), pNames.take(r.nPath), sNames.take(r.nSpace), r.prog)
+      val hooked = routine.optimized
+      val plain = routine.optimizedPlain
+      if hooked.body != plain.body then differ += 1
+      nodesPlain += SpatialPipeline.nodeCount(plain.body)
+      nodesHooked += SpatialPipeline.nodeCount(hooked.body)
+      for (sv, pv) <- envs do
+        val pc: PathContext = PathContextMap((0 until r.nPath).map(j => pNames(j) -> pv(j)).toMap)
+        val sc = SpaceContextMap((0 until r.nSpace).map(i => sNames(i) -> sv(i)).toMap)
+        val ref = eval(r.prog)(using pc, sc, PartialFunction.empty)
+        assertEquals(eval(hooked.body)(using pc, sc, PartialFunction.empty), ref,
+          s"HOOK BUG: the spatially rewritten program disagrees with eval\n  prog:   ${r.prog.show}\n" +
+          s"  hooked: ${hooked.body.show}")
+        assertEquals(eval(plain.body)(using pc, sc, PartialFunction.empty), ref,
+          s"the ORDINARY optimizer disagrees (not the hook's fault, but it must be known)")
+        checks += 1
+      // and the hook may only shrink: `optimized` running the rules after it cannot be worse than the
+      // rules alone, or the rewrite is fighting them
+      assert(SpatialPipeline.nodeCount(hooked.body) <= SpatialPipeline.nodeCount(plain.body),
+             s"the hooked program is BIGGER: ${r.prog.show}")
+    val after = SpatialHook.stats
+    println(f"\n[hook-corpus] ${recs.size} programs x $perProg envs = $checks%d differential checks against " +
+            f"eval; the hook changed $differ programs; nodes $nodesPlain -> $nodesHooked; " +
+            f"${(after.nanos - before.nanos) / 1e6}%.0f ms of analysis over ${after.calls - before.calls} " +
+            f"calls; wall ${(System.nanoTime() - t0) / 1e9}%.1f s")
+    assertEquals(checks, recs.size.toLong * perProg)
+    // the hook swallows an analysis failure by design (a compile-time hook may lose an optimization,
+    // not a compile) — which is exactly why the count is asserted here rather than trusted
+    assertEquals(after.raised - before.raised, 0L,
+                 s"the hook's analysis RAISED on the corpus: ${after.lastError}")
+    assert(differ > 0 && nodesHooked < nodesPlain,
+           s"the hook changed nothing on $progLimit corpus programs — it is not earning its cost")
   }
 
   // ================================================================================================

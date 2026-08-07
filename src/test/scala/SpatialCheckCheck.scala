@@ -270,29 +270,57 @@ class SpatialCheckCheck extends FunSuite:
   // 4.  A KNOWN `leq` FALSE NEGATIVE RETURNS `Unknown`, NEVER `Refuted`   (required test 4)
   // ================================================================================================
 
-  /** FALSE NEGATIVE A — the spill window against tracked classes.
+  /** FALSE NEGATIVE A — a PRODUCT INTERACTION, and NOT a repairable one.
    *
-   *  `a` says "exactly one path, of one or two items" using the SPILL bucket; `b` says the same thing
-   *  with two TRACKED classes.  `γ(a) ⊆ γ(b)` genuinely holds (decided on `U` below), but
-   *  `SpatialGamma.leqSpace` requires `a`'s spill window to nest inside `b`'s — and `b` has no spill
-   *  bucket at all, because it tracks those lengths instead.  That is the integer-partition reasoning
-   *  the order documents itself as not attempting. */
-  val fnShape: Shape = Shape.oneUnknownPath(LenBounds(1, 2))
-  val fnA: SpatialType = SpatialType.reduce(SpatialType(fnShape, SpaceType.boundedExact(LenBounds(1, 2), 1)))
-  val fnB: SpatialType = SpatialType.reduce(SpatialType(fnShape, SpaceType.closed(1L -> Ivl(0, 1), 2L -> Ivl(0, 1))))
+   *  HISTORY, because it matters for what this test is allowed to claim.  This used to be a spill window
+   *  against tracked classes: `a` said "exactly one path of one or two items" with the SPILL bucket and
+   *  `b` said it with two TRACKED classes, and `SpatialGamma.leqSpace` demanded `a`'s window nest inside
+   *  `b`'s.  THAT ONE WAS FIXED — `leqSpace` now decides the spill-vs-tracked partition (`canonSpace`
+   *  plus the window decomposition in `leqSpaceMask`), and `SpatialLawCheck`'s two order tests measure
+   *  ZERO false negatives on universes that DECIDE containment.  Re-pointing this test at a still-open
+   *  false negative was the honest response; asserting the repaired one would have been asserting a bug.
+   *
+   *  THE ONE HERE IS DIFFERENT IN KIND.  Both types carry the SAME shape, which pins the value to
+   *  exactly `{ε, a, b}` — so `γ(a) = γ(b) = {fnV}`, a single space, and containment is not merely "true
+   *  on a finite universe" but true outright.  `a` states the count as a spill bucket of exactly 3 paths
+   *  over lengths [0, 1]; `b` states it as one path of 0 items and two of 1.  The HISTOGRAM alone does
+   *  not contain: `a.lens` admits the count vector (0 at length 0, 3 at length 1), which `b.lens`
+   *  rejects.  Only the conjunction with the SHAPE — which forbids a second path under any head — rules
+   *  that vector out.  No COMPONENTWISE order (and `SpatialType.leq` is `Shape.leqStrong` ×
+   *  `leqSpace`) can see this, so it is not a defect to be repaired in `leqSpace`: it is the product
+   *  structure, and the class `SpatialLawCheck` names PRODUCT INTERACTION (52 of its 202 residual
+   *  false negatives, against 0 avoidable ones). */
+  val fnV: SpaceValue = sv(p(), p("a"), p("b"))
+  /** the shape that pins the value: ε, a and b PRESENT, nothing else permitted */
+  val fnShape: Shape = SpatialGamma.alpha(fnV).shape
+  /** the count as a SPILL bucket: exactly 3 paths, spread over lengths [0, 1] */
+  val fnA: SpatialType = SpatialType.reduce(SpatialType(fnShape, SpaceType.unknown))
+  /** the same count as TRACKED classes: one path of 0 items, two of 1 */
+  val fnB: SpatialType = SpatialGamma.alpha(fnV)
 
   test("4a. the false negative is REAL: γ-containment holds and the order does not see it") {
     assert(!SpatialType.leq(fnA, fnB), s"precondition: the order rejects ${fnA.show} ⊑ ${fnB.show}")
+    // DECIDED, not merely "contained on U": the shape pins both sides to the single value `fnV`, and
+    // `U` contains it, so these two counts are the same set and the order's `false` is incompleteness.
+    val ma = U.filter(SpatialTyping.accepts(_, fnA))
+    val mb = U.filter(SpatialTyping.accepts(_, fnB))
+    assertEquals(ma, Vector(fnV), s"γ(a) ∩ U must be exactly {${fnV.pretty}}: ${ma.map(_.pretty)}")
+    assertEquals(mb, Vector(fnV), s"γ(b) ∩ U must be exactly {${fnV.pretty}}: ${mb.map(_.pretty)}")
     assert(containedOnU(fnA, fnB),
-           s"precondition: γ-containment must genuinely hold; witness ${witnessOnU(fnA, fnB).map(_.pretty)}")
-    // and it is not vacuous — γ(a) is inhabited on U
-    val members = U.count(SpatialTyping.accepts(_, fnA))
-    assert(members >= 2, s"γ(a) ∩ U should be inhabited, got $members")
+           s"γ-containment must genuinely hold; witness ${witnessOnU(fnA, fnB).map(_.pretty)}")
+    // WHY no repair of `leqSpace` can close it: the HISTOGRAM halves are not in the order either way,
+    // and the shape halves are equal — so the containment is only visible to the conjunction.
+    assert(!SpatialGamma.leqSpace(fnA.lens, fnB.lens), "precondition: the histogram half must reject")
+    assert(Shape.leqStrong(fnA.shape, fnB.shape), "precondition: the shape half must hold")
     val chans = SpatialChannels.orderFailures(fnA, fnB)
-    assert(chans.exists(c => c.channel == ResultChannel.SpillWindow && c.sufficientOnly),
-           chans.map(_.show).mkString("\n"))
-    println(s"FALSE NEGATIVE A: ${fnA.show} ⊑ ${fnB.show}\n  leq = false, γ-containment on " +
-      s"${U.size} values = true, γ(a) ∩ U has $members members\n  " + chans.map(_.show).mkString("\n  "))
+    assert(chans.nonEmpty, "a rejected pair must name at least one channel")
+    assert(chans.forall(_.channel.isInstanceOf[ResultChannel.LengthClass]),
+           s"only the length classes may object here: ${chans.map(_.show).mkString("; ")}")
+    // and every one of them is marked sufficient-only, BECAUSE the shape half is contained
+    assert(chans.forall(_.sufficientOnly), chans.map(_.show).mkString("\n"))
+    println(s"FALSE NEGATIVE A (product interaction): ${fnA.show} ⊑ ${fnB.show}\n  leq = false, " +
+      s"γ(a) = γ(b) = {${fnV.pretty}} (decided on ${U.size} values)\n  " +
+      chans.map(_.show).mkString("\n  "))
   }
 
   test("4b. …so the verdict is Unknown, never Refuted, and the reason says WHY") {
@@ -309,17 +337,22 @@ class SpatialCheckCheck extends FunSuite:
     println(s"FALSE NEGATIVE A verdict: ${verdict.show}")
   }
 
-  test("4c. the same false negative through a real ROUTINE (a singleton over an opaque ref)") {
-    val q = PathRef("q")
-    val r = Routine(RoutinePtr("one"), Vector(q), Vector.empty, Space.Singleton(Path.Deref(q)))
-    val sig = SpatialSignature(Map(q -> PathType.opaque(1, 2)), Map.empty, fnB)
+  test("4c. the same false negative through a real ROUTINE (the identity over a declared mention)") {
+    // the routine entry point, not the type-pair one: `routine(s) = s` infers its input's declared type
+    // exactly, so this is the false negative above arriving through `SpatialCheck.report`.
+    val r = Routine(RoutinePtr("id"), Vector.empty, Vector(mS), Space.Mention(mS))
+    val sig = SpatialSignature(Map.empty, Map(mS -> fnA), fnB)
     val rep = SpatialCheck.report(r, sig)
     assert(rep.check.isUnknown, s"expected Unknown, got ${rep.check.show}")
     assert(!rep.check.isRefuted)
     assertEquals(rep.inferred, fnA, s"the routine really does infer the false-negative type: ${rep.inferred.show}")
-    assert(rep.diagnosis.failures.exists(_.channel == ResultChannel.SpillWindow))
+    assert(rep.diagnosis.failures.forall(_.channel.isInstanceOf[ResultChannel.LengthClass]),
+           rep.diagnosis.failures.map(_.show).mkString("; "))
+    assert(rep.diagnosis.failures.forall(_.sufficientOnly),
+           rep.diagnosis.failures.map(_.show).mkString("; "))
+    // …and the declaration it is Unknown MODULO is named as an assumption
     assert(rep.diagnosis.assumptions.exists {
-      case SpatialAssumption.InputPathAnnotation(pr, _) => pr == q
+      case SpatialAssumption.InputSpaceAnnotation(m, t) => m == mS && t == fnA
       case _ => false }, rep.diagnosis.show)
     println(s"FALSE NEGATIVE A via routine:\n${rep.show}")
   }

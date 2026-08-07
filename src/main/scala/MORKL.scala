@@ -226,12 +226,42 @@ def sliceRange(s: Set[PathValue], start: Int, end: Int): Set[PathValue] =
 case class RoutinePtr(s: String)
 case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[SpaceMention], body: Space):
   def show = s"routine(\"${name.s}\", Vector(${refs.map("\"" ++ _.s ++ "\"").mkString(", ")}), Vector(${mentions.map("\"" ++ _.s ++ "\"").mkString(", ")}), \n${body.show.split('\n').map("  " + _).mkString("\n")}\n)"
-  def optimized(using ctx: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Routine = Routine(name, refs, mentions,
-    all_forever(Lower.inline(using new PartialFunction {
+  /** the routine table WITHOUT this routine: what the inliner may splice, and what the spatial
+   *  analysis may look through.  Excluding `name` is what keeps a self-recursive routine from being
+   *  expanded into its own body. */
+  private def others(ctx: PartialFunction[RoutinePtr, Routine]): PartialFunction[RoutinePtr, Routine] =
+    new PartialFunction[RoutinePtr, Routine]:
       override def apply(f: RoutinePtr): Routine = ctx(f)
       override def isDefinedAt(f: RoutinePtr): Boolean = f != name && ctx.isDefinedAt(f)
-    })(body), List(Lower.ConstantOps, Lower.SizeEmpty, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.IterComposition_Indep, Lower.EpsGuard_Wrap, Lower.IterWitness_TransposeSemiJoin, Lower.IterWitness_HeadNarrow, Lower.UnwrapPush, Lower.WrapMerge, Lower.RestrictionPush, Lower.CompWrapAssoc, Lower.CompAssocRight, Lower.CompLitWraps, Lower.Unwrap_Merge, Lower.SingletonConstPrefix_Wrap, Lower.RaffinationPush, Lower.RaffRestrictAlgebra, Lower.RestrictRaffWrapBoth, Lower.IterSetOpMerge, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
-//    })(body), List(Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
+
+  /** THE ORDINARY OPTIMIZER, with the spatial tier in front of it (review.md finding 3).
+   *
+   *  `SpatialHook.rewrite` runs one decorated spatial analysis of `body` with NO input annotation and
+   *  consumes only what that licenses unconditionally — an occurrence proved `∅` becomes `Space.Empty`,
+   *  an occurrence pinned to one concrete value becomes that `Literal` — so the result is valid for
+   *  every input and needs no guard.  It runs BEFORE `Lower.inline` (the term is smallest there) and
+   *  its `Empty`s/`Literal`s are then propagated by the ordinary rule list, which is the whole point
+   *  of composing the two rather than running the spatial tier separately.
+   *
+   *  It is a NO-OP when `SpatialHook.enabled` is false or the body is past `SpatialHook.maxBodyNodes`,
+   *  and `SpatialHook.stats` meters what it cost — see that object for the policy and the numbers. */
+  def optimized(using ctx: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Routine =
+    val rc = others(ctx)
+    Routine(name, refs, mentions,
+            all_forever(Lower.inline(using rc)(SpatialHook.rewrite(body, rc)), Lower.OrdinaryRules))
+
+  /** THE ORDINARY RULE LIST ALONE — `optimized` with the spatial tier taken out, i.e. exactly what
+   *  `optimized` did before that tier was installed.
+   *
+   *  It exists for the one caller that must NOT get the spatial rewrites: `SpatialPipeline`'s
+   *  `optimizeGuarded` uses it as the FALLBACK of a guarded artifact, where the fallback's job is to be
+   *  the program the ordinary pipeline would have produced with no spatial input at all — so that
+   *  `GuardedRoutine.changed` keeps meaning "the spatial tier changed something" and a differential
+   *  comparison of the two has a baseline.  A test that wants the same baseline should call this rather
+   *  than flip `SpatialHook.enabled`, which is process-wide. */
+  def optimizedPlain(using ctx: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Routine =
+    Routine(name, refs, mentions,
+            all_forever(Lower.inline(using others(ctx))(body), Lower.OrdinaryRules))
 
 def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
   // EFFORT INSTRUMENTATION (SpatialEvents.scala).  `recp`/`recs` are one-line counting wrappers
@@ -2466,6 +2496,28 @@ object Lower:
         spost = { case Space.Mention(mentionmap(rhs)) => rhs },
         ppost = { case Path.Deref(refmap(rhs)) => rhs })
   })
+
+  /** THE RULE LIST `Routine.optimized` RUNS TO A FIXED POINT, in one place so that `optimized` and
+   *  `optimizedPlain` cannot drift apart (they differ in exactly one thing: whether the spatial tier
+   *  runs first).  Declared LAST in this object because every entry is a `val` of it.
+   *
+   *  The smaller list `optimized` used to carry commented out beside it, kept for ablation:
+   *  {{{
+   *  List(IterateSingleton_Deref, LiteralSpaceOps, SingletonConst_Literal, ConcatSingleton_Iter,
+   *       IterUnion_Indep, Wrap_Iter, Iter_Ident, Concat_Path, IterateLiteral_Union,
+   *       UnwrapConcat_Unwraps, SingletonComposition_Wrap, SingletonSpaceOp_PathOp,
+   *       SingletonRestriction_Unwrap)
+   *  }}} */
+  val OrdinaryRules: List[Space => Space] = List(
+    Lower.ConstantOps, Lower.SizeEmpty, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps,
+    Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep,
+    Lower.IterComposition_Indep, Lower.EpsGuard_Wrap, Lower.IterWitness_TransposeSemiJoin,
+    Lower.IterWitness_HeadNarrow, Lower.UnwrapPush, Lower.WrapMerge, Lower.RestrictionPush,
+    Lower.CompWrapAssoc, Lower.CompAssocRight, Lower.CompLitWraps, Lower.Unwrap_Merge,
+    Lower.SingletonConstPrefix_Wrap, Lower.RaffinationPush, Lower.RaffRestrictAlgebra,
+    Lower.RestrictRaffWrapBoth, Lower.IterSetOpMerge, Lower.Wrap_Iter, Lower.Iter_Ident,
+    Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps,
+    Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)
 end Lower
 
 

@@ -31,9 +31,17 @@ object Interner:
 final case class ITrie(terminal: Boolean, children: IntMap[ITrie]):
   def isEmpty: Boolean = !terminal && children.isEmpty
   def nonEmpty: Boolean = !isEmpty
-  def size: Int = (if terminal then 1 else 0) + children.valuesIterator.map(_.size).sum
-  def nodeCount: Int = 1 + children.valuesIterator.map(_.nodeCount).sum
+  // Every recursive walk below counts ONE EffortEvent.TrieNodeVisit per node it examines.  These are
+  // the per-node descents review.md item 1 says were uncounted; `SpatialCost`'s `touch` component is
+  // defined by them (plus EffortEvent.PatriciaVisit), which is what makes `touch` calibratable at all.
+  def size: Int =
+    effort(EffortEvent.TrieNodeVisit)
+    (if terminal then 1 else 0) + children.valuesIterator.map(_.size).sum
+  def nodeCount: Int =
+    effort(EffortEvent.TrieNodeVisit)
+    1 + children.valuesIterator.map(_.nodeCount).sum
   def prefixCount(n: Int): Int =
+    effort(EffortEvent.TrieNodeVisit)
     if n == 0 then (if nonEmpty then 1 else 0) else children.valuesIterator.map(_.prefixCount(n - 1)).sum
   def toSpaceValue: SpaceValue = SpaceValue(ITrie.toPaths(this))
 
@@ -41,13 +49,26 @@ object ITrie:
   val empty: ITrie = ITrie(false, IntMap.empty)
   val epsilon: ITrie = ITrie(true, IntMap.empty)
 
-  def singleton(ids: List[Int]): ITrie = ids.foldRight(epsilon)((id, acc) => ITrie(false, IntMap.singleton(id, acc)))
+  /** THE ONE ALLOCATION SITE of the algebra.  Every `ITrie` node this file builds goes through here
+   *  and counts one [[EffortEvent.FreshTrieNode]], so `alloc` has an oracle on all three trie-shaped
+   *  executables.  `empty`/`epsilon` are process-wide vals and allocate nothing per operation.
+   *
+   *  `SpaceZipper.materialize` builds its nodes in Zipper.scala and counts [[EffortEvent.FreshNode]]
+   *  instead, so the two never double-count the same object. */
+  private[morkl] inline def node(terminal: Boolean, children: IntMap[ITrie]): ITrie =
+    effort(EffortEvent.FreshTrieNode)
+    ITrie(terminal, children)
+
+  def singleton(ids: List[Int]): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
+    ids.foldRight(epsilon)((id, acc) => node(false, IntMap.singleton(id, acc)))
   def singletonP(p: PathValue): ITrie = singleton(Interner.internPath(p.items))
   def fromSpaceValue(sv: SpaceValue): ITrie = sv.paths.foldLeft(empty)((t, p) => union(t, singletonP(p)))
 
   def toPaths(t: ITrie): Set[PathValue] =
     val out = Set.newBuilder[PathValue]
     def go(n: ITrie, acc: List[Int]): Unit =
+      effort(EffortEvent.TrieNodeVisit)
       if n.terminal then out += PathValue(Interner.uninternPath(acc.reverse))
       n.children.foreach { case (k, c) => go(c, k :: acc) }
     go(t, Nil); out.result()
@@ -58,30 +79,37 @@ object ITrie:
   // ---- ring of sets via IntMap callbacks ------------------------------------
 
   def union(a: ITrie, b: ITrie): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
     if a.isEmpty then b else if b.isEmpty then a
     else if Tuning.patriciaOps then
-      if a eq b then a else ITrie(a.terminal || b.terminal, IntTrieOps.unionTries(a.children, b.children))
-    else ITrie(a.terminal || b.terminal, a.children.unionWith(b.children, (_, x, y) => union(x, y)))
+      if a eq b then { effort(EffortEvent.ReusedSubtrie); a }
+      else node(a.terminal || b.terminal, IntTrieOps.unionTries(a.children, b.children))
+    else node(a.terminal || b.terminal, a.children.unionWith(b.children, (_, x, y) => union(x, y)))
 
   def intersection(a: ITrie, b: ITrie): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
     if a.isEmpty || b.isEmpty then empty
     else if Tuning.patriciaOps then
-      if a eq b then a else ITrie(a.terminal && b.terminal, IntTrieOps.intersectTries(a.children, b.children))
-    else ITrie(a.terminal && b.terminal, prune(a.children.intersectionWith(b.children, (_, x, y) => intersection(x, y))))
+      if a eq b then { effort(EffortEvent.ReusedSubtrie); a }
+      else node(a.terminal && b.terminal, IntTrieOps.intersectTries(a.children, b.children))
+    else node(a.terminal && b.terminal, prune(a.children.intersectionWith(b.children, (_, x, y) => intersection(x, y))))
 
   def subtraction(a: ITrie, b: ITrie): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
     if a.isEmpty then empty else if b.isEmpty then a
     else if Tuning.patriciaOps then
-      if a eq b then empty else ITrie(a.terminal && !b.terminal, IntTrieOps.diffTries(a.children, b.children))
+      if a eq b then { effort(EffortEvent.ReusedSubtrie); empty }
+      else node(a.terminal && !b.terminal, IntTrieOps.diffTries(a.children, b.children))
     else
       var ch = a.children
       b.children.foreach { case (k, bc) => a.children.get(k).foreach { ac =>
         val r = subtraction(ac, bc); ch = if r.isEmpty then ch - k else ch.updated(k, r) } }
-      ITrie(a.terminal && !b.terminal, ch)
+      node(a.terminal && !b.terminal, ch)
 
   // ---- n-ary join-all / meet-all --------------------------------------------
 
   def joinAll(ts: IterableOnce[ITrie]): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
     val live = ts.iterator.filter(_.nonEmpty).toArray
     if live.isEmpty then empty else if live.length == 1 then live(0)
     else if Tuning.patriciaOps then
@@ -98,9 +126,10 @@ object ITrie:
         t.children.foreach { case (k, c) => groups.getOrElseUpdate(k, mutable.ArrayBuffer.empty) += c }
       var ch = IntMap.empty[ITrie]
       for (k, cs) <- groups do ch = ch.updated(k, joinAll(cs))
-      ITrie(term, ch)
+      node(term, ch)
 
   def meetAll(ts: Seq[ITrie]): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
     if ts.isEmpty then empty else if ts.length == 1 then ts.head else if ts.exists(_.isEmpty) then empty
     else if Tuning.patriciaOps then
       // smallest-first fold over the native Patricia intersection (simultaneous descent + eq
@@ -114,36 +143,43 @@ object ITrie:
       smallest.children.foreach { case (k, sc) =>
         val cs = others.flatMap(_.children.get(k))
         if cs.length == others.length then { val r = meetAll(sc +: cs); if r.nonEmpty then ch = ch.updated(k, r) } }
-      ITrie(term, ch)
+      node(term, ch)
 
   // ---- prefix operations ----------------------------------------------------
 
   def wrap(ids: List[Int], s: ITrie): ITrie =
-    if s.isEmpty then empty else ids.foldRight(s)((id, acc) => ITrie(false, IntMap.singleton(id, acc)))
-  def unwrap(s: ITrie, ids: List[Int]): ITrie = ids match
-    case Nil => s
-    case h :: t => s.children.get(h).map(unwrap(_, t)).getOrElse(empty)
+    effort(EffortEvent.TrieNodeVisit)
+    if s.isEmpty then empty else ids.foldRight(s)((id, acc) => node(false, IntMap.singleton(id, acc)))
+  def unwrap(s: ITrie, ids: List[Int]): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
+    ids match
+      case Nil => s
+      case h :: t => s.children.get(h).map(unwrap(_, t)).getOrElse(empty)
 
   def composition(a: ITrie, b: ITrie): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
     if a.isEmpty || b.isEmpty then empty
     else
-      val mapped = ITrie(false, a.children.transform((_, ac) => composition(ac, b)))
+      val mapped = node(false, a.children.transform((_, ac) => composition(ac, b)))
       if a.terminal then union(mapped, b) else mapped
 
   def restriction(x: ITrie, prefixes: ITrie): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
     if x.isEmpty || prefixes.isEmpty then empty
     else if prefixes.terminal then x
-    else if Tuning.patriciaOps then ITrie(false, IntTrieOps.restrictTries(x.children, prefixes.children))
+    else if Tuning.patriciaOps then node(false, IntTrieOps.restrictTries(x.children, prefixes.children))
     else
       var ch = IntMap.empty[ITrie]
       x.children.foreach { case (k, xc) => prefixes.children.get(k).foreach { pc =>
         val r = restriction(xc, pc); if r.nonEmpty then ch = ch.updated(k, r) } }
-      ITrie(false, ch)
+      node(false, ch)
 
   def raffination(x: ITrie, y: ITrie): ITrie = subtraction(x, restriction(x, y))
   def tailsUnion(s: ITrie): ITrie = joinAll(s.children.valuesIterator.toSeq)
   def tailsIntersection(s: ITrie): ITrie = meetAll(s.children.valuesIterator.toSeq)
-  def head(s: ITrie): ITrie = ITrie(false, s.children.foldLeft(IntMap.empty[ITrie])((m, kv) => m.updated(kv._1, epsilon)))
+  def head(s: ITrie): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
+    node(false, s.children.foldLeft(IntMap.empty[ITrie])((m, kv) => m.updated(kv._1, epsilon)))
 
   def fromPaths(ps: IterableOnce[PathValue]): ITrie = ps.iterator.foldLeft(empty)((t, p) => union(t, singletonP(p)))
 
@@ -151,8 +187,9 @@ object ITrie:
    *  Identity: S(t) = (t minus its ε) ∪ ⋃_k S(child_k): the first union is every suffix starting at
    *  position 0 (the non-empty paths themselves), the second every suffix starting deeper. */
   def suffixClosure(t: ITrie): ITrie =
+    effort(EffortEvent.TrieNodeVisit)
     if t.children.isEmpty then empty
-    else t.children.foldLeft(ITrie(false, t.children): ITrie) { case (acc, (_, c)) => union(acc, suffixClosure(c)) }
+    else t.children.foldLeft(node(false, t.children): ITrie) { case (acc, (_, c)) => union(acc, suffixClosure(c)) }
   /** Native ordered slice `[start, end)` in canonical (`String`) order — NO path
    *  materialization.  Walks the trie in canonical order (children sorted by their un-interned item;
    *  prefixes before extensions), counting terminals and emitting only those inside the window, and
@@ -166,6 +203,7 @@ object ITrie:
       var idx = 0
       var out = empty
       def go(n: ITrie, acc: List[Int]): Unit =
+        effort(EffortEvent.TrieNodeVisit)
         if idx < hi then
           if n.terminal then { if idx >= lo then out = union(out, singleton(acc.reverse)); idx += 1 }
           if idx < hi && n.children.nonEmpty then
@@ -197,17 +235,20 @@ def internConstStr(constant: String): List[Int] =
   iConstStrCache.computeIfAbsent(constant, c => Interner.internPath(LiteralCodec.decodeConst(c).items))
 
 def pathItemsI(x: Path)(using pc: PathContext, ic: Map[SpaceMention, ITrie],
-                        rc: PartialFunction[RoutinePtr, Routine]): List[Int] = x match
-  case Path.Deref(pr) => Interner.internPath(pc.resolve(pr).items)
-  case Path.Constant(pi) => Interner.internPath(pi.items)
-  case Path.Concat(l, r) => pathItemsI(l) ++ pathItemsI(r)
-  case Path.GroundedPP(p, f) => Interner.internPath(f(PathValue(Interner.uninternPath(pathItemsI(p)))).items)
-  case Path.GroundedSP(sp, f) => Interner.internPath(f(evalI(sp).toSpaceValue).items)
+                        rc: PartialFunction[RoutinePtr, Routine]): List[Int] =
+  effort(EffortEvent.TriePathDispatch)                     // one Path subterm, `Deref` included
+  x match
+    case Path.Deref(pr) => Interner.internPath(pc.resolve(pr).items)
+    case Path.Constant(pi) => Interner.internPath(pi.items)
+    case Path.Concat(l, r) => pathItemsI(l) ++ pathItemsI(r)
+    case Path.GroundedPP(p, f) => Interner.internPath(f(PathValue(Interner.uninternPath(pathItemsI(p)))).items)
+    case Path.GroundedSP(sp, f) => Interner.internPath(f(evalI(sp).toSpaceValue).items)
 
 def evalI(s: Space)(using pc: PathContext = PathContextMap(Map.empty),
                     ic: Map[SpaceMention, ITrie] = Map.empty,
                     rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): ITrie =
   inline def P(x: Path): PathValue = PathValue(Interner.uninternPath(pathItemsI(x)))
+  effort(EffortEvent.TrieDispatch)                         // one Space node visited by evalI
   s match
     case Space.Empty => ITrie.empty
     case Space.Mention(v) => ic.getOrElse(v, ITrie.empty)
@@ -232,6 +273,7 @@ def evalI(s: Space)(using pc: PathContext = PathContextMap(Map.empty),
     case Space.Iteration(src, symbol, rest, body) =>
       val t = evalI(src)
       ITrie.joinAll(t.children.iterator.map { case (k, sub) =>
+        effort(EffortEvent.LoopBodyEntry)                   // one head-group body entry
         evalI(body)(using pc.grown(Map(symbol -> PathValue(Interner.unintern(k) :: Nil))), ic.updated(rest, sub), rc)
       }.toSeq)
     case Space.Fixpoint(init, rec, body) =>
@@ -239,6 +281,7 @@ def evalI(s: Space)(using pc: PathContext = PathContextMap(Map.empty),
       var acc = cur
       var stop = false
       while !stop do
+        effort(EffortEvent.FixpointRound)                   // counts the terminating round too
         val nxt = evalI(body)(using pc, ic.updated(rec, cur), rc)
         if nxt == cur then stop = true else { acc = ITrie.union(acc, nxt); cur = nxt }
       acc
@@ -247,12 +290,14 @@ def evalI(s: Space)(using pc: PathContext = PathContextMap(Map.empty),
       var accv = PathValue(Interner.uninternPath(pathItemsI(initial)))
       var out = ITrie.empty
       for (k, sub) <- t.children.iterator.toSeq.sortBy((kk, _) => kk) do
+        effort(EffortEvent.LoopBodyEntry)
         val pctx = pc.grown(Map(acc -> accv, symbol -> PathValue(Interner.unintern(k) :: Nil)))
         val ictx = ic.updated(rest, sub)
         out = ITrie.union(out, evalI(body)(using pctx, ictx, rc))
         accv = PathValue(Interner.uninternPath(pathItemsI(update)(using pctx, ictx, rc)))
       out
     case Space.Call(rp, refs, mentions) =>
+      effort(EffortEvent.CallEntry)                         // one routine call entered
       val refvs = refs.map(P)
       val mentionvs = mentions.map(m => evalI(m))
       val Routine(_, refns, mentionns, body) = rc(rp)

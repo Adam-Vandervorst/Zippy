@@ -18,10 +18,10 @@ import scala.collection.immutable.SortedMap
  *
  *  | instance          | executable                        | calibrated against               |
  *  |-------------------|-----------------------------------|----------------------------------|
- *  | [[ReferenceCost]] | `eval` (MORKL.scala)              | counted events (`SpatialEventsCheck`) |
- *  | [[TrieCostModel]] | `evalI` (IntTrie.scala)           | NOT calibrated — `evalI` has no hooks |
- *  | [[GraphCost]]     | `execT` (GraphExec.scala)         | counted events                   |
- *  | [[ZipperCost]]    | `execZ` (Zipper.scala)            | counted events, minus the `evalI` fallback |
+ *  | [[ReferenceCost]] | `eval` (MORKL.scala)              | counted events, `touch` excepted (no oracle) |
+ *  | [[TrieCostModel]] | `evalI` (IntTrie.scala)           | counted events, all four components |
+ *  | [[GraphCost]]     | `execT` (GraphExec.scala)         | counted events, all four components |
+ *  | [[ZipperCost]]    | `execZ` (Zipper.scala)            | counted events, `evalI` fallback INCLUDED |
  *
  *  They disagree, and the disagreement is what makes this a cost model rather than a second size
  *  bound: a trie intersection can skip a provably disjoint subtrie, an `Unwrap` shares the focused
@@ -33,14 +33,26 @@ import scala.collection.immutable.SortedMap
  *  `eval`/`evalI`/`evalT`/`exec*`.  Every input fact comes from the term's syntax, the declared
  *  annotations, or a read-only query to `SpatialTypes` / `SpatialTyping` / `SpatialFacts` / `Lower`.
  *
- *  WHAT IS AND IS NOT ESTABLISHED (review.md finding 2).  Three of the four cost components —
- *  `work`, `alloc`, `rounds` — are now DEFINED BY COUNTED EVENTS ([[EffortComponent]]), so their
- *  tightness is measurable and is measured: `SpatialEventsCheck` publishes containment
- *  (`lower ≤ actual ≤ upper`) and slack (`upper / actual`) per component and per backend over the
- *  fuzzer corpus and the cornerstones.  The fourth component, `touch`, models element/node work
- *  inside `Set` and `ITrie` internals that carry no hooks; it has NO ORACLE and is excluded from
- *  calibration, and the rank-correlation check in `SpatialCostCheck` is explicitly demoted to a
- *  secondary trend metric over it.  Per-operator constants remain a model read off the executors'
+ *  WHAT IS AND IS NOT ESTABLISHED (review.md finding 2, then item 1).  ALL FOUR cost components —
+ *  `work`, `alloc`, `rounds` AND `touch` — are DEFINED BY COUNTED EVENTS ([[EffortComponent]]), so
+ *  their tightness is measurable and is measured: `SpatialEventsCheck` publishes containment
+ *  (`lower ≤ actual ≤ upper`), median/p95/worst slack per component and per backend over the fuzzer
+ *  corpus and the cornerstones, and GATES the p95 and the worst case.  `touch` became measurable when
+ *  IntTrie.scala / IntTrieOps.scala were instrumented: it is the per-node descent inside the trie
+ *  algebra ([[EffortEvent.TrieNodeVisit]] + [[EffortEvent.PatriciaVisit]]).
+ *
+ *  THE ONE REMAINING EXCEPTION, declared in the model rather than filtered in the harness:
+ *  [[ReferenceCost]] overrides [[CostModel.touchNoOracle]].  `eval` works over
+ *  `scala.collection.immutable.Set[PathValue]`, performs no `ITrie` work at all, and the `Set`
+ *  internals (hash probes, bucket copies) are standard-library code with no hooks — so the reference
+ *  backend's `touch` is a MODEL with no oracle, validated only by the SECONDARY rank-correlation
+ *  trend in `SpatialCostCheck`.  `SpatialEventsCheck` asserts that this is the ONLY such exception, so
+ *  the exclusion list cannot grow silently.
+ *
+ *  THE TOUCH LOWER ENDPOINT IS 0 BY CONSTRUCTION.  The fast paths inside `ITrie`/`IntMap` — pointer
+ *  identity, a prefix mismatch that prunes a whole Patricia branch, an empty operand — can eliminate
+ *  essentially every internal visit, so no positive LOWER bound on counted `touch` is claimed;
+ *  [[SpatialCost.analyze]] zeroes it. Per-operator constants remain a model read off the executors'
  *  code — what is now checked is that the model BRACKETS what the executors actually do.
  *  ============================================================================================== */
 
@@ -480,6 +492,7 @@ final case class CostPoint(work: Double, alloc: Double, rounds: Double, touch: D
     case EffortComponent.Work => work
     case EffortComponent.Alloc => alloc
     case EffortComponent.Rounds => rounds
+    case EffortComponent.Touch => touch
     case EffortComponent.Explain => 0.0
 
 /** THE COST COMPONENTS.  Three of the four are now DEFINED BY COUNTED EVENTS
@@ -491,13 +504,13 @@ final case class CostPoint(work: Double, alloc: Double, rounds: Double, touch: D
  *                Oracle: `Events.alloc`.
  *   - `rounds` — [[EffortComponent.Rounds]]: loop-body entries, fixpoint rounds, routine calls.
  *                Oracle: `Events.rounds`.
- *   - `touch`  — elementary element/node touches INSIDE library data structures (`Set` hash probes,
- *                `ITrie`/Patricia node descents).  **NO ORACLE**: the code that performs them is not
- *                instrumented, so this component is deliberately EXCLUDED from calibration.  It is
- *                kept because it carries the asymptotic content the other three lose (a `Set` union
- *                of two n-element sets is ONE dispatch but 2n touches), and it is what the secondary
- *                rank-correlation trend metric uses.  A claim in `touch` is a MODEL, not a
- *                measurement, and this file must never pretend otherwise. */
+ *   - `touch`  — [[EffortComponent.Touch]]: the per-node descent INSIDE the trie algebra —
+ *                `ITrie`-level recursive entries and `IntMap` Patricia node visits.  Oracle:
+ *                `Events.touch`, on the three trie-shaped backends.  It carries the asymptotic
+ *                content the other three lose (a merge of two n-node tries is ONE `TrieOpEntry` but
+ *                Θ(n) node visits).  For [[ReferenceCost]] ALONE it has no oracle — `eval` does the
+ *                equivalent work inside `Set`, whose internals carry no hooks — and that model says so
+ *                via [[CostModel.touchNoOracle]] rather than the harness filtering it out. */
 final case class Cost(work: Amount, alloc: Amount, rounds: Amount, touch: Amount = Amount.zero):
   def +(o: Cost): Cost = Cost(work + o.work, alloc + o.alloc, rounds + o.rounds, touch + o.touch)
   def scale(k: Sym): Cost = scale(Amount.of(k))
@@ -508,6 +521,7 @@ final case class Cost(work: Amount, alloc: Amount, rounds: Amount, touch: Amount
     case EffortComponent.Work => work
     case EffortComponent.Alloc => alloc
     case EffortComponent.Rounds => rounds
+    case EffortComponent.Touch => touch
     case EffortComponent.Explain => Amount.zero
   def at(v: Map[String, Double]): CostPoint = CostPoint(work.at(v), alloc.at(v), rounds.at(v), touch.at(v))
   def show: String = s"work=${work.show}  alloc=${alloc.show}  rounds=${rounds.show}  touch=${touch.show}"
@@ -537,6 +551,9 @@ final case class CostInterval(lo: Cost, hi: Cost):
   /** scale by an interval of multiplicities (a loop's lower/upper group count) */
   def scale(kLo: Sym, kHi: Sym): CostInterval = CostInterval(lo.scale(kLo), hi.scale(kHi))
   def scale(kLo: Amount, kHi: Amount): CostInterval = CostInterval(lo.scale(kLo), hi.scale(kHi))
+  /** Drop the LOWER endpoint of `touch` — see the "TOUCH LOWER ENDPOINT IS 0 BY CONSTRUCTION" note in
+   *  the file header.  Applied once, at the end of [[SpatialCost.analyze]]. */
+  def withoutTouchLower: CostInterval = CostInterval(lo.copy(touch = Amount.zero), hi)
   def show: String = s"LOWER ${lo.show}\n  UPPER ${hi.show}"
 
 object CostInterval:
@@ -560,7 +577,8 @@ object CostInterval:
  *  by the worst case alone. */
 final case class Meas(size: Sym, len: Sym, heads: Sym,
                       sizeLo: Sym = Sym.zero, headsLo: Sym = Sym.zero,
-                      nodesHi: Option[Sym] = None):
+                      nodesHi: Option[Sym] = None,
+                      headKeys: Option[Set[PathItem]] = None):
   /** Worst-case LOGICAL trie node count: the always-present root plus one node per distinct
    *  non-empty prefix, with no prefix sharing assumed.
    *
@@ -586,6 +604,16 @@ final case class Meas(size: Sym, len: Sym, heads: Sym,
   def provablyEmpty: Boolean = size == Sym.Const(0)
   /** is the space PROVABLY NON-EMPTY (a constant positive lower bound)? */
   def provablyNonEmpty: Boolean = sizeLo match { case Sym.Const(n) => n >= 1L; case _ => false }
+  /** THE EXACT SET OF POSSIBLY-PRESENT HEADS, when the shape's head set is CLOSED (`others.hi == 0`,
+   *  i.e. no untracked head) — otherwise `None`.
+   *
+   *  Carried on the measure rather than re-queried, because it is a by-product of the `shapeAt` call
+   *  `refine` already makes for every node: asking a second time (and a third, for the other operand)
+   *  cost an extra `SpatialTyping.infer` per merge node and pushed `SpatialPipelineCheck`'s
+   *  analysis-latency gate over its budget.  Its only consumer is [[headDisjoint]]. */
+  def headDisjointFrom(o: Meas): Boolean = (headKeys, o.headKeys) match
+    case (Some(a), Some(b)) => a.intersect(b).isEmpty
+    case _ => false
   def show: String =
     val lo = if sizeLo == Sym.zero then "" else s" |·|≥${sizeLo.show}"
     s"|·|≤${size.show} len≤${len.show} heads≤${heads.show}$lo"
@@ -623,7 +651,16 @@ trait CostModel:
   def phase: ExecutionPhase
   def name: String = s"${backend.slug}/${if phase == ExecutionPhase.Warm then "warm" else "cold"}"
 
-  /** the node's own dispatch: `AstDispatch` / `GraphNodeDispatch` / `ZipperBuild` */
+  /** WHY this instance's `touch` component has no counted oracle, when it has none.
+   *
+   *  `None` (the default) means `touch` IS calibrated against
+   *  [[EffortEvent.TrieNodeVisit]] + [[EffortEvent.PatriciaVisit]].  `Some(reason)` is a declared
+   *  exclusion from the tightness gate; `SpatialEventsCheck` asserts that exactly one instance per
+   *  phase declares one, so this list cannot grow without a test failing.  This is review.md item 1's
+   *  fifth point: `touch` either has a counted oracle or says, in the model itself, that it does not. */
+  def touchNoOracle: Option[String] = None
+
+  /** the node's own dispatch: `AstDispatch` / `TrieDispatch` / `GraphNodeDispatch` / `ZipperBuild` */
   def dispatch: CostInterval = CostInterval.exact(Cost.of(work = Sym.one))
   /** A `Path` subterm attached to this node.  The two counts are DIFFERENT and both syntactic:
    *  `nodes` is every `Path` subterm (what `eval.recp` dispatches on), `slots` is the number of
@@ -705,6 +742,15 @@ final class ReferenceCost(val phase: ExecutionPhase) extends CostModel:
   import Sym.tighter
   val backend = Backend.Reference
   override def raffinationRereadsX = true                     // recs(x) runs twice; see below
+  /** THE ONE DECLARED ORACLE GAP in this file.  `eval` never touches an `ITrie`, so no `TrieNodeVisit`
+   *  or `PatriciaVisit` is ever counted for it, and the equivalent work happens inside
+   *  `scala.collection.immutable.Set` — standard-library code this repository does not own and cannot
+   *  hook.  Synthesising an "actual" element count from operand sizes would measure the model against
+   *  itself, so it is not done: these `touch` claims are a MODEL, evidenced only by the secondary
+   *  rank-correlation trend in `SpatialCostCheck`. */
+  override def touchNoOracle: Option[String] =
+    Some("eval works over scala.collection.immutable.Set[PathValue] and performs no ITrie work; the " +
+         "Set internals (hash probes, bucket copies) are standard-library code with no hooks")
 
   def literal(m: Meas): CostInterval = phase match
     case ExecutionPhase.Warm => CostInterval.exact(Cost.zero)             // the stored Set is returned
@@ -791,97 +837,172 @@ final class ReferenceCost(val phase: ExecutionPhase) extends CostModel:
 sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostModel:
   import Sym.tighter
   protected def nd(m: Meas): Sym = m.nodes
-  /** one entry into the ITrie algebra — `TrieOpEntry` in the graph executor */
-  protected def opEntry: Sym = Sym.one
-  /** WHERE ITrie NODE ALLOCATION GOES.
+  /** One entry into the ITrie algebra as counted by the EXECUTOR'S OWN slot loop
+   *  ([[EffortEvent.TrieOpEntry]]).  `execT` emits one per space slot, so [[GraphCost]] charges 1;
+   *  `evalI` emits none — its per-node [[EffortEvent.TrieDispatch]] (charged by [[dispatch]]) already
+   *  covers the node — so [[TrieCostModel]] charges 0.  Charging 1 there doubled the predicted work of
+   *  every trie program. */
+  protected def opEntry: Sym
+
+  /** COUNTED `touch` PER LOGICAL TRIE NODE — the constant that makes every `touch` bound below sound.
    *
-   *  `ITrie`/`IntTrieOps` carry no event hooks, so a fresh trie node is never COUNTED.  For the
-   *  graph backend — whose `alloc` component has an oracle, `GraphFrameAllocation` — a trie-node
-   *  claim must therefore live in the un-oracled `touch` component, or the `alloc` interval would
-   *  bracket a number no run can produce.  `evalI` has no counted component at all, so the trie
-   *  instance keeps its node claims in `alloc` where they read naturally. */
-  protected def nodeAllocIsCounted: Boolean
+   *  One merge of two tries `A`, `B` counts:
+   *   - at most `min(N(A), N(B))` [[EffortEvent.TrieNodeVisit]]s (one per recursive `ITrie`-level
+   *     entry, which happens only where a key is present in both), and
+   *   - at most `2 (N(A) + N(B))` [[EffortEvent.PatriciaVisit]]s: a Patricia tree over `k` keys has at
+   *     most `2k-1` nodes, a simultaneous descent visits at most the nodes of both trees, and every
+   *     `IntMap` node sits on the child map of exactly one `ITrie` node, so summing over the levels
+   *     gives `2 (child edges of A + of B) < 2 (N(A) + N(B))`.
+   *
+   *  Hence `3 (N(A) + N(B))`.  This is a WORST CASE: pointer identity, empty operands and Patricia
+   *  prefix mismatches all cut it, which is why the measured slack on `touch` is much larger than on
+   *  the dispatch-level components.  That is a fact about the executor, published in
+   *  `SpatialEventsCheck`, not a licence to claim less. */
+  protected val tPer: Sym = Sym.c(3)
+  /** counted `touch` of ONE two-operand merge over operands of `a` and `b` logical nodes */
+  protected def merge2(a: Sym, b: Sym): Sym = tPer * (a + b)
+  /** counted `touch`/`alloc` of a BALANCED k-way `joinAll` over operands totalling `tot` nodes */
+  protected def joinAllNodes(tot: Sym, k: Sym): Sym = tot * (Sym.one + Sym.log(k))
+
   protected def mk(work: Sym = Sym.zero, nodes: Sym = Sym.zero, touch: Sym = Sym.zero): Cost =
-    if nodeAllocIsCounted then Cost.of(work = work, alloc = nodes, touch = touch)
-    else Cost.of(work = work, touch = touch + nodes)
+    Cost.of(work = work, alloc = nodes, touch = touch)
+  /** THE GENERIC LOWER ENDPOINT OF ONE OPERATOR OF THIS ALGEBRA: its own op entry, no allocation.
+   *
+   *  `CostInterval.upper` cannot be used here: it hard-codes a lower endpoint of ONE work unit, which
+   *  is right for `execT` (every space slot emits a `TrieOpEntry`) and WRONG for `evalI`, whose
+   *  [[opEntry]] is 0 because its single per-node `TrieDispatch` is already charged by [[dispatch]].
+   *  With the hard-coded 1 the trie model's lower endpoint EXCEEDED its own upper endpoint on every
+   *  program with a set operation — the corpus calibration caught it as 213 inverted intervals. */
+  protected def up(hi: Cost): CostInterval = CostInterval(Cost.of(work = opEntry), hi)
   /** an `ITrie` op whose FIRST operand is provably empty returns `ITrie.empty` immediately */
   protected def emptyFast: CostInterval = CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
   /** a pointer-identity short circuit */
   protected def sharedFast: CostInterval = CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
   override def empty: CostInterval = CostInterval.exact(Cost.of(work = opEntry))
-  /** `pathItemsI` walks the Path but `evalI` carries no hooks, so nothing is COUNTED here */
-  override def pathTerm(nodes: Sym, slots: Sym): CostInterval = CostInterval.upperOnly(Cost.of(touch = nodes))
+  /** `pathItemsI` dispatches on EVERY Path subterm, `Deref` included, and counts
+   *  [[EffortEvent.TriePathDispatch]] for each */
+  override def pathTerm(nodes: Sym, slots: Sym): CostInterval = CostInterval.exact(Cost.of(work = nodes))
 
   def literal(m: Meas): CostInterval = phase match
     // iLiteral / iLiteralStr are memo caches: a warm Literal is a map lookup, NOT |v| insertions
     case ExecutionPhase.Warm => CostInterval.exact(mk(work = opEntry, touch = Sym.one))
-    case ExecutionPhase.Cold => CostInterval.exact(mk(work = opEntry, nodes = nd(m), touch = nd(m)))
-  def singleton(plen: Sym): CostInterval =
-    CostInterval.exact(mk(work = opEntry, nodes = plen, touch = plen))
+    // cold: `fromSpaceValue` folds `union(t, singletonP(p))` over the paths — |p| fresh nodes for the
+    // singleton and at most |p|+1 more for the merge spine, i.e. at most 3 nd(m) in total
+    case ExecutionPhase.Cold =>
+      CostInterval.exact(mk(work = opEntry, nodes = Sym.c(3) * nd(m), touch = Sym.c(3) * nd(m)))
+  /** `ITrie.singleton` allocates exactly one node per path item (`epsilon` is a shared val).  NOT
+   *  `exact`, because `plen` is itself only an UPPER bound whenever the path is a `Deref` whose
+   *  declared length is a bound rather than a value — claiming it as a lower endpoint would predict
+   *  more allocation than the run performs. */
+  def singleton(plen: Sym): CostInterval = up(mk(work = opEntry, nodes = plen, touch = Sym.one))
   def mention(m: Meas): CostInterval = CostInterval.exact(Cost.of(work = opEntry))
   def union(a: Meas, b: Meas, same: Boolean): CostInterval =
     if same then sharedFast
     else if a.provablyEmpty || b.provablyEmpty then emptyFast          // `if a.isEmpty then b`
-    else CostInterval.upper(mk(work = opEntry, nodes = tighter(nd(a), nd(b)), touch = nd(a) + nd(b)))
+    else up(mk(work = opEntry, nodes = tighter(nd(a), nd(b)),
+               touch = merge2(nd(a), nd(b))))
   def inter(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
     if same then sharedFast
     else if a.provablyEmpty || b.provablyEmpty then emptyFast
-    else if disjoint then CostInterval.exact(Cost.of(work = opEntry, touch = a.heads + b.heads))
-    else CostInterval.upper(mk(work = opEntry, nodes = tighter(nd(a), nd(b)), touch = tighter(nd(a), nd(b))))
+    // HEAD-DISJOINT (SpatialCost.headDisjoint): `intersectTries` finds no matching key and returns
+    // `Nil` at once, so the only allocation is the root node `ITrie(false, Nil)` and the only descent is
+    // the top-level Patricia comparison of the two head sets.  An empty RESULT buys nothing — the
+    // calibration proved that (12 counted fresh nodes against a predicted 1).
+    else if disjoint then CostInterval(Cost.of(work = opEntry),
+                                       Cost.of(work = opEntry, alloc = Sym.one,
+                                               touch = Sym.one + merge2(a.heads, b.heads)))
+    else up(mk(work = opEntry, nodes = tighter(nd(a), nd(b)),
+               touch = merge2(nd(a), nd(b))))
   def subtract(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
     if same then sharedFast                                            // `a eq b` ⇒ empty
     else if a.provablyEmpty || b.provablyEmpty then emptyFast
-    else if disjoint then CostInterval.exact(Cost.of(work = opEntry, touch = a.heads + b.heads))
-    else CostInterval.upper(mk(work = opEntry, nodes = nd(a), touch = tighter(nd(a), nd(b))))
+    else if disjoint then CostInterval(Cost.of(work = opEntry),
+                                       Cost.of(work = opEntry, alloc = Sym.one,
+                                               touch = Sym.one + merge2(a.heads, b.heads)))
+    else up(mk(work = opEntry, nodes = tighter(nd(a), nd(b)),
+               touch = merge2(nd(a), nd(b))))
   def restrict(x: Meas, y: Meas): CostInterval =
     if x.provablyEmpty || y.provablyEmpty then emptyFast
-    else CostInterval.upper(mk(work = opEntry, nodes = nd(y), touch = nd(x) + nd(y)))
+    else up(mk(work = opEntry, nodes = tighter(nd(x), nd(y)),
+               touch = merge2(nd(x), nd(y))))
   def raffine(x: Meas, y: Meas): CostInterval =
+    // subtraction(x, restriction(x, y)): the restriction visits x and y, the subtraction visits x and
+    // the restriction's result (at most x's nodes again)
     if x.provablyEmpty then emptyFast
-    else CostInterval.upper(mk(work = Sym.c(2) * opEntry, nodes = nd(x) + nd(y),
-                               touch = nd(x) + nd(y) + nd(x)))
+    else up(mk(work = Sym.c(2) * opEntry,
+               nodes = nd(x) + tighter(nd(x), nd(y)),
+               touch = Sym.c(2) + tPer * (Sym.c(3) * nd(x) + nd(y))))
   def compose(a: Meas, b: Meas): CostInterval =
+    // one recursive entry (and one fresh node) per node of `a`, then — at every TERMINAL of `a` — a
+    // `union(mapped, b)`.  Summing the merged sizes over a's nodes costs a factor len(a):
+    // Σ_v N(subtree_v) ≤ N(a)·len(a) and Σ_v |subtree_v| ≤ |a|·len(a).
     if a.provablyEmpty || b.provablyEmpty then emptyFast
-    else CostInterval.upper(mk(work = opEntry, nodes = nd(a), touch = nd(a) + a.size))
+    else up(mk(work = opEntry, nodes = nd(a) + a.size * nd(b),
+               touch = nd(a) + tPer * (nd(a) * a.len + a.size * (a.len + Sym.one) * nd(b))))
   def wrap(src: Meas, plen: Sym): CostInterval =
+    // NOT exact: `ITrie.wrap` returns `empty` and allocates NOTHING when the source turns out empty at
+    // run time, which the shape domain need not have proved
     if src.provablyEmpty then emptyFast
-    else CostInterval.exact(mk(work = opEntry, nodes = plen, touch = plen))
+    else up(mk(work = opEntry, nodes = plen, touch = Sym.one))
   def unwrap(src: Meas, plen: Sym): CostInterval =
-    if src.provablyEmpty then emptyFast
-    else CostInterval.exact(Cost.of(work = opEntry, touch = plen))      // focus, no rebuild
+    if src.provablyEmpty then emptyFast                                // focus, no rebuild
+    else CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one + plen))
   def tailsUnion(src: Meas): CostInterval =
-    CostInterval.upper(mk(work = opEntry, nodes = nd(src), touch = nd(src)))
+    // joinAll over the head children: a BALANCED pairwise merge, log(heads) levels deep
+    up(mk(work = opEntry, nodes = joinAllNodes(nd(src), src.heads),
+          touch = Sym.one + tPer * joinAllNodes(nd(src), src.heads)))
   def tailsInter(src: Meas): CostInterval =
-    CostInterval.upper(mk(work = opEntry, nodes = nd(src), touch = nd(src)))
+    // meetAll is a LEFT FOLD of intersections over the present-head children: `heads` merges, each
+    // against an accumulator of at most nd(src) nodes
+    up(mk(work = opEntry, nodes = src.heads * nd(src),
+          touch = Sym.one + tPer * nd(src) * (src.heads + Sym.one)))
   def range(x: Meas, window: Sym, identity: Boolean): CostInterval =
     // `val size = t.size` is a FULL recursive walk and runs before the identity check.
     val sizeWalk = nd(x)
-    if identity then CostInterval(Cost.of(work = opEntry), Cost.of(work = opEntry, touch = sizeWalk))
-    else CostInterval.upper(mk(work = opEntry,
-                               nodes = tighter(window, x.size) * x.len,
-                               // the walk, plus a per-node key sort by the UN-INTERNED item
-                               touch = sizeWalk + sizeWalk * Sym.log(x.heads)))
+    val w = tighter(window, x.size)
+    if identity then CostInterval(Cost.of(work = opEntry),
+                                  Cost.of(work = opEntry, touch = Sym.one + sizeWalk))
+    else up(mk(work = opEntry,
+                               // per emitted path: |p| singleton nodes plus at most |p|+1 merge nodes
+                               nodes = Sym.c(3) * w * (x.len + Sym.one),
+                               // the size walk, the ordered `go` walk, the per-node child-key sort
+                               // (standard-library `sortBy`, so REAL but not counted — see
+                               // SpatialEvents.scala gap 3), and the per-path union into the result
+                               touch = Sym.c(2) * sizeWalk + sizeWalk * Sym.log(x.heads) +
+                                       tPer * w * (w * x.len + x.len + Sym.c(2))))
   def group(src: Meas): CostInterval =
     CostInterval.exact(Cost.of(work = opEntry, touch = src.heads))      // the head children ARE the groups
   def collect(groups: Sym, body: Meas): CostInterval =
-    CostInterval.upperOnly(mk(work = groups * opEntry, nodes = groups * nd(body), touch = groups * nd(body)))
+    // The accumulation of the per-group results.  This must cover the WORSE of the two shapes `evalI`
+    // uses — `Iteration`'s balanced `joinAll` and `Fold`'s LEFT FOLD of unions — so it is the left
+    // fold: `groups` merges, the k-th against an accumulator of at most `groups · nd(body)` nodes.
+    // That quadratic-in-`groups` factor is real for a left fold and is the single largest source of
+    // `touch` slack in the published table.
+    // the `+ 1` is load-bearing: `ITrie.joinAll` is ENTERED once per loop node even when the source has
+    // no head at all, so a zero-group loop still counts one TrieNodeVisit (caught by the corpus
+    // calibration: 4 counted touches against a predicted 3)
+    CostInterval.upperOnly(mk(work = groups * opEntry, nodes = groups * nd(body),
+                              touch = Sym.one + tPer * groups * (groups + Sym.one) * nd(body)))
   def foldStep(groups: Sym, updNodes: Sym, updLen: Sym): CostInterval =
-    CostInterval.upperOnly(mk(work = groups * opEntry, nodes = groups, touch = groups * updLen))
+    // per group: `pathItemsI(update)` dispatches on every update subterm; the accumulator is a
+    // PathValue, so nothing is allocated in the trie
+    CostInterval.upperOnly(mk(work = groups * (opEntry + updNodes), touch = groups * updLen))
   def fixStep(acc: Meas, body: Meas): CostInterval =
-    CostInterval.upper(mk(work = opEntry, nodes = nd(acc) + nd(body), touch = nd(acc) + nd(body)))
+    up(mk(work = opEntry, nodes = tighter(nd(acc), nd(body)),
+          touch = merge2(nd(acc), nd(body))))
 
 /** `evalI` (IntTrie.scala): one AST dispatch per node, then the trie algebra.
  *
- *  **UNCALIBRATED.**  `evalI` and the `ITrie`/`IntTrieOps` internals carry no event hooks (those
- *  files are not owned by this change), so no counted run exists for this backend.  Its `work`
- *  numbers are a model of code that is read, not measured.  `execT` runs the same algebra and IS
- *  instrumented, which is why [[GraphCost]] is the calibrated trie-shaped instance. */
+ *  CALIBRATED (review.md item 1).  `evalI`, `ITrie` and `IntTrieOps` now carry hooks, so this backend
+ *  has counted runs for all four components: [[EffortEvent.TrieDispatch]] +
+ *  [[EffortEvent.TriePathDispatch]] for `work`, [[EffortEvent.FreshTrieNode]] for `alloc`, `evalI`'s
+ *  own [[EffortEvent.LoopBodyEntry]]/[[EffortEvent.FixpointRound]]/[[EffortEvent.CallEntry]] for
+ *  `rounds`, and [[EffortEvent.TrieNodeVisit]] + [[EffortEvent.PatriciaVisit]] for `touch`. */
 final class TrieCostModel(p: ExecutionPhase) extends TrieAlgebraCost(p):
   val backend = Backend.Trie
-  /** This whole instance is uncalibrated (no `evalI` hooks), so its node-allocation claims stay in
-   *  `alloc`, where they read naturally, rather than being folded into `touch`.  Nothing here is
-   *  measured either way — see the class comment. */
-  protected def nodeAllocIsCounted = true
+  /** `evalI` emits no [[EffortEvent.TrieOpEntry]]: one [[EffortEvent.TrieDispatch]] per node covers
+   *  both the AST dispatch and the algebra entry, and [[dispatch]] already charges it. */
+  protected def opEntry: Sym = Sym.zero
 
 /** `execT` (GraphExec.scala): the same trie algebra, executed as a flat dataflow graph.
  *
@@ -895,14 +1016,17 @@ final class TrieCostModel(p: ExecutionPhase) extends TrieAlgebraCost(p):
  *     `internConstStr` caches, so a cold graph pays a decode the interpreters do not. */
 final class GraphCost(p: ExecutionPhase) extends TrieAlgebraCost(p):
   val backend = Backend.Graph
-  /** `alloc` here means EXECUTOR FRAMES, the one allocation `execT` actually counts */
-  protected def nodeAllocIsCounted = false
+  /** `execT` emits one [[EffortEvent.TrieOpEntry]] per `case "space"` slot, on top of the
+   *  [[EffortEvent.GraphNodeDispatch]] that [[dispatch]] charges. */
+  protected def opEntry: Sym = Sym.one
   /** A mention resolves to the EXISTING prologue slot (`g.find`): no new graph node, so neither a
    *  `GraphNodeDispatch` nor a `TrieOpEntry`.  Charging either made the lower endpoint exceed the
    *  counted total on every program with a repeated mention (caught by the corpus calibration). */
   override def mentionDispatch: CostInterval = CostInterval.zero
   override def mention(m: Meas): CostInterval = CostInterval.zero
-  /** the graph allocates one frame per call, and `CallEntry` is counted */
+  /** the graph allocates one frame per call, and `CallEntry` is counted.  `alloc` now also counts
+   *  `FreshTrieNode`, so this is a LOWER endpoint of 1 frame and an upper of 1 frame — the trie nodes
+   *  the callee allocates are charged by the callee's own operators. */
   override def callFrame: CostInterval =
     CostInterval.exact(Cost.of(alloc = Sym.one, rounds = Sym.one))
   /** every non-`Deref` path subterm is its own dispatched graph slot */
@@ -952,7 +1076,21 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
   val backend = Backend.Zipper
   /** Per visited node and per layer: two cursor reads (`terminal` + `children`) plus, at whichever
    *  layer forces the materialisation, one `ZipperMaterializeNode`. */
-  private def reads(m: Meas): Sym = Sym.c(3) * m.nodes
+  private def reads(m: Meas): Sym = Sym.c(4) * m.nodes
+  /** THE COST OF ONE FUSED BINARY LAYER over a result of `res` logical nodes.
+   *
+   *  A cursor query CASCADES: `Union.terminal` calls `a.terminal` AND `b.terminal`, each of which is
+   *  itself a counted read at its own layer, and `materialize` pays one `ZipperMaterializeNode` per
+   *  node on top.  Charging only `reads(a) + reads(b)` treated the operator's OWN layer as free and put
+   *  the predicted work below the counted total on 4 of the 200 corpus programs (82 counted work events
+   *  against a predicted 75).  Own layer plus both operands' layers is the sound envelope. */
+  private def fuse2(a: Meas, b: Meas, res: Sym): Sym = Sym.c(4) * res + reads(a) + reads(b)
+  /** NO POSITIVE LOWER BOUND ON CURSOR READS IS CLAIMED.  A fused operator is a lazy cursor: if its
+   *  parent never descends into it — a `Composition` whose left operand has no terminal never reads
+   *  `b`, an `Intersection` that prunes at the root never reads below it — it performs ZERO reads.  The
+   *  meaningful lower endpoint for this backend is [[dispatch]], one `ZipperBuild` per lifted node,
+   *  which `transpileZ` really does emit unconditionally. */
+  private def up(hi: Cost): CostInterval = CostInterval.upperOnly(hi)
   override def raffinationRereadsX = true            // `Subtraction(x, restriction(x, y))` reads x twice
   override def controlFlowFallback: Option[Backend] = Some(Backend.Trie)
   override def fallbackEntry: CostInterval = CostInterval.exact(Cost.of(work = Sym.one))
@@ -966,69 +1104,95 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
    *  the sum over the term is a sound envelope.  A concrete (`Lit`) cursor is never re-materialised,
    *  which is why `mention`/`literal`/`singleton`/`unwrap` contribute nothing. */
   override def finish(root: Meas, concrete: Boolean): CostInterval = CostInterval.zero
+  /** `transpileZ` calls `pathItemsI` for `Singleton`/`Wrap`/`Unwrap`, which dispatches on every Path
+   *  subterm and counts [[EffortEvent.TriePathDispatch]] — a work event the zipper model owes. */
+  override def pathTerm(nodes: Sym, slots: Sym): CostInterval = CostInterval.exact(Cost.of(work = nodes))
 
-  // ALLOC HERE MEANS `FreshNode`, i.e. exactly what `SpaceZipper.materialize` allocates.  Nodes built
-  // by `ITrie.singleton` / `iLiteral` / `ITrie.range` are NOT counted (IntTrie.scala has no hooks), so
-  // claiming them under `alloc` would bracket a number no run can produce; they go to `touch`.
+  // ALLOC MEANS `FreshNode` (what `SpaceZipper.materialize` allocates) PLUS `FreshTrieNode` (what the
+  // `ITrie` calls the zipper still makes — `singleton`, `range`, `tailsIntersection` — allocate).  Both
+  // are counted now, so both belong here.
+  //
+  // TOUCH MEANS THE TRIE-ALGEBRA DESCENT, and the FUSED operators perform none of it: a virtual cursor
+  // composes `IntMap`s directly (`unionWith`, `intersectionWith`, `transform`), which allocates no
+  // `ITrie` node and enters no `IntTrieOps` descent.  Their real per-node cost is the counted
+  // `ZipperCursorRead`/`ZipperMaterializeNode` traffic, which is in `work` — so `touch` is 0 for them
+  // and only the operators that genuinely call into `ITrie` claim any.
   def literal(m: Meas): CostInterval = phase match
-    case ExecutionPhase.Warm => CostInterval.exact(Cost.of(touch = Sym.one))   // iLiteral cache hit, lifted O(1)
-    case ExecutionPhase.Cold => CostInterval.exact(Cost.of(touch = Sym.c(2) * m.nodes))
-  def singleton(plen: Sym): CostInterval = CostInterval.exact(Cost.of(touch = Sym.c(2) * plen))
+    case ExecutionPhase.Warm => CostInterval.exact(Cost.zero)                  // iLiteral cache hit, lifted O(1)
+    case ExecutionPhase.Cold =>
+      CostInterval.exact(Cost.of(alloc = Sym.c(3) * m.nodes, touch = Sym.c(3) * m.nodes))
+  // upper-only for the same reason as the trie model's: `plen` may be a bound, not a value
+  def singleton(plen: Sym): CostInterval = up(Cost.of(alloc = plen, touch = Sym.one))
   // `traversal` is O(1), but the resulting `Lit` cursor is READ by its parent layer: at most twice
   // per node of the lifted trie, since a union/intersection/subtraction descent visits each node once.
   def mention(m: Meas): CostInterval = CostInterval.upperOnly(Cost.of(work = reads(m)))
+  // A pointer-identity short circuit performs NO cursor read: `SpaceZipper.union` tests `sameSpace`
+  // and returns an operand, counting only the EXPLANATORY `ReusedSpace`.  Charging one work unit for it
+  // put the lower endpoint above the counted total on every `x ∪ x` (caught by the corpus calibration).
   def union(a: Meas, b: Meas, same: Boolean): CostInterval =
-    if same then CostInterval.exact(Cost.of(work = Sym.one))                   // ReusedSpace
-    else CostInterval.upper(Cost.of(work = reads(a) + reads(b), alloc = a.nodes + b.nodes,
-                                    touch = a.nodes + b.nodes))
+    if same then CostInterval.exact(Cost.zero)                                 // ReusedSpace: explanatory
+    else up(Cost.of(work = fuse2(a, b, a.nodes + b.nodes), alloc = a.nodes + b.nodes))
   def inter(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
-    if same then CostInterval.exact(Cost.of(work = Sym.one))
-    else if disjoint then CostInterval.upper(Cost.of(work = Sym.c(3) * (a.heads + b.heads),
-                                                     alloc = a.heads + b.heads, touch = a.heads + b.heads))
-    else CostInterval.upper(Cost.of(work = Sym.c(3) * tighter(a.nodes, b.nodes),
-                                    alloc = tighter(a.nodes, b.nodes), touch = tighter(a.nodes, b.nodes)))
+    if same then CostInterval.exact(Cost.zero)
+    // HEAD-disjoint (SpatialCost.headDisjoint): `IntMap.intersectionWith` finds no shared key at the
+    // top, so the fused cursor has no children and `materialize` stops there
+    else if disjoint then up(Cost.of(work = fuse2(a, b, a.heads + b.heads), alloc = a.heads + b.heads))
+    else up(Cost.of(work = fuse2(a, b, tighter(a.nodes, b.nodes)), alloc = tighter(a.nodes, b.nodes)))
   def subtract(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
-    if same then CostInterval.exact(Cost.of(work = Sym.one))                   // instant prune to ∅
-    else CostInterval.upper(Cost.of(work = reads(a) + reads(b), alloc = a.nodes, touch = a.nodes))
+    if same then CostInterval.exact(Cost.zero)                                 // instant prune to ∅
+    else up(Cost.of(work = fuse2(a, b, a.nodes), alloc = a.nodes))
   def restrict(x: Meas, y: Meas): CostInterval =
-    CostInterval.upper(Cost.of(work = Sym.c(3) * tighter(x.nodes, y.nodes),
-                               alloc = tighter(x.nodes, y.nodes), touch = tighter(x.nodes, y.nodes)))
+    up(Cost.of(work = fuse2(x, y, tighter(x.nodes, y.nodes)), alloc = tighter(x.nodes, y.nodes)))
   def raffine(x: Meas, y: Meas): CostInterval =
-    CostInterval.upper(Cost.of(work = reads(x) + Sym.c(3) * tighter(x.nodes, y.nodes),
-                               alloc = x.nodes + y.nodes, touch = x.nodes + y.nodes))
+    // Subtraction(x, restriction(x, y)) — TWO fused layers over x
+    up(Cost.of(work = Sym.c(2) * fuse2(x, y, x.nodes + y.nodes), alloc = x.nodes + y.nodes))
   def compose(a: Meas, b: Meas): CostInterval =
     // `Composition.children` splices ALL of b at every terminal of a, so b's cursor is re-read once
     // per a-terminal.  This is the one local operator whose fused cost is not linear in the operands.
-    CostInterval.upper(Cost.of(work = reads(a) + a.size * reads(b), alloc = a.nodes * b.nodes,
-                               touch = a.nodes * b.size))
+    up(Cost.of(work = Sym.c(4) * (a.nodes + a.size * b.nodes) + reads(a) + a.size * reads(b),
+               alloc = a.nodes * b.nodes))
   def wrap(src: Meas, plen: Sym): CostInterval =
-    CostInterval.upper(Cost.of(work = plen + reads(src), alloc = plen + src.nodes, touch = plen))
+    // `Prefix` is a cursor LAYER PER PREFIX ITEM, and `materialize` walks every one of them: each costs
+    // one ZipperMaterializeNode plus `terminal` + `children` reads, and the innermost layer delegates
+    // both queries to the source cursor as well.  Charging `plen + reads(src)` (as if the prefix were
+    // free) made the predicted work fall below the counted total on every wrapped control-flow term —
+    // 4 of the 200 corpus programs, visible only once the evalI fallback stopped being excluded.
+    up(Cost.of(work = Sym.c(4) * (plen + Sym.one) + reads(src), alloc = plen + Sym.one + src.nodes))
   def unwrap(src: Meas, plen: Sym): CostInterval =
     // p.foldLeft(descend): |p| reads, and the RESULT IS A `Lit`, so materialize allocates nothing
-    CostInterval.exact(Cost.of(work = plen, touch = plen))
+    CostInterval.exact(Cost.of(work = plen))
   def tailsUnion(src: Meas): CostInterval =
-    CostInterval.upper(Cost.of(work = reads(src), alloc = src.nodes, touch = src.nodes))
+    // `TailsUnion.merged` REDUCES the head children with `Union(_, _)`, so one query at the top
+    // cascades through a chain of up to `heads` fused layers
+    up(Cost.of(work = Sym.c(4) * src.nodes * (Sym.one + src.heads), alloc = src.nodes))
   def tailsInter(src: Meas): CostInterval =
-    // TailsIntersection MATERIALISES its source (it needs the present-head set) and reuses ITrie.
-    // That materialisation goes through `SpaceZipper.materialize`, so its nodes ARE counted.
-    CostInterval.upper(Cost.of(work = reads(src), alloc = src.nodes, touch = src.nodes))
+    // TailsIntersection MATERIALISES its source (it needs the present-head set) and then calls
+    // `ITrie.tailsIntersection`, a LEFT FOLD of `heads` merges — so this operator does pay real
+    // trie-algebra `touch`, and allocates both `FreshNode`s and `FreshTrieNode`s.
+    up(Cost.of(work = Sym.c(2) * reads(src), alloc = src.nodes * (Sym.one + src.heads),
+               touch = Sym.one + Sym.c(3) * src.nodes * (src.heads + Sym.one)))
   def range(x: Meas, window: Sym, identity: Boolean): CostInterval =
-    // materialize(transpileZ(x)) then ITrie.range — inherently count-based, never fused
+    // materialize(transpileZ(x)) then ITrie.range — inherently count-based, never fused.  transpileZ
+    // counts one TrieOpEntry for the crossing; materialize counts one node per visited node.
     val walk = x.nodes
-    // the source IS materialised through the zipper (counted), the slice itself is ITrie work (not)
-    if identity then CostInterval.upper(Cost.of(work = Sym.one, alloc = walk, touch = walk))
-    else CostInterval.upper(Cost.of(work = Sym.one, alloc = walk,
-                                    touch = walk + walk * Sym.log(x.heads) + tighter(window, x.size) * x.len))
+    val w = tighter(window, x.size)
+    if identity then up(Cost.of(work = Sym.one + reads(x), alloc = walk, touch = Sym.one + walk))
+    else up(Cost.of(work = Sym.one + reads(x),
+                    alloc = walk + Sym.c(3) * w * (x.len + Sym.one),
+                    touch = Sym.c(2) * walk + walk * Sym.log(x.heads) +
+                    Sym.c(3) * w * (w * x.len + x.len + Sym.c(2))))
   // control flow never reaches these: `controlFlowFallback` reprices the whole subterm with the trie
-  // model before the traversal gets here.  They stay defined (and equal to the trie model's) so the
-  // instance is total rather than throwing.
+  // model before the traversal gets here.  They stay defined (and no cheaper than the trie model's) so
+  // the instance is total rather than throwing.
   def group(src: Meas): CostInterval = CostInterval.exact(Cost.of(work = Sym.one, touch = src.heads))
   def collect(groups: Sym, body: Meas): CostInterval =
-    CostInterval.upperOnly(Cost.of(work = groups, touch = Sym.c(2) * groups * body.nodes))
+    CostInterval.upperOnly(Cost.of(work = groups, alloc = groups * body.nodes,
+                                   touch = Sym.c(3) * groups * (groups + Sym.one) * body.nodes))
   def foldStep(groups: Sym, updNodes: Sym, updLen: Sym): CostInterval =
-    CostInterval.upperOnly(Cost.of(work = groups, touch = groups * (Sym.one + updLen)))
+    CostInterval.upperOnly(Cost.of(work = groups * (Sym.one + updNodes), touch = groups * (Sym.one + updLen)))
   def fixStep(acc: Meas, body: Meas): CostInterval =
-    CostInterval.upperOnly(Cost.of(work = Sym.one, touch = Sym.c(2) * (acc.nodes + body.nodes)))
+    CostInterval.upperOnly(Cost.of(work = Sym.one, alloc = tighter(acc.nodes, body.nodes),
+                                   touch = Sym.c(3) * (acc.nodes + body.nodes)))
 
 /** The eight instances (four executables x two phases), and the legacy two-instance names the rest
  *  of the tree used before backends were separated. */
@@ -1127,6 +1291,31 @@ object Recurrence:
     if cs.isEmpty then None
     else params.indices.find(i => cs.forall(c => c.mentions.lift(i).exists(a => dropsAnItem(a, params(i)))))
 
+  /** Is `arg` syntactically `p ∪ _` or `_ ∪ p` — an argument that can only GROW the parameter? */
+  private def growsMonotonically(arg: Space, p: SpaceMention): Boolean = arg match
+    case Space.Union(Space.Mention(m), _) => m == p
+    case Space.Union(_, Space.Mention(m)) => m == p
+    case _ => false
+
+  /** THE SECOND TERMINATION CRITERION (review.md item 1, fourth point).
+   *
+   *  Which mention parameter is a MONOTONE ACCUMULATOR at every recursive call site: the argument
+   *  passed for it is syntactically `p ∪ g`, so `p` can only grow.  Combined with
+   *  [[selfTerminating]] — `eval`/`evalI` stop a `Union(_, Call(rp, args))` once the arguments stop
+   *  changing — this means every non-final recursive call adds AT LEAST ONE PATH to the accumulator,
+   *  so the call depth is at most `|accumulator at the fixpoint| + 2`.
+   *
+   *  It is the same argument `fixRounds` uses for a monotone `Fixpoint`, and it is why the semi-naive
+   *  Datalog cornerstone terminates.  What it does NOT give is the BOUND: `|accumulator at the
+   *  fixpoint|` is a property of the least fixpoint of the body's size transformer, and this analysis
+   *  has no fixpoint over the size lattice (and no finite path universe to widen into).  So this
+   *  predicate makes the REASON precise instead of making the depth finite — see the note the `Call`
+   *  transfer records. */
+  def accumulatorArg(body: Space, rp: RoutinePtr, params: Vector[SpaceMention]): Option[Int] =
+    val cs = calls(body, rp)
+    if cs.isEmpty then None
+    else params.indices.find(i => cs.forall(c => c.mentions.lift(i).exists(a => growsMonotonically(a, params(i)))))
+
   /** Is the body the shape `eval`'s self-call detection terminates on (MORKL.scala `Space.Call`
    *  case: a `Union(l, Call(rp, sameArgs))` returns `l` once the arguments stop changing)? */
   def selfTerminating(body: Space, rp: RoutinePtr): Boolean = body match
@@ -1201,8 +1390,13 @@ object SpatialCost:
     val st = new State
     val (c, m) = go(s, env, model, st, 0)
     if st.budget <= 0 then st.note(s"spatial-fact budget ($FactBudget queries) exhausted; the rest is symbolic only")
-    // the root materialisation, if the executable has one (only `execZ` does)
-    Report(model.name, model.backend, model.phase, c + model.finish(m, liftsToLit(s)), m, st.notes.toVector)
+    for why <- model.touchNoOracle do
+      st.note(s"${model.name}: the `touch` component has NO COUNTED ORACLE and is a model, not a " +
+              s"measurement — $why")
+    // the root materialisation, if the executable has one (only `execZ` does), and the one structural
+    // widening: no positive LOWER bound on library-internal node visits is claimed (file header)
+    Report(model.name, model.backend, model.phase,
+           (c + model.finish(m, liftsToLit(s))).withoutTouchLower, m, st.notes.toVector)
 
   /** Every executable's warm interval over the SAME facts — the per-backend cost map review.md
    *  finding 7 asks candidate selection to compare. */
@@ -1255,7 +1449,8 @@ object SpatialCost:
       case Some(t) =>
         out = out.copy(heads = tighter(out.heads, symSize(t.headCount.hi)),
                        headsLo = out.headsLo lub symLo(t.headCount.lo),
-                       sizeLo = out.sizeLo lub symLo(t.size.lo))
+                       sizeLo = out.sizeLo lub symLo(t.size.lo),
+                       headKeys = closedHeadKeys(t.shape).orElse(out.headKeys))
         // THE EXACT TRIE-NODE IDENTITY, when the shape's prefix profile supplies one (whispers §1).
         // Both candidates are sound uppers of the same quantity, so `tighter` preserves soundness.
         SpatialFacts.trieNodes(t) match
@@ -1263,6 +1458,27 @@ object SpatialCost:
           case Left(_) => ()                   // an inconsistent hand-built type: keep the fallback
       case None => ()
     out.copy(heads = tighter(out.heads, out.size))
+
+  /** DO THE TWO OPERANDS HAVE PROVABLY DISJOINT HEAD SETS?
+   *
+   *  THIS REPLACES A WRONG FAST-PATH JUSTIFICATION, and the event calibration is what caught it.  The
+   *  model used to take "the intersection is PROVABLY EMPTY" as licence to charge one head comparison
+   *  and ZERO allocations.  That is false: `ITrie.intersection`'s empty guard fires on an empty
+   *  OPERAND, not an empty RESULT, so two operands that share HEADS but no full path still descend
+   *  every shared prefix and allocate one node per level.  Counted: 12 fresh trie nodes against a
+   *  predicted 1, on the corpus, three times over.
+   *
+   *  What DOES stop the merge at the top is disjoint HEAD SETS: `intersectTries`/`diffTries` then find
+   *  no matching key, return `IntMap.Nil` immediately, and exactly one root node is built.  Proving it
+   *  needs both head sets CLOSED (`Shape.headsClosed`, i.e. no untracked head) and their
+   *  possibly-present keys disjoint — strictly stronger than an empty result, and the only form the
+   *  executors actually reward. */
+  private def headDisjoint(ma: Meas, mb: Meas): Boolean = ma.headDisjointFrom(mb)
+
+  /** the possibly-present head keys of a CLOSED head set, for [[Meas.headKeys]] */
+  private def closedHeadKeys(sh: Shape): Option[Set[PathItem]] =
+    if !sh.headsClosed then None
+    else Some(sh.heads.iterator.filter((_, t) => t.possiblyNonEmpty).map(_._1).toSet)
 
   /** Provably empty?  With the shape tier on this sees head-set disjointness and absent prefixes;
    *  without it, only what the length histogram derives. */
@@ -1382,9 +1598,10 @@ object SpatialCost:
       case Space.Empty => (d + model.empty, Meas.empty)
 
       case Space.Literal(SpaceValue(ps)) =>
+        val hs = ps.iterator.collect { case PathValue(h :: _) => h }.toSet
         val m = Meas.exact(Sym.c(ps.size.toLong),
                            Sym.c(if ps.isEmpty then 0L else ps.iterator.map(_.items.length.toLong).max),
-                           Sym.c(ps.iterator.collect { case PathValue(h :: _) => h }.toSet.size.toLong))
+                           Sym.c(hs.size.toLong)).copy(headKeys = Some(hs))
         (d + model.literal(m), m)
 
       case Space.Singleton(p) =>
@@ -1404,7 +1621,8 @@ object SpatialCost:
 
       case Space.Intersection(a, b) =>
         val (ca, ma) = rec(a); val (cb, mb) = rec(b)
-        val disj = provablyEmpty(s, env, st)
+        // HEAD-set disjointness, not an empty result — see `headDisjoint`
+        val disj = headDisjoint(ma, mb)
         val same = sharedOperands(a, b)
         // x ∩ x = x, so a shared operand carries its lower bound through; otherwise nothing is known
         val loSz = if same then ma.sizeLo else Sym.zero
@@ -1415,7 +1633,7 @@ object SpatialCost:
 
       case Space.Subtraction(a, b) =>
         val (ca, ma) = rec(a); val (cb, mb) = rec(b)
-        val disj = provablyEmpty(Space.Intersection(a, b), env, st)
+        val disj = headDisjoint(ma, mb)
         val same = sharedOperands(a, b)
         // x ∖ x = ∅; a disjoint subtrahend removes nothing, so a's lower bound survives
         val loSz = if same then Sym.zero else if disj then ma.sizeLo else Sym.zero
@@ -1558,9 +1776,23 @@ object SpatialCost:
           // a genuine recursion: find the decreasing measure, then close the linear recurrence
           Recurrence.decreasingArg(rbody, rp, mentionns) match
             case None =>
-              st.note(s"recursive routine ${rp.s}: no argument provably loses an item per call, so no " +
-                      "recursion depth bound and no closed form")
-              (total + CostInterval.unbounded(s"recursion in ${rp.s} without a decreasing measure"), Meas.top)
+              // No length-decreasing argument.  Say EXACTLY what is missing rather than "no measure":
+              // a monotone accumulator does prove termination, but bounding its fixpoint size needs a
+              // fixpoint over the size lattice that this analysis does not have.
+              val why = Recurrence.accumulatorArg(rbody, rp, mentionns) match
+                case Some(i) if Recurrence.selfTerminating(rbody, rp) =>
+                  st.note(s"recursive routine ${rp.s}: parameter $i (${mentionns.lift(i).map(_.s).getOrElse("?")}) is a " +
+                          "MONOTONE ACCUMULATOR and the body is the Union(_, Call) shape, so the recursion does " +
+                          "terminate — every continuing call adds at least one path and the depth is " +
+                          "|accumulator at the fixpoint| + 2.  What is missing is a BOUND on that size: it is the " +
+                          "least fixpoint of the body's size transformer, and this analysis has neither a fixpoint " +
+                          "over the size lattice nor a finite path universe to widen into.  MODELLING GAP, named.")
+                  s"recursion in ${rp.s}: monotone accumulator with no bound on its fixpoint size"
+                case _ =>
+                  st.note(s"recursive routine ${rp.s}: no argument provably loses an item per call and none is a " +
+                          "monotone accumulator, so no recursion depth bound and no closed form")
+                  s"recursion in ${rp.s} without a decreasing measure"
+              (total + CostInterval.unbounded(why), Meas.top)
             case Some(i) =>
               val argLen = mentions.lift(i).map(a => SpatialTypes.lenOf(a, env.facts.lengths).hi).getOrElse(LenBounds.INF)
               val n = Recurrence.depthBound(argLen)

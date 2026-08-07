@@ -394,32 +394,75 @@ object Shape:
    *  facing tracked classes would need; `SpatialLawCheck` measures that incompleteness against
    *  `SpatialGamma.gammaLeqOn`, which decides containment exactly on a finite universe.  Moved here
    *  verbatim from `SpatialGamma.leqShape`, which now forwards. */
-  def leqStrong(a: Shape, b: Shape): Boolean = leqStrong(a, b, 32)
-  private def leqStrong(a: Shape, b: Shape, d: Int): Boolean =
-    if d <= 0 then b.isTop
-    else if b.isTop then true
+  def leqStrong(a: Shape, b: Shape): Boolean = leqStrongMask(a, b, 32, full = false) == 0
+
+  /** WHY [[leqStrong]] said no — the bit positions of [[leqStrongMask]].  `leqStrong` IS
+   *  `leqStrongMask == 0`, so this is attribution, not a second order: review.md 4 asks for the
+   *  cause of every avoidable `Unknown` to be MEASURED, and a boolean cannot be measured.
+   *  `Child` marks "some head's sub-comparison failed"; the channel bits are OR-ed up from that
+   *  sub-comparison too, so the mask names the root-cause channels of the whole tree. */
+  object LeqShapeWhy:
+    val Eps = 1        // (a) b's ε presence does not admit a's
+    val CntLo = 2      // (c) b FORCES more untracked heads than a guarantees
+    val CntHi = 4      // (c) a permits more untracked heads than b does
+    val Tail = 8       // (d) some a-side tail-set is not inside b's otherTail summary
+    val Depth = 16     // the 32-level comparison budget ran out on a non-⊤ right-hand side
+    val Child = 32     // (b) a tracked/untracked head's sub-comparison failed
+    val names: Vector[(Int, String)] = Vector(Eps -> "shape:eps", CntLo -> "shape:others.lo",
+      CntHi -> "shape:others.hi", Tail -> "shape:otherTail", Depth -> "shape:depth-cap",
+      Child -> "shape:child")
+    def show(m: Int): Vector[String] = names.collect { case (bit, n) if (m & bit) != 0 => n }
+
+  /** `full = false` reproduces [[leqStrong]]'s short-circuit exactly (so the production order pays
+   *  nothing for the instrumentation); `full = true` visits every channel and every head, which is
+   *  what the incompleteness histogram needs. */
+  private[morkl] def leqStrongMask(a: Shape, b: Shape): Int = leqStrongMask(a, b, 32, full = true)
+  private def leqStrongMask(a: Shape, b: Shape, d: Int, full: Boolean): Int =
+    import LeqShapeWhy.*
+    if d <= 0 then (if b.isTop then 0 else Depth)
+    else if b.isTop then 0
     else
-      val epsOk = b.eps == Presence.May || b.eps == a.eps
-      val keys = a.heads.keySet ++ b.heads.keySet
-      val childOk = keys.forall(h => leqStrong(a.under(h), b.under(h), d - 1))
-      // heads untracked in b: a's own extra tracked heads, plus a's untracked ones
-      val hiOut = Ivl.add(a.heads.count((h, t) => !b.heads.contains(h) && t.possiblyNonEmpty).toLong, a.others.hi)
-      // …and a LOWER bound on the same quantity, so `b`'s must claim can be discharged instead of
-      // simply rejected.  Requiring `b.others.lo == 0` made the order NON-REFLEXIVE — `leqStrong(x, x)`
-      // was false for every `x` with a forced untracked head — which the decorated analysis' "the root
-      // is never weaker than `infer`" law needs (it failed on 24 of 400 corpus terms).  `a`'s own
-      // forced untracked heads survive only after discounting the keys `b` newly TRACKS (they leave the
-      // untracked set), the same discount `unionTransfer` and `meet` need.
-      val bOnly = b.heads.keySet.diff(a.heads.keySet).size.toLong
-      val loOut = Ivl.add(Ivl.relu(a.others.lo - bOnly),
-                          a.heads.count((h, t) => !b.heads.contains(h) && t.definitelyNonEmpty).toLong)
-      val cntOk = b.others.lo <= loOut && hiOut <= b.others.hi
-      val tailOk = b.otherTail match
-        case None => true
-        case Some(bt) =>
-          a.heads.forall((h, t) => b.heads.contains(h) || !t.possiblyNonEmpty || leqStrong(t, bt, d - 1)) &&
-            (a.others.hi == 0 || leqStrong(a.otherTail.getOrElse(top), bt, d - 1))
-      epsOk && childOk && cntOk && tailOk
+      var m = 0
+      if !(b.eps == Presence.May || b.eps == a.eps) then m |= Eps
+      if m != 0 && !full then m
+      else
+        val keys = a.heads.keySet ++ b.heads.keySet
+        var cm = 0
+        val it = keys.iterator
+        while it.hasNext && (full || cm == 0) do
+          val h = it.next()
+          cm |= leqStrongMask(a.under(h), b.under(h), d - 1, full)
+        if cm != 0 then m |= Child | cm
+        if m != 0 && !full then m
+        else
+          // heads untracked in b: a's own extra tracked heads, plus a's untracked ones
+          val hiOut = Ivl.add(a.heads.count((h, t) => !b.heads.contains(h) && t.possiblyNonEmpty).toLong, a.others.hi)
+          // …and a LOWER bound on the same quantity, so `b`'s must claim can be discharged instead of
+          // simply rejected.  Requiring `b.others.lo == 0` made the order NON-REFLEXIVE — `leqStrong(x, x)`
+          // was false for every `x` with a forced untracked head — which the decorated analysis' "the root
+          // is never weaker than `infer`" law needs (it failed on 24 of 400 corpus terms).  `a`'s own
+          // forced untracked heads survive only after discounting the keys `b` newly TRACKS (they leave the
+          // untracked set), the same discount `unionTransfer` and `meet` need.
+          val bOnly = b.heads.keySet.diff(a.heads.keySet).size.toLong
+          val loOut = Ivl.add(Ivl.relu(a.others.lo - bOnly),
+                              a.heads.count((h, t) => !b.heads.contains(h) && t.definitelyNonEmpty).toLong)
+          if b.others.lo > loOut then m |= CntLo
+          if hiOut > b.others.hi then m |= CntHi
+          if m != 0 && !full then m
+          else
+            b.otherTail match
+              case None => m
+              case Some(bt) =>
+                var tm = 0
+                val ti = a.heads.iterator
+                while ti.hasNext && (full || tm == 0) do
+                  val (h, t) = ti.next()
+                  if !b.heads.contains(h) && t.possiblyNonEmpty then
+                    tm |= leqStrongMask(t, bt, d - 1, full)
+                if (full || tm == 0) && a.others.hi != 0 then
+                  tm |= leqStrongMask(a.otherTail.getOrElse(top), bt, d - 1, full)
+                if tm != 0 then m |= Tail
+                m
 
   /** THE LATTICE JOIN — a ⊑-upper bound of both ALTERNATIVES: `γ(a) ⊆ γ(join(a,b)) ⊇ γ(b)`.
    *

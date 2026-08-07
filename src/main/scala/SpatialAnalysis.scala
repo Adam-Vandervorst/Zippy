@@ -10,28 +10,41 @@ import scala.collection.immutable.SortedMap
  *  caller who wanted a cheaper or a sharper analysis had to know all of them.  They are collected
  *  here, one value, with the defaults being exactly the numbers those constants had.
  *
- *  WHAT CONSUMES IT TODAY — three different degrees, and the difference matters to a caller:
+ *  WHAT CONSUMES IT — every field below is READ by a run, and this list says by whom:
  *
- *   - PER CALL, honoured: [[SpatialAnalysis]] (every field it names), `SpatialTyping`
- *     (`nodeBudget`, `termDepth`, `fixpointRounds`, `fixpointWiden`) and `SpatialType.reduce`
- *     (`reduceRounds`) all take a `SpatialConfig` argument, so a non-default value really does change
- *     what those runs do.
- *   - GLOBAL DEFAULT ONLY: `Shape.MaxDepth`/`MaxHeads` are `val`s initialised from
- *     `SpatialConfig.default.shapeDepth`/`shapeWidth`.  Passing a config with a different
- *     `shapeDepth` to [[SpatialAnalysis.of]] does NOT narrow the trie — the carrier's caps are still
- *     process-wide constants, merely named in one place now.  Treat those two fields as
- *     documentation of the caps, not as knobs.
- *   - DECLARED BUT UNCONSUMED: `histQueries`, `inline`, `summaryKeys`, `unroll` mirror
- *     `SpatialCost.FactBudget`/`MaxInline` and `SpatialRecursion.Limits`, which still read their own
- *     constants.  They exist so there is one place to change them when those files adopt the config;
- *     setting them today changes nothing outside [[SpatialAnalysis]].
+ *   - [[SpatialAnalysis]]: `maxNodes`, `histQueries`, `reduceRounds`, and — through
+ *     [[SpatialAnalysis.narrow]] — `shapeDepth`/`shapeWidth`.
+ *   - `SpatialTyping.shapeWith`: `nodeBudget`, `termDepth`, `fixpointRounds`, `fixpointWiden`.
+ *   - `SpatialType.reduce`: `reduceRounds`.
+ *   - `SpatialFacts` (through [[facts]], which `SpatialAnnotations.factConfig` returns):
+ *     `profileDepth`, `unrollDepth`, `unrollNodes`, `prefixLength`.
+ *   - `SpatialRecursion` (through [[recursion]], which `SpatialAnnotations.limits` returns):
+ *     `summaryKeys`, `summaryUpdates`, `summaryWiden`, `summaryRounds`, `unroll`.
+ *   - [[SpatialLaws]] (through [[SpatialAnalysis]]' recorder): `laws`, `lawQueries`.
  *
- *  So review.md 6's "one configuration value for all analysis stages" is PARTIAL, by exactly this
- *  list.  `SpatialConfig.cheap` is honest about it: the fields it sets are the ones that are read. */
+ *  ==THE ONE HONEST CAVEAT: `shapeDepth`/`shapeWidth` NARROW, THEY DO NOT WIDEN==
+ *  `Shape.MaxDepth`/`MaxHeads` are `val`s of the CARRIER, initialised from
+ *  `SpatialConfig.default.shapeDepth`/`shapeWidth`.  They have to be domain-wide: a `Shape` built
+ *  under one cap is compared, joined and met with one built under another, so the cap belongs to the
+ *  domain rather than to a call.  What a per-analysis value can therefore do is only ever WEAKEN a
+ *  shape further, and that is what [[SpatialAnalysis.narrow]] does — it caps the depth
+ *  ([[Shape.capDepth]]) and spills the excess tracked heads into `others`/`otherTail` on every shape
+ *  the decorated traversal records and hands to its parent.  So:
+ *
+ *   - `shapeDepth`/`shapeWidth` BELOW the carrier's caps really do change the run (cheaper, weaker);
+ *   - values AT or ABOVE them are a no-op, and the analysis says so in its `notes` — a config cannot
+ *     deepen the trie the transfers build.
+ *
+ *  ==WHAT IS NOT HERE==
+ *  `SpatialCost.MaxInline` (the cost analysis' call-inlining cap) has no channel: `SpatialCost.Env`
+ *  takes no budget argument, so a field mirroring it would be decoration.  It was one
+ *  (`SpatialConfig.inline`) and is deleted rather than left unconsumed; see the report's API request. */
 final case class SpatialConfig(
-  /** [[Shape.MaxDepth]] — trie levels kept before collapsing to an untracked-head count */
+  /** trie levels this ANALYSIS keeps before collapsing to an untracked-head count.  Narrowing only —
+   *  see the caveat above; `Shape.MaxDepth` is the domain-wide cap it cannot exceed. */
   shapeDepth: Int = 4,
-  /** [[Shape.MaxHeads]] — tracked heads per level before spilling into `others`/`otherTail` */
+  /** tracked heads per level this ANALYSIS keeps before spilling into `others`/`otherTail`.
+   *  Narrowing only, against `Shape.MaxHeads`. */
   shapeWidth: Int = 12,
   /** transfers the shape traversal may run before degrading to ⊤ */
   nodeBudget: Int = 200000,
@@ -49,19 +62,77 @@ final case class SpatialConfig(
    *  transfer is not compositional (`Iteration`, `Fold`, `Fixpoint`) plus the root.  This is the
    *  budget `SpatialCost.FactBudget` spends per NODE; here it is spent per BINDER. */
   histQueries: Int = 2000,
-  /** `SpatialCost.MaxInline` */
-  inline: Int = 6,
+  /** `SpatialFacts.Config.maxProfileDepth` */
+  profileDepth: Int = 64,
+  /** `SpatialFacts.Config.maxUnrollDepth` */
+  unrollDepth: Int = 8,
+  /** `SpatialFacts.Config.maxUnrollNodes` */
+  unrollNodes: Long = 4096L,
+  /** `SpatialFacts.Config.maxPrefixLength` */
+  prefixLength: Int = 64,
   /** `SpatialRecursion.Limits.maxKeys` */
-  summaryKeys: Int = 512,
+  summaryKeys: Int = 400,
+  /** `SpatialRecursion.Limits.maxUpdates` */
+  summaryUpdates: Int = 8,
+  /** `SpatialRecursion.Limits.widenAfter` */
+  summaryWiden: Int = 3,
+  /** `SpatialRecursion.Limits.maxRounds` */
+  summaryRounds: Int = 20000,
   /** `SpatialRecursion.Limits.maxUnroll` */
   unroll: Int = 32,
+  /** THE SEMANTIC LAWS this run may meet into its per-node results (review.md 2, [[SpatialLaws]]).
+   *  Empty by default: a law is a soundness PREMISE with provenance, so it is opted into, never
+   *  inherited.  Consumed by [[SpatialAnalysis]]' recorder at every visited occurrence. */
+  laws: Vector[SpatialBoundLaw] = Vector.empty,
+  /** APPLICABLE OCCURRENCES at which the decorated traversal will evaluate a law's `bound`.  Past it
+   *  the laws stop firing and the analysis says so in its `notes` — a user-supplied law with an
+   *  expensive `bound` (`SpatialLaws.restChainPointwise` runs a whole chain analysis) must not be able
+   *  to turn a bounded analysis into an unbounded one.  Sites where no law is applicable cost only the
+   *  `applies` predicates and are not counted; the ROOT is refined regardless of the budget, because
+   *  the traversal is post-order and the root is the last occurrence visited. */
+  lawQueries: Int = 4000,
 ):
   require(shapeDepth >= 1 && shapeWidth >= 1 && reduceRounds >= 1)
+  /** add laws to this configuration (see [[SpatialLaws]] and `SpatialAnnotations.withLaws`) */
+  def withLaws(ls: SpatialBoundLaw*): SpatialConfig = copy(laws = laws ++ ls)
+  /** the fact/profile/candidate stage's budgets — the value `SpatialFacts` takes.  A `lazy val` and
+   *  not a field so that constructing a `SpatialConfig` (which `Shape.MaxDepth` does, at class-load)
+   *  cannot force `SpatialFacts`' own initialisation. */
+  lazy val facts: SpatialFacts.Config =
+    SpatialFacts.Config(maxProfileDepth = profileDepth, maxUnrollDepth = unrollDepth,
+                        maxUnrollNodes = unrollNodes, maxPrefixLength = prefixLength)
+  /** the recursion residualiser's budgets — the value `SpatialRecursion` takes */
+  lazy val recursion: SpatialRecursion.Limits =
+    SpatialRecursion.Limits(maxKeys = summaryKeys, maxUpdates = summaryUpdates,
+                            widenAfter = summaryWiden, maxRounds = summaryRounds, maxUnroll = unroll)
+  /** does this config narrow the trie below the carrier's own caps? (`false` ⇒ [[SpatialAnalysis]]
+   *  skips the narrowing pass entirely, so the default path pays nothing for it) */
+  def narrowsShapes: Boolean = shapeDepth < Shape.MaxDepth || shapeWidth < Shape.MaxHeads
 
 object SpatialConfig:
   val default: SpatialConfig = SpatialConfig()
-  /** the cheap setting: no direct histogram queries, no reduction rounds beyond the first */
-  val cheap: SpatialConfig = SpatialConfig(reduceRounds = 1, histQueries = 0, maxNodes = 2000)
+  /** THE CHEAP SETTING — the one a hook on a hot compilation path can afford (`SpatialHook`, which
+   *  runs on every `Routine.optimized` call): no direct histogram queries, one reduction round, a trie
+   *  narrowed to 2 levels × 6 heads, and — the field that actually bounds the price — a TRANSFER
+   *  budget two orders of magnitude below the default.
+   *
+   *  `nodeBudget` is what makes the cost predictable, and it was chosen by measurement, not taste.
+   *  With the default 200000 the analysis of n-queens `place(8)` (137 body nodes, but a term whose
+   *  binder bodies are re-analysed per head group and whose `Call`s are inlined interprocedurally)
+   *  added 4.4 SECONDS to one `optimized` call.  The measured worst case over the nine representative
+   *  routines in `SpatialPipelineCheck`'s cost test:
+   *
+   *  {{{
+   *  nodeBudget   worst added   n-queens place(8)   gol/nextStep
+   *     200000      +4391 ms          +4391 ms          +129 ms
+   *       8000       +123 ms            +81 ms          +123 ms
+   *       2000        +11 ms             +8 ms           +11 ms
+   *        500         +9 ms             +3 ms            +3 ms
+   *  }}}
+   *
+   *  Exhausting it costs precision only: `SpatialTyping` degrades the remaining subterms to ⊤. */
+  val cheap: SpatialConfig = SpatialConfig(shapeDepth = 2, shapeWidth = 6, nodeBudget = 2000,
+                                           reduceRounds = 1, histQueries = 0, maxNodes = 2000)
 
 /** THE LEXICAL IDENTITY of one occurrence: the child-index path from the root of the analysed term.
  *  `Vector()` is the root, `Vector(0, 1)` the second child of the first child.  Two structurally
@@ -97,9 +168,18 @@ final case class NodeAnalysis(id: NodeId,
                               result: SpatialType,
                               bindings: SpatialTyping.Env,
                               observations: Vector[SpatialObservation],
-                              facts: Vector[Fact]):
+                              facts: Vector[Fact],
+                              /** WHICH SEMANTIC LAW TIGHTENED WHAT, HERE (review.md 2).  `result` and
+                               *  `facts` above are already law-refined; this is the audit trail that
+                               *  says by which law, on what evidence, and from what to what.  Empty
+                               *  unless [[SpatialConfig.laws]] is non-empty. */
+                              laws: Vector[LawApplication] = Vector.empty):
   def isJoined: Boolean = observations.size > 1
-  def show: String = s"${id.show} ${expression.show.take(60)} :: ${result.show}"
+  /** laws that actually moved this node's answer */
+  def tightenedBy: Vector[LawApplication] = laws.filter(_.tightened)
+  def show: String =
+    s"${id.show} ${expression.show.take(60)} :: ${result.show}" +
+    (if tightenedBy.isEmpty then "" else tightenedBy.map(a => s"\n      ⊓ ${a.show}").mkString)
 
 /** THE DECORATED ANALYSIS — one traversal, per-node results with lexical provenance (review.md 4).
  *
@@ -139,12 +219,31 @@ final case class NodeAnalysis(id: NodeId,
  *    - `Iteration`/`Fold`/`Fixpoint` are genuinely NOT compositional in the count domain (the
  *      rest-chain head-partition law reads the real body, and the fixpoint re-analyses its body
  *      against the accumulated type), so for those the analysis also makes ONE direct
- *      `SpatialTypes.infer` call and MEETS the two answers.  That is `O(#binders)` direct queries
- *      instead of `O(#nodes)`, under [[SpatialConfig.histQueries]].
+ *      `SpatialTypes.infer` call per BINDER OBSERVATION and MEETS the two answers, under
+ *      [[SpatialConfig.histQueries]].  (Per observation, not per binder: a binder inside a 16-level
+ *      nest is analysed once per enclosing head group, and each of those has its own environment, so
+ *      one cached answer would be an answer to a different question.  Measured on `puzzle15`: 1279
+ *      direct queries, 0.21 s of a 1.33 s analysis.)
+ *
+ *  ==WHY THE RECORDER IS LINEAR IN THE OBSERVATIONS==
+ *  A position's published `result` is the JOIN over its observations, and `stubHist` reads a child's
+ *  result once per PARENT visit.  Recomputing that join (and its `Fact.from` projection) per lookup is
+ *  quadratic in the observation count, and on `puzzle15` — 295 positions, 13725 observations — it was
+ *  34.1 s of a 35.6 s analysis.  The join is therefore maintained INCREMENTALLY (one `SpatialType.join`
+ *  per observation, the same left fold, the same value) and facts are derived exactly once per
+ *  position, at the end.  Measured: 35.6 s -> 1.33 s, identical root type, identical node count.
+ *
+ *  ==SEMANTIC LAWS  (review.md 2)==
+ *  [[SpatialConfig.laws]] carries [[SpatialBoundLaw]]s; the recorder MEETS every applicable law's bound
+ *  into the per-node result at the occurrence where it applies and keeps the provenance on the node
+ *  ([[NodeAnalysis.laws]]).  Because the refined child is what the parent transfer consumes, a law at a
+ *  child changes the parent's answer, the routine's facts, its specialisation candidates, and — through
+ *  `SpatialPipeline`'s per-node elimination — its RESIDUAL and the residual's cost.  See
+ *  [[SpatialLaws]] for the safety argument (the channel is a meet, so a law cannot widen).
  *
  *  ==NO EVALUATION==
  *  Nothing here calls `eval`/`evalI`/`evalT`/`exec*`.  Every number comes from the transfers, the
- *  declared input types and the term's syntax; grounded functions stay ⊤. */
+ *  declared input types, the term's syntax and the declared laws; grounded functions stay ⊤. */
 final case class SpatialAnalysis(root: SpatialType,
                                  nodes: Vector[NodeAnalysis],
                                  config: SpatialConfig,
@@ -160,6 +259,24 @@ final case class SpatialAnalysis(root: SpatialType,
   def occurrencesOf(s: Space): Vector[NodeAnalysis] = nodes.filter(_.expression == s)
   /** the nodes the analysis PROVED empty: the elimination candidates, with their positions */
   def provablyEmpty: Vector[NodeAnalysis] = nodes.filter(_.result.isProvablyEmpty)
+
+  // ---- THE LAW CHANNEL'S AUDIT TRAIL (review.md 2) ----------------------------------------------
+  /** every law application at every occurrence */
+  def lawApplications: Vector[LawApplication] = nodes.flatMap(_.laws)
+  /** the ones that MOVED an answer — the honest measure of what the laws bought */
+  def tightenedBy: Vector[LawApplication] = nodes.flatMap(_.tightenedBy)
+  /** the law applications at ONE occurrence: "which law tightened WHAT, here" */
+  def lawsAt(id: NodeId): Vector[LawApplication] = index.get(id).map(_.laws).getOrElse(Vector.empty)
+  /** laws that tightened an answer WITHOUT a discharged proof obligation.  A consumer that must not
+   *  rest on an undischarged axiom reads this and refuses. */
+  def assumedLaws: Vector[String] = tightenedBy.filter(_.assumed).map(_.law).distinct
+  /** laws whose bound contradicted the transfers and were therefore DROPPED */
+  def contradictedLaws: Vector[LawApplication] =
+    lawApplications.filter(_.outcome == LawOutcome.Contradicted)
+  /** how many observations the traversal made in total (parents are re-analysed per head group, so
+   *  this is the quantity the latency budget is really about, not `nodes.size`) */
+  def observationCount: Int = nodes.iterator.map(_.observations.size).sum
+
   def show: String =
     (s"root ${root.show}" +: nodes.map(n => "  " + n.show) ++: notes.map("  ! " + _)).mkString("\n")
 
@@ -231,6 +348,51 @@ object SpatialAnalysis:
    *  shadow a stub, so the analysis refuses to stub in that case and falls back to a direct query. */
   private val StubPrefix = "#sa#"
 
+  // ------------------------------------------------------------------------------------------------
+  // THE PER-ANALYSIS TRIE CAPS — what makes `shapeDepth`/`shapeWidth` a knob and not a comment
+  // ------------------------------------------------------------------------------------------------
+
+  /** WEAKEN `sh` to this analysis' own trie caps.  Applied to every shape the decorated traversal
+   *  records AND hands back to its parent transfer, so a narrower config really does produce a
+   *  cheaper, weaker run rather than an identical one.
+   *
+   *  ==WHY IT CAN ONLY WEAKEN==
+   *  `Shape.MaxDepth`/`MaxHeads` are properties of the CARRIER (see [[SpatialConfig]]), so the deepest
+   *  trie any transfer will build is fixed process-wide.  Both directions of this function are
+   *  therefore downward: [[Shape.capDepth]] collapses everything below `shapeDepth` into an
+   *  untracked-head COUNT, and [[capWidth]] moves the excess tracked heads into `others`/`otherTail`.
+   *
+   *  ==WHY IT IS SOUND==
+   *  Both operations only ADD values to γ, and the decorated analysis' soundness argument is exactly
+   *  γ-based, never monotonicity-based: the concrete value of a subterm is in γ of the shape recorded
+   *  for it, and every transfer is sound for every value in γ of its operands' declared types.  So a
+   *  parent transfer fed the widened child stays sound, the recorded node stays sound, and the only
+   *  thing lost is precision.  (`SpatialType.reduce` may still tighten it back through the histogram
+   *  half — that is the reduced product doing its job, not the cap being ignored.) */
+  def narrow(sh: Shape, cfg: SpatialConfig): Shape =
+    if !cfg.narrowsShapes then sh else Shape.capDepth(capWidth(sh, cfg.shapeWidth), cfg.shapeDepth)
+
+  /** keep at most `k` tracked heads per level; the rest become untracked, exactly the way
+   *  `Shape`'s own normalising constructor spills them (`SpatialShape.scala:340-348`) — the count
+   *  channel absorbs how many they were (`lo` counts the ones that are FORCED present, `hi` all of
+   *  them) and the `otherTail` summary absorbs their tails, WEAKENED so no must claim survives into a
+   *  channel that is a may-only summary by definition. */
+  private def capWidth(sh: Shape, k: Int): Shape =
+    if sh.definitelyEmpty then sh
+    else
+      val kids = sh.heads.iterator.map((h, t) => h -> capWidth(t, k)).toVector
+      val ot = sh.otherTail.map(t => Shape.weaken(capWidth(t, k)))
+      if kids.size <= k then Shape(sh.eps, SortedMap.from(kids), sh.others, ot)
+      else
+        val keep = kids.take(k)
+        val spill = kids.drop(k)
+        val base: Shape = if sh.others.hi == 0 then Shape.empty else ot.getOrElse(Shape.top)
+        val tail = spill.foldLeft(Shape.weaken(base))((a, kv) => Shape.unionTransfer(a, Shape.weaken(kv._2)))
+        val cnt = Ivl(Ivl.add(sh.others.lo, spill.count((_, t) => t.definitelyNonEmpty).toLong),
+                      Ivl.add(sh.others.hi, spill.size.toLong))
+        Shape(sh.eps, SortedMap.from(keep), cnt,
+              if tail.isTop then None else Some(Shape.weaken(tail)))
+
   def of(s: Space): SpatialAnalysis = of(s, SpatialTyping.Env(), SpatialConfig.default)
   def of(s: Space, env: SpatialTyping.Env): SpatialAnalysis = of(s, env, SpatialConfig.default)
 
@@ -249,10 +411,35 @@ object SpatialAnalysis:
     val contradiction =
       if root.uninhabited then
         Vector("the compositional per-node result and the root query CONTRADICT each other: the " +
-               "annotations are unsatisfiable, or one of the two transfers is unsound")
+               "annotations are unsatisfiable, or one of the two transfers is unsound" +
+               (if cfg.laws.isEmpty then ""
+                else s"; ${cfg.laws.size} law(s) were in effect (${cfg.laws.map(_.show).mkString(", ")}) " +
+                     "and a law's bound is a soundness PREMISE, so suspect it first"))
       else Vector.empty
     val nodes = rec.nodes(root)
-    SpatialAnalysis(root, nodes, cfg, contradiction ++ rec.noteList)
+    // a law that MOVED an answer is reported, and one that rests on an undischarged axiom is reported
+    // loudly: a consumer must be able to see that a rewrite was licensed by an assumption.
+    val lawNotes =
+      val tightened = nodes.flatMap(_.tightenedBy)
+      val dropped = nodes.flatMap(_.laws).filter(_.outcome == LawOutcome.Contradicted)
+      tightened.groupBy(_.law).toVector.sortBy(_._1).map((n, as) =>
+        s"law $n tightened ${as.size} occurrence(s) [${as.head.evidence.show}]") ++
+      dropped.groupBy(_.law).toVector.sortBy(_._1).map((n, as) =>
+        s"law $n CONTRADICTED the transfers at ${as.size} occurrence(s) and was DROPPED: ${as.head.why}") ++
+      (if tightened.exists(_.assumed) then
+         Vector("this result rests on ASSUMED law(s): " +
+                tightened.filter(_.assumed).map(_.law).distinct.mkString(", ") +
+                " — no proof obligation was discharged for their bounds")
+       else Vector.empty)
+    // a config may only NARROW the trie (see `narrow`); say so rather than let a caller believe a
+    // bigger `shapeDepth` bought a deeper one
+    val caps =
+      if cfg.shapeDepth > Shape.MaxDepth || cfg.shapeWidth > Shape.MaxHeads then
+        Vector(s"shapeDepth=${cfg.shapeDepth}/shapeWidth=${cfg.shapeWidth} exceed the carrier's own " +
+               s"caps (${Shape.MaxDepth}/${Shape.MaxHeads}): a config narrows the trie, it cannot " +
+               "deepen or widen it, so those two values had no effect")
+      else Vector.empty
+    SpatialAnalysis(root, nodes, cfg, contradiction ++ caps ++ lawNotes ++ rec.noteList)
 
   /** facts for one occurrence, straight out of the decorated analysis */
   def factsAt(s: Space, env: SpatialTyping.Env, id: NodeId): Vector[Fact] = of(s, env).factsAt(id)
@@ -264,7 +451,18 @@ object SpatialAnalysis:
       extends SpatialTyping.ShapeVisitor:
     private val obs = collection.mutable.LinkedHashMap.empty[Vector[Int], Vector[SpatialObservation]]
     private val exprs = collection.mutable.HashMap.empty[Vector[Int], Space]
+    /** THE INCREMENTALLY MAINTAINED JOIN over a position's observations — the same value the fold
+     *  `vs.map(_.result).reduce(SpatialType.join)` produces, in the same left-to-right order, but
+     *  updated ONCE PER OBSERVATION instead of recomputed on every lookup.  That is what makes the
+     *  decorated traversal linear in the number of observations rather than quadratic: `stubHist`
+     *  reads a child's result once per PARENT visit, and a binder body under a 16-level iteration nest
+     *  has thousands of observations (measured on `puzzle15`: 13725 visits over 295 positions, 11487
+     *  child lookups, 34.1 s of the 35.6 s total spent re-joining and re-deriving facts). */
+    private val joined = collection.mutable.HashMap.empty[Vector[Int], SpatialType]
+    /** the law audit trail per position, merged over observations ([[LawApplication.occurrences]]) */
+    private val lawLog = collection.mutable.HashMap.empty[Vector[Int], Vector[LawApplication]]
     private var queries = cfg.histQueries
+    private var lawBudget = cfg.lawQueries
     private var dropped = 0
     private val notes = collection.mutable.LinkedHashSet.empty[String]
     /** `nodes` may add a note, so read this AFTER it */
@@ -274,36 +472,65 @@ object SpatialAnalysis:
 
     /** POST-ORDER: children are visited before their parent, so their histograms are already here. */
     def visit(pos: Vector[Int], s: Space, env: SpatialTyping.Env, sh: Shape, cause: String): Shape =
-      val lens = histOf(pos, s, env)
-      val reduced = SpatialType.reduce(SpatialType(sh, lens), cfg)
+      // ONE construction of the length environment per visit.  `env.lengths` rebuilds three maps, and
+      // the direct query, the stub query and the leaf fallback all want the same value.
+      lazy val lenv = env.lengths
+      val lens = histOf(pos, s, env, lenv)
+      // THIS ANALYSIS' OWN trie caps, applied before the reduction so the reducer works on the shape
+      // this run is willing to keep (see `SpatialAnalysis.narrow` — narrowing only, always sound)
+      val reduced = SpatialType.reduce(SpatialType(narrow(sh, cfg), lens), cfg)
+      // ---- THE LAW CHANNEL (review.md 2): meet every applicable law's bound in, HERE, and keep the
+      // provenance on the node.  A law can only narrow (the channel is a meet), and with no laws
+      // configured this costs one `isEmpty` test and returns the value the transfers produced.
+      val refined =
+        // THE ROOT IS NEVER STARVED.  The traversal is POST-ORDER, so the root is the LAST occurrence
+        // visited; a budget spent on the way up would silently skip the one node every consumer reads.
+        // It is exactly one extra site, so the exception costs a bounded amount.
+        if cfg.laws.isEmpty then reduced
+        else if lawBudget <= 0 && pos.nonEmpty then
+          notes += s"law refinements exhausted (${cfg.lawQueries} applicable occurrences); later " +
+                   "occurrences use the transfers alone — sound, less precise (the ROOT is always " +
+                   "refined regardless of this budget)"
+          reduced
+        else
+          val (r, apps) = SpatialLaws.refine(cfg.laws, LawSite(NodeId(pos), s, env, reduced))
+          if apps.nonEmpty then
+            // the budget counts APPLICABLE sites, which is what the expensive half (`bound`) costs.
+            // `applies` is required to be cheap and is not budgeted — see `SpatialBoundLaw`.
+            lawBudget -= 1
+            lawLog(pos) = SpatialLaws.mergeApplications(lawLog.getOrElse(pos, Vector.empty), apps)
+          r
       if obs.size >= cfg.maxNodes && !obs.contains(pos) then
         dropped += 1
-        reduced.shape
+        refined.shape
       else
         exprs(pos) = s
-        obs(pos) = obs.getOrElse(pos, Vector.empty) :+ SpatialObservation(cause, env, reduced)
+        obs(pos) = obs.getOrElse(pos, Vector.empty) :+ SpatialObservation(cause, env, refined)
+        joined(pos) = joined.get(pos) match
+          case Some(prev) => SpatialType.join(prev, refined)
+          case None => refined
         // the TIGHTENED child is what the parent transfer sees — the part a root-only reduction
-        // cannot do (review.md 5)
-        reduced.shape
+        // cannot do (review.md 5), and the part that lets a law at a child change a PARENT's answer
+        refined.shape
 
     /** the compositional histogram for one node, plus a direct query where composition is weak */
-    private def histOf(pos: Vector[Int], s: Space, env: SpatialTyping.Env): SpaceType =
+    private def histOf(pos: Vector[Int], s: Space, env: SpatialTyping.Env, lenv: => SpatialEnv): SpaceType =
       val kids = childrenOf(s)
       val direct = s match
         case Space.Iteration(_, _, _, _) | Space.Fold(_, _, _, _, _, _, _) | Space.Fixpoint(_, _, _) =>
-          if queries > 0 then { queries -= 1; Some(SpatialTypes.infer(s, env.lengths)) }
+          if queries > 0 then { queries -= 1; Some(SpatialTypes.infer(s, lenv)) }
           else { notes += s"direct histogram queries exhausted (${cfg.histQueries}); binder nodes " +
                           "past that point use the compositional bound only"; None }
         case _ => None
-      val stub = stubHist(pos, s, kids, env)
+      val stub = stubHist(pos, s, kids, lenv)
       (stub, direct) match
         case (Some(a), Some(b)) => SpatialGamma.meetSpace(a, b).getOrElse(a)
         case (Some(a), None) => a
         case (None, Some(b)) => b
         // a leaf, or a child whose record was dropped: ask the transfer directly on the node itself
         case (None, None) =>
-          if kids.isEmpty then SpatialTypes.infer(s, env.lengths)
-          else if queries > 0 then { queries -= 1; SpatialTypes.infer(s, env.lengths) }
+          if kids.isEmpty then SpatialTypes.infer(s, lenv)
+          else if queries > 0 then { queries -= 1; SpatialTypes.infer(s, lenv) }
           else SpaceType.unknown
 
     /** rebuild the node over stub mentions bound to the children's histograms, and let
@@ -316,10 +543,10 @@ object SpatialAnalysis:
      *  later groups; the SHAPE half, which is where head-group precision actually lives, is per
      *  observation because the traversal itself re-runs the transfer under each group's bindings. */
     private def stubHist(pos: Vector[Int], s: Space, kids: Vector[Space],
-                         env: SpatialTyping.Env): Option[SpaceType] =
+                         lenv: => SpatialEnv): Option[SpaceType] =
       if kids.isEmpty then None
       else
-        val childTypes = kids.indices.map(i => node(pos :+ i).map(_.result.lens))
+        val childTypes = kids.indices.map(i => joinedAt(pos :+ i).map(_.lens))
         if childTypes.exists(_.isEmpty) then None
         else
           var names = Map.empty[Space, SpaceMention]
@@ -334,17 +561,22 @@ object SpatialAnalysis:
                 bind = bind.updated(m, childTypes(i).get)
                 Space.Mention(m)
           }
-          val lenv = env.lengths
-          if lenv.spaces.keysIterator.exists(_.s.startsWith(StubPrefix)) then None
-          else Some(SpatialTypes.infer(rebuild(s, stubs), lenv.copy(spaces = lenv.spaces ++ bind)))
+          val le = lenv
+          if le.spaces.keysIterator.exists(_.s.startsWith(StubPrefix)) then None
+          else Some(SpatialTypes.infer(rebuild(s, stubs), le.copy(spaces = le.spaces ++ bind)))
+
+    /** THE HOT LOOKUP — the join over a position's observations, in O(1).  `stubHist` calls it once
+     *  per operand per parent visit, so it must not derive facts (that is `node`'s job, and it happens
+     *  exactly once per POSITION, at the end). */
+    private def joinedAt(pos: Vector[Int]): Option[SpatialType] = joined.get(pos)
 
     private def node(pos: Vector[Int]): Option[NodeAnalysis] =
       for
         vs <- obs.get(pos)
         e <- exprs.get(pos)
-      yield
-        val joined = vs.map(_.result).reduce(SpatialType.join)
-        NodeAnalysis(NodeId(pos), e, joined, vs.head.bindings, vs, Fact.from(joined, probes))
+        j <- joined.get(pos)
+      yield NodeAnalysis(NodeId(pos), e, j, vs.head.bindings, vs, Fact.from(j, probes),
+                         lawLog.getOrElse(pos, Vector.empty))
 
     /** every decorated node, parents before children.  The ROOT is replaced by the meet-refined root
      *  the analysis publishes, so `at(root)` and `.root` cannot disagree. */

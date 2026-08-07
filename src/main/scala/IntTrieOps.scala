@@ -1,6 +1,6 @@
 package scala.collection.immutable
 
-import morkl.ITrie
+import morkl.{ITrie, EffortEvent, effort}
 
 /** Native merges of the `IntMap[ITrie]` children maps that back [[morkl.ITrie]].  This object lives
  *  in `scala.collection.immutable` so it can see IntMap's package-private Patricia structure
@@ -9,12 +9,25 @@ import morkl.ITrie
  *  round-trips, and whole shared sub-tries skipped by pointer identity.
  *
  *  Each op short-circuits on `eq` (identical sub-tries merge to themselves) — the common case under
- *  iteration/fixpoint, where most of one operand's structure is shared with the other. */
+ *  iteration/fixpoint, where most of one operand's structure is shared with the other.
+ *
+ *  INSTRUMENTED (review.md item 1).  Each recursive entry counts one
+ *  [[morkl.EffortEvent.PatriciaVisit]], which — together with `ITrie`'s own
+ *  [[morkl.EffortEvent.TrieNodeVisit]] — is the ORACLE for `SpatialCost`'s `touch` component.  The
+ *  bound the cost models rely on is the Patricia one: a Patricia tree over `k` keys has at most
+ *  `2k-1` nodes, and a simultaneous descent visits at most the nodes of the two trees, so one merge
+ *  of children maps of sizes `m` and `n` counts at most `2(m + n)` visits.  The hook is one static
+ *  load and a not-taken branch while the sink is disarmed (`morkl.effort` is `inline`), and that cost
+ *  is measured in `SpatialEventsCheck`, not asserted. */
 object IntTrieOps:
   import IntMapUtils.{hasMatch, zero, shorter, join}
 
+  /** Count ONE Patricia descent and hand the scrutinee back unchanged.  Written as an inline identity
+   *  so the hook can sit on the existing `= (a, b) match` lines without reshaping the match. */
+  private inline def visit[A](inline x: A): A = { effort(EffortEvent.PatriciaVisit); x }
+
   // ---- union: keep every key; combine the two sides where a key is in both -------------------
-  def unionTries(a: IntMap[ITrie], b: IntMap[ITrie]): IntMap[ITrie] = (a, b) match
+  def unionTries(a: IntMap[ITrie], b: IntMap[ITrie]): IntMap[ITrie] = visit((a, b)) match
     case _ if a eq b => a
     case (IntMap.Nil, _) => b
     case (_, IntMap.Nil) => a
@@ -33,7 +46,7 @@ object IntTrieOps:
       else join(p1, a, p2, b)
 
   // ---- intersection: only keys in both, combined; drop sub-results that come out empty --------
-  def intersectTries(a: IntMap[ITrie], b: IntMap[ITrie]): IntMap[ITrie] = (a, b) match
+  def intersectTries(a: IntMap[ITrie], b: IntMap[ITrie]): IntMap[ITrie] = visit((a, b)) match
     case _ if a eq b => a
     case (IntMap.Nil, _) | (_, IntMap.Nil) => IntMap.Nil
     case (IntMap.Tip(k, v), _) => b.get(k) match
@@ -53,7 +66,7 @@ object IntTrieOps:
   // ---- restriction: keys of `x` that also appear in `prefixes`, recursively restricted; drop empties.
   //      (called only when `prefixes` is NOT terminal — the terminal "keep whole subtree" case is
   //      handled by ITrie.restriction before descent.) ------------------------------------------
-  def restrictTries(x: IntMap[ITrie], p: IntMap[ITrie]): IntMap[ITrie] = (x, p) match
+  def restrictTries(x: IntMap[ITrie], p: IntMap[ITrie]): IntMap[ITrie] = visit((x, p)) match
     case (IntMap.Nil, _) | (_, IntMap.Nil) => IntMap.Nil
     case (IntMap.Tip(k, v), _) => p.get(k) match
       case Some(w) => keep(k, ITrie.restriction(v, w)); case None => IntMap.Nil
@@ -70,7 +83,7 @@ object IntTrieOps:
       else IntMap.Nil
 
   // ---- difference: keys of `a`, minus (per matching key) what `b` removes; drop empties --------
-  def diffTries(a: IntMap[ITrie], b: IntMap[ITrie]): IntMap[ITrie] = (a, b) match
+  def diffTries(a: IntMap[ITrie], b: IntMap[ITrie]): IntMap[ITrie] = visit((a, b)) match
     case _ if a eq b => IntMap.Nil
     case (IntMap.Nil, _) => IntMap.Nil
     case (_, IntMap.Nil) => a

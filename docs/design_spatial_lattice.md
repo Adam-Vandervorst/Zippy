@@ -65,7 +65,7 @@ is deliberately separated from the SMT rows:
 | `γ(a op# b) ⊇ γ(a) op γ(b)` at abstract operands | `SpatialLawCheck` (900/operator, incl. open head sets) + `SpatialSoundnessHunt` HUNT 7 (246 300 checks) | proved |
 | the whole analysis on adversarial terms | `SpatialSoundnessHunt` HUNT 1–6, delta-debugged witnesses | proved |
 | `specialize(s, facts) ≡ s` under the facts | `SpatialLawCheck` conditional-rewrite tests + corpus | proved |
-| `cost#` bounds a backend's real cost | **nothing** — the cost constants are an unvalidated model of the two interpreters, with only a rank-correlation sanity check (ρ = 0.933, 16 programs) | proved *or* measured |
+| `cost#` bounds a backend's real cost | `SpatialEventsCheck` calibration against **counted executor events** — 4 backends × 4 components, 3000 corpus points + 66 cornerstone points, **100% containment**, with p95 and worst-case slack **gated per (backend, component)**. Rank correlation is now the secondary metric. | proved; **and the bound is loose** — see §7a: cornerstone slack reaches 3.96 M× on `touch` |
 
 **Termination is not addressed here either.** The `Shape` widening (`widenShape`) and the `Fixpoint`
 iteration bound are structural arguments plus an explicit iteration cap, exactly as §7 says for the
@@ -85,18 +85,29 @@ certified relational laws, the solver). An earlier revision seeded closed subter
 (`groundFold`, in all three tiers); it was removed, and the exactness it produced on the cornerstones
 went with it. Anything that looks exact now is derived.
 
-**The invariant now covers eleven files, and is checked rather than trusted.** Every `Spatial*.scala`
-in `src/main/scala` — including the newer `SpatialAnalysis`, `SpatialFacts`, `SpatialCheck`,
-`SpatialPipeline` and `SpatialEvents` — contains **zero** calls to `eval`/`evalI`/`evalT`/`exec*`. The
-only textual matches are four string literals in `SpatialCost.scala` that *name* the backends
-(`"eval (MORKL.scala) over Set[PathValue]"` and its three siblings). Four suites additionally assert it
-behaviourally with a **bomb subterm** — a `GroundedSS` whose function throws — and run inference, fact
-derivation, cost prediction, conformance checking and witness search over it; a throw is never an
-acceptable route to precision, and the correct answer is ⊤.
+**The invariant now covers twelve files, and is checked rather than trusted.** Every `Spatial*.scala`
+in `src/main/scala` — including `SpatialAnalysis`, `SpatialFacts`, `SpatialCheck`, `SpatialPipeline`,
+`SpatialEvents` and the new `SpatialLaws` — contains **zero** calls to
+`eval`/`evalI`/`evalT`/`exec*`/`runGraphT`. Re-verified this round: the only textual matches are seven
+occurrences inside doc comments (four in `SpatialCost.scala` naming the backends it prices, three in
+`SpatialEvents`/`SpatialGamma`/`SpatialTypes` stating the soundness obligation). Four suites additionally
+assert it behaviourally with a **bomb subterm** — a `GroundedSS` whose function throws — and run
+inference, fact derivation, cost prediction, conformance checking and witness search over it; a throw is
+never an acceptable route to precision, and the correct answer is ⊤.
 
-**Instrumentation is not analysis.** `SpatialEvents` counts events *inside* `eval`, `execT` and
-`execZ`, which is the opposite direction: the executor reports what it did, and the analysis never asks
-it. The counted vectors are consumed only by tests (calibration), never by a transfer or a bound.
+**Instrumentation is not analysis.** `SpatialEvents` counts events *inside* `eval`, `evalI`, `execT` and
+`execZ` — including the recursive `ITrie`/`IntTrieOps` descent — which is the opposite direction: the
+executor reports what it did, and the analysis never asks it. The counted vectors are consumed only by
+tests (calibration), never by a transfer or a bound.
+
+**A law is not an evaluation either — but this one is argued, not gated.** `SpatialLaws` bounds come
+from `LawSite` (the term, the environment and the already-inferred type) and are **met** into the result;
+the file contains no executor call, and the library's laws are established *outside* the analysis, by
+exhaustive finite search in a test, recorded as `ExecutableChecked` provenance. The gap is that
+`SpatialLawsCheck` has **no bomb-subterm test of its own**: nothing stops a *caller-supplied* law from
+calling `eval` inside its `bound`, and the invariant for user laws is therefore a contract, not a check.
+The laws that ship are covered indirectly — `SpatialAcceptance` 6a–6d run the law-refined pipeline under
+its `noEval` wrapper — but a bomb-subterm test on the law channel itself is **open work**.
 
 ## 1. The domain
 
@@ -265,25 +276,58 @@ result.
   count fact to pick a sharper structural rule mid-transfer; it can only be corrected afterwards. The
   `peel` case works because correction-after-the-node is enough there, not because the transfers
   cooperate.
-- **`SpatialConfig` is one value, not one authority.** Honoured per call by `SpatialAnalysis`,
-  `SpatialTyping` and `SpatialType.reduce`. `Shape.MaxDepth`/`MaxHeads` are `val`s read from the
-  **global default**, so `shapeDepth`/`shapeWidth` cannot be varied per analysis. `histQueries`,
-  `inline`, `summaryKeys` and `unroll` are declared but unconsumed — `SpatialCost` and
-  `SpatialRecursion` still read their own constants.
-- **Zipper effort calibration rests on 23 of 200 programs.** `execZ` delegated the other 177 to the
-  uninstrumented `evalI`; those are *excluded* from the zipper rows rather than counted as zero, which
-  is honest but thin. `ZipperFallbackToEvalI` makes the exclusion visible; instrumenting `evalI` (or
-  the `IntTrieOps` Patricia operators, which are ours) is the way to widen it.
-- **Some effort intervals are vacuous.** Where a cornerstone's predicted upper is `∞` (`puzzle15` and
-  `datalog-sn` on all three components), "100% containment" says nothing and slack is `Infinity`.
-  Containment is only meaningful jointly with the slack column; zipper `Alloc` p95 = 67.8 is inside the
-  interval and still not a close model.
-- **Reference `work` is not fully countable from our source.** `eval`'s `Set` operations delegate to the
-  Scala collection library, so internal hash probes cannot be counted by these hooks. The reference
-  oracle counts AST dispatches, explicit prefix comparisons, loop frames and fixpoint rounds only — if
-  `SetCost.work` is read as "internal element touches", that component is *not* validated.
-- **Bounded completeness is bounded.** `SpatialCheck.Refuted` needs a real witness, and witnesses come
-  from a finite universe over a chosen alphabet and maximum path length. `Unknown` therefore mixes
-  genuine violations with abstract false negatives and with "the universe was too small"; the measured
-  `leq` incompleteness (11 of 62 contained pairs missed) is a property of that universe, not of the
-  order in general.
+- **`SpatialConfig` narrows the trie; it cannot widen it.** Every field is now read by a run and the
+  class comment names the reader; `SpatialAnnotations.factConfig`/`limits` are **projections** of it
+  rather than separate records, and the one field with no channel (`inline`, mirroring
+  `SpatialCost.MaxInline`) was **deleted** rather than left as decoration. What remains is
+  one-directional and structural: `Shape.MaxDepth`/`MaxHeads` are `val`s of the **carrier**, initialised
+  from `SpatialConfig.default`, because a `Shape` built under one cap is joined and met with one built
+  under another. A per-analysis `shapeDepth`/`shapeWidth` therefore only ever **weakens** — via
+  `SpatialAnalysis.narrow` (`Shape.capDepth` plus a width spill into `others`/`otherTail`) on every shape
+  the decorated traversal records — and a value at or above the carrier's cap is a no-op that the
+  analysis reports in its `notes`.
+- **Effort calibration now covers four backends with no structural exclusion, and is *loose*.** `evalI`,
+  every `ITrie` node the algebra builds, and the recursive `ITrie`/`IntTrieOps` descent are instrumented,
+  so the review's "177 of 200 zipper programs excluded because they delegated to `evalI`" is gone —
+  `0 of 200` predictions are skipped. Containment is 100% (3000 corpus points, 66 cornerstone points),
+  and the honest half is the slack: corpus worst-case is 36× (zipper `Work`), 151× (zipper `Alloc`) and
+  110× (zipper `Touch`); the **cornerstones** are 5,368× / 55,648× / 3,175× on the reference backend and
+  **3,962,335×** on trie/zipper `Touch`. `touch` is the worst component because it bounds a worst-case
+  Patricia descent that pointer identity, empty operands and prefix mismatches routinely cut to nothing,
+  and because `collect` must cover `Fold`'s quadratic left fold of unions. **`Cost.touch` is not a
+  runtime predictor at cornerstone scale.** The p95-and-worst gate exists so this is a tracked number
+  rather than a discovered surprise.
+- **Two cornerstone predictions remain unbounded, and the reasons are structural, not constants.**
+  `datalog-sn` needs a fixpoint over the size lattice (an interprocedural size summary) and `puzzle15`
+  needs the loop transfer restructured for a whole rest-chained nest — raising `SpatialCost.MaxDepth`
+  from 64 to 512 was tried and the bound then saturates to `inf` because a 16-level product of per-level
+  group counts overflows the algebra's `Long`. The exclusion list is asserted equal, in both directions,
+  to the set of cornerstones that actually come out unbounded.
+- **Reference `touch` has no oracle at all, and that is declared in the model.** `ReferenceCost` carries
+  `touchNoOracle`: `eval`'s `Set` operations delegate union/intersection/hash probing to the Scala
+  collection library, so these hooks cannot count its internal element touches. `touch` is excluded from
+  calibration for `reference` **and only for `reference`** — a test pins the list to one backend and
+  names the reason, and `eval` is measured to emit **0** trie-touch events over 200 corpus programs and
+  6 cornerstones. Read `SetCost.work` as AST dispatches, explicit prefix comparisons, loop frames and
+  fixpoint rounds; do not read it as internal element touches.
+- **Semantic laws are premises, and the label matters.** `SpatialLaws` carries `ExecutableChecked` /
+  `SmtProved` / `Assumed`, only the first two are `discharged`, and `decorated.assumedLaws` makes an
+  undischarged premise findable. Every law in the current library is `ExecutableChecked` by an exhaustive
+  finite search (512 digraphs on 3 nodes; 512 3×3 Life fields; exact n-queens counts n=1..8) — **none is
+  SMT-proved**, and nothing generates the Scala law from a proof obligation. The *safety* of the channel
+  does not depend on the label: a bound is **met** into the inferred type, so an unsound law can only
+  cost precision or produce `Contradicted` (and be dropped), never widen γ. The **bounds themselves are
+  loose where the law is general**: the Life radius-1 image bound of 9·|field| is sound, and the worst
+  ratio actually observed over all 512 fields is 1.75.
+- **Bounded completeness is bounded — but the order's incompleteness is now measured, attributed, and
+  mostly irreducible.** `SpatialCheck.Refuted` still needs a real witness from a finite universe over a
+  chosen alphabet and maximum path length, so `Unknown` still mixes genuine violations, abstract false
+  negatives and "the universe was too small". What changed is that the three are now separable:
+  `SpatialGamma.leqSpaceMask` / `Shape.leqStrongMask` attribute a rejection to a channel, and the causes
+  of the 202 residual false negatives on the wide pool are **150 true negatives** (refuted off the
+  universe — `leq` is right), **52 product interaction** (neither component contained, only the
+  conjunction, which no componentwise order can see) and **0 avoidable**. On universes that DECIDE
+  containment for their class, both orders measure **0 false negatives**. The residual limit is therefore
+  the *product structure*, not a missing clause: `SpatialType.leq` is `Shape.leqStrong × leqSpace`, and a
+  containment visible only to the conjunction is out of reach for any componentwise test. That is what
+  `orderFailures` now says on a one-sided failure, and what `SpatialCheckCheck` 4a–4c pin.

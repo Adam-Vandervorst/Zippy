@@ -405,13 +405,32 @@ object SpatialChannels:
 
   // ---- abstract inclusion: which clause of the order failed?  (mirror of SpatialType.leq) ---------
 
-  /** every clause of `SpatialType.leq(a, b)` that failed.  Empty ⟺ the order holds. */
+  /** every clause of `SpatialType.leq(a, b)` that failed.  Empty ⟺ the order holds.
+   *
+   *  ONE-SIDED FAILURES ARE MARKED `sufficientOnly`.  `SpatialType.leq` is a COMPONENTWISE test
+   *  (`Shape.leqStrong` × `SpatialGamma.leqSpace`), so when one component is PROVED contained and the
+   *  other is not, the product containment can still hold: the contained component may exclude exactly
+   *  the values the other component's clause objects to.  `SpatialLawCheck`'s cause histogram measures
+   *  that class — PRODUCT INTERACTION, 52 of the 202 residual false negatives, and the only avoidable
+   *  class is now empty — so a clause coming from the only failing component is a sufficient condition
+   *  for the product order's `false`, never a necessary one, and says so. */
   def orderFailures(a: SpatialType, b: SpatialType): Vector[ChannelFailure] =
     if a.uninhabited then Vector.empty          // ⊥ is below everything — vacuously; see `SpatialCheck`
     else if b.uninhabited then
       Vector(ChannelFailure(ResultChannel.Bottom, a.show, "⊥",
                             "the declared type is the explicit bottom and the inferred one is not"))
-    else shapeOrderFailures(a.shape, b.shape, Nil, 32) ++ histOrderFailures(a.lens, b.lens)
+    else
+      val sh = shapeOrderFailures(a.shape, b.shape, Nil, 32)
+      val hi = histOrderFailures(a.lens, b.lens)
+      if sh.isEmpty == hi.isEmpty then sh ++ hi
+      else (sh ++ hi).map(c =>
+        if c.sufficientOnly then c
+        else c.copy(sufficientOnly = true,
+                    why = c.why + "; and the OTHER component of the product order (" +
+                          (if sh.isEmpty then "the shape" else "the histogram") +
+                          ") IS contained, so this clause alone cannot decide the product — a " +
+                          "containment visible only to the conjunction of the two is exactly the " +
+                          "PRODUCT INTERACTION class the order is measured to be incomplete on"))
 
   /** mirror of `Shape.leqStrong`, clause for clause and with its own depth budget */
   private def shapeOrderFailures(a: Shape, b: Shape, prefix: List[PathItem],
@@ -457,22 +476,43 @@ object SpatialChannels:
             sufficientOnly = true)
       out.result()
 
-  /** mirror of `SpatialGamma.leqSpace`.  The spill clauses carry `sufficientOnly` because they are
-   *  exactly the integer-partition reasoning the order documents itself as not attempting — the source
-   *  of the false negatives review.md 1 measures at ~17.2%. */
-  private def histOrderFailures(a: SpaceType, b: SpaceType): Vector[ChannelFailure] =
+  /** mirror of `SpatialGamma.leqSpace`, DRIVEN BY THAT ORDER'S OWN MASK.
+   *
+   *  It used to re-state the clauses, and that is exactly how it drifted: when `leqSpace` was completed
+   *  for the spill-vs-tracked partition (`SpatialGamma.leqSpaceMask`'s `windowOk`/`loOut` clauses, plus
+   *  the `canonSpace` normalisation in front of them), this mirror kept rejecting pairs the order now
+   *  proves and `SpatialCheckCheck` 6b caught the disagreement.  So the VERDICT is no longer restated
+   *  here at all: `leqSpaceMask` decides, the bits it sets select which channels are reported, and the
+   *  prose is computed on the CANONICAL forms the order actually compared.  A mask of 0 returns no
+   *  failures, by construction, so this mirror cannot disagree with `leqSpace` again.
+   *
+   *  A set bit with no prose still produces one generic failure: a rejected pair must never come back
+   *  with an empty explanation (`SpatialCheckCheck` 4d gates that). */
+  private def histOrderFailures(a0: SpaceType, b0: SpaceType): Vector[ChannelFailure] =
+    val m = SpatialGamma.leqSpaceMask(a0, b0)
+    if m == 0 then Vector.empty else histOrderWhy(a0, b0, m)
+
+  private def histOrderWhy(a0: SpaceType, b0: SpaceType, m: Int): Vector[ChannelFailure] =
+    import SpatialGamma.LeqSpaceWhy.*
+    // the order canonicalises both sides before comparing them, so the numbers quoted in the diagnosis
+    // have to come from the canonical forms or they will not match the clause that fired
+    val a = SpatialGamma.canonSpace(a0)
+    val b = SpatialGamma.canonSpace(b0)
+    // …and it caps the ε class at one path on both sides, because only one path has length 0
+    def atCapped(t: SpaceType, l: Long): Ivl =
+      val c = t.at(l)
+      if l == 0L && c.hi > 1L then Ivl(c.lo, 1L) else c
     val out = Vector.newBuilder[ChannelFailure]
-    for l <- (a.byLen.keySet ++ b.byLen.keySet).toVector.sorted do
-      val (x, y) = (a.at(l), b.at(l))
-      if y.lo > x.lo || x.hi > y.hi then
-        out += ChannelFailure(ResultChannel.LengthClass(l), ivl(x), ivl(y),
-          if y.lo > x.lo then s"the declaration demands at least ${y.lo} paths of $l items and the " +
-                              s"inferred type only guarantees ${x.lo}"
-          else s"the inferred type permits up to ${x.hi} paths of $l items and the declaration " +
-               s"allows ${y.hi}")
-    if !(a.rest.hi == 0 || a.restLens.isEmpty ||
-         (b.rest.hi > 0 && !b.restLens.isEmpty &&
-          b.restLens.lo <= a.restLens.lo && a.restLens.hi <= b.restLens.hi)) then
+    if (m & (PointwiseHi | PointwiseLo)) != 0 then
+      for l <- (a.byLen.keySet ++ b.byLen.keySet).toVector.sorted do
+        val (x, y) = (atCapped(a, l), atCapped(b, l))
+        if y.lo > x.lo || x.hi > y.hi then
+          out += ChannelFailure(ResultChannel.LengthClass(l), ivl(x), ivl(y),
+            if y.lo > x.lo then s"the declaration demands at least ${y.lo} paths of $l items and the " +
+                                s"inferred type only guarantees ${x.lo}"
+            else s"the inferred type permits up to ${x.hi} paths of $l items and the declaration " +
+                 s"allows ${y.hi}")
+    if (m & Window) != 0 then
       out += ChannelFailure(ResultChannel.SpillWindow,
         s"spill ${ivl(a.rest)} over lengths [${a.restLens.lo}, ${a.restLens.hi}]",
         if b.rest.hi == 0 then "no spill bucket at all"
@@ -481,25 +521,42 @@ object SpatialChannels:
           "declaration TRACKS those lengths instead, containment can still hold — the order does not " +
           "do that integer-partition reasoning",
         sufficientOnly = true)
-    var hiOut = if a.rest.hi > 0 then a.rest.hi else 0L
-    var loOut =
-      if a.rest.lo == 0 || a.restLens.isEmpty then 0L
-      else if b.byLen.keysIterator.exists(l => a.restLens.lo <= l && l <= a.restLens.hi) then 0L
-      else a.rest.lo
-    for (l, c) <- a.byLen if !b.byLen.contains(l) do
-      hiOut = Ivl.add(hiOut, c.hi); loOut = Ivl.add(loOut, c.lo)
-    if hiOut > b.rest.hi then
+    // the AGGREGATE at lengths the declaration does not track.  The two bits are reported separately
+    // because they fail for opposite reasons, and the ingredients are quoted rather than the order's
+    // internal running totals: those totals are computed by `leqSpaceMask` and recomputing them here is
+    // precisely the duplication that let this mirror go stale.
+    val aOnly = a.byLen.filter((l, c) => !b.byLen.contains(l) && (c.hi > 0 || c.lo > 0))
+    val aWin =
+      if a.rest.hi > 0 && !a.restLens.isEmpty then
+        s" plus its spill bucket ${ivl(a.rest)} over lengths [${a.restLens.lo}, ${a.restLens.hi}]"
+      else ""
+    if (m & AggHi) != 0 then
       out += ChannelFailure(ResultChannel.SpillAggregate,
-        s"up to $hiOut paths at lengths the declaration does not track", ivl(b.rest),
+        s"paths at lengths the declaration does not track: " +
+          (if aOnly.isEmpty then "none tracked" else aOnly.toVector.sortBy(_._1)
+             .map((l, c) => s"len $l ${ivl(c)}").mkString(", ")) + aWin,
+        ivl(b.rest),
         "the aggregate at untracked lengths exceeds the declared spill bucket")
-    else if b.rest.lo > loOut then
+    if (m & AggLo) != 0 then
       out += ChannelFailure(ResultChannel.SpillAggregate,
-        s"at least $loOut such paths are guaranteed", ivl(b.rest),
+        s"guaranteed paths at lengths the declaration does not track: " +
+          (if aOnly.isEmpty then "none tracked" else aOnly.toVector.sortBy(_._1)
+             .map((l, c) => s"len $l ${ivl(c)}").mkString(", ")) + aWin,
+        ivl(b.rest),
         "the declared spill bucket has a lower bound the inferred type does not discharge; the order " +
           "gives up a side's spill lower bound as soon as the other side tracks a length inside its " +
           "window, so this clause rejects genuine containments",
         sufficientOnly = true)
-    out.result()
+    val res = out.result()
+    // A REJECTED PAIR ALWAYS GETS AN EXPLANATION.  The pointwise clauses above quote the canonical
+    // classes, and a bit can in principle be set by a class pair this loop does not re-derive; rather
+    // than return nothing, name the bits.  Empty output for a non-zero mask would be a silent
+    // diagnosis failure, which is worse than a coarse one.
+    if res.nonEmpty then res
+    else Vector(ChannelFailure(ResultChannel.SpillWindow, a.show, b.show,
+      "the histogram order rejected this pair on " + SpatialGamma.LeqSpaceWhy.show(m).mkString(", ") +
+        " and the per-channel mirror could not localise it further",
+      sufficientOnly = true))
 end SpatialChannels
 
 // ==================================================================================================

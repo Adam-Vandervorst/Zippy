@@ -142,11 +142,15 @@ class SpatialCostCheck extends FunSuite:
   private def rounds(r: SpatialCost.Report): Sym = r.cost.rounds.symOpt.getOrElse(Sym.Inf)
   private def touch(r: SpatialCost.Report): Sym = r.cost.touch.symOpt.getOrElse(Sym.Inf)
 
-  // NOTE ON COMPONENT MEANINGS (changed by the calibration work, review.md finding 2).
-  //   `work`/`alloc`/`rounds` are now DEFINED BY COUNTED EVENTS, so a claim about them is a claim
-  //   about `Events.work`/`.alloc`/`.rounds` that `SpatialEventsCheck` measures.  A `Set` union is
-  //   ONE AstDispatch and ZERO PathValue allocations, however large its operands: the |a|+|b|
-  //   element cost lives in `touch`, which has NO ORACLE and is therefore asserted only as a model.
+  // NOTE ON COMPONENT MEANINGS (changed by the calibration work, review.md finding 2, then item 1).
+  //   ALL FOUR components are now DEFINED BY COUNTED EVENTS, so a claim about any of them is a claim
+  //   about `Events.work`/`.alloc`/`.rounds`/`.touch` that `SpatialEventsCheck` measures and GATES.
+  //   A `Set` union is ONE AstDispatch and ZERO PathValue allocations, however large its operands: the
+  //   |a|+|b| element cost lives in `touch`.  For the TRIE-SHAPED backends `touch` is the counted
+  //   per-node descent inside the trie algebra (TrieNodeVisit + PatriciaVisit).  For the REFERENCE
+  //   backend alone it has no oracle — `eval` does that work inside `Set`, which carries no hooks — so
+  //   `ReferenceCost.touchNoOracle` declares it and the rank-correlation test at the end of this file
+  //   is the only (secondary) evidence for it.
   test("reference-backend transfers: the shape of each operator's cost") {
     def setO(s: Space) = SpatialCost.analyze(s, SetCost).cost
     // a union is a linear scan of both operands, but the scan happens inside `Set` — so it is a
@@ -198,16 +202,32 @@ class SpatialCostCheck extends FunSuite:
       if a.cost != b.cost then differing += 1
       println(f"COST: $nm%-12s set[${a.cost.showO}]  trie[${b.cost.showO}]")
     assertEquals(differing, cases.length, "every one of these must be priced differently by the two backends")
-    // a provably DISJOINT intersection: the trie skips the merge entirely, the set evaluator cannot
-    val av = SpaceValue(Set(p("a", "x"), p("a", "y"), p("a", "z"), p("b", "x"), p("b", "y"), p("b", "z")))
-    val bv = SpaceValue(Set(p("c", "x"), p("c", "y"), p("c", "z"), p("d", "x"), p("d", "y"), p("d", "z")))
+    // A HEAD-DISJOINT intersection: the trie stops at the head level, the set evaluator cannot.
+    //
+    // WHY THE HEAD SETS AND NOT THE RESULT (a correction the event calibration forced).  The model used
+    // to take "the intersection is PROVABLY EMPTY" as licence to charge one head comparison and ZERO
+    // allocations.  Measurement refuted it: `ITrie.intersection`'s empty guard fires on an empty
+    // OPERAND, not an empty RESULT, so operands that share HEADS but no full path still descend every
+    // shared prefix — 12 counted fresh nodes against a predicted 1, three times over on the corpus.
+    // What the executor actually rewards is DISJOINT HEAD SETS, so that is what the model now asks for.
+    //
+    // The fibers are deliberately FAT (2 heads x 30 tails): the trie's win is that its cost is in the
+    // HEAD count while the set evaluator's is in the PATH count, and a 6-path example is too small to
+    // show it — at 2 heads x 3 tails the two are within one unit of each other.
+    val heads = Vector("a", "b"); val other = Vector("c", "d")
+    val av = SpaceValue(heads.flatMap(h => (0 until 30).map(i => p(h, "x" + i))).toSet)
+    val bv = SpaceValue(other.flatMap(h => (0 until 30).map(i => p(h, "x" + i))).toSet)
     val (ma, mb) = (SpaceMention("A"), SpaceMention("B"))
     val env = SpatialCost.Env(facts = SpatialTyping.Env(spaces = Map(ma -> SpatialType.of(av), mb -> SpatialType.of(bv))))
     val (ds, dt) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(mb)), env)
-    assertEquals(touch(ds).show, "12", "a set intersection touches all 6+6 paths")
-    assertEquals(touch(dt).show, "4", "a trie intersection compares 2+2 heads and stops")
-    assertEquals(alloc(dt).show, "0", "and allocates nothing")
-    assert(Sym.dominates(touch(ds), touch(dt)))
+    assertEquals(touch(ds).show, "120", "a set intersection touches all 60+60 paths")
+    // The trie compares 2+2 HEADS and stops — and `touch` is now a COUNTED component
+    // (EffortEvent.TrieNodeVisit + PatriciaVisit), so the claim is what a run can produce: one
+    // ITrie-level entry plus the top Patricia descent over the two head sets, at most 2(m+n) visits.
+    assertEquals(touch(dt).show, "13", "1 entry + 3(2+2) for the head-set Patricia descent")
+    // and it allocates exactly the ONE root node it builds before discovering the result is empty
+    assertEquals(alloc(dt).show, "1", "the merged root node, and nothing below it")
+    assert(Sym.dominates(touch(ds), touch(dt)), s"${ds.show}\n${dt.show}")
     // ground truth: the intersection really is empty (eval as ORACLE, never inside the analysis)
     assertEquals(eval(Space.Intersection(Space.Literal(av), Space.Literal(bv))), SpaceValue(Set.empty))
     // an OVERLAPPING intersection gets no skip.  `Mention(A) ∩ Mention(A)` is the SAME trie object,
@@ -215,8 +235,8 @@ class SpatialCostCheck extends FunSuite:
     // path from the disjointness skip, and one the reference `Set` evaluator does not have.
     val (os, ot) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(mb)),
                                        env.copy(shapeFacts = false))
-    // 6 paths x 2 items, PLUS the always-present root node (Meas.nodes = 1 + size*len)
-    assertEquals(alloc(ot).show, "13", s"no shape tier, no skip: ${ot.show}")
+    // 60 paths x 2 items, PLUS the always-present root node (Meas.nodes = 1 + size*len)
+    assertEquals(alloc(ot).show, "121", s"no shape tier, no skip: ${ot.show}")
     val (_, selfT) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(ma)), env)
     assertEquals(alloc(selfT).show, "0", s"x ∩ x is a pointer-identity accept: ${selfT.show}")
     // dropping the shape tier removes the skip: the cost RISES, and the report says why
