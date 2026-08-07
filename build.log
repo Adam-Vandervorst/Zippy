@@ -2961,3 +2961,328 @@ answered — honestly: it is an OPT-IN entry point, not wired into the default o
 the optimizer's own guards still call Lower.sizeBounds. Only the EMPTINESS fact is exploited so far;
 the other facts review.md lists (exact prefix, singleton/head set, exact bounded iteration) need the
 shape components the domain does not have yet.
+
+================================================================================
+2026-08-07  re-review response: defects fixed + FIRST CUT of a spatial TYPE SYSTEM
+================================================================================
+Re-reviewed review.md (grew 191 -> 331 lines). Reproduced all three independent probes first:
+  * SpaceType.exact bypassed widen -> a length-9000 Singleton kept a tracked key above MaxLen 8192
+  * infer(nested-iteration).size = [0,256] while sizeOf(...) = [0,4] on the SAME term (actual 4)
+  * {a.0,a.1,a.2,a.3} and {a.0,b.0,c.0,d.0} both infer {len 2: [4,4]} yet have 1 vs 4 heads
+
+FIXED (8, 7, 6, 9, 5 from the review):
+ * #8 exact/bounded/boundedExact now route through `widen` like `closed` already did — the MaxLen
+   promise holds for every constructor (probe: max tracked key 9000 -> spilled).
+ * #7 `reduceTotal` caps every length class by a sound bound on the TOTAL, applied at the loop
+   transfers where the exponentiation happens: infer.size [0,256] -> [0,4], matching sizeOf.
+ * #6 removed the "every transfer is a true cardinality fact" claim from the SpatialTypes header;
+   it now says which three are checked and that no mechanical link ties code to obligations.
+ * #9 validated propositions (`Fact`): DefinitelyEmpty / DefinitelyNonEmpty / MinimumCardinality /
+   MaximumCardinality / AllPathsHaveAtLeast / MaximumPathLength / ExactHeadSet / MaximumHeadCount,
+   each bundling its precondition — the empty space's len.lo is INF, and a client reading it raw
+   would "prove" three extractable items from nothing; `Fact.from` emits only DefinitelyEmpty there.
+ * #5 `SpecializedRoutine(precondition, residual, facts)` carries the assumed environment as DATA,
+   with `satisfies(SpaceValue, SpatialType)` and `applicableTo(args)` — the missing operation a
+   guarded dispatcher needs. A conditional equivalence can no longer be mistaken for a general one.
+
+NEW: THE SPATIAL TYPE SYSTEM (first cut) — src/main/scala/SpatialShape.scala + SpatialTypeSystem.scala
+`Shape` is a bounded abstract trie (eps presence; tracked head map -> tail shape; count of untracked
+heads; summary of their tails; caps MaxDepth=4, MaxHeads=12). `SpatialType` is the REDUCED PRODUCT of
+that shape with the length/count histogram, each bounding the other. Transfers: literal, singleton,
+union, intersection, subtraction, restriction, raffination, wrap, unwrap, tails-union/intersection,
+mention, and ITERATION analysed PER HEAD-GROUP with the loop symbol bound to that head item.
+Composition/Range/Fold/Fixpoint/Call/Grounded degrade the shape to top and rely on the histogram.
+Delivers the review's probes: A vs B head-count upper 1 vs 4 (the histogram gave [1,4] for both);
+`Unwrap(Literal({b}), "a")` PROVED empty; disjoint head sets proved disjoint; declared input SHAPES
+bound loop group counts.
+
+*** KNOWN OPEN — THE SHAPE DOMAIN IS NOT SOUND YET AND IS WIRED INTO NOTHING ***
+Bringing it up surfaced four genuine must/may leaks, all the same family — an operation that can
+DELETE members leaking MUST information through one of its channels:
+  1. inter(a, top) returned `a`, keeping must-heads an intersection may remove;
+  2. restrict treated a MAY-present epsilon in the prefix set as absent, returning empty for a
+     non-empty restriction;
+  3. an iteration group whose tail-set only MAY be non-empty need not run, yet contributed must;
+  4. sub/restrict carried `otherTail` through unweakened.
+Making v1 MAY-ONLY (the shape contributes no lower bounds at all; every lower bound comes from the
+already-validated count component) removed that whole family. At least one wrongly-empty shape still
+remains on the corpus — witness: a term of the form
+  ((Singleton("c.b") /\ Literal({"d"})) <| Literal({"d"})) \/ ((Singleton("b.d") \ Singleton("b.c.a")) <| Literal({"d"}).iter(...))
+infers shape ∅ for a non-empty value. The corpus soundness gate is WRITTEN and currently IGNORED
+(not deleted) so it stays visible; five targeted tests pass. Nothing consumes the shape domain, so
+this cannot affect anything else — but it must not be relied on or described as sound until green.
+Fixing it is the next task, and the lesson is already clear: this domain needs a per-operation
+may/must argument written down BEFORE the code, not patched channel by channel.
+
+DEFERRED, explicitly (review items 2, 3, and parts of 6/7): recursion measures and call-depth bounds
+(maxLen 4 -> maxCallDepth 4 -> residualised traversal); a symbolic cost algebra with size variables,
+recurrences and asymptotic orders — cardinality is NOT cost and the build.log line saying a nested
+iteration "costs" a sizeBounds result was wrong; per-node typed IR with provenance instead of
+re-running infer; backend-specific cost transfers; and the semantic law family relating gamma, eval,
+the transfers, specialisation and backends.
+
+================================================================================
+2026-08-07  THE SPATIAL TYPE SYSTEM, integrated — shape domain made SOUND, symbolic
+            cost, bounded recursion, a semantic (γ) layer, and an adversarial hunter
+================================================================================
+Answers review.md findings 1, 2, 3, 6, 7 (and finishes 5 and 9). Five pieces landed in parallel and
+were then integrated; the integration found and fixed three real unsoundnesses that no single piece
+owned. Whole tree + tests compile clean. FULL BATTERY: 15 suites, 127 tests, ALL GREEN.
+
+--------------------------------------------------------------------------------
+1. THE SHAPE DOMAIN IS NOW SOUND (review.md 1) — SpatialShape.scala, SpatialTypeSystem.scala
+--------------------------------------------------------------------------------
+The previous entry shipped `Shape` as MAY-ONLY and NOT sound, with a known wrongly-empty corpus
+witness and the gate `.ignore`d. Both are gone. `Shape` is a bounded abstract trie (eps Presence
+No/May/Must; tracked head map -> tail shape; count of UNTRACKED heads; a PER-HEAD `otherTail` summary
+of them; MaxDepth 4, MaxHeads 12) and MUST is restored channel by channel behind a per-operator
+may/must table that was WRITTEN BEFORE THE CODE — the lesson from last time, applied.
+
+The corpus bug was found by a greedy delta-debugger, not by guessing. 25/1000 instances failed; all
+shrank to one family, minimal witness
+  Restriction(Composition(Literal({d}), Literal({d})), Literal({b,d}))   eval={d.d}  inferred=∅
+Root cause: `Composition` degraded to an OPEN head set, and `restrict` keyed its result on
+`x.heads.keys ∩ prefixes.heads.keys` while marking it CLOSED because the PREFIX side was closed — so
+an untracked head of `x` equal to a prefix head was dropped. Fixed by keying on the CLOSED side and
+descending through `x.under(h)`. Certified as a refutation: gsem_l1_restrict_openkeys_unsound.
+
+`SpatialType` is the REDUCED product with the histogram, reduced in both directions after every
+transfer. Real transfers now: literal, singleton (incl. unknown path of bounded length), union,
+inter, sub, restrict, raffination, wrap/wrapUnknown, unwrap/unwrapUnknown, tailsUnion, tailsInter,
+composition (grafts at the leaves — was ⊤), range, iteration/fold PER HEAD GROUP, fixpoint (a
+certified post-fixpoint — was ⊤), call (interprocedural — was ⊤). ⊤ only for: Grounded*, an absent/
+active Call, unwrap by an unbounded path, an undeclared Mention, an uncertified Fixpoint, budget
+exhaustion.
+
+`Fact` (review.md 9) is the consumer API: DefinitelyEmpty / DefinitelyNonEmpty / MinimumCardinality /
+MaximumCardinality / AllPathsHaveAtLeast / MaximumPathLength / ExactHeadSet / HeadSetWithin /
+MinimumHeadCount / MaximumHeadCount / PrefixAbsent, each with its precondition discharged once.
+`SpecializedRoutine` (review.md 5) carries its precondition as data and gates with the EXACT
+`gammaMember`, not the weaker `satisfies` envelope (that gap is itself certified:
+gsem_satisfies_weaker, and measured — satisfies accepts a non-member 237/38400 times and rejects a
+member 0 times).
+
+MEASURED (SpatialShapeCheck, 18 tests):
+  * corpus: 1000 closed instances, γ-membership 1000/1000; head count EXACT on 936; size strictly
+    tighter than the histogram alone on 542; provably empty on 498. Second seed: 1000/1000.
+  * operator matrix 35200 checks / 22 operators x 4 modes; wide+deep matrix 10560 checks (open head
+    set on 2825, over-MaxDepth paths on 6398); nested matrix 8000 terms (⊤ shape on 1557) — 0 viol.
+  * review.md 7's nested rest-chained iteration: histogram alone [0,1024], SpatialTypes.sizeOf
+    [0,1024], REDUCED PRODUCT [4,4], actual 4.
+  * review.md 1's A-vs-B: head-count upper 1 vs 4 (the histogram gave [1,4] for both).
+
+--------------------------------------------------------------------------------
+2. THREE SOUNDNESS BUGS FOUND AT INTEGRATION AND FIXED
+--------------------------------------------------------------------------------
+The adversarial hunter (piece 5, written against the domain by an agent that did not own it) was RED
+on first integration: 5 term sweeps + 2 algebra matrices reported 24 minimal witnesses over ~83k
+cases. Three distinct root causes, all now fixed and all re-verified:
+
+(a) `SpatialTyping.fixpoint` USED THE UNION TRANSFER AS A LATTICE JOIN.  The concrete operator binds
+    the recursive mention to the LAST iterate and returns the UNION of all of them. `Shape.union` is
+    the transfer for `A ∪ B`: it keeps the left operand's MUST (sound — `A ∪ B ⊇ A`) and ADDS the
+    untracked-head counts. Neither holds for a value drawn from ONE side, so it is not an upper bound
+    and the Kleene candidate claimed musts no iterate has. Witness (71 raw cases):
+        Singleton("c.b.b").fix(k){TailsIntersection(k)}
+        eval    = {b, b.b, c.b.b, ε}
+        claimed = shape {b·{b·{ε?}}, c·{b·{b·{ε!}}}}   -- eps=No, so ε was PROVED ABSENT
+        and via the product reduction, size.hi = 2 for a 4-path result and len.lo = 2 with ε present
+    FIX, in two parts, because there are two obligations and the old code had one:
+      * the chain ascends with a real join, `Shape.lub` (MAX of the counts, no lower bound, ε -> May
+        unless both agree), over iterates kept MAY-ONLY. May-only is what closes the argument:
+        γ_may = γ there, so `Shape.leq` (a γ_may order) is exactly the right certificate AND the body
+        is still analysed by the transfers in the STRONG reading they are sound for.
+      * the RESULT is an unbounded union of iterates and γ is NOT union-closed ({a} and {b} are both
+        in γ({+[0,1] more}), {a,b} is not). What survives is `openCounts` — ε-absence and
+        head-set closedness are union-closed, counts are not. So `union(i0, openCounts(c))`.
+      `SpatialGamma.lubShape` now DELEGATES to `Shape.lub`: one join, because two spellings of a join
+      is how this confusion got in. First attempt at `lub` had its own bug (`lub(∅, b) = b` — ∅ is
+      NOT below a must-carrying shape) which the order matrix caught in 9417 raw cases.
+(b) `Shape.leq` IGNORED HEADS THE RIGHT SIDE TRACKS AND THE LEFT DOES NOT (129 raw cases).
+        leq({ε!, +[1,inf] more}, {ε?, a·{b·{…}}, …, +[0,inf] more}) was accepted,
+        yet {a, ε} ∈ γ_may(lhs) and ∉ γ_may(rhs) — rhs's child for `a` has eps=No.
+    An untracked head of the left CAN be a key the right tracks, and nothing else looked at that
+    pair. FIX: iterate the union of both live key sets (`a.under(h)` already returns ∅ for a closed
+    side, so the extra arm is vacuous exactly when it should be). This is load-bearing, not cosmetic:
+    `leq` is the fixpoint's convergence test and its certificate.
+(c) `SpatialTypes` SUBTRACTION: THE SPILL LOWER BOUND IGNORED THE SUBTRAHEND'S TRACKED CLASSES.
+    It discounted only `y.rest.hi`, so a subtrahend whose paths sit in TRACKED classes covered by the
+    minuend's spill window removed nothing from `x.rest.lo`. Three shapes of witness:
+        (hunt$rec(;$s0) \ $s0)   with $s0={ε}   ->  size.lo 1, DefinitelyNonEmpty, for eval = ∅
+        (($s0 ∪ TU(L)) \ TU(L))                ->  size.lo 2                      for eval = ∅
+        (Singleton(?p) \ L{17 paths})          ->  size.lo 1                      for eval = ∅
+    FIX: the bucket discounts the subtrahend's total over the lengths its window covers (tracked
+    classes keep their own exact `y.at(l).hi` discount). This one is in the histogram tier, i.e. it
+    predates the shape work and was reachable from the OLD API — `Fact.DefinitelyNonEmpty` on an
+    empty space is exactly the class of error review.md 9 warned about.
+
+All four minimal witnesses are pinned as named regression tests in SpatialSoundnessHunt (they were
+written as failing bug reports and assert only soundness, so they can never pin buggy behaviour).
+
+HUNTER AFTER THE FIXES (per sweep: cases / minimal witnesses):
+  HUNT 1 closed+exact          22919 / 0      (was 45 broken-claim keys, 7 witnesses)
+  HUNT 2 approximate env       22952 / 0      (was 27 / 4)
+  HUNT 3 deep+binders           8899 / 0      (was 11 / 2)
+  HUNT 4 degenerate            19250 / 0      (was 24 / 4)
+  HUNT 5 past the caps          8271 / 0      (was 49 / 6)
+  HUNT 6 corpus, open           3679 / 0      (was  7 / 1)
+  HUNT 7 transfer matrix      246300 checks / 0 violations
+  HUNT 8 order/widen/lub       40000 checks / 0 violations   (was 1: Shape.leq)
+  HUNT 9 may-reading          163770 checks / 3 — a DOCUMENTED NON-LAW, see KNOWN-OPEN
+Per case it checks satisfies, gammaMember, SpatialGamma.gamma, size.lo/hi/loHeaded, len.lo/hi,
+lens.at(L) for every L populated or not, headCount, the four shape channels with trie-position
+attribution, mayHavePrefix/mustHaveHead, and EVERY Fact in Fact.from. 0 analysis crashes.
+
+--------------------------------------------------------------------------------
+3. BOUNDED RECURSION (review.md 2) — SpatialRecursion.scala
+--------------------------------------------------------------------------------
+The exact thing review.md asked for, end to end. (i) Summaries memoised by (RoutinePtr, abstract
+arguments), solved by a WORKLIST with widening — and licensed not by the schedule but by an explicit
+POST-FIXED-POINT CERTIFICATION: re-deriving every key's body under the final table must give a type
+⊑ the stored one. A table that fails to certify is reported and never used. Bodies are abstracted by
+rewriting each Call into a placeholder mention bound to that call's summary, then calling
+SpatialTyping.infer ONCE — no transfer logic duplicated. (ii) A measure μ(t) = t.len.hi with BOTH a
+structural witness M1 (tails / unwrap-by-≥1 / the rest-mention of a loop over a syntactic subset) and
+a numeric drop M2 along the chain. (iii) maxCallDepth = the first level whose summary is provably
+empty. (iv) Residualisation with every spliced binder alpha-renamed fresh, the level-k call replaced
+by Empty, wrapped in BoundedRecursion carrying its precondition.
+
+MEASURED (SpatialRecursionCheck, 18 tests):
+  * HEADLINE: maxLen 4 + one item per call -> maxCallDepth 4; μ chain 4->3->2->1->0; level-4 summary
+    ⊥; Call-free residual; summaries 6 keys / 9 rounds / 4 updates / 0 widened / 0 ⊤-pinned,
+    certified=true. 600 conforming inputs, 0 disagreements.
+  * the annotation is LOAD-BEARING: 400 violating inputs (327 carry a >4-item path), 24
+    disagreements — and applicableTo admitted 73, ZERO of them among the 24.
+  * L=1..6 residual sizes 5/9/13/17/21/25 nodes, one level per unrolled call, no more.
+  * GENERATED GATE: 500 routines, 341 bounded (depths 0:151 1:31 2:47 3:56 4:41 5:15), 159 NoBound
+    all with a NAMED reason, 4092 differential evaluations, 0 disagreements.
+  * a non-empty base case correctly gives L+1 = 5, not 4; every NoBound reason has a test.
+
+--------------------------------------------------------------------------------
+4. SYMBOLIC COST (review.md 3) — SpatialCost.scala
+--------------------------------------------------------------------------------
+Cardinality is NOT cost, and this file is built around that. Cardinality/length/head-count are the
+INPUTS (`Meas`); the output is a Cost VECTOR per node — work (elementary visits), alloc (paths or
+trie nodes materialised), rounds (head-groups and fixpoint rounds entered) — over `Sym`
+(Const|Var|Add|Mul|Pow|Max|Log|Inf) with a real polynomial normal form. Vars range over reals ≥ 2,
+which is what makes the syntactic `dominates` sound (monomial matching + a log₂x ≤ x trade — that is
+what derives N² ≥ N log N). `BigO(expFactors, degree, logs)` compared lexicographically IS
+2^N > N² > N log N > N > log N > 1, so the distinctions review.md says collapse to one INF stay
+separate. TWO backends consume the SAME facts and disagree, which is what makes it a cost model:
+  unwrap     set work=n         trie work=1   (zipper focus, no rebuild)
+  range      set work=n² log n  trie work=n
+  restrict   set work=n³        trie work=n²
+  union      set work=n         trie work=n²
+MEASURED (SpatialCostCheck, 20 tests): dominates sound on 114 pairs x 60 valuations = 6840 points;
+monotonicity on 48 cost components and under a bigger DECLARED input type; 300 corpus programs x 2
+backends in 1258 ms, 600/600 work components BOUNDED, 0 reach `inf`; the two backends disagree on
+300/300 programs; set-backend order classes spread over n .. n⁹ log n.
+*** The per-operator constants are a MODEL of the two interpreters, read off eval and the trie/zipper
+ops. They are NOT measured constants and NOT proved. The only evidence they track reality is a WEAK
+rank correlation of set-backend work against measured eval runtime: Spearman ρ = 0.933 over 16
+programs. That is a sanity check. Do not cite it as a validated cost model. ***
+
+--------------------------------------------------------------------------------
+5. THE SEMANTIC LAYER (review.md 6) — SpatialGamma.scala, proofs/spatial-semantic/
+--------------------------------------------------------------------------------
+review.md 6's law family could not previously be STATED, because γ of the actual carrier did not
+exist. It does now: gammaSpace (histogram incl. the spill aggregate), gammaShape (STRONG),
+gammaShapeMay (= strong γ of a total weakenAll — the reading Fact/headCount/mayHavePrefix/
+isProvablyEmpty consume), gamma/gammaMay on the product, alpha, lubSpace, leqShape, and the operator
+table. Both readings are reported separately everywhere. No eval/evalI/evalT/exec* anywhere in it.
+
+MEASURED (SpatialLawCheck, 17 tests):
+  * Galois: v ∈ γ(α v) on 4128 values; α monotone on 600 set pairs; reductive on 795/800 (the rest
+    have no member in the finite universe); adjunction decided BOTH directions on 443 sets.
+  * γ-monotone: 14400 pairs — leq held 1100, ALL γ-sound; leq is incomplete on 229 (17.2% of the
+    γ-contained pairs) — measured, not hidden.
+  * Shape.contains ≡ SpatialGamma.gammaShape on 10400 pairs (the two γ copies must not drift).
+  * SIMULATION SQUARES eval(s) ∈ γ(infer(s)): 22 operators x 600 trials, 0 failures in any channel.
+  * γ(a op# b) ⊇ γ(a) op γ(b) at abstract operands α never produces: 900/operator, 0 failures; and
+    again with OPEN head sets + otherTail summaries (3380 operand sets carried one), 0 failures.
+  * CONDITIONAL REWRITE: 1147 conforming inputs all agree; of 1853 violating inputs 1071 DIFFER, so
+    the precondition is load-bearing; applicableTo admitted 777/2000, 0 outside γ(precondition).
+    Corpus specialisation fires on 546/1000, 2000 differential checks clean.
+proofs/spatial-semantic/: 20 obligations, ALL PROVED (z3 unsat on the negated theorem; vampire also
+refutes 11). NINE are deliberate GROUND WITNESSES, and two of those correct this repository's own
+documentation: gsem_join_not_lub (design_spatial_lattice.md §2 called `SpatialTypes.join` a lub — it
+is the union transfer) and gsem_within_not_containment (`within` is an upper envelope only).
+docs/design_spatial_lattice.md gains §0a stating exactly this scope and separating
+SMT-PROVED / GROUND WITNESS / DEFINITIONAL / executable-checked / assumed.
+
+--------------------------------------------------------------------------------
+FULL BATTERY (re-run after the three fixes; wall time on this machine)
+--------------------------------------------------------------------------------
+  SpatialShapeCheck      18 PASS   4s      SizeBoundsCheck         6 PASS   3s
+  SpatialSoundnessHunt   13 PASS  26s      LenBoundsCheck          4 PASS   5s
+  SpatialCostCheck       20 PASS   6s      SizeZ3Check             4 PASS  69s
+  SpatialLawCheck        17 PASS   8s      AlgebraicLaws           1 PASS   3s
+  SpatialRecursionCheck  18 PASS   3s      CorpusLawValidation     1 PASS   5s
+  SpatialElimination      6 PASS   3s      ProductUnionCheck       7 PASS   2s
+  SpillSoundness          5 PASS   3s
+  ReviewFindings          3 PASS   2s      TOTAL   15 suites / 127 tests / 0 failures / 0 ignored
+  SpatialTypeCheck        5 PASS  15s
+SpatialTypeCheck also re-measures the older tier: 3000 closed corpus instances per-length sound,
+strictly tighter than tier-1 on size 1740 (was 1480 — `reduceTotal`, not new algebra) and length 87;
+both projections inside the z3 bounds on 150/150 for length and 149/150 for size.
+
+================================================================================
+KNOWN-OPEN (explicit; none of these is a green test hiding a red fact)
+================================================================================
+1. THE COST CONSTANTS ARE UNVALIDATED. §4 above. A real gate needs measured per-operator constants
+   on both backends, and `cost#(s)` asserted as an upper bound on a counted execution — neither
+   exists. ρ = 0.933 over 16 programs is the whole story.
+2. HUNT 9's THREE ROWS ARE A NON-LAW, NOT A BUG. `sub`, `raffination` and `tailsInter` consume an
+   operand's MUST channel (that is the point of review.md 1) and are therefore sound in the STRONG
+   reading ONLY — subtraction is antitone in its right operand, so an operand read may-only licenses
+   a LARGER result than sub# returns. gsem_l2_tailsinter_may_unsound PROVES the tailsInter case is
+   genuinely unsound as a may law. What makes it safe: the analysis never reads a shape may-only and
+   feeds it back into a transfer. It does pass WEAKENED shapes in (Shape.under on an untracked head,
+   groupUnion's `rest` binding, fixpoint's iterate) — but γ_s(s) ⊆ γ_s(weaken s), so a weakened shape
+   is still a valid STRONG abstraction of the same value, which HUNT 7 covers. If anyone later adds a
+   consumer that re-abstracts from the may reading, these three rows become live bugs.
+3. THE SEMANTIC PROOFS ARE A MODEL, NOT THE CODE. Bounded depth (1–2), hand-written, no generator
+   from obligation to Scala and no mechanical agreement check. The cap arms (MaxDepth/MaxHeads) are
+   not in any obligation; `eval`, `Space`, the binders, `Call`, `Fold`, `Fixpoint` appear in none.
+   Every code-level claim in this entry rests on the executable suites.
+4. `satisfies` IS WEAKER THAN γ AND STAYS SO. It does not verify a per-class LOWER bound for a class
+   the value leaves empty (237/38400 non-members accepted; 0 members rejected). Dispatch uses
+   `gammaMember`; `satisfies` remains only as the cheap envelope. Certified: gsem_satisfies_weaker.
+5. `Shape.leq` IS INCOMPLETE (17.2% of γ-contained pairs undecided). Only costs the Fixpoint chain a
+   widening round, but it is why some fixpoints land at ⊤ that need not.
+6. FIXPOINT PRECISION AFTER THE FIX. `widenShape` opens every count channel, so a fixpoint that
+   reaches the widening loses `headsClosed` and with it the exact head count and a finite size.hi.
+   Measured cost of the whole fix on the nested matrix: ⊤ shapes 1556 -> 1557 of 8000, so ~0.01% —
+   but I did NOT capture the pre-fix corpus precision counters, so the 936/542/498 numbers in §1 have
+   no before-value to compare against. A gentler widening that preserves closedness while still
+   terminating is the obvious next precision win.
+7. TERMINATION OF THE SHAPE WIDENING IS NOT PROVED. Same status as the histogram (§7 of the design
+   doc): structural argument plus an explicit iteration cap (8 rounds, then one widen-and-retry, then
+   ⊤). ⊤ always certifies, so the analysis is total, but "it converges" is not a theorem.
+8. STILL NOT WIRED INTO ANY PIPELINE. `eliminate`/`eliminateIn` remain the only consumer of the OLD
+   tier, and they consume only ⊥. Nothing consumes `Fact`, `headCount`, `BoundedRecursion` or `Cost`
+   in `Routine.optimized` or any backend. review.md 8's "one vertical demonstration" is DONE as a
+   test (recursion: derive depth 4, residualise, keep the precondition, differential-check) but is
+   not DONE as a compiler path.
+9. NO PER-NODE TYPED IR (review.md's other half of finding 4). `SpatialTyping.infer` still analyses a
+   term and returns one root answer; the shape and histogram each walk the term once (the earlier
+   quadratic re-inference is gone) but there is no stable NodeId -> Fact map with provenance, so an
+   optimizer still cannot ask "what did you know at this node".
+10. `Fold`'s ACCUMULATOR IS STILL OPAQUE. The head-group union is exact, but the accumulator's value
+   depends on group ORDER and on `update`, neither of which the domain models; a body that reads the
+   accumulator degrades exactly where it reads it. review.md 2's complaint about Fold is only
+   partly answered.
+
+ERRATA to the entry above (build.log is append-only in this environment, so the corrections are here
+rather than inline):
+ * the test TOTAL is 128, not 127. Recounted from the per-suite results: 18+13+20+17+18+6+5+3+5+6+4+4
+   +1+1+7 = 128 pass, 0 fail, 0 ignored, over 15 suites. The per-suite numbers in the battery table
+   are correct; only their sum was wrong.
+ * "strictly tighter than tier-1 on size 1740 (was 1480 -- reduceTotal, not new algebra)": the 1740
+   is measured, the ATTRIBUTION to reduceTotal is not. It is the only intervening change to the size
+   projection, but no A/B was run. docs/design_spatial_lattice.md §6 now says so.
+ * "25/1000 corpus instances failed" and the Restriction/Composition minimal witness in §1 are the
+   shape agent's measurement of the pre-fix state, reported here as history. I did not re-observe
+   them (the fix was already on disk when I integrated); what I verified is that the corpus gate is
+   now green at 1000/1000 on two seeds and that the witness is pinned in SpatialLawCheck
+   ("regression: restriction of an OPEN-headed operand by a CLOSED prefix set is not ∅").

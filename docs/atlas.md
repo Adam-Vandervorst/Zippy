@@ -257,12 +257,18 @@ The source-level "link" step that turns recognizable self- and mutual-recursion 
 
 Three analyses over one design: a compositional tier-1 interval, a z3 tier that refines it, and
 above both a length-indexed count domain whose two projections *are* the size and length analyses.
+Above *that* sits the spatial type system proper (§9.6–§9.9): a reduced product of a bounded abstract
+trie with the histogram, plus interprocedural recursion measures, a symbolic cost algebra, and the
+γ/law layer that ties all of it to `eval`.
 
 | Analysis | Tier-1 (compositional) | Tier-2 (z3) | Answer |
 |---|---|---|---|
 | **Space size** `\|eval(s)\|` | `Lower.sizeBounds` (§9.1) | `SizeZ3` (§9.2) | `SizeBounds(lo, loHeaded, hi)` |
 | **Path length** `∀p ∈ eval(s). \|p\|` | `Lower.lenBounds` (§9.3) | `LenZ3` (§9.4) | `LenBounds(lo, hi)`; `lo > hi` = provably empty |
 | **Spatial type** counts PER length | `SpatialTypes.infer` (§9.5) | — (meets the two above) | `SpaceType(byLen, rest, restLens)` |
+| **Spatial type** shape × counts | `SpatialTyping.infer` (§9.6) | — | `SpatialType(Shape, SpaceType)` + `Vector[Fact]` |
+| **Call-depth bound** | `SpatialRecursion` (§9.7) | — | `DepthBound` + `BoundedRecursion` residual |
+| **Cost** (work/alloc/rounds) | `SpatialCost.analyze` (§9.8) | — | `Cost` over `Sym`, per backend |
 
 A two-tier abstract interpretation of a Space's cardinality. **Tier-1** (`Lower.sizeBounds`) is a compositional interval abstraction `lo ≤ |eval(s)| ≤ hi` plus `loHeaded`, computed by per-constructor cardinality laws. **Tier-2** (`SizeZ3`) translates a term's per-node cardinality facts plus the saturated subset relation into a LINEAR z3 optimization problem, reading the root's interval off the objectives — tighter-everywhere / unsound-nowhere by construction (it asserts every tier-1 interval, so any sat optimum is equal-or-tighter). Design in [design_size_constraints.md](design_size_constraints.md), motivated by the tightness numbers in `build.log`.
 
@@ -326,12 +332,15 @@ exactly. A **relational layer** (`subsumes`, `partitionOf`) applies the certifie
 partition / self-restriction laws so `x ∪ (x ∩ y)` is not double counted. `Fixpoint` uses Kleene
 iteration with widening plus an upper-envelope post-fixpoint check.
 
-**Status and scope (deliberately stated).** This is a cardinality-and-length pass, *not* a shape
-domain and *not* a cost model: it tracks how many paths of each length a term can denote, and can
-distinguish nothing else — two paths of the same length are indistinguishable, so heads, prefixes,
-tags and values are invisible (`Unwrap(Literal({b}), "a")` is `∅` but the analysis only says
-`{len 0: [0,1]}`). Bounds are concrete `Long`s, so there are no size variables, cost expressions,
-recurrences or asymptotic orders. **Consumer.** `eliminate`/`eliminateIn` are the one consumer: given a function and *abstract
+**Status and scope of THIS component (deliberately stated).** Taken alone `SpaceType` is a
+cardinality-and-length pass, *not* a shape domain and *not* a cost model: it tracks how many paths of
+each length a term can denote, and can distinguish nothing else — two paths of the same length are
+indistinguishable, so heads, prefixes, tags and values are invisible (`Unwrap(Literal({b}), "a")` is
+`∅` but this component only says `{len 0: [0,1]}`). Bounds are concrete `Long`s, so there are no size
+variables, cost expressions, recurrences or asymptotic orders. §9.6 adds the shape component that
+supplies the missing structure, §9.8 the symbolic cost algebra; `SpaceType` remains the component that
+still says something past the trie's depth/width caps, which is why the product keeps both.
+**Consumer.** `eliminate`/`eliminateIn` are the one consumer: given a function and *abstract
 annotations for its inputs*, they return a residual body plus the named facts that justify it,
 deleting any subterm whose inferred type is `⊥`. That removes the whole computation feeding it, and
 the ordinary `Lower` laws then propagate `Empty` upward. It is strictly stronger than the syntactic
@@ -350,6 +359,147 @@ assume*, not this implementation — see [design_spatial_lattice.md](design_spat
 the model-vs-code gaps.
 Supersedes the partial `otypes`/`itypes` experiment (`MORKL.scala:2393/2455`, `???` at
 TailsUnion/Fixpoint), which is left in place unused.
+
+### 9.6 The spatial type system: shape × counts, reduced
+
+**`Shape` / `Presence`** — `src/main/scala/SpatialShape.scala`
+A **bounded abstract trie**, the component the histogram cannot express (`{a.0,a.1,a.2,a.3}` and
+`{a.0,b.0,c.0,d.0}` are the same histogram but have 1 vs 4 head groups, and head grouping *is* the
+semantics of `Iteration`). Carrier: `eps: Presence` (No/May/Must), `heads: SortedMap[PathItem, Shape]`,
+`others: Ivl` (count of UNTRACKED heads — `others.hi == 0` is the closed-head-set case that licenses
+exact head counts and absent-prefix proofs), and `otherTail: Option[Shape]` summarising the untracked
+heads **per head**, not as their union. Finite by `MaxDepth = 4` levels (`capDepth`) and
+`MaxHeads = 12` tracked keys per level (`mk` spills the excess into `others`/`otherTail`); both only
+loosen. γ is the conjunction of those four channels and is written twice on purpose —
+`Shape.contains` (self-contained, so the domain's own gate needs no other file) and
+`SpatialGamma.gammaShape` — with an executable agreement test between the copies.
+
+Transfers: `union`, `inter`, `sub`, `restrict`, raffination (as `x ∖ (x <| y)`), `wrap`/`wrapUnknown`,
+`unwrap`/`unwrapUnknown`, `tailsUnion`, `tailsInter`, `comp`, `range`, plus `Iteration`/`Fold` analysed
+**per head group** (the head symbol bound to that item, `rest` to that head's tail-set, one extra
+weakened arm for the untracked groups) and `Fixpoint`/`Call` in `SpatialTyping`. Only these degrade to
+⊤: `GroundedPS`/`GroundedSS`, a `Call` whose routine is absent or already on the stack, an `Unwrap` by
+an unbounded-length path, a `Mention` with no declared type, a `Fixpoint` with no certified
+post-fixpoint, and anything past the node budget. A written-before-the-code **per-operator may/must
+table** heads the file: MUST is restored channel by channel with the argument that licenses it, and
+each deliberately may-only entry says why. **Two orders, not one, and they are different operations:**
+`Shape.union` is the transfer for `A ∪ B` (it keeps the left operand's MUST because `A ∪ B ⊇ A`, and it
+ADDS the untracked counts) while `Shape.lub` is the lattice join (`γ(a) ∪ γ(b) ⊆ γ(lub a b)` — MAX of
+the counts, no lower bound, ε demoted to May unless both agree). `Shape.leq` is the γ_may order;
+`weaken` drops every MUST at every depth; `openCounts` is what survives an *unbounded union* of members
+of one γ (ε-absence and closedness are union-closed, counts are not); `widenShape` is the Kleene
+widening.
+
+**`SpatialType` / `Fact` / `SpatialTyping`** — `src/main/scala/SpatialTypeSystem.scala`
+`SpatialType = (Shape, SpaceType)` as a **reduced product**: `SpatialType.reduce` caps every length
+class by the shape's implied total, `size`/`len`/`headCount` meet both components, and the shape's
+head count bounds an iteration's group count. Measured on the review's own nested rest-chained
+iteration: histogram alone `[0, 1024]`, `SpatialTypes.sizeOf` `[0, 1024]`, reduced product `[4, 4]`
+against an actual size of 4. `Fact` is the **validated-proposition** API an optimizer should consume —
+`DefinitelyEmpty`, `DefinitelyNonEmpty`, `MinimumCardinality`, `MaximumCardinality`,
+`AllPathsHaveAtLeast`, `MaximumPathLength`, `ExactHeadSet`, `HeadSetWithin`, `MinimumHeadCount`,
+`MaximumHeadCount`, `PrefixAbsent` — each bundling the conjunction its meaning needs, because the empty
+space's `len.lo` is `INF` and a client reading it raw would "prove" three extractable items from
+nothing. `SpecializedRoutine(precondition, residual, facts)` carries the assumed environment as data
+and `applicableTo` decides an actual argument with the exact `gammaMember`, never the weaker
+`satisfies` envelope.
+
+`SpatialTyping.fixpoint` deserves its own note because it is where the two orders matter: the concrete
+operator binds the recursive mention to the LAST iterate and returns the UNION of all of them, so the
+chain ascends with `lub` over MAY-ONLY iterates (may-only is what makes `γ_may = γ`, so `leq` is the
+right certificate *and* the body is analysed by transfers in the strong reading they are sound for) and
+the accumulation is bounded by `openCounts` of the certified candidate.
+
+### 9.7 Bounded recursion: summaries, a measure, a depth bound, a residual
+
+**`SpatialRecursion`** — `src/main/scala/SpatialRecursion.scala`
+Four pieces. (1) **Summaries** memoised by `Key(RoutinePtr, Args)` where `Args` carries the abstract
+mention types and, per path parameter, either a constant value or a length interval; solved by a real
+**worklist** (join, widen after 3 updates, ⊤ after 8, ⊤ past a key budget). The schedule is a
+heuristic; what licenses the answer is the explicit **post-fixed-point certification** — re-deriving
+every key's body under the final table must yield a type `⊑` the stored one. A table that fails to
+certify is reported (`Summaries.certified = false`) and never used. Routine bodies are abstracted by
+rewriting each `Call` into a placeholder mention bound to that call's summary and then calling
+`SpatialTyping.infer` once, so no transfer logic is duplicated. (2) A **decreasing measure**
+`μ(t) = t.len.hi` with two required checks: **M1** a *structural* witness that the recursive argument
+drops ≥1 item (tails/unwrap-by-≥1/rest-mention of a loop over a syntactic subset), **M2** a *numeric*
+drop `μ(a_{k+1}) ≤ μ(a_k) − 1` along the unrolled chain. (3) The **bound**: `maxCallDepth = k`, the
+first level whose summary is provably empty. (4) **Residualisation** of levels `0…k−1` with every
+spliced binder alpha-renamed fresh (so an argument mentioning a loop binder cannot be captured), the
+level-`k` call replaced by `Empty`, wrapped in `BoundedRecursion` which carries its precondition as
+data and answers `applicableTo`. Review.md's exact request lands: `maxLen 4` + one item per call ⇒
+`maxCallDepth 4`, μ chain `4→3→2→1→0`, level-4 summary ⊥, Call-free residual, 17 nodes / 4 levels.
+`DepthBound.NoBound` names its reason rather than silently returning ⊤.
+
+### 9.8 Symbolic cost (cardinality is not cost)
+
+**`Sym` / `BigO` / `Amount` / `Cost` / `Meas` / `CostModel` / `SetCost` / `TrieCost` / `Recurrence` /
+`SpatialCost`** — `src/main/scala/SpatialCost.scala`
+`Sym = Const | Var | Add | Mul | Pow | Max | Log | Inf`, normalised through a real polynomial normal
+form (monomial → coefficient, atoms being vars/logs/symbolic powers/maxes), so like terms collect and
+the form is idempotent. Every `Var` ranges over reals `≥ 2`, which is what makes the **syntactic**
+`dominates(a,b)` test sound (monomial matching with coefficient budgets plus a `log₂ x ≤ x` trade —
+that is what derives `N² ≥ N log N`). `Inf` is a genuine top used only where a quantity is unknowable,
+never as a stand-in for "large". `BigO(expFactors, degree, logs)` compared lexicographically *is*
+`2^N > N² > N log N > N > log N > 1`, so the distinctions review.md 3 says collapse to one `INF`
+stay separate.
+
+The analysed answer is a `Cost(work, alloc, rounds)` **vector per node** — elementary visits, paths or
+trie nodes materialised, and loop head-groups / fixpoint rounds entered — parameterised by the spatial
+facts (`Meas(size, len, heads)` read off `SpatialType`, never off `eval`). `CostModel` has two
+instances that consume the *same* facts and disagree, which is what makes this a cost model rather
+than a second size bound: measured `unwrap` set `work=n` / trie `work=1` (zipper focus, no rebuild),
+`range` set `n² log n` / trie `n`, `restriction` set `n³` / trie `n²`, `union` set `n` / trie `n²`.
+`Recurrence.solve`/`close` give linear recurrences closed forms instead of saturating, and a routine
+with a §9.7 depth bound gets a closed cost.
+
+**What is and is not established.** The per-operator constants are a *model* of the two interpreters,
+read off `eval` and the trie/zipper ops — not measured constants and not proved. Executable-checked:
+normalisation/idempotence, `dominates` against numeric evaluation (114 pairs × 60 valuations),
+`bigO` monotone under `dominates`, the per-operator transfers, backend disagreement (300/300 corpus
+programs), monotonicity in both the symbolic valuation and the declared input type, and a **weak**
+rank-correlation sanity check of set-backend `work` against measured `eval` runtime
+(Spearman ρ = 0.933 over 16 programs — a sanity check, not a validated cost model).
+
+### 9.9 The semantic layer and the law corpus
+
+**`SpatialGamma`** — `src/main/scala/SpatialGamma.scala`
+Makes review.md 6's law family *statable*: `gammaSpace` (the histogram, spill aggregate included),
+`gammaShape` (**strong** — Must means the member really is there, `others.lo` is a real lower bound),
+`gammaShapeMay` = strong γ of a total `weakenAll` (the may-only reading `Fact`/`headCount`/
+`mayHavePrefix`/`isProvablyEmpty` consume), `gamma`/`gammaMay` on the product, `alpha`, `lubSpace`,
+`leqShape`, and the operator table that drives the simulation squares. Both readings are reported
+separately everywhere, because a transfer sound for one and not the other is not "nearly sound".
+`lubShape` delegates to `Shape.lub` — one join, deliberately, since two spellings of a join is how the
+order/transfer confusion got in. Contains no call to `eval`/`evalI`/`evalT`/`exec*`: γ is a predicate
+on a value the caller already holds.
+
+**`proofs/spatial-semantic/`** (20 obligations, generated by
+`scripts/gen_spatial_semantic_obligations.py`, run by `proofs/spatial-semantic/run.sh`) — all 20
+currently **PROVED** (z3 `unsat` on the negated theorem; vampire also refutes 11). These are
+finite-first-order fragments of the *actual* carrier, so they are a genuine step past
+`proofs/spatial/`, but they are still a model: no mechanical link generates the Scala from them. Nine
+are deliberate **GROUND WITNESSES** — refutations that pin what the code does *not* license:
+`gsem_within_not_containment` (`SpaceType.within` is an upper envelope, not γ-containment),
+`gsem_join_not_lub` (`SpatialTypes.join` is the union transfer; design_spatial_lattice.md §2 calls it a
+lub), `gsem_satisfies_weaker` (the dispatcher gate admits non-members), `gsem_l2_union_maxlo_unsound`,
+`gsem_othertail_perhead_union`, `gsem_l2_tailsinter_may_unsound`, `gsem_l1_restrict_openkeys_unsound`.
+
+### 9.10 The gates for §9.5–§9.9
+
+All are `eval`-gated differential suites; `eval` appears in tests only, never in an analysis
+(docs/design_spatial_lattice.md §0).
+
+| Suite | Path | What it pins |
+|---|---|---|
+| **`SpatialTypeCheck`** | `SpatialTypeCheck.scala` | Per-length soundness of `SpatialTypes.infer` on 3000 closed corpus instances, plus both projections inside the z3 bounds. Reports the tier-1 tightening count. |
+| **`SpillSoundness`** / **`ReviewFindings`** | `SpillSoundness.scala` | The spill/tracked overlap repair, the class and `MaxLen` caps holding for *every* constructor, randomized spill collisions; and the three earlier review defects. |
+| **`SpatialElimination`** | `SpatialElimination.scala` | `eliminate`/`eliminateIn`: fires where the syntactic law cannot, never inside a `Call`, and 2000 corpus differential checks for unconditional rewrites. |
+| **`SpatialShapeCheck`** | `SpatialShapeCheck.scala` | The shape domain and the product: the review's probes, the 1000-instance corpus γ gate, and operator matrices over flat / wide / past-`MaxDepth` / nested operands. Carries a greedy delta-debugger (`ShapeShrink`) so a violation reports a *minimal* witness. |
+| **`SpatialLawCheck`** | `SpatialLawCheck.scala` | The γ layer: extensivity/reductivity/adjunction, `leq ⇒ γ`-containment with its incompleteness measured, the two γ copies agreeing, per-operator simulation squares, transfers at abstract operands α never produces, and conditional-rewrite equivalence with a load-bearing precondition. |
+| **`SpatialRecursionCheck`** | `SpatialRecursionCheck.scala` | Depth bounds and residuals: the headline `maxLen 4 ⇒ depth 4`, hygiene of splicing, every `NoBound` reason, worklist/certification behaviour, and randomized gates over generated recursive routines. |
+| **`SpatialCostCheck`** | `SpatialCostCheck.scala` | The `Sym` algebra, `dominates` soundness, per-operator and per-backend cost shape, recurrence closing, monotonicity, and the runtime rank-correlation sanity check. |
+| **`SpatialSoundnessHunt`** | `SpatialSoundnessHunt.scala` | The **adversarial** net: 9 sweeps over all 21 constructors with nested binders, an interprocedural routine table, non-exact declared inputs and three path-ref modes, checking every projection, channel and `Fact` per case, with violations delta-debugged over *(term, environment)* pairs. Four minimal witnesses it found are pinned as named regressions. |
 
 ---
 
@@ -448,6 +598,10 @@ All suites gate against `eval` (directly, or via a backend itself gated against 
 | **`SCDegeneracies`** | `SCDegeneracies.scala` | Corpus-wide SC diagnostics + soundness (`evalI(residual)==evalI(original)` on 8 inputs × 1000 programs) and a ranked table of reducible-but-surviving residual patterns naming missing laws (the backlog signal `CorpusLawValidation` later validates). |
 
 ### 13.4 Size-analysis suites
+
+The spatial-type suites (`SpatialTypeCheck`, `SpillSoundness`/`ReviewFindings`, `SpatialElimination`,
+`SpatialShapeCheck`, `SpatialLawCheck`, `SpatialRecursionCheck`, `SpatialCostCheck`,
+`SpatialSoundnessHunt`) are tabulated with the components they gate in **§9.10**.
 
 | Suite | Path | What it pins |
 |---|---|---|

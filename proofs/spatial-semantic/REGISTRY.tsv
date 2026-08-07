@@ -1,0 +1,21 @@
+law	kind	certificates	note
+α/γ adjunction on a class interval	FILE	spatial-semantic/gsem_ivl_gamma_adjunction.smt2	extensive + reductive + both adjunction directions; the Galois core
+concretization order ⇒ containment	FILE	spatial-semantic/gsem_type_order_containment.smt2	the class-indexed carrier WITH the spill aggregate — sp_gamma_order does one interval only
+`within` is not γ-containment	FILE	spatial-semantic/gsem_within_not_containment.smt2	GROUND WITNESS; the exact gap between SpaceType.within and the order
+lattice join is an upper bound	FILE	spatial-semantic/gsem_type_lub_upper.smt2	γ(a) ∪ γ(b) ⊆ γ(lub a b) — the join SpatialGamma.lub implements
+`SpatialTypes.join` is NOT the lub	FILE	spatial-semantic/gsem_join_not_lub.smt2	GROUND WITNESS; docs/design_spatial_lattice.md §2 calls it one
+`SpatialTypes.join` IS the union transfer	DEFINITIONAL	spatial-semantic/gsem_join_union_sound.smt2	proved from the finite-measure bridge (asserted, DEFINITIONAL)
+`disjoin` preserves γ	FILE	spatial-semantic/gsem_disjoin_sound.smt2	the spill/tracked overlap repair, stated as a γ fact
+`satisfies` admits non-members	FILE	spatial-semantic/gsem_satisfies_weaker.smt2	GROUND WITNESS; the dispatcher gate is weaker than the precondition
+ε may/must rules for ∪ ∩ ∖ weaken	FILE	spatial-semantic/gsem_eps_rules.smt2	channel (a) of γ for every binary operator
+union transfer is not an upper bound	FILE	spatial-semantic/gsem_othertail_perhead_union.smt2	GROUND WITNESS; why an over-cap head summary must be weakened before folding
+L2 union transfer γ-sound	FILE	spatial-semantic/gsem_l2_union_sound.smt2	all four channels at depth 2, INCLUDING the others.lo key discount
+naive others.lo = max is unsound	FILE	spatial-semantic/gsem_l2_union_maxlo_unsound.smt2	GROUND WITNESS; certifies the discount in the current Shape.union
+L2 intersection transfer γ-sound	FILE	spatial-semantic/gsem_l2_inter_sound.smt2	closed-head-set key rule included
+L2 subtraction transfer γ-sound	FILE	spatial-semantic/gsem_l2_sub_sound.smt2	including the closed-subtrahend must-count discount
+L2 tailsUnion transfer γ-sound	FILE	spatial-semantic/gsem_l2_tailsunion_sound.smt2	and why the untracked contribution needs openCounts
+tailsInter over MAY heads is unsound	FILE	spatial-semantic/gsem_l2_tailsinter_may_unsound.smt2	GROUND WITNESS; an absent head does not participate
+tailsInter under the closed guard is sound	FILE	spatial-semantic/gsem_l2_tailsinter_closed_sound.smt2	MUST restored exactly when the participant set is known
+restriction key rule: open ∩ closed	FILE	spatial-semantic/gsem_l1_restrict_openkeys_unsound.smt2	GROUND WITNESS; the corpus wrongly-empty shape
+L1 restriction transfer γ-sound	FILE	spatial-semantic/gsem_l1_restrict_sound.smt2	with the repaired key rule
+head-count bounds ∪ ∩ ∖ <|	FILE	spatial-semantic/gsem_l1_headcount_rules.smt2	the group count of an Iteration — invisible to the histogram

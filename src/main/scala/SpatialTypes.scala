@@ -22,7 +22,10 @@ package morkl
  *
  *  — the count of paths of each length is bracketed, hence so are the size and length
  *  projections.  Unknowns (free mention with no env entry, Call, Grounded) widen to "any number
- *  of paths at any length"; every transfer below is a true cardinality fact about the operator.
+ *  of paths at any length".  Each transfer is INTENDED to be a true cardinality fact about its
+ *  operator; three of them (∪, ∩, ∖) have that checked in `proofs/spatial/lat_transfer_sound.smt2`
+ *  and the rest are supported by the path lemmas in §5 of docs/design_spatial_lattice.md plus the
+ *  differential suites — no mechanical link ties a transfer here to an obligation there.
  *
  *  Representation: counts for the lengths in `byLen`, plus a single `rest` bucket covering ALL
  *  other lengths (those in `restLens`).  `rest == Ivl.zero` therefore means "the support is
@@ -89,8 +92,10 @@ object SpaceType:
 
   val empty: SpaceType = SpaceType(sorted(Nil), Ivl.zero, LenBounds.empty)
   val unknown: SpaceType = SpaceType(sorted(Nil), Ivl.unknown, LenBounds.unknown)
-  /** exactly `n` paths, all of length `l` */
-  def exact(l: Long, n: Long): SpaceType = SpaceType(sorted(List(l -> Ivl(n, n))), Ivl.zero, LenBounds.empty)
+  /** exactly `n` paths, all of length `l` (routed through the widening: a length-9000 constant
+   *  used to keep a tracked key above `MaxLen`, contradicting the class comment) */
+  def exact(l: Long, n: Long): SpaceType =
+    SpatialTypes.widen(SpaceType(sorted(List(l -> Ivl(n, n))), Ivl.zero, LenBounds.empty))
   /** Closed support: the given classes and nothing else.  Routed through the analysis' widening so
    *  the documented class cap actually holds — a literal (or a declared input type) with more than
    *  `MaxClasses` distinct lengths used to build an oversized map that bypassed `normalize`. */
@@ -100,11 +105,11 @@ object SpaceType:
     closed(v.paths.groupBy(_.items.length.toLong).view.mapValues(ps => Ivl(ps.size, ps.size)).toSeq*)
   /** at most `n` paths, lengths anywhere in `b` (the shape of an unwrap/restriction result) */
   def bounded(b: LenBounds, n: Long): SpaceType =
-    if b.isEmpty || n == 0 then empty else SpaceType(sorted(Nil), Ivl(0, n), b)
+    if b.isEmpty || n == 0 then empty else SpatialTypes.widen(SpaceType(sorted(Nil), Ivl(0, n), b))
   /** EXACTLY `n` paths whose lengths lie in `b` but are not individually known — a singleton over
    *  an unknown-length path is this, not `bounded`: the count is certain even when the class is not. */
   def boundedExact(b: LenBounds, n: Long): SpaceType =
-    if b.isEmpty then empty else SpaceType(sorted(Nil), Ivl(n, n), b)
+    if b.isEmpty then empty else SpatialTypes.widen(SpaceType(sorted(Nil), Ivl(n, n), b))
 
 /** The abstract environment: input types for space mentions, path-length types for refs, and the
  *  routine table so `Call` nodes can be analysed INTERPROCEDURALLY (parameters bound to the
@@ -274,8 +279,24 @@ object SpatialTypes:
 
       case Space.Subtraction(a, b) =>
         val (x, y) = (rec(a), rec(b))
+        // The SPILL lower bound has to discount every subtrahend path that could sit at one of the
+        // lengths the bucket covers -- including one in a TRACKED class of `y`.  Using only
+        // `y.rest.hi` ignored those, so e.g. `(A \ A)` with `A`'s count in the spill kept a lower
+        // bound of |A| on an empty result (witness: `(hunt$rec(;$s0) \ $s0)` with `$s0 = {ε}`
+        // inferred size.lo = 1 -> DefinitelyNonEmpty for eval = ∅; also
+        // `((s0 ∪ TU(L)) \ TU(L))` -> lo 2, and `(Singleton(?p) \ L{17 paths})` -> lo 1).
+        // Tracked classes keep their own exact discount (`y.at(l).hi`); only the bucket needs the
+        // window sum, because it does not know which lengths its paths occupy.
+        val win = x.restLens
+        val yInWindow: Long =
+          if x.rest.lo == 0 || win.isEmpty then 0L
+          else
+            var tot = 0L
+            for (l, c) <- y.byLen if win.lo <= l && l <= win.hi do tot = Ivl.add(tot, c.hi)
+            if y.rest.hi > 0 && !y.restLens.isEmpty && y.restLens.lo <= win.hi && win.lo <= y.restLens.hi
+            then Ivl.add(tot, y.rest.hi) else tot
         build(x.byLen.map((l, c) => l -> Ivl(Ivl.relu(c.lo - y.at(l).hi), c.hi)),
-              Ivl(Ivl.relu(x.rest.lo - y.rest.hi), x.rest.hi), x.restLens)
+              Ivl(Ivl.relu(x.rest.lo - yInWindow), x.rest.hi), x.restLens)
 
       case Space.Restriction(xs, ys) =>
         val (x, y) = (rec(xs), rec(ys))
@@ -365,7 +386,8 @@ object SpatialTypes:
           val bt = go(body, benv, depth + 1)
           val groupsHi = sb.hi                                       // ≤ one group per source path
           val runs = sb.loHeaded >= 1                                // ≥1 headed source path ⇒ ≥1 group
-          scaleUnion(bt, if runs then 1L else 0L, groupsHi)
+          reduceTotal(scaleUnion(bt, if runs then 1L else 0L, groupsHi),
+                      Lower.sizeBounds(s, envSizes(env), env.routines, env.active))
 
       case Space.Fold(src, _, acc, sym, rest, body, _) =>
         val x = rec(src)
@@ -374,7 +396,8 @@ object SpatialTypes:
         else
           val benv = env.withPath(sym -> LenBounds(1, 1))
             .copy(spaces = if rest.s == "_" then env.spaces else env.spaces + (rest -> tailsOf(x)))
-          scaleUnion(go(body, benv, depth + 1), 0L, sb.hi)           // accumulator unknown ⇒ no lower
+          reduceTotal(scaleUnion(go(body, benv, depth + 1), 0L, sb.hi),   // accumulator unknown ⇒ no lower
+                      Lower.sizeBounds(s, envSizes(env), env.routines, env.active))
 
       case Space.Fixpoint(init, recm, body) =>
         val i0 = rec(init)
@@ -437,6 +460,16 @@ object SpatialTypes:
   /** both are sound bounds on the same count, so the meet is sound and at least as tight */
   private def meetSize(a: SizeBounds, b: SizeBounds): SizeBounds =
     SizeBounds(a.lo max b.lo, a.loHeaded max b.loHeaded, a.hi min b.hi)
+
+  /** REDUCE the histogram against a sound bound on its TOTAL.  No class can hold more than the whole
+   *  space, so every class upper is capped by `total.hi`; when only one class is live that makes the
+   *  reduction exact.  Without this the product was unreduced and `infer(...).size` could be 64x
+   *  looser than `sizeOf(...)` on the very same term — a four-deep rest-chained iteration reported
+   *  [0, 256] where the tier-1 head-partition law already knew [0, 4] (review.md 7). */
+  private def reduceTotal(t: SpaceType, total: SizeBounds): SpaceType =
+    if total.hi == Ivl.INF then t
+    else SpaceType(SortedMap.from(t.byLen.map((l, c) => l -> Ivl(c.lo, c.hi min total.hi))),
+                   Ivl(t.rest.lo, t.rest.hi min total.hi), t.restLens)
 
   private def widenCounts(t: SpaceType): SpaceType =
     SpaceType(SortedMap.from(t.byLen.map((l, c) => l -> Ivl(c.lo, Ivl.INF))),
