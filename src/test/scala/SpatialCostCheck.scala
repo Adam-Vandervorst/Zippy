@@ -140,33 +140,48 @@ class SpatialCostCheck extends FunSuite:
   private def work(r: SpatialCost.Report): Sym = r.cost.work.symOpt.getOrElse(Sym.Inf)
   private def alloc(r: SpatialCost.Report): Sym = r.cost.alloc.symOpt.getOrElse(Sym.Inf)
   private def rounds(r: SpatialCost.Report): Sym = r.cost.rounds.symOpt.getOrElse(Sym.Inf)
+  private def touch(r: SpatialCost.Report): Sym = r.cost.touch.symOpt.getOrElse(Sym.Inf)
 
-  test("set-backend transfers: the shape of each operator's cost") {
+  // NOTE ON COMPONENT MEANINGS (changed by the calibration work, review.md finding 2).
+  //   `work`/`alloc`/`rounds` are now DEFINED BY COUNTED EVENTS, so a claim about them is a claim
+  //   about `Events.work`/`.alloc`/`.rounds` that `SpatialEventsCheck` measures.  A `Set` union is
+  //   ONE AstDispatch and ZERO PathValue allocations, however large its operands: the |a|+|b|
+  //   element cost lives in `touch`, which has NO ORACLE and is therefore asserted only as a model.
+  test("reference-backend transfers: the shape of each operator's cost") {
     def setO(s: Space) = SpatialCost.analyze(s, SetCost).cost
-    // a union is a linear scan of both operands; a composition is the |a|.|b| product of concats
-    assertEquals(setO(Space.Union(S"s0", S"s1")).work.bigO, BigO(0, 1, 0))
-    assertEquals(setO(Space.Union(S"s0", S"s1")).alloc.bigO, BigO(0, 1, 0))
+    // a union is a linear scan of both operands, but the scan happens inside `Set` — so it is a
+    // `touch` claim, and the evaluator's own counted work for it is constant
+    assertEquals(setO(Space.Union(S"s0", S"s1")).touch.bigO, BigO(0, 1, 0))
+    assertEquals(setO(Space.Union(S"s0", S"s1")).work.bigO, BigO.const, "3 AstDispatches, whatever |s0|,|s1| are")
+    assertEquals(setO(Space.Union(S"s0", S"s1")).alloc, Amount.Bounded(Sym.zero), "no PathValue is built")
+    // a composition builds |a|.|b| FRESH PathValues — that IS counted, as FreshPath
     assertEquals(setO(Space.Composition(S"s0", S"s1")).alloc.bigO, BigO(0, 2, 0))
-    assertEquals(setO(Space.Composition(S"s0", S"s1")).work.bigO, BigO(0, 3, 0), "|a|.|b| concats of length |a|+|b|")
-    // a Restriction in `eval` is a NESTED startsWith scan — the quadratic term the trie removes
+    assertEquals(setO(Space.Composition(S"s0", S"s1")).touch.bigO, BigO(0, 3, 0), "|a|.|b| concats of length |a|+|b|")
+    // a Restriction in `eval` is a NESTED startsWith scan, and every item comparison IS counted
     assertEquals(setO(Space.Restriction(S"s0", S"s1")).work.bigO, BigO(0, 3, 0))
-    // `Range` in `eval` is `.toVector.sorted.slice` — a comparison sort, hence the log factor
+    // `Range` in `eval` is `.toVector.sorted.slice` — a comparison sort through `pathValueOrdering`,
+    // which is instrumented, so the log factor lands in the COUNTED component
     assert(setO(Space.Range(S"s0", 0, 3)).work.bigO.logs >= 1, "a set Range must pay for a sort")
     // an Unwrap rebuilds the whole set
     assertEquals(setO(Space.Unwrap(S"s0", "a")).alloc.bigO, BigO(0, 1, 0))
     // and an empty operand costs nothing downstream
-    assertEquals(setO(Space.Composition(Space.Empty, S"s1")).work, Amount.Bounded(Sym.zero))
+    assertEquals(setO(Space.Composition(Space.Empty, S"s1")).touch, Amount.Bounded(Sym.zero))
   }
 
   test("trie-backend transfers: skipping and sharing show up as different cost") {
     def trieO(s: Space) = SpatialCost.analyze(s, TrieCost).cost
-    // a zipper Unwrap descends |p| levels and hands back the SHARED subtrie: no allocation at all
+    // an Unwrap descends |p| levels and hands back the SHARED subtrie: no allocation at all
     assertEquals(trieO(Space.Unwrap(S"s0", "a")).alloc, Amount.Bounded(Sym.zero))
     assertEquals(trieO(Space.Wrap(S"s0", "a.b")).alloc, Amount.Bounded(Sym.c(2)), "a 2-node spine over a shared child")
-    // the trie is stored in canonical path order, so Range needs no sort
-    assertEquals(trieO(Space.Range(S"s0", 0, 3)).work.bigO.logs, 0)
-    // restriction descends the prefix trie once instead of scanning pairs
-    assert(trieO(Space.Restriction(S"s0", S"s1")).work.bigO < SpatialCost.analyze(Space.Restriction(S"s0", S"s1"), SetCost).cost.work.bigO)
+    // ATTRIBUTION FIX (review.md 2, third bullet): the old model claimed the trie `Range` needs "NO
+    // SORT".  `ITrie.range` sorts every visited node's child keys by their UN-INTERNED item, so the
+    // log factor is real and must appear.  It also computes the recursive `t.size` first.
+    assert(trieO(Space.Range(S"s0", 0, 3)).touch.bigO.logs >= 1,
+           s"ITrie.range sorts child keys per visited node: ${trieO(Space.Range(S"s0", 0, 3)).show}")
+    // restriction descends the prefix trie once instead of scanning pairs: the win is in COMPARISONS
+    // (`work`), which is exactly the component `Effort.startsWith` counts for the reference evaluator
+    assert(trieO(Space.Restriction(S"s0", S"s1")).work.bigO <
+             SpatialCost.analyze(Space.Restriction(S"s0", S"s1"), SetCost).cost.work.bigO)
   }
 
   test("the SAME facts give the two backends DIFFERENT costs") {
@@ -189,36 +204,45 @@ class SpatialCostCheck extends FunSuite:
     val (ma, mb) = (SpaceMention("A"), SpaceMention("B"))
     val env = SpatialCost.Env(facts = SpatialTyping.Env(spaces = Map(ma -> SpatialType.of(av), mb -> SpatialType.of(bv))))
     val (ds, dt) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(mb)), env)
-    assertEquals(work(ds).show, "12", "a set intersection touches all 6+6 paths")
-    assertEquals(work(dt).show, "4", "a trie intersection compares 2+2 heads and stops")
+    assertEquals(touch(ds).show, "12", "a set intersection touches all 6+6 paths")
+    assertEquals(touch(dt).show, "4", "a trie intersection compares 2+2 heads and stops")
     assertEquals(alloc(dt).show, "0", "and allocates nothing")
-    assert(Sym.dominates(work(ds), work(dt)))
+    assert(Sym.dominates(touch(ds), touch(dt)))
     // ground truth: the intersection really is empty (eval as ORACLE, never inside the analysis)
     assertEquals(eval(Space.Intersection(Space.Literal(av), Space.Literal(bv))), SpaceValue(Set.empty))
-    // an OVERLAPPING intersection gets no skip
-    val (os, ot) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(ma)), env)
-    assert(!Sym.dominates(work(os), work(ot)) || work(ot) != Sym.c(4), "no skip when the operands may overlap")
-    assertEquals(alloc(ot).show, "12")
+    // an OVERLAPPING intersection gets no skip.  `Mention(A) ∩ Mention(A)` is the SAME trie object,
+    // so `ITrie.intersection`'s `a eq b` fires and the trie really is O(1) there — a different fast
+    // path from the disjointness skip, and one the reference `Set` evaluator does not have.
+    val (os, ot) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(mb)),
+                                       env.copy(shapeFacts = false))
+    // 6 paths x 2 items, PLUS the always-present root node (Meas.nodes = 1 + size*len)
+    assertEquals(alloc(ot).show, "13", s"no shape tier, no skip: ${ot.show}")
+    val (_, selfT) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(ma)), env)
+    assertEquals(alloc(selfT).show, "0", s"x ∩ x is a pointer-identity accept: ${selfT.show}")
     // dropping the shape tier removes the skip: the cost RISES, and the report says why
     val noShape = SpatialCost.analyze(Space.Intersection(Space.Mention(ma), Space.Mention(mb)),
                                       env.copy(shapeFacts = false), TrieCost)
-    assert(Sym.dominates(work(noShape), work(dt)), s"without the shape the trie must not be cheaper: ${noShape.show}")
+    assert(Sym.dominates(touch(noShape), touch(dt)), s"without the shape the trie must not be cheaper: ${noShape.show}")
     assert(dt.assumptions.exists(_.contains("SpatialShapeCheck")), "a shape-derived skip must be flagged")
     assert(noShape.assumptions.forall(!_.contains("SpatialShapeCheck")))
   }
 
   test("the model is NOT rigged: each backend wins somewhere") {
+    // compared on the WHOLE cost vector's order class (the max over all four components), which is
+    // the honest "which executable is asymptotically cheaper here"
     def cheaper(s: Space): String =
       val (a, b) = SpatialCost.compare(s)
-      if a.cost.work.bigO < b.cost.work.bigO then "set"
-      else if b.cost.work.bigO < a.cost.work.bigO then "trie" else "tie"
-    // a zipper focus, an ordered slice and a prefix descent favour the trie
+      if a.cost.bigO < b.cost.bigO then "set"
+      else if b.cost.bigO < a.cost.bigO then "trie" else "tie"
+    // a focus, an ordered slice and a prefix descent favour the trie
     assertEquals(cheaper(Space.Unwrap(S"s0", "a")), "trie")
-    assertEquals(cheaper(Space.Range(S"s0", 0, 3)), "trie")
     assertEquals(cheaper(Space.Restriction(S"s0", S"s1")), "trie")
     // a flat set union favours the hash set: a trie merge walks nodes, not paths
     assertEquals(cheaper(Space.Union(S"s0", S"s1")), "set")
     assertEquals(cheaper(Space.TailsUnion(S"s0")), "set")
+    // and the reference backend now WINS a full-window Range, because `sliceRange` returns its input
+    // while `ITrie.range` still walks every node to compute `t.size` (review.md 2, bullets 2 and 3)
+    assertEquals(cheaper(Space.Range(S"s0", 0, 0)), "set")
   }
 
   // ==============================================================================================
@@ -245,8 +269,11 @@ class SpatialCostCheck extends FunSuite:
                                               Space.Composition(S"t", S"t"))
     val (ha, hb) = (SpatialCost.analyze(heavy(a), SetCost), SpatialCost.analyze(heavy(b), SetCost))
     assertEquals(rounds(ha).show, "1"); assertEquals(rounds(hb).show, "4")
-    assert(Sym.dominates(work(ha), work(hb)) && work(ha) != work(hb),
+    // the fat-group source ALLOCATES more (16 fresh concatenated paths against 4), which is the
+    // counted `FreshPath` component, and touches more elements
+    assert(Sym.dominates(alloc(ha), alloc(hb)) && alloc(ha) != alloc(hb),
            s"one group over 4 tails squares to 16 concats; four groups over 1 tail each to 4:\n${ha.show}\n${hb.show}")
+    assert(Sym.dominates(touch(ha), touch(hb)) && touch(ha) != touch(hb), s"${ha.show}\n${hb.show}")
     // ground truth for that direction
     assertEquals(eval(heavy(a)).paths.size, 16)
     assertEquals(eval(heavy(b)).paths.size, 1)
@@ -413,7 +440,11 @@ class SpatialCostCheck extends FunSuite:
   // 5. GROUND-TRUTH TREND (eval used only as an oracle, never by the analysis)
   // ==============================================================================================
 
-  test("the set-backend work correlates with measured eval runtime (weak sanity check)") {
+  // DEMOTED (review.md finding 2): this is a SECONDARY trend metric.  It runs against `touch`, the
+  // un-oracled element-cost component, because wall-clock time is dominated by `Set`/`ITrie`
+  // internals that no event counts.  The PRIMARY evidence is now the containment/slack table in
+  // `SpatialEventsCheck`, which compares predicted intervals against counted events per component.
+  test("SECONDARY TREND: the reference-backend touch model ranks with measured eval runtime") {
     // families whose predicted set costs differ by construction: k^2 concats, k^2 prefix
     // comparisons, k log k sort comparisons, and a linear scan
     def bigLit(k: Int, pre: String): Space = litN(k, pre)
@@ -434,29 +465,13 @@ class SpatialCostCheck extends FunSuite:
         best = math.min(best, (System.nanoTime() - t0) / 1e6 / 20.0)
       best
     val rows = progs.map { (nm, s) =>
-      val pred = SpatialCost.analyze(s, SetCost).cost.work.symOpt.map(Sym.evalAt(_, Map.empty)).getOrElse(Double.PositiveInfinity)
+      val pred = SpatialCost.analyze(s, SetCost).cost.touch.at(Map.empty)
       (nm, pred, timeMs(s))
     }
-    def ranks(xs: Vector[Double]): Vector[Double] =
-      val order = xs.indices.sortBy(xs).toVector
-      val r = Array.fill(xs.length)(0.0)
-      var i = 0
-      while i < order.length do
-        var j = i
-        while j + 1 < order.length && xs(order(j + 1)) == xs(order(i)) do j += 1
-        val avg = (i + j) / 2.0
-        for k <- i to j do r(order(k)) = avg
-        i = j + 1
-      r.toVector
-    val (rp, rt) = (ranks(rows.map(_._2)), ranks(rows.map(_._3)))
-    val n = rows.length.toDouble
-    val (mp, mt) = (rp.sum / n, rt.sum / n)
-    val cov = rp.zip(rt).map((a, b) => (a - mp) * (b - mt)).sum
-    val sp = math.sqrt(rp.map(a => (a - mp) * (a - mp)).sum)
-    val stt = math.sqrt(rt.map(b => (b - mt) * (b - mt)).sum)
-    val rho = cov / (sp * stt)
-    for (nm, pred, ms) <- rows.sortBy(_._2) do println(f"COST: $nm%-14s predicted work=${pred.toLong}%10d  measured eval=$ms%8.3f ms")
-    println(f"COST: Spearman rank correlation (predicted set work vs measured eval time) = $rho%.3f over ${rows.length} programs")
+    val rho = Calibration.spearman(rows.map(_._2), rows.map(_._3))
+    for (nm, pred, ms) <- rows.sortBy(_._2) do println(f"COST: $nm%-14s predicted touch=${pred.toLong}%10d  measured eval=$ms%8.3f ms")
+    println(f"COST: Spearman rank correlation (predicted set touch vs measured eval time) = $rho%.3f over ${rows.length} programs " +
+            "[SECONDARY metric; see SpatialEventsCheck for containment/slack]")
     assert(rho >= 0.5, f"the predicted cost order should track measured runtime; got rho=$rho%.3f")
     // the strongest single claim: the quadratic family really does grow quadratically
     val comp = rows.filter(_._1.startsWith("compose")).map(_._3)

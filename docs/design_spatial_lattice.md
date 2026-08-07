@@ -85,6 +85,19 @@ certified relational laws, the solver). An earlier revision seeded closed subter
 (`groundFold`, in all three tiers); it was removed, and the exactness it produced on the cornerstones
 went with it. Anything that looks exact now is derived.
 
+**The invariant now covers eleven files, and is checked rather than trusted.** Every `Spatial*.scala`
+in `src/main/scala` — including the newer `SpatialAnalysis`, `SpatialFacts`, `SpatialCheck`,
+`SpatialPipeline` and `SpatialEvents` — contains **zero** calls to `eval`/`evalI`/`evalT`/`exec*`. The
+only textual matches are four string literals in `SpatialCost.scala` that *name* the backends
+(`"eval (MORKL.scala) over Set[PathValue]"` and its three siblings). Four suites additionally assert it
+behaviourally with a **bomb subterm** — a `GroundedSS` whose function throws — and run inference, fact
+derivation, cost prediction, conformance checking and witness search over it; a throw is never an
+acceptable route to precision, and the correct answer is ⊤.
+
+**Instrumentation is not analysis.** `SpatialEvents` counts events *inside* `eval`, `execT` and
+`execZ`, which is the opposite direction: the executor reports what it did, and the analysis never asks
+it. The counted vectors are consumed only by tests (calibration), never by a transfer or a bound.
+
 ## 1. The domain
 
 | Level | Carrier | Order |
@@ -117,6 +130,27 @@ old one. This is why `LenBounds.empty = (INF, 0)` composes correctly through `mi
 | the lattice is **distributive** (a product of two total orders) | `lat_ivl_distrib` | PROVED |
 | pointwise order on spatial types is a partial order | `lat_type_order` | PROVED |
 | pointwise join is the lub | `lat_type_join_lub` | PROVED |
+
+### 2a. The bidirectional reducer — EXECUTABLE-CHECKED, not proved
+
+`SpatialType.reduce` (eight rules, `H1`–`H4` histogram→shape and `S1`–`S4` shape→histogram, iterated to
+a fixed point under `SpatialConfig.reduceRounds`) has **no SMT obligation**. Nothing in
+`proofs/spatial/` or `proofs/spatial-semantic/` covers it. What is established about it is executable
+only, and the distinction matters because the reducer is now load-bearing for a *bound*
+(atlas §9.7's `peel` case derives a call-depth bound that neither component derives alone):
+
+| Property | How | Verdict |
+|---|---|---|
+| reduction is **sound** — `reduce` never drops a γ-member | 225 generated types × 128 concrete values; 71 types tightened | 0 members lost |
+| `meet` never fabricates ⊥ for an inhabited pair | 48² pairs × 128 values | 0 false ⊥ |
+| reduction **terminates**, and fast | measured rounds to the fixed point over 225 types | ≤ 1 round (cap 4); idempotent on all |
+| the tightened child reaches the parent transfer | per-node decoration on 400 corpus instances | 0 violations, 0 collapses to ⊥ |
+| per-node results are sound against the concrete semantics | 4,352 closed decorated occurrences vs `eval` | 0 violations |
+
+**Termination is measured, not argued.** The ≤ 1 round figure is an observation on a generated pool, and
+`reduceRounds` is a hard cap that makes non-termination impossible but imprecision possible; there is no
+proof that the eight rules form a decreasing chain. Read this table as "no counterexample found by these
+gates", which is weaker than the `lat_*` rows above it.
 
 ## 3. Arithmetic the transfers run on (certified: `lat_sat_*`)
 
@@ -218,3 +252,38 @@ result.
 - **Widening is not proved terminating.** Spilling and count-widening are proved *sound*
   (`lat_widen_sound`); the ascending-chain argument (finite classes × bounded lengths) is
   structural, not certified.
+
+### 7a. Limits introduced by the consolidation round
+
+- **The reducer has no proof obligation.** See §2a. It is load-bearing for a call-depth bound and is
+  gated only by executable γ-checks and a round cap.
+- **The reduced product is mutual at the shape/histogram boundary, projection-only past it.** `reduce`
+  really does move information both ways, and the decorated traversal really does hand the tightened
+  child to the parent. But the *transfers themselves* are still per-component: `SpatialTypes.infer`
+  computes counts without consulting the shape, `Shape`'s transfers compute structure without consulting
+  counts, and the two meet only at the reduction step after each node. So a transfer cannot use a
+  count fact to pick a sharper structural rule mid-transfer; it can only be corrected afterwards. The
+  `peel` case works because correction-after-the-node is enough there, not because the transfers
+  cooperate.
+- **`SpatialConfig` is one value, not one authority.** Honoured per call by `SpatialAnalysis`,
+  `SpatialTyping` and `SpatialType.reduce`. `Shape.MaxDepth`/`MaxHeads` are `val`s read from the
+  **global default**, so `shapeDepth`/`shapeWidth` cannot be varied per analysis. `histQueries`,
+  `inline`, `summaryKeys` and `unroll` are declared but unconsumed — `SpatialCost` and
+  `SpatialRecursion` still read their own constants.
+- **Zipper effort calibration rests on 23 of 200 programs.** `execZ` delegated the other 177 to the
+  uninstrumented `evalI`; those are *excluded* from the zipper rows rather than counted as zero, which
+  is honest but thin. `ZipperFallbackToEvalI` makes the exclusion visible; instrumenting `evalI` (or
+  the `IntTrieOps` Patricia operators, which are ours) is the way to widen it.
+- **Some effort intervals are vacuous.** Where a cornerstone's predicted upper is `∞` (`puzzle15` and
+  `datalog-sn` on all three components), "100% containment" says nothing and slack is `Infinity`.
+  Containment is only meaningful jointly with the slack column; zipper `Alloc` p95 = 67.8 is inside the
+  interval and still not a close model.
+- **Reference `work` is not fully countable from our source.** `eval`'s `Set` operations delegate to the
+  Scala collection library, so internal hash probes cannot be counted by these hooks. The reference
+  oracle counts AST dispatches, explicit prefix comparisons, loop frames and fixpoint rounds only — if
+  `SetCost.work` is read as "internal element touches", that component is *not* validated.
+- **Bounded completeness is bounded.** `SpatialCheck.Refuted` needs a real witness, and witnesses come
+  from a finite universe over a chosen alphabet and maximum path length. `Unknown` therefore mixes
+  genuine violations with abstract false negatives and with "the universe was too small"; the measured
+  `leq` incompleteness (11 of 62 contained pairs missed) is a property of that universe, not of the
+  order in general.

@@ -1,0 +1,722 @@
+package morkl
+
+import munit.FunSuite
+import morkl.Syntax.{*, given}
+import scala.language.implicitConversions
+
+/** ==================================================================================================
+ *  THE ACCEPTANCE SUITE — review.md's eight numbered "Requested real-program tests".
+ *
+ *  The randomized γ gates elsewhere validate the SOUNDNESS OF THE CARRIER.  These validate that the
+ *  subsystem answers the questions a Zippy user actually asks, on real programs, through the ONE entry
+ *  point ([[SpatialPipeline]]).
+ *
+ *  ==THE NO-EVALUATION GATE, MECHANICALLY==
+ *  Every executor in the tree is instrumented (SpatialEvents.scala), so `EffortSink.count(stage)`
+ *  returning an empty event vector is a PROOF that no interpreter ran.  That is strictly stronger than
+ *  a throwing sentinel, which only covers the subterms the sentinel sits on — and both are used.
+ *
+ *  The gate is applied with `ordinaryLower = false`.  `Routine.optimized` is a PARTIAL EVALUATOR:
+ *  `Lower.ConstantOps` (MORKL.scala:1613) tries `eval` on every node and folds the ones that do not
+ *  throw, and `Lower.LiteralSpaceOps` calls `eval` on every literal-operand algebra node.  Those
+ *  compile-time evaluations are legitimate and long predate the spatial subsystem, but they mean any
+ *  stage that calls the ordinary rule list cannot be event-free — see the attribution test in
+ *  `SpatialPipelineCheck`.
+ *
+ *  ==THE SCORECARD==
+ *  {{{
+ *  1 strict annotation-only analysis   DONE   7 terms x 4 backends, 0 counted events
+ *  2 symbolic fibers ({edge.?target})  DONE   one head group; frames 1+N and result 2N, never N²
+ *  3 decorated binders and identity    DONE   2 occurrences, 2 observations, per-group bindings kept
+ *  4 multi-step Game of Life           DONE   len pinned to [3,3] through all FIVE nested calls
+ *  5 cornerstones under open annot.    DONE   six programs, sound against `eval`, 0 counted events
+ *  6 semantic-law ground checks        DONE   512 digraphs, 512 Life fields, n-queens n=1..8
+ *  7 optimization consumption          DONE   four sub-claims, each differentially verified
+ *  8 effort calibration                SKIP   the event agent's `SpatialEventsCheck` owns it
+ *  9 review.md's "definition of done"  DONE   one signature: REFUTED on the recursion, PROVED on
+ *                                             the residual, four backends agreeing with `eval`
+ *  }}}
+ *  ================================================================================================ */
+class SpatialAcceptance extends FunSuite:
+  import Space.*
+  import Lower.{LenBounds, SizeBounds}
+  override val munitTimeout = scala.concurrent.duration.Duration(45, "min")
+
+  // ------------------------------------------------------------------------------------------------
+  //  shared fixtures
+  // ------------------------------------------------------------------------------------------------
+  def pv(items: String*): PathValue = PathValue(items.toList)
+  def spv(ps: PathValue*): SpaceValue = SpaceValue(ps.toSet)
+  def lit(ps: PathValue*): Space = Space.Literal(spv(ps*))
+  def konst(items: String*): Path = Path.Constant(pv(items*))
+  def routineOf(name: String, body: Space, ms: SpaceMention*): Routine =
+    Routine(RoutinePtr(name), Vector.empty, ms.toVector, body)
+  def fs(b: SizeBounds): String = s"[${b.lo}, ${if b.hi == SizeBounds.INF then "inf" else b.hi}]"
+  def fl(b: LenBounds): String =
+    if b.isEmpty then "EMPTY" else s"[${b.lo}, ${if b.hi == LenBounds.INF then "inf" else b.hi}]"
+
+  /** the mechanical no-evaluation gate */
+  def noEval[A](label: String)(body: => A): A =
+    val (a, ev) = EffortSink.count(body)
+    assertEquals(ev.total, 0L, s"$label EVALUATED its subject: ${ev.show}")
+    a
+
+  /** an opaque grounded atom that THROWS if anything runs it (whispers §8's sentinel) */
+  def bomb(inner: Space = Space.Empty): Space =
+    Space.GroundedSS(inner, _ => throw RuntimeException("the analysis evaluated its subject"))
+
+  def strict(a: SpatialAnnotations): SpatialAnnotations = a.copy(ordinaryLower = false)
+
+  // ================================================================================================
+  //  1.  STRICT ANNOTATION-ONLY ANALYSIS
+  // ================================================================================================
+  test("1. strict annotation-only: a Range bound is DERIVED, and a throwing atom is never run") {
+    // ---- (a) the bound comes from the transfer, not from an evaluated value --------------------
+    val src = lit(pv("a"), pv("b"), pv("c"), pv("d"), pv("e"))
+    val window = Space.Range(src, 2, 4)                 // a 2-wide slice of a 5-path source
+    val a = noEval("analyzeTerm(Range)")(
+      SpatialPipeline.analyzeTerm(window, strict(SpatialAnnotations.open())))
+    assertEquals(a.result.size.hi, 2L, s"the window width must be derived: ${a.result.show}")
+    assertEquals(SpatialFacts.exactValue(a.result), None,
+      "the analysis must NOT know which two paths survive — that would be evaluation")
+    assert(a.facts.contains(Fact.MaximumCardinality(2)), s"${a.facts}")
+    // ground truth, for contrast only
+    assertEquals(eval(window).paths.size, 2)
+
+    // ---- (b) the sentinel: nothing in the pipeline runs a grounded atom -----------------------
+    val b = bomb(lit(pv("x")))
+    intercept[RuntimeException] { eval(b) }             // the sentinel is live
+    val terms = Vector[Space](
+      b,
+      Space.Union(b, lit(pv("y"))),
+      Space.Intersection(Space.Wrap(b, konst("k")), lit(pv("k", "z"))),
+      Space.Iteration(b, PathRef("h").known(1), SpaceMention("r"), Space.Mention(SpaceMention("r"))),
+      Space.Fixpoint(lit(pv("s")), SpaceMention("f"), Space.Union(Space.Mention(SpaceMention("f")), b)),
+      Space.Range(b, 1, 2),
+      Space.Subtraction(b, b),
+    )
+    val ann = strict(SpatialAnnotations.open())
+    for t <- terms do
+      val ta = noEval(s"analyze ${t.show.take(30)}")(SpatialPipeline.analyzeTerm(t, ann))
+      val r = routineOf("bomb", t)
+      val g = noEval("optimizeGuarded")(SpatialPipeline.optimizeGuarded(r, ta))
+      for bk <- Backend.values.toVector do noEval(s"lower/${bk.slug}")(SpatialPipeline.lower(g, bk, ann))
+      noEval("facts")(SpatialTyping.facts(t))
+      noEval("profile")(ta.profile)
+      noEval("cost")(SpatialCost.analyzeAll(t))
+      noEval("candidates")(SpatialFacts.specializations(ta.result))
+      noEval("selectBackend")(SpatialPipeline.selectBackend(t, ann))
+    println(s"\n[1] ${terms.size} sentinel-bearing terms analysed, optimized, lowered and priced " +
+            "on four backends with ZERO counted executor events")
+  }
+
+  // ================================================================================================
+  //  2.  SYMBOLIC FIBERS — {edge.?target} with cardinality N
+  // ================================================================================================
+  /** `Iteration(src, h1, r1, Iteration(r1, h2, r2, leaf))` — a full-path iterator over length-2 paths */
+  def nest2(src: Space, leaf: Space): Space =
+    val h1 = PathRef("h1").known(1); val r1 = SpaceMention("r1")
+    val h2 = PathRef("h2").known(1); val r2 = SpaceMention("r2")
+    Space.Iteration(src, h1, r1, Space.Iteration(Space.Mention(r1), h2, r2, leaf))
+
+  /** the two-path pointwise leaf: it reads only the HEAD refs, never a rest set */
+  val twoPathLeaf: Space =
+    val h1 = Path.Deref(PathRef("h1").known(1)); val h2 = Path.Deref(PathRef("h2").known(1))
+    Space.Union(Space.Singleton(Path.Concat(h1, h2)), Space.Singleton(Path.Concat(h2, h1)))
+
+  test("2. symbolic fibers: {edge.?target} is ONE head group, and the nest is 2N, never N^2") {
+    println("\n[2] N | heads | K_1 | K_2 | leafInv | frames=ΣK_i | refVisits=ΣE_i | naive ΠK_i | result")
+    for n <- Vector(2, 3, 5, 8, 13) do
+      // {edge.t_1 … edge.t_N}: ONE head, N distinct second items — cardinality N
+      val fiber = Space.Literal(SpaceValue((1 to n).map(i => pv("edge", s"t$i")).toSet))
+      val nest = nest2(fiber, twoPathLeaf)
+      val ann = strict(SpatialAnnotations.open())
+      val a = noEval(s"analyze N=$n")(SpatialPipeline.analyzeTerm(nest, ann))
+      val srcT = noEval("infer(fiber)")(SpatialTyping.infer(fiber))
+      val chain = RestChain.recognize(nest).getOrElse(fail("the nest must be recognised"))
+      assertEquals(chain.depth, 2)
+      val b = noEval("chainBound")(SpatialFacts.chainBound(chain, SpatialTyping.Env()))
+        .getOrElse(fail(s"the chain must be bounded"))
+
+      println(f"    $n%2d | ${srcT.headCount.show}%8s | ${b.profile.prefixes(1).show}%7s | " +
+              f"${b.profile.prefixes(2).show}%8s | ${b.leafInvocations.show}%8s | " +
+              f"${b.frameEntries.show}%9s | ${b.groupingVisits.show}%9s | ${b.naiveProductBound.show}%12s | " +
+              f"${b.resultCardinality.show}%9s")
+
+      // ---- ONE head group ---------------------------------------------------------------------
+      assertEquals(srcT.headCount, Ivl(1, 1), s"N=$n: {edge.?target} has exactly ONE head")
+      assert(SpatialTyping.facts(fiber).contains(Fact.ExactHeadSet(Set("edge"))))
+      // ---- pointwise, not quadratic -----------------------------------------------------------
+      assertEquals(b.profile.prefixes(1), Ivl(1, 1), s"N=$n: K_1 = 1")
+      assertEquals(b.profile.prefixes(2), Ivl(n, n), s"N=$n: K_2 = N")
+      assertEquals(b.leafInvocations, Ivl(n, n), s"N=$n: the leaf runs K_2 = N times")
+      assertEquals(b.frameEntries.hi, 1L + n, s"N=$n: frames = K_1 + K_2 = 1 + N")
+      assert(b.frameEntries.hi <= 2L * n, s"N=$n: frames ${b.frameEntries.show} must be <= 2N")
+      assert(b.resultCardinality.hi <= 2L * n,
+             s"N=$n: the result must be bounded pointwise by 2N, got ${b.resultCardinality.show}")
+      // Π K_i for THIS family is 1·N (there is only one head), so the interesting comparison here is
+      // against N², which is what a per-level "up to N groups at each of two levels" bound would give.
+      assertEquals(b.naiveProductBound.hi, n.toLong, s"N=$n: Π K_i = K_1·K_2 = 1·N")
+      // ---- the ROOT ANALYSIS agrees: no N^2 anywhere in the inferred type --------------------
+      assert(a.result.size.hi <= 2L * n,
+             s"N=$n: the inferred result cardinality ${fs(a.result.size)} must be <= 2N")
+      if n > 2 then assert(2L * n < n.toLong * n.toLong,
+        s"N=$n: 2N must be strictly better than N² (the bound this test exists to rule out)")
+      assertEquals(b.groupingVisits.hi, 2L * n, s"N=$n: the reference groupMap scans ΣE_i = 2N")
+      // ---- ground truth ----------------------------------------------------------------------
+      val truth = eval(nest).paths.size
+      assert(truth <= a.result.size.hi, s"N=$n: unsound, truth $truth > ${a.result.size.hi}")
+      assert(a.result.size.lo <= truth, s"N=$n: unsound lower, ${a.result.size.lo} > $truth")
+
+    // THE DISTINCT-HEAD FAMILY — where the per-level product really is N², and Σ K_i really is 2N
+    println("[2] distinct heads: N | frames=ΣK_i | naive ΠK_i | result")
+    for n <- Vector(3, 6, 10) do
+      val distinct = Space.Literal(SpaceValue((1 to n).map(i => pv(s"h$i", s"t$i")).toSet))
+      val nest = nest2(distinct, twoPathLeaf)
+      val chain = RestChain.recognize(nest).get
+      val b = SpatialFacts.chainBound(chain, SpatialTyping.Env())
+        .getOrElse(fail(s"the distinct-head nest N=$n must be bounded"))
+      val a = SpatialPipeline.analyzeTerm(nest, strict(SpatialAnnotations.open()))
+      println(f"    $n%2d | ${b.frameEntries.show}%11s | ${b.naiveProductBound.show}%11s | ${fs(a.result.size)}")
+      assertEquals(b.frameEntries.hi, 2L * n, s"distinct heads N=$n: Σ K_i = 2N exactly")
+      assertEquals(b.naiveProductBound.hi, n.toLong * n.toLong,
+                   s"distinct heads N=$n: the per-level PRODUCT is N² — the bound never to be used")
+      assert(b.frameEntries.hi < b.naiveProductBound.hi || n <= 2,
+             s"N=$n: 2N must beat N²: ${b.frameEntries.show} vs ${b.naiveProductBound.show}")
+      assert(b.resultCardinality.hi <= 2L * n,
+             s"distinct heads N=$n: the result must be 2N, not N²: ${b.resultCardinality.show}")
+      assert(a.result.size.hi <= 2L * n,
+             s"distinct heads N=$n: the INFERRED result must be 2N, not N²: ${fs(a.result.size)}")
+  }
+
+  // ================================================================================================
+  //  3.  DECORATED BINDERS AND IDENTITY
+  // ================================================================================================
+  test("3. decorated binders: bindings are retained per observation, positions are distinct") {
+    val H = PathRef("h").known(1); val R = SpaceMention("r")
+    // ONE AST OBJECT used in TWO positions
+    val shared = Space.Iteration(lit(pv("a", "1"), pv("b", "2")), H, R,
+                                 Space.Wrap(Space.Mention(R), Path.Deref(H)))
+    val body = Space.Union(Space.Wrap(shared, konst("L")), Space.Wrap(shared, konst("Rt")))
+    val ann = strict(SpatialAnnotations.open())
+    val a = noEval("analyze")(SpatialPipeline.analyzeTerm(body, ann))
+
+    // ---- positional identity ----------------------------------------------------------------
+    val occ = a.decorated.occurrencesOf(shared)
+    assertEquals(occ.size, 2, s"the same object in two positions must be two nodes: ${occ.map(_.id.show)}")
+    assertEquals(occ.map(_.id).toSet, Set(NodeId(Vector(0, 0)), NodeId(Vector(1, 0))))
+    assert(occ(0).id != occ(1).id, "two occurrences must have DIFFERENT ids")
+    // ...and the pipeline can rewrite ONE of them without touching the other
+    val one = SpatialPipeline.replaceAt(body, Vector(0, 0), Space.Empty).get
+    assertEquals(SpatialPipeline.subtermAt(one, Vector(0, 0)), Some(Space.Empty))
+    assertEquals(SpatialPipeline.subtermAt(one, Vector(1, 0)), Some(shared))
+
+    // ---- the loop body keeps EACH head group's bindings --------------------------------------
+    val bodyNode = a.decorated.at(NodeId(Vector(0, 0, 1)))
+      .getOrElse(fail(s"the loop body must be decorated: ${a.decorated.nodes.map(_.id.show)}"))
+    assertEquals(bodyNode.observations.size, 2,
+      s"two head groups => two observations: ${bodyNode.observations.map(_.cause)}")
+    val boundHeads = bodyNode.observations.flatMap(_.bindings.paths.get(H)).map(_.items).toSet
+    assertEquals(boundHeads, Set(List("a"), List("b")),
+      s"each observation must keep ITS head item: ${bodyNode.observations.map(_.show)}")
+    val boundRests = bodyNode.observations.flatMap(_.bindings.spaces.get(R)).map(_.shape.show).toSet
+    assertEquals(boundRests.size, 2, s"each observation must keep ITS rest-set: $boundRests")
+    assert(bodyNode.isJoined, "the node's published result is the JOIN over its observations")
+    // the joined result admits every observation, which is what makes a rewrite at this position sound
+    for o <- bodyNode.observations do
+      assert(SpatialType.leq(o.result, bodyNode.result) || o.result == bodyNode.result,
+             s"the join must be above ${o.show}")
+    println(s"\n[3] ${occ.map(_.id.show).mkString(" and ")} are the two occurrences; the loop body at " +
+            s"${bodyNode.id.show} has ${bodyNode.observations.size} observations " +
+            s"(${bodyNode.observations.map(_.cause).mkString(", ")})")
+  }
+
+  // ================================================================================================
+  //  4.  MULTI-STEP GAME OF LIFE
+  // ================================================================================================
+  /** A window wide enough for five glider steps, chosen from the PROGRAM's geometry (the glider moves
+   *  one cell diagonally every four generations) — not by running anything. */
+  val gliderRules = new GoL.Rules(-3, 8)
+  val glider: Set[(Int, Int)] = Set((1, 0), (2, 1), (0, 2), (1, 2), (2, 2))
+
+  def gliderSteps(k: Int): Space =
+    (0 until k).foldLeft(Mention(SpaceMention("field")): Space) { (acc, _) =>
+      Space.Call(RoutinePtr("nextStep"), Vector.empty, Vector(acc))
+    }
+
+  test("4. multi-step Game of Life: an annotated glider through five calls, no concrete intermediate") {
+    // THE ANNOTATION: the glider's own spatial type.  It is an INPUT TYPE, so the facts are
+    // conditional on it; no intermediate field value is ever computed or fed back.
+    val fieldType = SpatialType.of(GoL.field(glider))
+    val ann = strict(SpatialAnnotations(spaces = Map(SpaceMention("field") -> fieldType),
+                                        routines = gliderRules.defs))
+    println("\n[4] steps |    ms | size            | length   | maxHeads | notes")
+    var deepest = 0
+    for k <- 1 to 5 do
+      val term = gliderSteps(k)
+      val t0 = System.nanoTime()
+      val a = noEval(s"analyze $k-step GoL")(SpatialPipeline.analyzeTerm(term, ann))
+      val ms = (System.nanoTime() - t0) / 1000000
+      val ln = a.result.len
+      val ok = !ln.isEmpty && ln.lo >= 3 && ln.hi <= 3
+      if ok then deepest = k
+      println(f"       $k%2d | $ms%5d | ${fs(a.result.size)}%15s | ${fl(ln)}%8s | " +
+              f"${a.result.headCount.show}%8s | ${if ok then "len pinned to 3" else a.notes.headOption.getOrElse("").take(40)}")
+      assert(a.scope.conditional, "the glider annotation is a precondition")
+      // SOUNDNESS against the plain-Scala reference (ground truth, never inside the analysis)
+      val truth = GoL.field(GoL.steps(glider, k))
+      assert(a.result.size.lo <= truth.paths.size && truth.paths.size <= a.result.size.hi,
+             s"$k steps: the inferred size ${fs(a.result.size)} excludes the true ${truth.paths.size}")
+      for p <- truth.paths do
+        assert(!ln.isEmpty && ln.lo <= p.items.length && p.items.length <= ln.hi,
+               s"$k steps: the inferred length ${fl(ln)} excludes ${p.show}")
+    println(s"[4] the path-length bound survived $deepest of 5 nested routine calls")
+    assert(deepest >= 1, "at least one step must retain the length bound")
+    // the IMAGE bound: every cell of the result is still a `Cell.x.y` path
+    val a5 = SpatialPipeline.analyzeTerm(gliderSteps(deepest), ann)
+    assertEquals(SpatialFacts.commonPrefix(a5.result).items, List("Cell"),
+      s"the result must still be proved to live under `Cell`: ${a5.result.show}")
+    // and the whole pipeline runs on it without evaluating
+    val r = routineOf("gol5", gliderSteps(5), SpaceMention("field"))
+    val g = noEval("optimizeGuarded 5-step")(
+      SpatialPipeline.optimizeGuarded(r, SpatialPipeline.analyzeRoutine(r, ann)))
+    assert(g.guarded, "the glider annotation must produce a GUARDED artifact")
+    assertEquals(g.choose(Map(SpaceMention("field") -> GoL.field(Set((9, 9))))).body, g.fallback.body,
+      "a field outside the annotation must select the fallback")
+  }
+
+  // ================================================================================================
+  //  5.  THE CORNERSTONES UNDER OPEN ANNOTATIONS
+  // ================================================================================================
+  /** the FREE space mentions of a term — the ones a routine has to declare as parameters, or
+   *  `transpile` has no prologue slot to resolve them from */
+  def freeMentions(s: Space): Vector[SpaceMention] =
+    val out = collection.mutable.LinkedHashSet.empty[SpaceMention]
+    def go(x: Space, bound: Set[SpaceMention]): Unit = x match
+      case Space.Mention(m) => if !bound(m) then out += m
+      case Space.Iteration(src, _, rest, b) => go(src, bound); go(b, bound + rest)
+      case Space.Fold(src, _, _, _, rest, b, _) => go(src, bound); go(b, bound + rest)
+      case Space.Fixpoint(i, rec, b) => go(i, bound); go(b, bound + rec)
+      case other => SizeZ3.children(other).foreach(go(_, bound))
+    go(s, Set.empty)
+    out.toVector
+
+  /** the six cornerstones as WRITTEN, with their inputs left symbolic (OPEN annotations) */
+  def cornerstones: Vector[(String, Space, PartialFunction[RoutinePtr, Routine])] =
+    val snTC =
+      def join(r: Space, s: Space): Space = r.iter(P"n", S"nbs", P"n" x \/(s <| S"nbs"))
+      routineOf("sn_tc",
+        S"all" \/ Space.Call(RoutinePtr("sn_tc"), Vector.empty, Vector(
+          S"e", S"all" \/ (join(S"delta", S"e") \ S"all"), join(S"delta", S"e") \ S"all")),
+        SpaceMention("e"), SpaceMention("all"), SpaceMention("delta"))
+    val puzzle = Sliding.puzzle(4, 4)
+    val temperature = Union(Restriction(S"world", Literal(NOAA.interval(0, 4, 4))),
+                            Restriction(S"world", Literal(NOAA.interval(12, 16, 4))))
+    val queens = NQueens.board(4)
+    Vector(
+      ("aunt", Routines.aunt_query_routine.body, PartialFunction.empty),
+      ("datalog-sn", Space.Call(RoutinePtr("sn_tc"), Vector.empty,
+         Vector(S"edges", S"edges", S"edges")), Syntax.mod(snTC)),
+      ("gol", Space.Call(RoutinePtr("nextStep"), Vector.empty, Vector(S"field")),
+         GoL.rulesFor(glider).defs),
+      ("puzzle15", puzzle.expandStep(S"frontier"), puzzle.defs),
+      ("temperature", temperature, PartialFunction.empty),
+      ("nqueens", queens.program, queens.defs),
+    )
+
+  test("5. the six cornerstones under OPEN annotations: useful output shapes, none by evaluating") {
+    // `decor ms` is `SpatialAnalysis.of` alone; `total ms` adds the routine-level facts, candidates and
+    // per-node candidate derivation.  Single samples on a warming JIT, so read them as orders of
+    // magnitude: the decorated traversal is the cost, the fact layer on top of it is noise.
+    println("\n[5] cornerstone   | decor ms | total ms | nodes | size              | length    | " +
+            "heads    | spine | root facts")
+    for (name, term, rc) <- cornerstones do
+      val ann = strict(SpatialAnnotations.open(rc))
+      // the WHOLE pipeline, still without evaluating.  The routine must DECLARE its free mentions or
+      // `transpile` has no slot to resolve them from — a malformed routine, not a lowering bug.
+      val r = routineOf(name.replace('-', '_'), term, freeMentions(term)*)
+      // attribution: the decorated traversal alone, then the routine-level facts/candidates on top
+      val t00 = System.nanoTime()
+      val bare = noEval(s"decorate $name")(SpatialAnalysis.of(term, ann.env(), ann.config))
+      val decorMs = (System.nanoTime() - t00) / 1000000
+      val t0 = System.nanoTime()
+      val a = noEval(s"analyze $name")(SpatialPipeline.analyzeRoutine(r, ann))
+      val ms = (System.nanoTime() - t0) / 1000000
+      assertEquals(a.result, bare.root, s"$name: the pipeline must publish the decorated root as-is")
+      val ln = a.result.len
+      val spine = SpatialFacts.commonPrefix(a.result)
+      println(f"    $name%-13s | $decorMs%8d | $ms%8d | ${a.decorated.nodes.size}%5d | " +
+              f"${fs(a.result.size)}%17s | ${fl(ln)}%9s | ${a.result.headCount.show}%8s | " +
+              f"${if spine.nonTrivial then spine.items.mkString(".") else "-"}%5s | " +
+              a.facts.map(_.show.takeWhile(_ != '(')).distinct.take(5).mkString(","))
+      val ra = a
+      val g = noEval(s"optimize $name")(SpatialPipeline.optimizeGuarded(r, ra))
+      // ONE analysis of the residual, shared by all four lowerings
+      val res = if g.residual.body == r.body then ra else SpatialPipeline.analyzeRoutine(g.residual, ann)
+      for b <- Backend.values.toVector do
+        noEval(s"lower $name/${b.slug}")(SpatialPipeline.lower(g, b, ann, res))
+      assert(a.unconditional, s"$name: an OPEN analysis must be unconditional")
+      assert(a.consistent, s"$name: an open analysis must never reduce to bottom")
+      assert(a.decorated.nodes.nonEmpty, s"$name: nothing was decorated")
+      // a USEFUL answer: the open forms genuinely bound something
+      assert(a.facts.nonEmpty || a.result.shape.isTop,
+             s"$name: neither a fact nor an honest ⊤: ${a.result.show}")
+    println("[5] every cornerstone analysed, optimized and lowered on four backends with ZERO events")
+  }
+
+  test("5b. the cornerstones' inferred types are SOUND against the real value") {
+    // ground truth via `eval` — legitimate here and nowhere inside the analysis
+    val contexts: Map[String, SpaceContext] = Map(
+      "aunt" -> AuntQuery.context,
+      "datalog-sn" -> SpaceContextMap(Map(SpaceMention("edges") ->
+        spv(pv("0", "1"), pv("1", "2"), pv("2", "3")))),
+      "gol" -> SpaceContextMap(Map(SpaceMention("field") -> GoL.field(glider))),
+      "puzzle15" -> SpaceContextMap(Map(SpaceMention("frontier") ->
+        SpaceValue(Set(Sliding.puzzle(4, 4).initial)))),
+      "temperature" -> SpaceContextMap(Map(SpaceMention("world") ->
+        SpaceValue((0 until 16).map(i => PathValue(NOAA.bits(i, 4) :+ "N")).toSet))),
+      "nqueens" -> SpaceContextMap(Map.empty),
+    )
+    println("\n[5b] cornerstone   | |eval| | inferred size     | sound")
+    for (name, term, rc) <- cornerstones do
+      val ann = strict(SpatialAnnotations.open(rc))
+      val a = noEval(s"analyze $name")(SpatialPipeline.analyzeTerm(term, ann))
+      given SpaceContext = contexts(name)
+      given PathContext = PathContextMap(Map.empty)
+      given PartialFunction[RoutinePtr, Routine] = rc
+      val v = eval(term)
+      val n = v.paths.size.toLong
+      val ok = a.result.size.lo <= n && n <= a.result.size.hi
+      println(f"     $name%-13s | $n%6d | ${fs(a.result.size)}%17s | ${if ok then "OK" else "UNSOUND"}")
+      assert(ok, s"$name: inferred size ${fs(a.result.size)} excludes the true $n")
+      for p <- v.paths do
+        val b = a.result.len
+        assert(!b.isEmpty && b.lo <= p.items.length && p.items.length <= b.hi,
+               s"$name: inferred length ${fl(b)} excludes ${p.show}")
+  }
+
+  // ================================================================================================
+  //  6.  SEMANTIC-LAW GROUND CHECKS
+  // ================================================================================================
+  /** whispers §3's Warshall generator, VERIFIED below against an independent saturation closure */
+  def transitiveClosure(n: Int, edges: Set[(Int, Int)]): Set[(Int, Int)] =
+    val r = Array.tabulate(n, n)((i, j) => edges((i, j)))
+    for k <- 0 until n; i <- 0 until n; j <- 0 until n do
+      r(i)(j) = r(i)(j) || (r(i)(k) && r(k)(j))
+    (for i <- 0 until n; j <- 0 until n if r(i)(j) yield i -> j).toSet
+
+  /** an INDEPENDENT closure: saturate `E ∪ (E ∘ E)` to a fixed point.  Used only to check the above. */
+  def closureBySaturation(edges: Set[(Int, Int)]): Set[(Int, Int)] =
+    var cur = edges
+    var done = false
+    while !done do
+      val next = cur ++ (for (a, b) <- cur; (c, d) <- cur if b == c yield a -> d)
+      if next == cur then done = true else cur = next
+    cur
+
+  def allDirectedGraphs(n: Int): Iterator[Set[(Int, Int)]] =
+    val universe = (for i <- 0 until n; j <- 0 until n yield i -> j).toVector
+    (0 until (1 << universe.size)).iterator.map { mask =>
+      universe.indices.collect { case i if (mask & (1 << i)) != 0 => universe(i) }.toSet
+    }
+
+  test("6a. all 512 directed graphs on three nodes satisfy E <= closure <= E^2") {
+    var checked = 0
+    var tight = 0
+    for e <- allDirectedGraphs(3) do
+      val c = transitiveClosure(3, e)
+      // whispers' generator is VERIFIED, not trusted
+      assertEquals(c, closureBySaturation(e), s"the Warshall generator disagrees on $e")
+      assert(e.subsetOf(c), s"the closure must contain its input: $e -> $c")
+      assert(c.size.toLong <= e.size.toLong * e.size.toLong, s"|closure| > |E|^2 for $e: $c")
+      if c.size.toLong == e.size.toLong * e.size.toLong then tight += 1
+      // ---- and the law is a USABLE ANNOTATION: γ of the law's type accepts the real closure ----
+      val law = SpatialType(Shape.top,
+        if c.isEmpty then SpaceType.empty
+        else SpaceType.closed(2L -> Ivl(e.size.toLong, e.size.toLong * e.size.toLong)))
+      val value = SpaceValue(c.map((i, j) => pv(i.toString, j.toString)))
+      assert(SpatialTyping.accepts(value, law),
+             s"the DirectedTransitiveClosure law's type must admit the real closure: $e -> $c")
+      checked += 1
+    assertEquals(checked, 512)
+    println(s"\n[6a] $checked directed graphs on 3 nodes: E ⊆ closure ⊆ E^2 holds; " +
+            s"$tight are E^2-tight; the law's SpatialType admits every real closure")
+  }
+
+  test("6b. all 512 3x3 Life fields satisfy the nine-cell image law") {
+    val cells = (for x <- 0 until 3; y <- 0 until 3 yield (x, y)).toVector
+    def image9(live: Set[(Int, Int)]): Set[(Int, Int)] =
+      for (x, y) <- live; dx <- -1 to 1; dy <- -1 to 1 yield (x + dx, y + dy)
+    var checked = 0
+    var worstRatio = 0.0
+    for mask <- 0 until (1 << cells.size) do
+      val live = cells.indices.collect { case i if (mask & (1 << i)) != 0 => cells(i) }.toSet
+      val next = GoL.step(live)                       // the plain-Scala reference, not Zippy
+      assert(next.subsetOf(image9(live)), s"a new cell outside the radius-1 image: $live -> $next")
+      assert(next.size <= 9 * live.size, s"|R| > 9|S| for $live: $next")
+      if live.nonEmpty then worstRatio = worstRatio max (next.size.toDouble / live.size)
+      // the law as a SpatialType: at most 9|S| paths, every one a `Cell.x.y`
+      val law = SpatialType(Shape.top,
+        if next.isEmpty then SpaceType.empty else SpaceType.closed(3L -> Ivl(0, 9L * live.size)))
+      assert(SpatialTyping.accepts(GoL.field(next), law),
+             s"the SubsetOfImage(field, 9) law's type must admit the real step: $live -> $next")
+      checked += 1
+    assertEquals(checked, 512)
+    println(f"[6b] $checked 3x3 Life fields: step ⊆ radius-1 image and |R| <= 9|S|; " +
+            f"worst observed |R|/|S| = $worstRatio%.2f (the bound 9 is loose but sound)")
+  }
+
+  /** an EXACT n-queens count by backtracking — no Zippy program is evaluated.  Deliberately NOT
+   *  whispers §3's general `FiniteSolver`/`FiniteProblem`/`FiniteConstraint` machinery: nothing in this
+   *  tree can consume a `FiniteConstraintSolutions` law (there is no `SpatialBoundLaw`), so porting
+   *  200 lines of production CSP code would add exactly the adjacent experiment review.md objects to.
+   *  What the law needs is the NUMBER, with provenance — which this provides. */
+  def queenCount(n: Int): Long =
+    val cols = new Array[Int](n)
+    var count = 0L
+    def safe(row: Int, c: Int): Boolean =
+      var r = 0
+      var ok = true
+      while r < row && ok do
+        if cols(r) == c || math.abs(cols(r) - c) == row - r then ok = false
+        r += 1
+      ok
+    def go(row: Int): Unit =
+      if row == n then count += 1
+      else for c <- 0 until n if safe(row, c) do { cols(row) = c; go(row + 1) }
+    go(0)
+    count
+
+  test("6c. small n-queens solution counts are computed EXACTLY without evaluating Zippy") {
+    val known = Vector(1L, 0L, 0L, 2L, 10L, 4L, 40L, 92L)
+    val (counts, ev) = EffortSink.count((1 to 8).map(queenCount).toVector)
+    assertEquals(ev.total, 0L, s"the finite counter must not run a Zippy program: ${ev.show}")
+    assertEquals(counts, known, "the exact n-queens counts")
+    // NQueens.known is the same table, independently recorded in the example
+    for n <- 4 to 8 do assertEquals(counts(n - 1), NQueens.known(n).toLong, s"n=$n")
+    // ---- the count becomes a TRUSTED ANNOTATION with provenance -------------------------------
+    for n <- 4 to 6 do
+      val law = SpatialType(Shape.top, SpaceType.closed(n.toLong -> Ivl(counts(n - 1), counts(n - 1))))
+      val facts = Fact.from(law)
+      assert(facts.contains(Fact.MaximumCardinality(counts(n - 1))),
+             s"n=$n: the proved cardinality must surface as a validated proposition: $facts")
+      if counts(n - 1) > 0 then
+        assert(facts.contains(Fact.MinimumCardinality(counts(n - 1))), s"n=$n: $facts")
+    println(s"[6c] exact counts n=1..8: ${counts.mkString(",")} — zero Zippy events")
+  }
+
+  // ================================================================================================
+  //  7.  OPTIMIZATION CONSUMPTION
+  // ================================================================================================
+  test("7a. spatial facts CHANGE the ordinary optimized program") {
+    val M = SpaceMention("m"); val M2 = SpaceMention("m2")
+    // `x ∖ x = ∅` for an arbitrary OPEN x: unconditional, and the ordinary rule list cannot see it
+    val body = Space.Union(Space.Mention(M2), Space.Subtraction(Space.Mention(M), Space.Mention(M)))
+    val r = routineOf("consume", body, M, M2)
+    val a = SpatialPipeline.analyzeRoutine(r, SpatialAnnotations.open())
+    val g = SpatialPipeline.optimizeGuarded(r, a)
+    println(s"\n[7a] ordinary ${g.fallback.body.show}   spatial ${g.residual.body.show}")
+    assert(!g.guarded, "an unconditional fact must not produce a guard")
+    assert(g.changed, s"the spatial facts must change the program: ${g.show}")
+    assert(SpatialPipeline.nodeCount(g.residual.body) < SpatialPipeline.nodeCount(g.fallback.body))
+    val rng = new java.util.Random(4711L)
+    for _ <- 0 until 200 do
+      val e = Map(M -> spv(pv("a"), pv("b")), M2 -> SpaceValue(
+        (0 until rng.nextInt(4)).map(i => pv(s"z$i")).toSet))
+      assertEquals(eval(g.residual.body)(using sc = SpaceContextMap(e)),
+                   eval(body)(using sc = SpaceContextMap(e)))
+  }
+
+  test("7b. a bounded recursion becomes Call-free through the pipeline") {
+    val M = SpaceMention("m"); val H = PathRef("h").known(1); val R = SpaceMention("r")
+    val ptr = RoutinePtr("walk")
+    val walk = Routine(ptr, Vector.empty, Vector(M),
+      Space.Iteration(Space.Mention(M), H, R,
+        Space.Union(Space.Singleton(Path.Deref(H)),
+                    Space.Call(ptr, Vector.empty, Vector(Space.Mention(R))))))
+    val table: PartialFunction[RoutinePtr, Routine] = Map(ptr -> walk)
+    val ann = SpatialAnnotations(spaces = Map(M -> SpatialRecursion.lengthAnnotation(1, 4)),
+                                 routines = table)
+    val l = SpatialPipeline.run(walk, ann, Backend.Graph)
+    assert(l.callFree, s"the lowered routine must be Call-free: ${l.routine.body.show}")
+    assert(!SpatialPipeline.isCallFree(walk.body), "the original does contain a Call")
+    assert(l.applied.exists(_.isInstanceOf[Rewrite.Residualise]), l.applied.map(_.show).mkString("; "))
+    // the graph really has no `Call` slot left
+    val g = l.graph.getOrElse(fail("the graph backend must lower this"))
+    def calls(x: RecursiveOpGraph): Int =
+      x.nodes.iterator.map { case Left(n) => if n.operation == "Call" then 1 else 0
+                             case Right(sg) => calls(sg) }.sum
+    assertEquals(calls(g), 0, "no Call slot may survive in the operation graph")
+    assertEquals(calls(morkl.optimize(transpile(walk))), 1, "the unanalysed graph HAS one")
+    // differential on conforming inputs, through the graph executor
+    val rng = new java.util.Random(1234L)
+    for _ <- 0 until 60 do
+      val v = SpaceValue((0 until rng.nextInt(5)).map { _ =>
+        PathValue(List.fill(1 + rng.nextInt(4))(Vector("a", "b", "c")(rng.nextInt(3))))
+      }.toSet)
+      val expect = eval(Space.Call(ptr, Vector.empty, Vector(Space.Mention(M))))(
+        using sc = SpaceContextMap(Map(M -> v)), rc = table)
+      assertEquals(runGraphT(g, mentions = Map(M.s -> iLiteral(v))).toSpaceValue, expect,
+                   s"the Call-free graph disagrees on ${v.pretty}")
+    println(s"[7b] Call slots 1 -> 0; ${l.applied.map(_.show).mkString("; ")}")
+  }
+
+  test("7c. a common prefix SELECTS zipper pre-focus") {
+    // a free mention keeps the body from folding to a constant; a concrete body lifts to
+    // `SpaceZipper.Lit` and has no fusion to steer, so the lowering declines the candidate there
+    val M = SpaceMention("m")
+    val body = Space.Union(
+      Space.Wrap(Space.Intersection(lit(pv("x"), pv("y")), Space.Mention(M)), konst("Cell", "0")),
+      Space.Wrap(lit(pv("z")), konst("Cell", "1")))
+    val r = routineOf("pf", body, M)
+    val ann = strict(SpatialAnnotations.open())
+    val a = SpatialPipeline.analyzeRoutine(r, ann)
+    val g = SpatialPipeline.optimizeGuarded(r, a)
+    val byBackend = Backend.values.toVector.map(b => b -> SpatialPipeline.lower(g, b, ann)).toMap
+    val prefocus = SpatialSpecialization.ZipperPrefocus(PathValue(List("Cell")))
+    assert(byBackend(Backend.Zipper).consumed.contains(prefocus),
+           s"the ZIPPER lowering must select it: ${byBackend(Backend.Zipper).consumed}")
+    for b <- Vector(Backend.Reference, Backend.Trie) do
+      assert(!byBackend(b).consumed.contains(prefocus),
+             s"${b.slug} must NOT select a zipper candidate: ${byBackend(b).consumed}")
+    // and the selected rewrite is an identity on the real zipper executor, for every input
+    val rng = new java.util.Random(606060L)
+    for _ <- 0 until 100 do
+      val v = SpaceValue((0 until rng.nextInt(4)).map(i => pv(Vector("x", "y", "w")(rng.nextInt(3)))).toSet)
+      val truth = eval(g.residual.body)(using sc = SpaceContextMap(Map(M -> v)))
+      assertEquals(execZ(byBackend(Backend.Zipper).body)(using ic = Map(M -> iLiteral(v))).toSpaceValue,
+                   truth, s"pre-focus changed the meaning on ${v.pretty}")
+    println(s"[7c] spine ${SpatialFacts.commonPrefix(a.result).show}; " +
+            s"zipper consumed ${byBackend(Backend.Zipper).consumed.map(_.show).mkString(", ")}")
+  }
+
+  test("7d. a CONDITIONAL residual keeps a checked fallback, and the guard is load-bearing") {
+    val M = SpaceMention("m")
+    val pinned = spv(pv("a"), pv("b"))
+    val body = Space.Union(Space.Mention(M), Space.Wrap(Space.Mention(M), konst("p")))
+    val r = routineOf("cond", body, M)
+    val ann = SpatialAnnotations(spaces = Map(M -> SpatialType.of(pinned)))
+    val g = SpatialPipeline.optimizeGuarded(r, SpatialPipeline.analyzeRoutine(r, ann))
+    assert(g.guarded, "a declared input type must produce a guard")
+    assert(g.changed, s"the annotation must buy something: ${g.show}")
+    // inside the precondition: the residual is correct
+    assert(g.applicableTo(Map(M -> pinned)))
+    assertEquals(eval(g.choose(Map(M -> pinned)).body)(using sc = SpaceContextMap(Map(M -> pinned))),
+                 eval(body)(using sc = SpaceContextMap(Map(M -> pinned))))
+    // outside it: the residual is WRONG, the dispatcher must pick the fallback, and the fallback is right
+    var wrong = 0
+    val rng = new java.util.Random(24680L)
+    for _ <- 0 until 200 do
+      val v = SpaceValue((0 until rng.nextInt(4)).map(i => pv(Vector("a", "b", "q")(rng.nextInt(3)))).toSet)
+      val ctx = SpaceContextMap(Map(M -> v))
+      val truth = eval(body)(using sc = ctx)
+      assertEquals(eval(g.choose(Map(M -> v)).body)(using sc = ctx), truth,
+                   s"the DISPATCHER must always be right, on ${v.pretty}")
+      if !g.applicableTo(Map(M -> v)) && eval(g.residual.body)(using sc = ctx) != truth then wrong += 1
+    assert(wrong > 0,
+      "if the residual were correct outside the precondition the guard would be unnecessary; " +
+      "this asserts the precondition really is load-bearing")
+    println(s"[7d] the residual is wrong on $wrong of 200 non-conforming inputs; the dispatcher was " +
+            "right on all 200")
+  }
+
+  // ================================================================================================
+  //  9.  review.md's DEFINITION OF DONE — one annotated routine, one facility
+  // ================================================================================================
+  test("9. definition of done: ONE signature drives the checker, the optimizer and the backends") {
+    val M = SpaceMention("m"); val H = PathRef("h").known(1); val R = SpaceMention("r")
+    val ptr = RoutinePtr("walk")
+    val walk = Routine(ptr, Vector.empty, Vector(M),
+      Space.Iteration(Space.Mention(M), H, R,
+        Space.Union(Space.Singleton(Path.Deref(H)),
+                    Space.Call(ptr, Vector.empty, Vector(Space.Mention(R))))))
+    val table: PartialFunction[RoutinePtr, Routine] = Map(ptr -> walk)
+
+    // ONE contract: every path of the input has 1..4 items; the result is the ITEM ALPHABET, so every
+    // path of the result has exactly one item.
+    val sig = SpatialSignature(
+      paths = Map.empty,
+      spaces = Map(M -> SpatialRecursion.lengthAnnotation(1, 4)),
+      result = SpatialRecursion.lengthAnnotation(1, 1))
+
+    // (1) the inferred input→output type, and (2) the three-way conformance verdict.
+    //     On the RECURSIVE routine the contract is NOT provable: the checker marks the routine active,
+    //     so the self-call widens to ⊤ and the result type really could hold anything.  That is the
+    //     honest answer, and it is exactly the gap stage 2 exists to close.
+    val rep = noEval("checkRoutine")(SpatialCheck.report(walk, sig, table))
+    println(s"\n[9] signature ${sig.show}")
+    println(s"[9] recursive verdict  ${rep.check.show.linesIterator.next()}")
+    assert(!rep.check.isProved,
+      "the ordinary transfer cannot prove a contract across a self-call; if it ever can, this test " +
+      "should be strengthened rather than deleted")
+
+    // (3) per-node validated facts with lexical provenance, and (4) the SAME premises as the verdict:
+    // the checker marks the routine active, so the pipeline must be told to as well or the two are
+    // analysing different things.
+    val ann = sig.annotations(table).copy(selfActive = true)
+    val a = noEval("analyzeRoutine")(SpatialPipeline.analyzeRoutine(walk, ann))
+    assertEquals(a.result, rep.check.inferredType,
+      "the checker's inferred type and the pipeline's root MUST be the same value — one traversal, " +
+      "one set of premises")
+    assert(a.decorated.nodes.forall(n => n.facts == Fact.from(n.result, SpatialAnalysis.constantPrefixes(walk.body))),
+           "per-node facts must be a projection of the per-node type, not a re-inference")
+
+    // (4) guarded specialization actually consumed by the pipeline, on every backend
+    val g = SpatialPipeline.optimizeGuarded(walk, a)
+    assert(g.guarded, "the contract restricts the input, so the artifact is guarded")
+    assert(g.applied.exists(_.isInstanceOf[Rewrite.Residualise]), g.show)
+    assert(SpatialPipeline.isCallFree(g.residual.body), "the specialisation is Call-free")
+    // THE PAYOFF: the Call-free residual satisfies the SAME declared result type, and now the checker
+    // can PROVE it — the specialisation turned an unprovable contract into a proved one.
+    val resRep = noEval("checkRoutine(residual)")(SpatialCheck.report(g.residual, sig, table))
+    println(s"[9] residual verdict   ${resRep.check.show.linesIterator.next()}")
+    assert(!resRep.check.isRefuted, s"the residual must not violate the contract: ${resRep.check.show}")
+    assert(resRep.check.isProved,
+      s"the Call-free residual should now PROVE the contract the recursion could not: ${resRep.check.show}")
+
+    // (5) per-backend effort intervals over the same facts, and a deterministic choice
+    val lowered = Backend.values.toVector.map(b => b -> SpatialPipeline.lower(g, b, ann)).toMap
+    val (best, scores) = SpatialPipeline.selectBackend(g.residual.body, ann, Map("N" -> 8.0))
+    println("[9] " + Backend.values.toVector.map(b =>
+      f"${b.slug}=${scores(b)}%.0f${if b == best then "*" else ""}").mkString("  "))
+    assertEquals(lowered.keySet, Backend.values.toSet)
+    for (b, l) <- lowered do assert(l.callFree, s"${b.slug}: the lowered routine must be Call-free")
+
+    // ---- and it all AGREES with the executors on inputs satisfying the contract ----------------
+    val rng = new java.util.Random(999L)
+    var checked = 0
+    for _ <- 0 until 100 do
+      val v = SpaceValue((0 until rng.nextInt(5)).map { _ =>
+        PathValue(List.fill(1 + rng.nextInt(4))(Vector("a", "b", "c")(rng.nextInt(3))))
+      }.toSet)
+      assert(g.applicableTo(Map(M -> v)), s"the generator must respect the contract: ${v.pretty}")
+      val expect = eval(Space.Call(ptr, Vector.empty, Vector(Space.Mention(M))))(
+        using sc = SpaceContextMap(Map(M -> v)), rc = table)
+      // the declared RESULT type must admit the real value, which is what the verdict claimed
+      assert(SpatialTyping.accepts(expect, sig.result),
+             s"the declared result type must admit ${expect.pretty}")
+      assertEquals(eval(lowered(Backend.Reference).body)(using sc = SpaceContextMap(Map(M -> v))), expect)
+      assertEquals(evalI(lowered(Backend.Trie).body)(using ic = Map(M -> iLiteral(v))).toSpaceValue, expect)
+      assertEquals(execZ(lowered(Backend.Zipper).body)(using ic = Map(M -> iLiteral(v))).toSpaceValue, expect)
+      lowered(Backend.Graph).graph.foreach(gr =>
+        assertEquals(runGraphT(gr, mentions = Map(M.s -> iLiteral(v))).toSpaceValue, expect))
+      checked += 1
+    println(s"[9] $checked contract-satisfying inputs: all four backends agree with `eval`")
+    assertEquals(checked, 100)
+  }
+
+  // ================================================================================================
+  //  8.  EFFORT CALIBRATION — deliberately not here
+  // ================================================================================================
+  test("8. effort calibration is the event agent's — SKIPPED here, on purpose") {
+    // The oracle (`EffortEvent`/`EffortSink`), the executor hooks and the per-backend
+    // containment/slack tables live in SpatialEvents.scala and SpatialEventsCheck.  Duplicating them
+    // would produce a second, weaker calibration harness disagreeing with the first.
+    // What IS asserted here is the one thing this file owns: the oracle is available and the
+    // pipeline's own artifacts can be measured with it (used throughout, e.g. `CallEntry 2035 -> 0`).
+    val (_, ev) = EffortSink.count(eval(Space.Union(lit(pv("a")), lit(pv("b")))))
+    assert(ev.total > 0L, "the oracle must count a real run")
+    assert(ev.work > 0L && ev.alloc >= 0L && ev.rounds >= 0L, ev.show)
+    println(s"\n[8] SKIPPED (SpatialEventsCheck owns calibration). Oracle sanity: ${ev.showComponents}")
+  }
+end SpatialAcceptance

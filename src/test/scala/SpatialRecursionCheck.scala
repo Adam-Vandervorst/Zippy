@@ -308,31 +308,94 @@ class SpatialRecursionCheck extends FunSuite:
     assert(out2.noBoundReason.get.contains("does not bound the maximum path length"))
   }
 
-  test("NO BOUND: M1 holds but the NUMERIC drop (M2) does not") {
-    // p0 is declared to carry between one and three items: "at least one item is dropped" is
-    // structurally true, but the histogram's variable-length unwrap arm loses the length bound.
-    val out = residualise(peelPtr, table, Map(M -> lengthAnnotation(1, 4)),
-                          Map(P0 -> Lower.LenBounds(1, 3)))
-    println(s"NO-BOUND (M2): ${out.noBoundReason.getOrElse("(a bound was derived!)")}")
-    assertEquals(out.bounded, None, "a bound must not be claimed when the numeric drop is unproven")
-    val why = out.noBoundReason.get
-    assert(why.contains("M2 failed") || why.contains("does not bound the maximum path length"), why)
-    // M1 by itself DOES accept it, so this really is M2 doing the work
+  /** eval as ground truth for `peel`, with p0 drawn from its DECLARED length interval and every
+   *  input path inside `lengthAnnotation(1, 4)`.  The residual is only obliged to agree inside its
+   *  precondition, so the generator asserts membership before it compares. */
+  def peelDifferential(plo: Int, phi: Int, r: BoundedRecursion, n: Int, seed: Long): (Int, Int, Option[String]) =
+    val rng = new java.util.Random(seed)
+    val orig = Space.Call(peelPtr, Vector(deref(P0)), Vector(Space.Mention(M)))
+    val ann = lengthAnnotation(1, 4)
+    var checked = 0; var bad = 0; var witness: Option[String] = None
+    for _ <- 0 until n do
+      val plen = plo + rng.nextInt(phi - plo + 1)
+      val pv = PathValue(List.fill(plen)(alphabet(rng.nextInt(alphabet.length))))
+      // bias towards sharing pv as a prefix, so the recursive arm is actually reached
+      val v = SpaceValue((0 until rng.nextInt(7)).map { _ =>
+        if rng.nextBoolean() && plen < 4 then
+          PathValue(pv.items ++ List.fill(1 + rng.nextInt(4 - plen))(alphabet(rng.nextInt(alphabet.length))))
+        else PathValue(List.fill(1 + rng.nextInt(4))(alphabet(rng.nextInt(alphabet.length))))
+      }.toSet)
+      assert(SpatialTyping.accepts(v, ann), s"generator left the precondition: ${v.paths}")
+      val a = eval(orig)(using PathContextMap(Map(P0 -> pv)), SpaceContextMap(Map(M -> v)), table)
+      val b = eval(r.residual.body)(using PathContextMap(Map(P0 -> pv)), SpaceContextMap(Map(M -> v)),
+                                    PartialFunction.empty)
+      checked += 1
+      if a != b then
+        bad += 1
+        if witness.isEmpty then witness = Some(s"p0=${pv.show} v=${v.paths} orig=${a.paths} residual=${b.paths}")
+    (checked, bad, witness)
+
+  /** M1 and M2 are BOTH load-bearing, and the numeric drop now survives a VARIABLE-length prefix
+   *  because the product is reduced in both directions (review.md 5).
+   *
+   *  History: this test used to assert `NoBound` here, on the reasoning that `p0 ∈ [1,3]` items
+   *  makes the histogram's variable-length unwrap arm give up (it does — see the assertion below,
+   *  `SpatialTypes.infer` alone still returns μ = ∞).  That reasoning was about the histogram alone.
+   *  The bidirectional reducer now closes the gap: `lengthAnnotation(1,4)`'s histogram materialises a
+   *  depth-≤4 trie out of `Shape.top` (rule H3), `Shape.unwrapUnknown` shifts that trie down by
+   *  `|p0|.lo = 1` levels — a sound envelope, since `Unwrap(s,p)` with `|p| = j` is a subset of the
+   *  level-`j` tail-sets — and the product's `len` meet reads the bound back off the shape.  So M2
+   *  is now PROVED, not skipped: `μ` drops by exactly `|p0|.lo` per level.
+   *
+   *  The bound is checked three ways below: the μ chain is monotone and lands on 0, the guard still
+   *  refuses when `|p0|` may be 0 (no decrease at all), and `eval` agrees with the residual on every
+   *  input inside the precondition. */
+  test("M2 over a VARIABLE-length prefix: the reduced product proves the numeric drop") {
+    // M1 by itself accepts it, with the SOUND drop — the LOWER end of |p0|, never the upper
     assertEquals(decreaseOf(Space.Unwrap(Space.Mention(M), deref(P0)), M, Map.empty,
                             Map(P0 -> Lower.LenBounds(1, 3))),
                  Some(Decrease.Unwrap(M, 1L)))
-    // with an EXACT one-item path parameter, the same routine does get a bound
-    val out2 = residualise(peelPtr, table, Map(M -> lengthAnnotation(1, 4)),
-                           Map(P0 -> Lower.LenBounds(1, 1)))
-    out2.bounded match
-      case Some(r) =>
-        println(s"PEEL (exact 1-item prefix) ${r.show}")
-        assertEquals(r.maxCallDepth, 4)
-        assert(r.callFree)
-        val (c, bad, w) = differential(peelPtr, r, 300, 8L, rr => randInput(rr, 1, 4, 6))
-        println(s"PEEL DIFFERENTIAL: $c conforming inputs, $bad disagreements")
-        assertEquals(bad, 0, s"$w")
-      case None => println(s"PEEL exact-prefix still unbounded: ${out2.noBoundReason.get}")
+    assertEquals(decreaseOf(Space.Unwrap(Space.Mention(M), deref(P0)), M, Map.empty,
+                            Map(P0 -> Lower.LenBounds(2, 3))),
+                 Some(Decrease.Unwrap(M, 2L)))
+
+    // THE HISTOGRAM ALONE STILL LOSES IT — this is the assertion the old expectation rested on, and
+    // it is still true.  What changed is that the histogram is no longer the only component asked.
+    val ann = lengthAnnotation(1, 4)
+    val lenv = SpatialEnv(spaces = Map(M -> ann.lens), paths = Map(P0 -> Lower.LenBounds(1, 3)))
+    val histOnly = SpatialTypes.infer(Space.Unwrap(Space.Mention(M), deref(P0)), lenv)
+    assertEquals(histOnly.len.hi, Lower.LenBounds.INF,
+                 "the histogram's variable-length unwrap arm is still the lossy one")
+    // the SHAPE half, over the reduced annotation, is what recovers it
+    val env = SpatialTyping.Env(spaces = Map(M -> keyType(ann)), opaque = Map(P0 -> Lower.LenBounds(1, 3)))
+    val product = SpatialTyping.infer(Space.Unwrap(Space.Mention(M), deref(P0)), env)
+    assertEquals(product.len, Lower.LenBounds(0, 3),
+                 "the reduced product recovers 4 - |p0|.lo = 3")
+    // and the depth cap is NOT being misread as a length claim: ⊤ admits arbitrarily deep paths
+    assert(Shape.top.lens.hi == Lower.LenBounds.INF, s"Shape.top.lens = ${Shape.top.lens}")
+    assert(SpatialType.accepts(SpatialType.top, SpaceValue(Set(PathValue(List.fill(Shape.MaxDepth * 3)("a"))))),
+           "⊤ must admit a path far deeper than Shape.MaxDepth")
+
+    // a bound IS derived now, and the μ chain drops by |p0|.lo at every level
+    for (plo, phi, drop) <- Vector((1, 1, 1), (1, 2, 1), (1, 3, 1), (1, 4, 1), (2, 3, 2)) do
+      val out = residualise(peelPtr, table, Map(M -> ann), Map(P0 -> Lower.LenBounds(plo, phi)))
+      val r = out.bounded.getOrElse(fail(s"p0=[$plo,$phi]: ${out.noBoundReason.get}"))
+      println(s"PEEL p0=[$plo,$phi] ${r.show}")
+      assert(r.callFree)
+      assertEquals(r.inputMaxLen, 4L)
+      assertEquals(r.lenChain, (0 to 4 / drop).map(i => 4L - i * drop).toVector,
+                   s"p0=[$plo,$phi]: μ must drop by exactly |p0|.lo = $drop per level")
+      assertEquals(r.maxCallDepth, 4 / drop)
+      val (c, bad, w) = peelDifferential(plo, phi, r, 1500, 8L + plo * 31 + phi)
+      println(s"PEEL p0=[$plo,$phi] DIFFERENTIAL: $c conforming inputs, $bad disagreements")
+      assertEquals(bad, 0, s"p0=[$plo,$phi]: $w")
+
+    // THE GUARD IS STILL LOAD-BEARING: a prefix that may be EMPTY drops nothing, so M1 refuses and
+    // no amount of product reduction may manufacture a bound.
+    val none = residualise(peelPtr, table, Map(M -> ann), Map(P0 -> Lower.LenBounds(0, 3)))
+    assertEquals(none.bounded, None, "|p0| may be 0: there is no decrease to bound anything with")
+    assert(none.noBoundReason.get.contains("no structural decrease witness (M1)"), none.noBoundReason.get)
+    println(s"NO-BOUND (|p0| may be 0): ${none.noBoundReason.get}")
   }
 
   test("NO BOUND: two self-calls, or a call to another routine") {

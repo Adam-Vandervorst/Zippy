@@ -3286,3 +3286,332 @@ rather than inline):
    them (the fix was already on disk when I integrated); what I verified is that the corpus gate is
    now green at 1000/1000 on two seeds and that the witness is pinned in SpatialLawCheck
    ("regression: restriction of an OPEN-headed operand by a CLOSED prefix set is not ∅").
+
+================================================================================
+CONSOLIDATION AND INTEGRATION — review.md findings 1-7 + the 8-item acceptance suite
+one increment, integrated by the last-line-of-defence agent, on top of 74ff685
+================================================================================
+THE ASK. The previous review's verdict was that the maths is present but the subsystem is "several
+impressive, adjacent experiments" rather than one facility, and that the next work is CONSOLIDATION
+AND INTEGRATION, explicitly NOT another abstract domain. No new abstract domain was added. Five
+files are new and every one of them is a projection, a decoration, an oracle, an API, or a pipeline
+over the carriers that already existed:
+
+  SpatialAnalysis.scala   one decorated traversal + THE one SpatialConfig      (finding 4)
+  SpatialFacts.scala      derived facts over Shape x SpaceType, no new carrier (finding 7)
+  SpatialCheck.scala      SpatialSignature / Proved-Refuted-Unknown            (finding 1)
+  SpatialEvents.scala     the counted-event oracle + calibration               (finding 2)
+  SpatialPipeline.scala   analyzeRoutine -> optimize -> lower, one entry point (finding 3)
+
+and three existing files were INSTRUMENTED (not restructured): MORKL.scala 16 hook lines,
+GraphExec.scala 9, Zipper.scala 34. All single statements; no signature changes.
+
+--------------------------------------------------------------------------------
+0. WHAT I VERIFIED FIRST, AND WHY THAT ORDER
+--------------------------------------------------------------------------------
+The executors were instrumented this round, so an executor-differential regression would outrank
+every feature in the increment. Soundness gates were therefore run BEFORE anything cosmetic, and
+before the new suites. All green on the first pass:
+
+  SpatialShapeCheck 18   SpillSoundness 5    SizeBoundsCheck 6   CorpusLawValidation 1
+  SpatialSoundnessHunt 13 SpatialLawCheck 17 LenBoundsCheck 4    CorpusValidation 1
+
+and the executor-differential set: GraphExecT 25, ZipperTest 3, OptimizerProperties 2,
+TrieAlgebra 4, TrieEval 6, TrieOps 5, ITrieEval 5, ITrieOps 2. Plus, widened because the hooks are
+in the executors: AlgebraicLaws 1, Poly 1, Fuzzy 1, Grounded 6, GroundedAudit 3, Imperative 6(+2
+ignored), Lowering 2, MORKL2Space 8, Routines 5, Permutations 4, Unification 9(+1), UnionFind 0(+1),
+SCHardening 7, SCFacade 7, and all six cornerstone example suites: ExGameOfLife 5, ExNQueens 10,
+ExAuntMetta 2, ExDatalog 4, ExSlidingPuzzle 8, ExNOAATemperature 5.
+
+*** THE STRONGEST INSTRUMENTATION EVIDENCE is not any of those. It is inside SpatialEventsCheck:
+for all 200 fuzzer-corpus programs and all 6 cornerstones, execZ's and execT's OUTPUTS are asserted
+equal to eval's WHILE COUNTED. A hook that changed executor semantics would fail there first. ***
+
+--------------------------------------------------------------------------------
+1. THE ONE FAILURE, AND WHY IT WAS NOT A REGRESSION  (SpatialRecursionCheck)
+--------------------------------------------------------------------------------
+One suite came back red: SpatialRecursionCheck "NO BOUND: M1 holds but the NUMERIC drop (M2) does
+not". The test asserted `bounded == None` for
+
+    peel(p0, m) = heads(m) u peel(p0, Unwrap(m, p0)),   |p0| in [1,3],   maxLen(m) = 4
+
+on the reasoning that the histogram's variable-length Unwrap arm loses the length bound, so M2
+cannot be shown. A bound WAS derived. I did not accept "stale expectation" as an answer; I
+diagnosed it component by component before touching the test.
+
+WHAT ACTUALLY HAPPENS (measured, each line a printed observation):
+  * the histogram alone STILL loses it: SpatialTypes.infer(Unwrap(m,p0)) with |p0| in [1,3] returns
+    len = [0, INF]. The test's premise about the histogram was and remains TRUE.
+  * the histogram is no longer the only component asked. keyType(lengthAnnotation(1,4)) reduces
+    Shape.top to a depth-<=4 trie (reducer rule H3, histogram -> shape), giving shape.lens = [1,4].
+  * Shape.unwrapUnknown then shifts that trie down by |p0|.lo = 1 level. Sound: Unwrap(s,p) with
+    |p| = j is a subset of the level-j tail-sets, i.e. tailsUnion iterated j times; the transfer
+    unions that over j in [k.lo, k.hi] and widens to weaken(top) when k.hi > MaxDepth + 2.
+  * the product's `len` meet reads the bound back off the shape: [0,3]. So M2 is PROVED, not skipped.
+  * the drop is always the LOWER end of |p0|: |p0| in [2,3] gives mu chain 4->2->0 and depth 2.
+
+SOUNDNESS EVIDENCE, three independent ways:
+  * Shape.unwrapUnknown is already differentially gated by SpatialSoundnessHunt's randomised
+    shape-transfer sweep (case 15, randLen containing the concrete prefix length) — green.
+  * eval vs the residual, INSIDE the precondition, over five |p0| intervals: 7,500 conforming
+    inputs, 0 disagreements. My first attempt at this generator produced paths of length 5 and
+    "found" 2 disagreements — the generator had left the annotation, not the residual; the suite now
+    asserts SpatialTyping.accepts on every generated input before comparing, so that cannot recur.
+  * the guard is still load-bearing: |p0| in [0,3] (a prefix that may be EMPTY, so nothing drops)
+    still returns NoBound with the M1 reason. Manufacturing a bound there would be the real bug.
+  * the MaxDepth cap is NOT being misread as a length claim: Shape.top.lens.hi = INF and
+    SpatialType.top admits a path 3x deeper than MaxDepth. Both asserted.
+
+RESOLUTION: the test was REWRITTEN, not ignored, to assert the sound new behaviour plus all four
+checks above, and renamed "M2 over a VARIABLE-length prefix: the reduced product proves the numeric
+drop". Its docstring records the old expectation and why it changed. SpatialAnalysisCheck already
+carried the same observation from the other side ("REDUCER x RECURSION ... (was NoBound: 'M2
+failed')", 300 admitted inputs, 0 disagreements), so two suites now pin it from two directions.
+NOTHING WAS MARKED .ignore IN THIS INCREMENT.
+
+--------------------------------------------------------------------------------
+2. THE REDUCED PRODUCT IS NOW BIDIRECTIONAL  (finding 5)
+--------------------------------------------------------------------------------
+`SpatialType.reduce` was ONE mutation (the shape's total capping each histogram upper). It is now
+EIGHT named rules iterated to a fixed point under SpatialConfig.reduceRounds:
+  H1..H4  histogram -> shape : per-depth counts bound a fibre's untracked-head room; zero/positive
+          support forces eps No/Must; "nothing longer than L" prunes the untracked branches too,
+          MATERIALISING an otherTail where there was none; unique possible location is forced.
+  S1..S4  shape -> histogram : implied total caps each class; classes outside the shape's length
+          hull die; a shape-forced class gets a lower bound; an empty meet is a CONTRADICTION.
+A contradiction does NOT widen — it collapses to the explicit SpatialType.bottom, whose gamma is
+empty (it rejects even the empty space), which is what lets a caller tell "the value is empty" from
+"your annotations are unsatisfiable".
+
+MEASURED (SpatialAnalysisCheck, 19 tests):
+  * reducer terminates in <= 1 round on 225 generated types (cap 4); non-idempotent 0.
+  * reduce gamma-gate: 225 types x 128 values = 28,800 checks, 529 members; tightened 71 types;
+    MEMBERS LOST 0.
+  * meet gamma-gate: 48^2 pairs x 128 values = 294,912 checks; meet was bottom on 2,256 pairs;
+    members lost 0; FALSE BOTTOM 0.
+  * per-node: the visitor's return value REPLACES the node's shape, so the parent transfer consumes
+    the tightened child — that is the part a root-only reduction cannot do. 400 corpus instances,
+    10,227 decorated nodes, differs from `infer` on 46, bottom on 0, root <= infer on all.
+  * 4,352 closed decorated occurrences checked against eval: violations 0.
+
+*** HONEST SCOPE. reduce has NO SMT obligation — nothing in proofs/spatial{,-semantic} covers it,
+and it is now load-bearing for a call-depth bound (section 1). Termination is MEASURED (<=1 round on
+a generated pool) plus a hard round cap, not argued: there is no proof the eight rules form a
+decreasing chain. Also: the product is mutual AT THE REDUCTION STEP, not inside the transfers.
+SpatialTypes.infer still computes counts without consulting the shape and Shape's transfers compute
+structure without consulting counts; they meet only after each node. peel works because
+correction-after-the-node suffices there, not because the transfers cooperate. ***
+
+--------------------------------------------------------------------------------
+3. THE EFFORT MODEL NOW HAS AN ORACLE  (finding 2) — AND IT IS UNEVEN
+--------------------------------------------------------------------------------
+16 events, each tied to ONE emitting site and ONE cost component; Events.work/.alloc/.rounds are the
+oracles for Cost.work/.alloc/.rounds. ReusedSpace and ZipperFallbackToEvalI are EXPLANATORY and
+never summed into work. Asserted rule: no event exists without an emitter (the Fact.PrefixAbsent
+"dead promise" complaint applied to this vocabulary). Backend is now Reference|Trie|Graph|Zipper,
+each naming its executable, and every model returns a CostInterval(lo,hi) rather than a bare upper.
+
+CALIBRATION, fuzzer corpus, warm phase (200 cases, 1269 points, 0 skipped as symbolic):
+  backend    component   n     contained   median slack   p95      worst
+  graph      Work        200   100.0%      1.20           1.91     7.70
+  graph      Alloc       200   100.0%      1.00           1.22     3.62
+  graph      Rounds      200   100.0%      1.00           1.50     6.05
+  reference  Work        200   100.0%      1.22           2.57    14.50
+  reference  Alloc       200   100.0%      1.58           7.00      inf
+  reference  Rounds      200   100.0%      1.00           1.50     6.05
+  zipper     Work         23   100.0%      3.72           6.94     7.45
+  zipper     Alloc        23   100.0%     14.00          67.80      inf
+  zipper     Rounds       23   100.0%      1.00           1.00     1.00
+  OVERALL containment 100.00% (0 of 1269 points outside the interval)
+CORNERSTONES, warm phase: 6 cases, 21 points, containment 100.00% (0 of 21 outside).
+Four attribution bugs the review named are fixed and pinned: warm Literal no longer charges |v|; a
+full-window Range is the identity and charges no sort; the TRIE Range does sort and its full window
+is not free; execT and execZ are priced separately and do differ. The identity regression holds: a
+bigger input does not increase modelled warm work for an identity op. Spearman rho = 0.927 over 16
+programs is retained as a SECONDARY trend metric only.
+
+*** HONEST LIMITS, LOAD-BEARING. (a) The zipper rows rest on 23 of 200 programs: execZ delegated the
+other 177 to the UNINSTRUMENTED evalI, and those are EXCLUDED rather than counted as zero.
+ZipperFallbackToEvalI is what makes the exclusion visible instead of silently mixing fused and
+materialized execution into one number. Instrumenting evalI (or the IntTrieOps Patricia operators,
+which are ours) is the way to widen it. (b) Several cornerstone uppers are INF (puzzle15 and
+datalog-sn on all three components), so their "containment" is vacuous and slack is Infinity;
+nqueens4 slack is finite but in the thousands. 100% containment with a zipper-Alloc p95 of 67.8 is
+NOT a close model, and the table is printed per row so that is visible rather than averaged away.
+(c) The reference Set backend delegates union/intersection/hash probing to the Scala collection
+library, so these hooks cannot count its internal hash probes; measured reference events are AST
+dispatches, explicit prefix comparisons, loop frames and fixpoint rounds ONLY. If SetCost.work is
+read as "internal element touches", that component is NOT validated. ***
+
+--------------------------------------------------------------------------------
+4. THE NAMING TRAP IS CLOSED  (finding 1)
+--------------------------------------------------------------------------------
+`satisfies` is DELETED, not deprecated. The carrier agent left it as a @deprecated alias; a
+deprecated alias leaves the trap reachable, which is exactly what the review objected to, so I
+adapted the two remaining consumers (SpatialLawCheck, SpatialSoundnessHunt) to `withinEnvelope` and
+removed the alias. `grep -rn "\bsatisfies("` over src/ is now empty. Full gamma is `accepts`
+(alias gammaMember); the weak envelope is `withinEnvelope`.
+
+The envelope's gap is REAL and still measured: 237 non-members admitted over 38,400 pairs, 0 genuine
+members rejected. What changed is that NO DISPATCHER IS BUILT ON IT any more —
+SpecializedRoutine.applicableTo, BoundedRecursion.applicableTo and
+SpatialPipeline.GuardedRoutine.applicableTo all decide with full gamma. A comment in SpatialLawCheck
+still claimed the opposite ("applicableTo is built on it, so a guarded dispatcher can select a
+specialisation for an input outside the precondition"); that claim was FALSE as of this increment, so
+I corrected it and added an assertion that the dispatcher REJECTS the exact witness the envelope
+admits, so the claim cannot rot back into being true.
+
+--------------------------------------------------------------------------------
+5. STANDING RULE 1 (NO EVALUATION IN AN ANALYSIS) — RE-CHECKED ACROSS ELEVEN FILES
+--------------------------------------------------------------------------------
+eval/evalI/evalT/exec* call count in each analysis file:
+  SpatialAnalysis 0  SpatialFacts 0  SpatialEvents 0  SpatialCheck 0  SpatialPipeline 0
+  SpatialTypeSystem 0  SpatialShape 0  SpatialGamma 0  SpatialRecursion 0  SpatialTypes 0
+  SpatialCost 4 — ALL FOUR ARE STRING LITERALS naming the backends ("eval (MORKL.scala) over
+  Set[PathValue]" and its three siblings), verified by reading each one.
+Four suites additionally assert it behaviourally with a BOMB subterm (a GroundedSS whose function
+throws) and run inference, fact derivation, cost prediction, conformance checking and witness search
+over it. Instrumentation is the OPPOSITE direction — the executor reports what it did and the
+analysis never asks it; the counted vectors are consumed only by tests.
+
+--------------------------------------------------------------------------------
+6. REVIEW.RESPONSE
+--------------------------------------------------------------------------------
+FINDINGS
+ 1 consumer-facing typechecker      ADDRESSED  SpatialCheckCheck 25 PASS; 360 pairs -> Proved 46 /
+                                               Refuted 267 (every witness re-validated) / Unknown 47
+ 2 effort model has no oracle       ADDRESSED  SpatialEventsCheck 14 PASS; 1269 points, containment
+                                               100%, median/p95 per backend published (see sec. 3);
+                                               PARTIAL for zipper (23/200) and INF-upper cases
+ 3 island beside optimizer/backends ADDRESSED  SpatialPipelineCheck 23 PASS; 1 of 6 probes is a
+                                               spatial-only win; graph consumes GraphConstantFold
+ 4 one decorated analysis           ADDRESSED  SpatialAnalysisCheck 19 PASS; 10,227 nodes over 400
+                                               instances, 2.99x per doubling (quadratic would be 4x)
+ 5 reduced product both directions  ADDRESSED  8 rules, 0 members lost / 0 false bottom; the peel
+                                               bound is a direction-crossing result (sec. 1-2)
+ 6 fragmented domain ownership      PARTIAL    one owner table in SpatialTypeSystem's header;
+                                               satisfies deleted; PrefixAbsent now emitted (390/400).
+                                               NOT DONE: SpatialConfig is one value, not one
+                                               authority (Shape reads the global default only;
+                                               histQueries/inline/summaryKeys/unroll unconsumed)
+ 7 structural facts for backends    ADDRESSED  SpatialFactsCheck 26 PASS; E_d/K_d, fibre envelopes,
+                                               trieNodes = 1 + sum K_d, the review's own candidate ADT
+ACCEPTANCE (the 8 requested real-program tests) — SpatialAcceptance 15 PASS
+ 1 strict annotation-only           ADDRESSED  bomb atom never run; no evaluated value returned
+ 2 symbolic fibers                  ADDRESSED  N=10 distinct heads: loop frames = sum K_i = [20,20]
+                                               (= 2N), NOT the naive product prod K_i = [100,100]
+                                               (= N^2); result cardinality [14,20] (printed table)
+ 3 decorated binders and identity    ADDRESSED  bindings retained; two equal ASTs distinct NodeIds
+ 4 multi-step Game of Life          ADDRESSED  5 calls, len pinned to 3 at every step (printed)
+ 5 cornerstones under open annots   PARTIAL    useful SHAPE facts on all six (MaximumPathLength,
+                                               HeadSetWithin, MaximumHeadCount, PrefixAbsent) but
+                                               size is [0,inf] on five of six; nqueens [0,1650688]
+ 6 semantic-law ground checks       ADDRESSED  exhaustive 3-node digraphs and 3x3 Life fields
+ 7 optimization consumption         ADDRESSED  Call-free residual; guarded fallback retained
+ 8 effort calibration               PARTIAL    see finding 2 — published, but uneven by backend
+
+--------------------------------------------------------------------------------
+7. DEFINITION OF DONE — the review's own five criteria, read honestly
+--------------------------------------------------------------------------------
+ 1 inferred input-to-output type            MET
+ 2 Proved / Refuted(witness) / Unknown      MET, with the completeness boundary stated in the types
+ 3 per-node validated facts with provenance MET (NodeId + the binder env each node was analysed in)
+ 4 guarded candidates consumed by the
+   NORMAL pipeline                          PARTIALLY MET. One entry point exists and is exercised
+   end to end, and a spatial-only win is demonstrated. But `Routine.optimized` still runs the old
+   Lower rule list by default: consuming spatial facts is opt-in via SpatialPipeline, not the
+   default path. "Integrated" in the strong sense (the ordinary optimizer consults spatial facts
+   without being asked) is NOT yet true.
+ 5 per-backend effort intervals whose
+   tightness is MEASURED against counted
+   runtime events                           PARTIALLY MET. Measured, published, and 100% contained
+   — but tightness is good for graph (p95 1.2-1.9), acceptable for reference Work (2.57), poor for
+   reference Alloc (7.0) and zipper Alloc (67.8), and undefined wherever the upper is INF. Zipper
+   rests on 23 of 200 programs.
+
+So: 3 of 5 met, 2 partially met, and the two partials are honest gaps rather than measurement
+artifacts. The subsystem is now ONE facility with one entry point rather than adjacent experiments;
+what it is not yet is the DEFAULT path, and its effort model is calibrated unevenly.
+
+--------------------------------------------------------------------------------
+8. FULL BATTERY (final re-run against the final tree; every number observed)
+--------------------------------------------------------------------------------
+  SOUNDNESS GATES                        NEW THIS ROUND
+  SpatialShapeCheck        18 PASS       SpatialAnalysisCheck    19 PASS
+  SpatialSoundnessHunt     13 PASS       SpatialFactsCheck       26 PASS
+  SpatialLawCheck          17 PASS       SpatialCostCheck        20 PASS
+  SpillSoundness            5 PASS       SpatialEventsCheck      14 PASS
+  SizeBoundsCheck           6 PASS       SpatialCheckCheck       25 PASS
+  LenBoundsCheck            4 PASS       SpatialPipelineCheck    23 PASS
+  CorpusLawValidation       1 PASS       SpatialAcceptance       15 PASS
+  CorpusValidation          1 PASS
+                                         OTHER SPATIAL
+  EXECUTOR DIFFERENTIAL                  SpatialTypeCheck         5 PASS
+  GraphExecT               25 PASS       SpatialElimination       6 PASS
+  ZipperTest                3 PASS       SpatialRecursionCheck   18 PASS
+  OptimizerProperties       2 PASS       ReviewFindings           3 PASS
+  TrieAlgebra/Eval/Ops   4/6/5 PASS      ProductUnionCheck        7 PASS
+  ITrieEval/ITrieOps       5/2 PASS      CornerstoneTypes         4 PASS
+                                         SpacialType              2 PASS
+  WIDENED EXECUTOR SWEEP (because the hooks live in eval/execT/execZ)
+  AlgebraicLaws 1, Poly 1, Fuzzy 1, Grounded 6, GroundedAudit 3, Imperative 6 (+2 ignored),
+  Lowering 2, MORKL2Space 8, Routines 5, Permutations 4, Unification 9 (+1), UnionFind 0 (+1),
+  SCHardening 7, SCFacade 7, ExGameOfLife 5, ExNQueens 10, ExAuntMetta 2, ExDatalog 4,
+  ExSlidingPuzzle 8, ExNOAATemperature 5.
+  ZERO FAILURES. ZERO tests marked .ignore by this increment. The 4 pre-existing ignores
+  (Imperative 2, Unification 1, UnionFind 1) were already ignored before this round.
+
+  INFRASTRUCTURE NOTE, not a code finding: mid-run I observed UnionFind appearing to hang for >10
+  minutes. Cause was a wedged bloop server (263% CPU, client idle at 0%) after I killed a concurrent
+  scala-cli client; two concurrent scala-cli invocations on this project root contend on the build
+  lock. After `scala-cli bloop exit` the suite completes in seconds. Run suites SERIALLY on this
+  machine. UnionFind's single test is `.ignore`d upstream, so it reports 0 pass / 1 ignored.
+
+--------------------------------------------------------------------------------
+9. WHAT REMAINS OPEN (carried forward)
+--------------------------------------------------------------------------------
+1. SpatialConfig is one value, not one authority. Shape.MaxDepth/MaxHeads are vals read from
+   SpatialConfig.default, so shapeDepth/shapeWidth cannot vary per analysis; histQueries, inline,
+   summaryKeys, unroll are declared but unconsumed by SpatialCost/SpatialRecursion. Finding 6 is
+   PARTIAL for exactly this reason. Threading a cfg through Shape's constructors is the fix.
+2. The reducer has no SMT obligation and no termination proof (section 2). It is now load-bearing
+   for a bound, which raises the value of certifying it.
+3. evalI is uninstrumented, which is why 177/200 zipper calibration points are excluded rather than
+   counted. IntTrieOps' Patricia operators are ours and would be far more faithful than charging
+   a.size + b.size after the fact.
+4. Reference-backend `work` cannot be counted honestly from our source (Scala collections own the
+   hash probing). Either redefine SetCost.work to mean what the hooks can see, or validate it with
+   a test-only counted set kernel.
+5. Routine.optimized still defaults to the old Lower rule list; spatial consumption is opt-in.
+6. Cornerstone CARDINALITY remains [0,inf] on five of six programs. The shape facts are useful; the
+   size projection is not, under open annotations.
+7. Shape.leq incompleteness (17.2% of gamma-contained pairs undecided) and the envelope/gamma gap
+   (237/38400) are unchanged and still measured rather than fixed.
+
+--------------------------------------------------------------------------------
+ADDENDUM (same increment): status of review.md 6's "move fixtures into test support"
+--------------------------------------------------------------------------------
+The finite universes, the operator matrix, the grounded fixtures and the callee routine are now
+namespaced inside `SpatialGamma.TestOnly`, with an `export TestOnly.*` at the bottom of the object
+keeping the old unqualified spellings compiling. I MECHANICALLY VERIFIED the precondition for
+finishing the job: for each of the 19 members (allPaths, universe, gammaLeqOn, gammaLeqWitness,
+bindSym, bindRest, bindAcc, bindRec, opSpaces, opPaths, BodyKind, Op, ops, callee, calleeRefs,
+calleeMentions, calleeRoutine, routineTable, groundedPS, groundedSS), the only occurrences anywhere in
+src/main outside SpatialGamma.scala are DOC COMMENTS naming them (SpatialShape.scala:395 and
+SpatialCheck.scala:774) plus unrelated identifiers that merely contain the same word (`universe` as a
+field of SpatialCheck.WitnessUniverse). So nothing in production depends on the fixtures and the
+remaining step is a pure file move: drop the `export`, move the object into a test-support file, and
+qualify the references in SpatialLawCheck / SpatialSoundnessHunt.
+
+I DID NOT DO THAT MOVE, deliberately. It has no semantic content but it edits two of the green
+soundness gates, and I would rather not refactor those at the end of the window when the value is
+structural tidiness. Finding 6 is reported PARTIAL for this and for the SpatialConfig authority gap,
+not for a missing capability.
+
+--------------------------------------------------------------------------------
+CONFIRMATION: the 30-suite battery in section 8 was re-run SERIALLY, one JVM per suite, AFTER the
+last source edit of this increment (the `satisfies` alias removal, the SpatialRecursionCheck rewrite
+and the SpatialLawCheck dispatcher assertion). Every per-suite number in section 8 was reproduced
+exactly. Totals: 304 PASS / 0 FAIL / 0 IGNORED across those 30 suites; plus the widened executor
+sweep at 94 PASS / 0 FAIL / 4 pre-existing IGNORED (Imperative 2, Unification 1, UnionFind 1).
+GRAND TOTAL OBSERVED THIS INCREMENT: 398 PASS, 0 FAIL, 0 ignores added.

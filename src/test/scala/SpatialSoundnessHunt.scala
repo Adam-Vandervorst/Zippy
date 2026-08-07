@@ -15,7 +15,7 @@ import scala.collection.immutable.SortedMap
  *  two point abstractions), evaluates the term with the reference `eval`, infers the spatial type,
  *  and then checks EVERY claim the type makes about the value:
  *
- *    - `SpatialTyping.satisfies` (the dispatcher envelope) and `SpatialTyping.gammaMember` (full
+ *    - `SpatialTyping.withinEnvelope` (the dispatcher envelope) and `SpatialTyping.gammaMember` (full
  *      γ-membership) and `SpatialGamma.gamma` (the independent copy);
  *    - the per-length count bracket `t.lens.at(L)` for every length, populated or not — the
  *      soundness statement in the header of SpatialTypes.scala;
@@ -690,7 +690,7 @@ object Hunt:
     val sz = t.size; val ln = t.len; val hc = t.headCount
 
     if !SpatialTyping.gammaMember(v, t) then out += "gammaMember"
-    if !SpatialTyping.satisfies(v, t) then out += "satisfies"
+    if !SpatialTyping.withinEnvelope(v, t) then out += "satisfies"
     if !SpatialGamma.gamma(t)(v) then out += "SpatialGamma.gamma"
     if n < sz.lo then out += "size.lo"
     if n > sz.hi then out += "size.hi"

@@ -391,18 +391,42 @@ of one γ (ε-absence and closedness are union-closed, counts are not); `widenSh
 widening.
 
 **`SpatialType` / `Fact` / `SpatialTyping`** — `src/main/scala/SpatialTypeSystem.scala`
-`SpatialType = (Shape, SpaceType)` as a **reduced product**: `SpatialType.reduce` caps every length
-class by the shape's implied total, `size`/`len`/`headCount` meet both components, and the shape's
-head count bounds an iteration's group count. Measured on the review's own nested rest-chained
-iteration: histogram alone `[0, 1024]`, `SpatialTypes.sizeOf` `[0, 1024]`, reduced product `[4, 4]`
-against an actual size of 4. `Fact` is the **validated-proposition** API an optimizer should consume —
-`DefinitelyEmpty`, `DefinitelyNonEmpty`, `MinimumCardinality`, `MaximumCardinality`,
-`AllPathsHaveAtLeast`, `MaximumPathLength`, `ExactHeadSet`, `HeadSetWithin`, `MinimumHeadCount`,
-`MaximumHeadCount`, `PrefixAbsent` — each bundling the conjunction its meaning needs, because the empty
-space's `len.lo` is `INF` and a client reading it raw would "prove" three extractable items from
-nothing. `SpecializedRoutine(precondition, residual, facts)` carries the assumed environment as data
-and `applicableTo` decides an actual argument with the exact `gammaMember`, never the weaker
-`satisfies` envelope.
+`SpatialType = (Shape, SpaceType)` as a **reduced product**. `size`/`len`/`headCount` meet both
+components, and the shape's head count bounds an iteration's group count. Measured on the review's own
+nested rest-chained iteration: histogram alone `[0, 1024]`, `SpatialTypes.sizeOf` `[0, 1024]`, reduced
+product `[4, 4]` against an actual size of 4.
+
+**`reduce` is now genuinely bidirectional (review.md 5).** It was one rule (the shape's total capping
+each class); it is now **eight named rules** iterated to a fixed point under `SpatialConfig.reduceRounds`:
+
+| direction | rules | what they do |
+|---|---|---|
+| histogram → shape | `H1` `H2` `H3` `H4` | per-depth counts bound a fibre's untracked-head room (`H1`); zero/positive support at a depth forces `eps` to `No`/`Must` (`H2`); "nothing longer than `L`" prunes the untracked branches too, **materialising** an `otherTail` where there was none (`H3`); non-empty with a unique possible location forces that location (`H4`) |
+| shape → histogram | `S1` `S2` `S3` `S4` | the shape's implied total caps each class (`S1`); classes outside the shape's length hull die (`S2`); a shape-forced class gets a lower bound (`S3`); an empty meet on the shared count/length hull is a **contradiction** (`S4`) |
+
+A contradiction does **not** widen — it collapses to the explicit `SpatialType.bottom`, whose γ is
+empty (it rejects even `∅`), which is what lets a caller tell "the value is the empty space" from
+"your annotations are unsatisfiable". Executable-checked: the reducer reaches its fixed point in
+**≤ 1 round** on 225 generated types (cap 4) and is idempotent on all of them; over 225 types × 128
+values it tightened 71 types and **lost 0 γ-members**; `meet` over 48² pairs × 128 values produced
+**0 false ⊥**. Both directions are exercised end to end — see §9.10 for the per-node claim and §9.7
+for the `peel` case where the shape half recovers a length bound the histogram half abandons.
+
+`Fact` is the **validated-proposition** API an optimizer should consume — `DefinitelyEmpty`,
+`DefinitelyNonEmpty`, `MinimumCardinality`, `MaximumCardinality`, `AllPathsHaveAtLeast`,
+`MaximumPathLength`, `ExactHeadSet`, `HeadSetWithin`, `MinimumHeadCount`, `MaximumHeadCount`,
+`PrefixAbsent` — each bundling the conjunction its meaning needs, because the empty space's `len.lo`
+is `INF` and a client reading it raw would "prove" three extractable items from nothing.
+`PrefixAbsent` **is now emitted** (it was a public constructor `Fact.from` never produced — the
+review's "dead promise"): 390 of 400 decorated corpus instances carry one.
+
+**The naming trap is closed (review.md 1).** Full γ-membership is `accepts` (alias `gammaMember`); the
+weak envelope is `withinEnvelope`; `satisfies` is **deleted**, not deprecated, because a deprecated
+alias leaves the trap reachable. The envelope's gap is real and still measured — 237 non-members
+admitted over 38,400 pairs — but **no dispatcher is built on it any more**:
+`SpecializedRoutine.applicableTo`, `BoundedRecursion.applicableTo` and
+`SpatialPipeline.GuardedRoutine.applicableTo` all decide with full γ, and `SpatialLawCheck` asserts
+that the dispatcher rejects the exact witness the envelope admits.
 
 `SpatialTyping.fixpoint` deserves its own note because it is where the two orders matter: the concrete
 operator binds the recursive mention to the LAST iterate and returns the UNION of all of them, so the
@@ -431,6 +455,21 @@ data and answers `applicableTo`. Review.md's exact request lands: `maxLen 4` + o
 `maxCallDepth 4`, μ chain `4→3→2→1→0`, level-4 summary ⊥, Call-free residual, 17 nodes / 4 levels.
 `DepthBound.NoBound` names its reason rather than silently returning ⊤.
 
+**What the bidirectional reducer bought here.** `peel(m, p0) = heads(m) ∪ peel(p0, Unwrap(m, p0))`
+with `p0` declared to carry **between one and three** items used to come back `NoBound`: the
+histogram's variable-length `Unwrap` arm gives up (it still does — `SpatialTypes.infer` alone returns
+`μ = ∞`), so M2 could not be shown. It is now **Bounded** at `maxCallDepth 4`, and the proof runs
+entirely through the product: `lengthAnnotation(1,4)`'s histogram materialises a depth-≤4 trie out of
+`Shape.top` (rule `H3`), `Shape.unwrapUnknown` shifts that trie down by `|p0|.lo = 1` levels — sound
+because `Unwrap(s,p)` with `|p| = j` is a subset of the level-`j` tail-sets, i.e. `tailsUnion` iterated
+`j` times, unioned over `j ∈ |p0|` — and the product's `len` meet reads the bound back off the shape.
+The drop is always the **lower** end of `|p0|`, never the upper: `|p0| ∈ [2,3]` gives μ chain `4→2→0`
+and depth 2. Checked three ways: the μ chain is asserted exactly, `eval` agrees with the residual on
+7,500 inputs drawn from inside the precondition across five `|p0|` intervals (0 disagreements), and
+`|p0| ∈ [0,3]` — a prefix that may be **empty**, so nothing decreases — still returns `NoBound` with
+the M1 reason. The depth cap is not being misread as a length claim: `Shape.top.lens.hi = ∞` and ⊤
+admits a path three times deeper than `MaxDepth`, both asserted.
+
 ### 9.8 Symbolic cost (cardinality is not cost)
 
 **`Sym` / `BigO` / `Amount` / `Cost` / `Meas` / `CostModel` / `SetCost` / `TrieCost` / `Recurrence` /
@@ -453,13 +492,23 @@ than a second size bound: measured `unwrap` set `work=n` / trie `work=1` (zipper
 `Recurrence.solve`/`close` give linear recurrences closed forms instead of saturating, and a routine
 with a §9.7 depth bound gets a closed cost.
 
-**What is and is not established.** The per-operator constants are a *model* of the two interpreters,
-read off `eval` and the trie/zipper ops — not measured constants and not proved. Executable-checked:
+**Four backends, and intervals rather than a bare worst case (review.md 2).** `Backend` is now
+`Reference | Trie | Graph | Zipper`, each naming the executable it describes (`eval`, `evalI`, `execT`,
+`execZ`) — one `TrieCost` formula can no longer stand for the materially different `execT` and `execZ`.
+Every model returns a `CostInterval(lo, hi)`, so the generic lower endpoint (one dispatch, zero
+allocations) is replaced by exact zero/identity values wherever `Shape` proves a fast path, and cold
+construction is separated from warm execution by phase rather than folded into the symbolic expression.
+
+**What is and is not established.** The per-operator constants remain a *model* of the interpreters,
+read off the source — not measured constants and not proved. Executable-checked:
 normalisation/idempotence, `dominates` against numeric evaluation (114 pairs × 60 valuations),
 `bigO` monotone under `dominates`, the per-operator transfers, backend disagreement (300/300 corpus
-programs), monotonicity in both the symbolic valuation and the declared input type, and a **weak**
-rank-correlation sanity check of set-backend `work` against measured `eval` runtime
-(Spearman ρ = 0.933 over 16 programs — a sanity check, not a validated cost model).
+programs), and monotonicity in both the symbolic valuation and the declared input type.
+
+The tightness question the review said was *unanswerable* is now answered, and answered unevenly — see
+§9.13 for the containment/slack tables against counted runtime events. Rank correlation
+(Spearman ρ = 0.927 over 16 programs) is retained only as a **secondary trend metric**; it is no
+longer the empirical case for the model.
 
 ### 9.9 The semantic layer and the law corpus
 
@@ -485,7 +534,163 @@ are deliberate **GROUND WITNESSES** — refutations that pin what the code does 
 lub), `gsem_satisfies_weaker` (the dispatcher gate admits non-members), `gsem_l2_union_maxlo_unsound`,
 `gsem_othertail_perhead_union`, `gsem_l2_tailsinter_may_unsound`, `gsem_l1_restrict_openkeys_unsound`.
 
-### 9.10 The gates for §9.5–§9.9
+### 9.10 One decorated analysis (review.md 4)
+
+**`SpatialConfig` / `NodeId` / `NodeAnalysis` / `SpatialAnalysis`** — `src/main/scala/SpatialAnalysis.scala`
+
+The cost pass used to re-run `SpatialTypes.infer` and `SpatialTyping.infer` at every subterm through
+`histAt`/`shapeAt`/`typeAt`, which is quadratic; `FactBudget = 2000` capped the duplicate work without
+making the architecture compositional. There is now **one** traversal. `SpatialTyping.goShape` takes a
+`private[morkl] ShapeVisitor`; with `ShapeVisitor.Off` it is byte-for-byte the query `infer` always
+ran, and with the recorder installed it becomes the decorated analysis. The visitor's return value
+**replaces** the node's shape, which is how the parent transfer consumes the reduced child rather than
+merely producing a tighter final projection — the part review.md 5 says a root-only reduction cannot do.
+
+```scala
+final case class NodeId(position: Vector[Int])                 // child-index path; "/" is the root
+final case class SpatialAnalysis(root: SpatialType, nodes: Vector[NodeAnalysis], config, notes):
+  val index: Map[NodeId, NodeAnalysis]                          // O(1), no re-inference
+  def at(id): Option[NodeAnalysis];  def factsAt(id): Vector[Fact];  def rootFacts
+  def occurrencesOf(s: Space): Vector[NodeAnalysis];  def provablyEmpty: Vector[NodeAnalysis]
+```
+
+Each node carries its `result`, the **binder environment it was analysed in**, its `observations` (one
+per cause, so a loop body seen under several head groups keeps each environment and joins the
+summaries) and its facts. The histogram half is compositional: each node is rebuilt over stub mentions
+bound to the children's already-computed histograms and handed to `SpatialTypes.infer` — the owner of
+the count transfers — as a one-node term. The operators whose count transfer is *not* compositional
+(`Iteration`, `Fold`, `Fixpoint`) plus the root get a direct histogram query under an explicit
+`histQueries` budget.
+
+**Executable-checked.** Root agreement: on 23 probe terms the decorated root is `⊑ infer` on all
+(strictly tighter on 1). Cost is not quadratic: 255 / 511 / 1023 nodes take 65.7 / 104.9 / 314.0 ms —
+the last doubling costs **2.99×**, where quadratic would be ~4×. On 400 corpus instances: 10,227
+decorated nodes (25.6 per term), differs from `infer` on 46, **bottom on 0**, root `≤ infer` on all,
+and 4,352 closed decorated occurrences agree with `eval` with **0 violations**. Two occurrences of the
+same AST object get distinct positional identities, and iterator bindings survive — both asserted.
+
+**Honest limit.** `SpatialConfig` is *one value* but not yet *one authority*: it is honoured per call
+by `SpatialAnalysis`, `SpatialTyping` and `SpatialType.reduce`; `Shape.MaxDepth`/`MaxHeads` read the
+**global default only** (so `shapeDepth` is documentation of the cap, not a knob); and `histQueries`,
+`inline`, `summaryKeys`, `unroll` are declared but still unconsumed by `SpatialCost` and
+`SpatialRecursion`, which keep their own constants. Review.md 6's single-configuration ask is therefore
+**partial**, by exactly that list.
+
+### 9.11 Derived facts backends can act on (review.md 7)
+
+**`SpatialFacts`** — `src/main/scala/SpatialFacts.scala`
+Projections of the existing carriers — **no new abstract domain**, and no `eval`/`exec*` reference.
+Two quantities drive everything, `E_d` (paths with at least `d` items, read off the histogram) and
+`K_d` (distinct length-`d` prefixes, read off the trie), reduced against each other by
+`0 ≤ K_d ≤ E_d` and `E_d > 0 ⇒ K_d > 0`. On top: per-depth `DepthDegree` with pigeonhole
+`minFiber`/`maxFiber` envelopes, `commonPrefix` + `canExtractEveryPath` (cardinality and path length
+kept apart — `MinimumCardinality(3)` says three paths exist, `AllPathsHaveAtLeast(3)` says each path
+supports three extractions, and only the latter removes three existence checks), `trieNodes` as the
+**exact** identity `1 + Σ_{d≥1} K_d` instead of the sharing-blind `size × len`, a `RestChain`
+recognizer whose nested-iterator bound is `Σ_{i=1..d} K_i` frames and `K_d` leaf invocations rather
+than `K_1·…·K_d`, and a correlated-path overlay (`ItemPattern`/`PathPattern`/`PatternStratum`) that
+refines a `SpatialType` without touching `Shape`. Candidates are the review's own ADT —
+`SpatialSpecialization.TrieUnroll` / `ZipperPrefocus` / `GraphConstantFold`.
+
+Where the two components disagree, `degreeAt` returns `Either[SpatialContradiction, DepthDegree]`
+rather than repairing `lo > hi` by swapping or widening: an uninhabited contract must not silently
+become an inhabited one.
+
+### 9.12 The consumer-facing typechecker (review.md 1)
+
+**`PathType` / `SpatialSignature` / `SpatialCheck`** — `src/main/scala/SpatialCheck.scala`
+`Routine` had names, parameters and a body and nothing else; there was no signature and no
+`checkRoutine`. Now there is, and **three different questions are kept apart by type**:
+
+| question | entry point | guarantee |
+|---|---|---|
+| does this concrete space inhabit this type? | `SpatialCheck.value` | sound **and complete** for the carrier (full γ via `SpatialTyping.accepts`) |
+| is this abstract type below that one? | `SpatialCheck.types` | three-way; sound, deliberately **incomplete** |
+| does this routine meet its declared contract? | `SpatialCheck.checkRoutine` | `Proved` / `Refuted(witness)` / `Unknown(reason)` |
+
+`Proved` may use sound abstract inclusion. **`Refuted` requires an actual witness** — a value in
+`γ(inferred) \ γ(expected)` is an *abstract gap*, which may be an artifact of abstraction and is not
+evidence the routine can produce it. Every other failed proof is `Unknown`. Executable-checked: over
+360 signature pairs, `Proved` 46 / `Refuted` 267 (every witness re-validated) / `Unknown` 47; the
+`leq` incompleteness is measured at **11 of 62** genuinely-contained pairs missed (17.7%) and **none
+became a type error**; a contradictory annotation reports `Unknown — VACUOUS` and names the fix rather
+than "proving" anything; and the checker runs on a term whose grounded functions throw, so no path
+evaluates its subject.
+
+### 9.13 Counted execution: the missing "actual steps" oracle (review.md 2)
+
+**`EffortEvent` / `EffortSink` / `Calibration`** — `src/main/scala/SpatialEvents.scala`, with hooks in
+`MORKL.scala` (16 lines), `GraphExec.scala` (9) and `Zipper.scala` (34) — all single statements, no
+signature changes.
+
+The effort model previously had no lower bound, no calibrated interval, and no identity of the
+executable it described; its only empirical test was wall-clock **rank** on 16 separated programs. Now
+16 events each tie to one emitting site and one cost component, and the components are the calibration
+contract: `Events.work`/`.alloc`/`.rounds` are the oracles for `Cost.work`/`.alloc`/`.rounds`.
+`ReusedSpace` and `ZipperFallbackToEvalI` are **explanatory** and never summed into work. A deliberate
+rule — asserted by a test — is that **no event exists without an emitter**, which is the `PrefixAbsent`
+"dead promise" complaint applied to this vocabulary.
+
+Instrumentation of an executor is not analysis, so this does not touch the §0 invariant. The sink is an
+armed-flag plus a `ThreadLocal[Counter]`; its disarmed cost is **measured, not asserted**.
+
+**Calibration, measured (executable-checked).** Containment is `lower ≤ actual ≤ upper` per component;
+slack is `upper/actual`; rank correlation is now the *secondary* metric (Spearman ρ = 0.927 over 16
+programs).
+
+| backend | component | n | contained | median slack | p95 |
+|---|---|---|---|---|---|
+| graph | Work / Alloc / Rounds | 200 | 100% | 1.20 / 1.00 / 1.00 | 1.91 / 1.22 / 1.50 |
+| reference | Work / Alloc / Rounds | 200 | 100% | 1.22 / 1.58 / 1.00 | 2.57 / 7.00 / 1.50 |
+| zipper | Work / Alloc / Rounds | 23 | 100% | 3.72 / 14.00 / 1.00 | 6.94 / 67.80 / 1.00 |
+
+Overall containment **100% (0 of 1269 points outside the interval)** on the fuzzer corpus and 100% (0
+of 21) on the cornerstones. The executors are also differentially checked **while counted**: `execZ`
+and `execT` outputs are asserted equal to `eval`'s on all 200 corpus programs and 6 cornerstones, which
+is the regression that would catch a hook changing semantics.
+
+Four attribution bugs the review named are fixed and pinned: a warm `Literal` no longer charges `|v|`;
+a full-window `Range` is the identity and charges no sort; the **trie** `Range` does sort and its full
+window is not free; and `execT`/`execZ` are priced separately and really do differ. The identity
+regression the review asked for holds: increasing input size does not increase modelled warm work for
+an identity operation.
+
+**Honest limits, and they are load-bearing.** (1) The zipper rows rest on **23 of 200** programs:
+`execZ` delegated the other 177 to the uninstrumented `evalI`, and those are *excluded* rather than
+counted as zero — `ZipperFallbackToEvalI` is what makes the exclusion visible instead of silently
+mixing fused and materialized execution into one number. (2) Several cornerstone predictions are
+`[·, ∞]`, so their "containment" is vacuous and slack is `Infinity` (`puzzle15`, `datalog-sn` on all
+three components; `nqueens4` slack is finite but in the thousands). Containment at 100% with a p95 of
+67.8 on zipper alloc is **not** a close model, and the table above is reported so that is visible
+rather than averaged away. (3) The reference `Set` backend delegates union/intersection/hash probing to
+the Scala collection library, so these hooks cannot honestly count its internal hash probes; the
+measured reference events are AST dispatches, explicit prefix comparisons, loop frames and fixpoint
+rounds.
+
+### 9.14 One ordinary entry point (review.md 3)
+
+**`SpatialAnnotations` / `SpatialPipeline`** — `src/main/scala/SpatialPipeline.scala`
+The subsystem was an island: `Routine.optimized` ran the old `Lower` rule list, and `transpile`, graph
+`optimize`, `execT` and `execZ` consumed no `SpatialType`, `Fact`, `BoundedRecursion` or cost report.
+There is now one flow, in the review's own shape:
+
+```scala
+def analyzeRoutine(r: Routine, ann: SpatialAnnotations): RoutineAnalysis
+def optimize(r: Routine, a: RoutineAnalysis): SpatialTyping.SpecializedRoutine
+def optimizeGuarded(r: Routine, a: RoutineAnalysis): GuardedRoutine   // + the checked fallback
+def lower(s: SpecializedRoutine, backend: Backend): LoweredRoutine
+```
+
+`SpatialAnnotations` is the single input value (spaces, paths, path lengths, routines, plus the four
+config records). `FactScope` separates **unconditional** facts — safe to consume in the ordinary
+optimized program — from **conditional** ones, which produce a guarded version plus a fallback whose
+dispatcher uses full γ. Backend lowering consumes explicit candidates; measured on the pipeline's own
+comparison table, 1 of 6 probe programs is a **spatial-only win** (`x ∖ x` folds to `Empty` where the
+ordinary rule list leaves 3 nodes), the graph backend consumes a `GraphConstantFold`, and the report
+prints why a candidate was *declined* (e.g. a body already a literal, where zipper pre-focus would only
+add work) rather than silently omitting it.
+
+### 9.15 The gates for §9.5–§9.14
 
 All are `eval`-gated differential suites; `eval` appears in tests only, never in an analysis
 (docs/design_spatial_lattice.md §0).
@@ -500,6 +705,11 @@ All are `eval`-gated differential suites; `eval` appears in tests only, never in
 | **`SpatialRecursionCheck`** | `SpatialRecursionCheck.scala` | Depth bounds and residuals: the headline `maxLen 4 ⇒ depth 4`, hygiene of splicing, every `NoBound` reason, worklist/certification behaviour, and randomized gates over generated recursive routines. |
 | **`SpatialCostCheck`** | `SpatialCostCheck.scala` | The `Sym` algebra, `dominates` soundness, per-operator and per-backend cost shape, recurrence closing, monotonicity, and the runtime rank-correlation sanity check. |
 | **`SpatialSoundnessHunt`** | `SpatialSoundnessHunt.scala` | The **adversarial** net: 9 sweeps over all 21 constructors with nested binders, an interprocedural routine table, non-exact declared inputs and three path-ref modes, checking every projection, channel and `Fact` per case, with violations delta-debugged over *(term, environment)* pairs. Four minimal witnesses it found are pinned as named regressions. |
+| **`SpatialAnalysisCheck`** | `SpatialAnalysisCheck.scala` | §9.10: decorated root `⊑ infer`, sub-quadratic scaling (2.99× per doubling), reducer termination/idempotence and its γ-gate (0 members lost, 0 false ⊥), positional identity of two equal ASTs, retained iterator bindings, and 4,352 closed decorated occurrences against `eval`. |
+| **`SpatialFactsCheck`** | `SpatialFactsCheck.scala` | §9.11: `E_d`/`K_d` and the fibre envelopes against concrete fibres over a finite universe, `trieNodes` against `ITrie.prefixCount`, the rest-chain bound as `Σ K_i` (never a product), and the affine-overlay counterexample (`x` vs `x+1`: different at the same binding, **not** globally disjoint) that blocks an unsound `2N` lower bound. |
+| **`SpatialCheckCheck`** | `SpatialCheckCheck.scala` | §9.12: the three-way result, every `Refuted` witness re-validated, a known `leq` false negative returning `Unknown` (never `Refuted`), vacuous-annotation reporting, and the no-evaluation sentinel. |
+| **`SpatialEventsCheck`** | `SpatialEventsCheck.scala` | §9.13: the closed event vocabulary (every event has an emitter), hand-computed hook counts per executor, the four attribution fixes, the identity regression, cold/warm separation, and the calibration tables — plus `execZ`/`execT` output equality with `eval` **while counted**. |
+| **`SpatialPipelineCheck`** / **`SpatialAcceptance`** | `SpatialPipelineCheck.scala`, `SpatialAcceptance.scala` | §9.14 and the review's 8-item acceptance suite: annotation-only analysis, symbolic fibres (`2N`, not `N²`), decorated binders, multi-step Life through five calls, the six cornerstones under open annotations, exhaustive semantic-law ground checks, and optimization consumption with a checked fallback. |
 
 ---
 
@@ -601,7 +811,7 @@ All suites gate against `eval` (directly, or via a backend itself gated against 
 
 The spatial-type suites (`SpatialTypeCheck`, `SpillSoundness`/`ReviewFindings`, `SpatialElimination`,
 `SpatialShapeCheck`, `SpatialLawCheck`, `SpatialRecursionCheck`, `SpatialCostCheck`,
-`SpatialSoundnessHunt`) are tabulated with the components they gate in **§9.10**.
+`SpatialSoundnessHunt`) are tabulated with the components they gate in **§9.15**.
 
 | Suite | Path | What it pins |
 |---|---|---|

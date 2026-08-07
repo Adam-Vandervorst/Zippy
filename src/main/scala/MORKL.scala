@@ -200,6 +200,7 @@ given pathValueOrdering: Ordering[PathValue] with
   def compare(a: PathValue, b: PathValue): Int =
     val ai = a.items.iterator; val bi = b.items.iterator
     while ai.hasNext && bi.hasNext do
+      effort(EffortEvent.PathItemComparison)              // the ONLY comparison oracle for `Range`
       val c = ai.next().compareTo(bi.next())
       if c != 0 then return c
     Integer.compare(a.items.length, b.items.length)
@@ -233,15 +234,25 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
 //    })(body), List(Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps, Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep, Lower.Wrap_Iter, Lower.Iter_Ident, Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps, Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)))
 
 def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceContext = SpaceContextMap(Map.empty), rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): SpaceValue =
-  def recp(x: Path): List[PathItem] = x match
+  // EFFORT INSTRUMENTATION (SpatialEvents.scala).  `recp`/`recs` are one-line counting wrappers
+  // around the unchanged dispatch bodies, so every recursive occurrence below is counted exactly
+  // once; `effort` compiles to one load of a static boolean and a not-taken branch when disarmed.
+  def recp(x: Path): List[PathItem] =
+    effort(EffortEvent.PathDispatch)
+    recpD(x)
+  def recpD(x: Path): List[PathItem] = x match
     case Path.Deref(pr) => pc.resolve(pr).items
     case Path.Constant(pi) => pi.items
     case Path.Concat(l, r) => recp(l) ++ recp(r)
     case Path.GroundedPP(p, f) => f(PathValue(recp(p))).items
     case Path.GroundedSP(s, f) => f(SpaceValue(recs(s))).items
-  def recs(x: Space): Set[PathValue] = x match
+  def recs(x: Space): Set[PathValue] =
+    effort(EffortEvent.AstDispatch)
+    recsD(x)
+  def recsD(x: Space): Set[PathValue] = x match
     case Space.Empty => Set()
     case Space.Call(rp, refs, mentions) =>
+      effort(EffortEvent.CallEntry)
       val refvs = refs.map(p => PathValue(recp(p)))
       val mentionvs = mentions.map(s => SpaceValue(recs(s)))
       val Routine(_, refns, mentionns, body) = rc(rp)
@@ -258,13 +269,15 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
 //      println(s"called ${rp.s}(${pctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show).mkString(", ")}; ${sctx.m.map((pr, pv) => pr.s ++ ":" ++ pv.show).mkString(", ")}) = ${SpaceValue(res).show}")
       res
     case Space.Mention(p) => sc.resolve(p).paths
-    case Space.Singleton(p) => Set(PathValue(recp(p)))
+    case Space.Singleton(p) => effort(EffortEvent.FreshPath); Set(PathValue(recp(p)))
+    // NOTE (review.md 2): the stored set is RETURNED — a warm `Literal` allocates nothing, whatever
+    // it cost to build.  `ReferenceCost.literal` prices the two phases separately for this reason.
     case Space.Literal(SpaceValue(ps)) => ps
     case Space.Union(x, y) => recs(x) union recs(y)
     case Space.Intersection(x, y) => recs(x) intersect recs(y)
     case Space.Subtraction(x, y) => recs(x) removedAll recs(y)
-    case Space.Restriction(x_e, prefixes_e) => val prefixes = recs(prefixes_e); recs(x_e).filter(x => prefixes.exists(p => x.items.startsWith(p.items)))
-    case Space.Composition(x, y) => val ys = recs(y); for e1 <- recs(x); e2 <- ys yield PathValue(e1.items ++ e2.items)
+    case Space.Restriction(x_e, prefixes_e) => val prefixes = recs(prefixes_e); recs(x_e).filter(x => prefixes.exists(p => Effort.startsWith(x.items, p.items)))
+    case Space.Composition(x, y) => val ys = recs(y); for e1 <- recs(x); e2 <- ys yield { effort(EffortEvent.FreshPath); PathValue(e1.items ++ e2.items) }
 //    case Space.Wrap(src_e, p_e) => val p = recp(p_e); recs(src_e).map( sp => PathValue(p ++ sp.items))
 //    case Space.Unwrap(src_e, p_e) => val p = recp(p_e); recs(src_e).collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
 
@@ -274,31 +287,34 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.Unwrap(src_e, p_e) =>
       val p = recp(p_e);
       val src = recs(src_e);
-      val res = src.collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
+      val res = src.collect { case e if Effort.startsWith(e.items, p) => effort(EffortEvent.FreshPath); PathValue(e.items.drop(p.length)) }
 //      println(s"unwrap p=${PathValue(p).show} src=${src.map(_.show)} res=${res.map(_.show)}")
       res
-    case Space.TailsUnion(src_e) => recs(src_e).collect { case PathValue(_::r) => PathValue(r) }
+    case Space.TailsUnion(src_e) => recs(src_e).collect { case PathValue(_::r) => effort(EffortEvent.FreshPath); PathValue(r) }
     case Space.TailsIntersection(src_e) => // total: empty input or only-empty-paths -> empty space
-      val groups = recs(src_e).collect { case PathValue(h::t) => h -> PathValue(t) }.groupMap(_._1)(_._2)
+      val groups = recs(src_e).collect { case PathValue(h::t) => effort(EffortEvent.FreshPath); h -> PathValue(t) }.groupMap(_._1)(_._2)
       if groups.isEmpty then Set.empty else groups.valuesIterator.map(_.toSet).reduce(_ intersect _)
     case Space.Iteration(src_e, symbol, rest, templates) => // total: headless (empty) paths are skipped
-      val groups = recs(src_e).collect { case PathValue(h::tail) => PathValue(h::Nil) -> PathValue(tail) }.groupMap(_._1)(_._2)
+      val groups = recs(src_e).collect { case PathValue(h::tail) => effortN(EffortEvent.FreshPath, 2L); PathValue(h::Nil) -> PathValue(tail) }.groupMap(_._1)(_._2)
       Set.from(for (h, r) <- groups;
-          p <- eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(Set.from(r)))), rc).paths
+          p <- { effort(EffortEvent.LoopBodyEntry)
+                 eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(Set.from(r)))), rc) }.paths
       yield p)
     case Space.Fixpoint(init, rec, body) => // union-saturating least fixpoint (the datalog shape)
       var cur = recs(init)
       var acc = cur
       var stop = false
       while !stop do
+        effort(EffortEvent.FixpointRound)                 // counts the terminating round too
         val nxt = eval(body)(using pc, sc.grown(Map(rec -> SpaceValue(cur))), rc).paths
         if nxt == cur then stop = true else { acc = acc union nxt; cur = nxt }
       acc
     case Space.Fold(src_e, initial, acc, symbol, rest, templates, update) => // deterministic left fold over head-groups
       var accValue = PathValue(recp(initial))
-      val groups = recs(src_e).collect { case PathValue(h::tail) => PathValue(h::Nil) -> PathValue(tail) }.groupMap(_._1)(_._2)
+      val groups = recs(src_e).collect { case PathValue(h::tail) => effortN(EffortEvent.FreshPath, 2L); PathValue(h::Nil) -> PathValue(tail) }.groupMap(_._1)(_._2)
       val out = Set.newBuilder[PathValue]
       for (h, r) <- groups.toSeq.sortBy(_._1.show) do
+        effort(EffortEvent.LoopBodyEntry)
         val pctx = pc.grown(Map(acc -> accValue, symbol -> h))
         val sctx = sc.grown(Map(rest -> SpaceValue(Set.from(r))))
         out ++= eval(templates)(using pctx, sctx, rc).paths

@@ -239,21 +239,21 @@ class SpatialLawCheck extends FunSuite:
     println(s"WITHIN vs LEQ: within(${a.show}, ${b.show}) = true, γ-containment = false, witness = ∅")
   }
 
-  test("`SpatialTyping.satisfies` is WEAKER than γ — the dispatcher gate admits non-members") {
+  test("`SpatialTyping.withinEnvelope` is WEAKER than γ — the dispatcher gate admits non-members") {
     // a runtime dispatcher built on `satisfies` (SpecializedRoutine.applicableTo) can select a
     // specialisation for an input that does NOT satisfy the precondition it was derived under.
     val t = SpatialType(Shape.top, SpaceType.closed(1L -> Ivl(1, 2), 2L -> Ivl(1, 2)))
     val v = SpaceValue(Set(PathValue(List("a", "b")), PathValue(List("b", "b"))))
     assert(!gamma(t)(v), "v has no length-1 path, so it is not in γ(t)")
     println(s"SATISFIES named witness: t = ${t.show}, v = ${v.pretty} — " +
-      s"γ = false, satisfies = ${SpatialTyping.satisfies(v, t)}")
+      s"γ = false, satisfies = ${SpatialTyping.withinEnvelope(v, t)}")
     // the same gap, searched for systematically over the universe
     val rng = new java.util.Random(1006)
     val pool = abstractPool(rng, 300)
     var admits = 0; var rejectsMember = 0; var pairs = 0
     for tt <- pool; v2 <- U do
       pairs += 1
-      val g = gamma(tt)(v2); val s = SpatialTyping.satisfies(v2, tt)
+      val g = gamma(tt)(v2); val s = SpatialTyping.withinEnvelope(v2, tt)
       if s && !g then admits += 1
       if g && !s then rejectsMember += 1
     println(s"SATISFIES vs γ: $pairs pairs — satisfies accepts a non-member $admits times; " +
@@ -261,12 +261,20 @@ class SpatialLawCheck extends FunSuite:
     // THE GATE, in the direction that must always hold: a dispatcher whose test rejects a genuine
     // member of the precondition would silently fall back and lose the specialisation.
     assertEquals(rejectsMember, 0, "satisfies must at least accept every γ-member")
-    // the other direction is a FINDING, not a gate: `satisfies` checks the class interval only of
-    // the lengths PRESENT in the value, so it accepts values that violate a positive class lower
-    // bound.  `SpecializedRoutine.applicableTo` is built on it, so a guarded dispatcher can select a
-    // specialisation for an input outside the precondition it was derived under (review.md 5).
-    // Certified as a ground statement in proofs/spatial-semantic/gsem_satisfies_weaker.smt2.
-    if admits == 0 then println("  (the satisfies/γ gap no longer shows on this pool — recheck the finding)")
+    // the other direction is a FINDING, not a gate: `withinEnvelope` checks the class interval only
+    // of the lengths PRESENT in the value, so it accepts values that violate a positive class lower
+    // bound.  Certified as a ground statement in proofs/spatial-semantic/gsem_satisfies_weaker.smt2.
+    //
+    // WHAT CHANGED (review.md 1): no dispatcher is built on this predicate any more.
+    // `SpecializedRoutine.applicableTo`, `BoundedRecursion.applicableTo` and
+    // `SpatialPipeline.GuardedRoutine.applicableTo` all decide with full γ (`SpatialTyping.accepts`),
+    // so the gap measured here is no longer reachable from a guarded specialisation.  The assertion
+    // below pins that, so the claim cannot rot back into being true.
+    assert(SpatialTyping.SpecializedRoutine(Map(SpaceMention("m") -> t), Routine(RoutinePtr("r"),
+             Vector.empty, Vector(SpaceMention("m")), Space.Empty), Vector.empty)
+             .applicableTo(Map(SpaceMention("m") -> v)) == false,
+           "a guarded dispatcher must REJECT the witness the envelope admits — it must use full γ")
+    if admits == 0 then println("  (the envelope/γ gap no longer shows on this pool — recheck the finding)")
   }
 
   /** abstract elements the order tests run on: α of universe values, joins of a few of them, and

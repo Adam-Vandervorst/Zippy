@@ -23,8 +23,9 @@ import scala.collection.immutable.SortedMap
  *    (d) OTHER-TAIL SUMMARY.  `otherTail = Some(ot)` ⇒ for EVERY `h ∈ U(V)`, `groups(V)(h) ∈ γ(ot)`
  *        (per-head, NOT the union — see the note below);  `None` means ⊤.
  *
- *  This is exactly `SpatialGamma.gammaShape`, and [[Shape.contains]] is a local copy of it so the
- *  domain's own gate does not depend on a file it does not own.  The PER-HEAD reading of (d) is the
+ *  [[Shape.contains]] IS this predicate, and it is the only implementation of it in the tree:
+ *  `SpatialGamma.gammaShape` and `SpatialType.accepts` both forward here (review.md 6 — there used to
+ *  be three copies).  The PER-HEAD reading of (d) is the
  *  one deliberately chosen: it makes every binary transfer's `otherTail` a per-head-to-per-head
  *  obligation (sound by induction), and it costs precision in exactly one place — [[tailsUnion]],
  *  which aggregates ACROSS heads and therefore has to open the count channels of `ot`
@@ -40,6 +41,25 @@ import scala.collection.immutable.SortedMap
  *  Every fact here comes from the term's syntax (literal paths, constant path prefixes), from
  *  declared input shapes, or from a transfer.  Nothing in this file or in [[SpatialTyping]] calls
  *  `eval`/`evalI`/`evalT`/`exec*`.  `contains` is a predicate on a value the caller already has.
+ *
+ *  ==ONE OWNER (review.md 6)==
+ *  THIS OBJECT owns every lattice operation of the SHAPE carrier, and no other file may restate one:
+ *
+ *  | law                                   | the one implementation      | who delegates to it                      |
+ *  |---------------------------------------|-----------------------------|------------------------------------------|
+ *  | γ (full membership, four channels)    | [[Shape.contains]]          | `SpatialGamma.gammaShape`, `SpatialType.accepts` |
+ *  | the ORDER `γ_may(a) ⊆ γ_may(b)`       | [[Shape.leq]]               | `SpatialGamma.leqShape`, `SpatialRecursion.leq`  |
+ *  | the JOIN (lub of alternatives)        | [[Shape.joinAlternatives]]  | `SpatialGamma.lubShape`, `SpatialType.join`      |
+ *  | the MEET (glb / reduction)            | [[Shape.meet]]              | `SpatialType.meet`, `SpatialType.reduce`         |
+ *  | the WIDENING                          | [[Shape.widen]]             | `SpatialTyping.fixpoint`, `SpatialRecursion`     |
+ *  | the UNION TRANSFER (`A ∪ B`)          | [[Shape.unionTransfer]]     | every `Union`-shaped transfer                    |
+ *
+ *  The two operations that are constantly confused have names that make the law visible at the call
+ *  site: [[unionTransfer]] is the transfer for the set operation `A ∪ B` (it keeps the left operand's
+ *  MUST claims and ADDS the untracked-head counts), [[joinAlternatives]] is the lattice lub (it keeps
+ *  no lower bound and MAXes the counts).  Using the first where the second is meant is what made the
+ *  `Fixpoint` Kleene chain unsound; the old spellings `union`/`lub`/`widenShape` remain as deprecated
+ *  aliases so no call site breaks while the tree migrates.
  *
  *  ==============================================================================================
  *  THE PER-OPERATOR MAY/MUST TABLE  (written before the code — review.md finding 1)
@@ -58,7 +78,7 @@ import scala.collection.immutable.SortedMap
  *  | Empty         | No ✓                       | none                        | [0,0] ✓                                     | None                     |
  *  | Literal/of    | Must/No exactly ✓          | exact child ✓               | [0,0], or exact count at the depth cap ✓     | ⊤ at the cap             |
  *  | Singleton p   | p≡ε: Must ✓; \|p\|≥1: No ✓ | none (content unknown)      | \|p\|≥1 ⇒ [1,1] ✓ (exactly one head)         | ⊤                        |
- *  | Union         | `or` ✓ (A∪B ⊇ A)           | `union` of children ✓       | lo = max over sides MINUS the keys the other side newly tracks ✓ (max alone is UNSOUND: b may track a's untracked head); hi = sum | `union` of both ots      |
+ *  | Union         | `or` ✓ (A∪B ⊇ A)           | `unionTransfer` of children ✓| lo = max over sides MINUS the keys the other side newly tracks ✓ (max alone is UNSOUND: b may track a's untracked head); hi = sum | `unionTransfer` of both ots |
  *  | Intersection  | `and` ✓ (ε in both ⇒ ε in ∩)| `inter` of children ✓ — must survives only through the ε chain, which is the only member two sets are both KNOWN to share | lo = 0 ∅ (∩ deletes); hi = min; closed on either side closes the result | `inter`, weakened        |
  *  | Subtraction   | `minus` ✓                  | `sub`; when `y` is CLOSED and h ∉ y.keys the subtrahend is exactly ∅, so the child passes through UNCHANGED ✓ | lo = x.others.lo minus \|y's live keys the result does not track\|, only when y is closed ✓; else 0 ∅. hi = x.others.hi | weaken(x.ot)             |
  *  | Restriction   | `and` ✓ (only ε prefixes ε) | y.eps=Must ⇒ child = c_x(h) unchanged ✓; y.eps=May ⇒ union(weaken x, restrict(x, y∖ε)) — must from the ε-free part ✓; else `restrict` | lo = 0 ∅ (a prefix set deletes); hi = min; closed on either side closes | weaken(x.ot)             |
@@ -73,7 +93,7 @@ import scala.collection.immutable.SortedMap
  *  | Range(lo,hi)  | whole window ⇒ x unchanged ✓; else MAY-ONLY ∅ — a positional slice deletes, and which paths it keeps depends on a global order the trie does not model | ∅ | lo = 0 ∅; hi = min(x.others.hi, window width) | x's, weakened |
  *  | Iteration     | union over head-groups; a group whose head is only MAY-present need not run, so its body is weakened; a MUST-present head's group DOES run and contributes must ✓.  An open head set adds one weakened body analysed with the head symbol UNBOUND and `rest` bound to weaken(ot) | as eps | as eps | as eps |
  *  | Fold          | same as Iteration but the accumulator ref is UNBOUND (⊤ wherever the body reads it).  MUST survives for bodies that do not read the accumulator ✓ | as eps | as eps | as eps |
- *  | Fixpoint      | Kleene over shapes with [[leq]] as the order, [[widenShape]] as the widening, and the post-fixpoint checked on `union(t, F#(t)) ⊑ t` — the SAME order.  The result is `union(shape(init), weaken(t))`: MAY from the verified post-fixpoint, MUST from `init` only, because the concrete accumulator provably contains `init` and nothing else is guaranteed ✓ | as eps | as eps | as eps |
+ *  | Fixpoint      | Kleene over shapes with [[leq]] as the order, [[widen]] as the widening, and the post-fixpoint checked on `union(t, F#(t)) ⊑ t` — the SAME order.  The result is `union(shape(init), weaken(t))`: MAY from the verified post-fixpoint, MUST from `init` only, because the concrete accumulator provably contains `init` and nothing else is guaranteed ✓ | as eps | as eps | as eps |
  *  | Call          | interprocedural: the callee body under parameters bound to the argument shapes, guarded by an active set.  MUST flows through because a body denotes a function of its parameters ✓.  A recursive occurrence ⇒ ⊤ | as eps | as eps | as eps |
  *  | GroundedPS/SS | ⊤ — an arbitrary Scala function; NOTHING is claimed ∅ | ∅ | ∅ | ∅ |
  *  | Mention       | the declared input shape, or ⊤ ∅ | | | |
@@ -101,6 +121,13 @@ enum Presence:
     else if this == Presence.Must && o == Presence.No then Presence.Must else Presence.May
   /** drop the must claim, keep the may claim */
   def weak: Presence = if this == Presence.Must then Presence.May else this
+  /** the MEET: both claims hold at once.  `None` is a CONTRADICTION (`No` against `Must`), which is
+   *  the only way two sound presences about the same set can be inconsistent. */
+  def meet(o: Presence): Option[Presence] = (this, o) match
+    case (Presence.No, Presence.Must) | (Presence.Must, Presence.No) => None
+    case (Presence.No, _) | (_, Presence.No) => Some(Presence.No)
+    case (Presence.Must, _) | (_, Presence.Must) => Some(Presence.Must)
+    case _ => Some(Presence.May)
 
 final case class Shape(eps: Presence,
                        heads: SortedMap[PathItem, Shape],
@@ -172,6 +199,31 @@ final case class Shape(eps: Presence,
           case None => any = true; lo = lo min 1L; hi = LenBounds.INF
       if !any then LenBounds.empty else LenBounds(lo, hi)
 
+  /** `K_d` — the number of DISTINCT length-`d` prefixes the shape permits.  At depth 0 there is one
+   *  prefix (ε) iff the space is non-empty; at depth 1 every untracked head is one prefix; BELOW
+   *  depth 1 `otherTail` is a may-only PER-UNTRACKED-HEAD summary, so it supplies an upper bound and
+   *  no positive lower bound.  (The formula is whispers.md §1's `rawPrefixesAt`, taken as-is: the
+   *  `d == 1` special case is the load-bearing part.)
+   *
+   *  This is the quantity the reducer meets against the histogram's `E_d` (paths with at least `d`
+   *  items): every qualifying path lies in exactly one prefix fibre, so `K_d ≤ E_d`, and `E_d > 0`
+   *  forces `K_d > 0`. */
+  def prefixesAt(d: Int): Ivl =
+    require(d >= 0, s"prefix depth must be non-negative, got $d")
+    if d == 0 then
+      if definitelyEmpty then Ivl.zero
+      else if definitelyNonEmpty then Ivl(1, 1)
+      else Ivl(0, 1)
+    else
+      var lo = 0L; var hi = 0L
+      for (_, child) <- heads do
+        val c = child.prefixesAt(d - 1)
+        lo = Ivl.add(lo, c.lo); hi = Ivl.add(hi, c.hi)
+      if others.hi > 0 then
+        if d == 1 then { lo = Ivl.add(lo, others.lo); hi = Ivl.add(hi, others.hi) }
+        else hi = Ivl.add(hi, Ivl.mul(others.hi, otherTail.getOrElse(Shape.top).prefixesAt(d - 1).hi))
+      Ivl(lo, if hi < lo then lo else hi)
+
   /** may this space contain a path starting with `items`? — `false` is a PROOF of absence */
   def mayHavePrefix(items: List[PathItem]): Boolean = items match
     case Nil => possiblyNonEmpty
@@ -197,8 +249,13 @@ final case class Shape(eps: Presence,
 
 object Shape:
   import Lower.LenBounds
-  val MaxDepth = 4
-  val MaxHeads = 12
+  /** THE budgets, read from the ONE analysis configuration ([[SpatialConfig]]) rather than spelled
+   *  out here — review.md 6 asks for a single value carrying every budget.  They stay `val`s because
+   *  the carrier's finiteness argument is about the whole domain, not about one query: a `Shape`
+   *  built under one depth cap must be comparable with one built under another, so the cap belongs to
+   *  the domain, not to a call.  A per-call cap would need `Shape` to carry its own budget. */
+  val MaxDepth: Int = SpatialConfig.default.shapeDepth
+  val MaxHeads: Int = SpatialConfig.default.shapeWidth
 
   val empty: Shape = Shape(Presence.No, SortedMap.empty, Ivl.zero, None)
   /** no information: ε may be there and any heads may be there */
@@ -284,7 +341,7 @@ object Shape:
     else
       val keep = live.take(MaxHeads); val spill = live.drop(MaxHeads)
       val base = if hiC == 0 then empty else ot.getOrElse(top)
-      val tail = spill.foldLeft(base)((a, kv) => union(a, weaken(kv._2)))
+      val tail = spill.foldLeft(base)((a, kv) => unionTransfer(a, weaken(kv._2)))
       val cnt = Ivl(Ivl.add(others.lo, spill.count((_, t) => t.definitelyNonEmpty).toLong),
                     Ivl.add(others.hi, spill.size.toLong))
       Shape(eps, SortedMap.from(keep), cnt,
@@ -303,6 +360,20 @@ object Shape:
    *  γ_may of the first and not of the second (`b`'s child for `a` has `eps = No`).
    *  `a.under(h)` already returns the right thing for an untracked `h` — `∅` when `a` is closed
    *  (so the arm is vacuous) and the weakened `otherTail` when it is open. */
+  /** THE TWO READINGS OF THE ORDER, side by side, in the one file that owns the carrier.  They are
+   *  NOT duplicates and neither may be deleted; what was wrong (review.md 6) was having them in two
+   *  files under one name.  [[leq]] is the MAY-ONLY order used by the `Fixpoint` Kleene chain (whose
+   *  iterates are deliberately may-only) and by `SpatialRecursion`'s may-only summaries; [[leqStrong]]
+   *  is the STRONG-γ order (`γ(a) ⊆ γ(b)`, must channels included) that `SpatialGamma.leq` /
+   *  `SpatialType.leq` publish.  They differ in exactly four places:
+   *
+   *  | channel        | [[leq]]  (γ_may)                          | [[leqStrong]]  (γ)                        |
+   *  |----------------|-------------------------------------------|-------------------------------------------|
+   *  | a = ∅          | `true` (∅ is in every γ_may)              | no short-circuit: `b` must ADMIT ∅        |
+   *  | ε              | `b.eps = No ⇒ a.eps = No`                 | `b.eps ∈ {May} ∨ b.eps = a.eps`           |
+   *  | others.lo      | ignored (no must claims)                  | `b.others.lo = 0` required                |
+   *  | otherTail      | via `b.under(h)` on both key sets         | `a`'s b-untracked heads against `b.ot`    |
+   */
   def leq(a: Shape, b: Shape): Boolean = leq(a, b, MaxDepth + 2)
   private def leq(a: Shape, b: Shape, d: Int): Boolean =
     if a.definitelyEmpty then true
@@ -318,13 +389,46 @@ object Shape:
       else (aLive ++ bLive).forall(h => leq(a.under(h), b.under(h), d - 1)) &&
         (a.others.hi == 0 || leq(a.otherTail.getOrElse(top), b.otherTail.getOrElse(top), d - 1))
 
-  /** THE LATTICE JOIN — a ⊑-upper bound of both operands: `γ(a) ⊆ γ(lub(a,b)) ⊇ γ(b)`.
+  /** the STRONG-γ order: `leqStrong(a, b)` ⇒ `γ(a) ⊆ γ(b)` with the must channels included.  Sound
+   *  and deliberately INCOMPLETE — it does not attempt the integer-partition reasoning a spill bucket
+   *  facing tracked classes would need; `SpatialLawCheck` measures that incompleteness against
+   *  `SpatialGamma.gammaLeqOn`, which decides containment exactly on a finite universe.  Moved here
+   *  verbatim from `SpatialGamma.leqShape`, which now forwards. */
+  def leqStrong(a: Shape, b: Shape): Boolean = leqStrong(a, b, 32)
+  private def leqStrong(a: Shape, b: Shape, d: Int): Boolean =
+    if d <= 0 then b.isTop
+    else if b.isTop then true
+    else
+      val epsOk = b.eps == Presence.May || b.eps == a.eps
+      val keys = a.heads.keySet ++ b.heads.keySet
+      val childOk = keys.forall(h => leqStrong(a.under(h), b.under(h), d - 1))
+      // heads untracked in b: a's own extra tracked heads, plus a's untracked ones
+      val hiOut = Ivl.add(a.heads.count((h, t) => !b.heads.contains(h) && t.possiblyNonEmpty).toLong, a.others.hi)
+      // …and a LOWER bound on the same quantity, so `b`'s must claim can be discharged instead of
+      // simply rejected.  Requiring `b.others.lo == 0` made the order NON-REFLEXIVE — `leqStrong(x, x)`
+      // was false for every `x` with a forced untracked head — which the decorated analysis' "the root
+      // is never weaker than `infer`" law needs (it failed on 24 of 400 corpus terms).  `a`'s own
+      // forced untracked heads survive only after discounting the keys `b` newly TRACKS (they leave the
+      // untracked set), the same discount `unionTransfer` and `meet` need.
+      val bOnly = b.heads.keySet.diff(a.heads.keySet).size.toLong
+      val loOut = Ivl.add(Ivl.relu(a.others.lo - bOnly),
+                          a.heads.count((h, t) => !b.heads.contains(h) && t.definitelyNonEmpty).toLong)
+      val cntOk = b.others.lo <= loOut && hiOut <= b.others.hi
+      val tailOk = b.otherTail match
+        case None => true
+        case Some(bt) =>
+          a.heads.forall((h, t) => b.heads.contains(h) || !t.possiblyNonEmpty || leqStrong(t, bt, d - 1)) &&
+            (a.others.hi == 0 || leqStrong(a.otherTail.getOrElse(top), bt, d - 1))
+      epsOk && childOk && cntOk && tailOk
+
+  /** THE LATTICE JOIN — a ⊑-upper bound of both ALTERNATIVES: `γ(a) ⊆ γ(join(a,b)) ⊇ γ(b)`.
    *
-   *  This is NOT [[union]].  `union` is the transfer for the set operation `A ∪ B`: it may keep `a`'s
-   *  MUST claims, because `A ∪ B ⊇ A` is a fact about the union, and it ADDS the untracked-head
-   *  counts, because both operands' heads appear in the result.  Neither is true of a value drawn
-   *  from ONE side, which is what a join has to admit.  Using `union` as a join is what made the
-   *  `Fixpoint` Kleene chain unsound (see `SpatialTyping.fixpoint`).
+   *  This is NOT [[unionTransfer]], and the names are what keep the two apart at the call site.
+   *  `unionTransfer` abstracts the set operation `A ∪ B`: it may keep `a`'s MUST claims, because
+   *  `A ∪ B ⊇ A` is a fact about the union, and it ADDS the untracked-head counts, because both
+   *  operands' heads appear in the result.  Neither is true of a value drawn from ONE side, which is
+   *  what a join has to admit.  Using the union transfer as a join is what made the `Fixpoint` Kleene
+   *  chain unsound (see `SpatialTyping.fixpoint`).
    *
    *  Channel by channel, for `V ∈ γ(a)`: (a) `May` unless the two presences already agree; (b) the
    *  result tracks `a.heads.keys ∪ b.heads.keys`, and `a.under(h)` is a sound abstraction of
@@ -332,6 +436,9 @@ object Shape:
    *  (c) `U_result(V) ⊆ U_a(V)`, so `max` of the two uppers bounds it and no lower bound survives
    *  the choice of side; (d) an untracked head of the result was untracked on whichever side `V`
    *  came from, so the summary must admit both. */
+  def joinAlternatives(a: Shape, b: Shape): Shape = lub(a, b, MaxDepth)
+  /** the old spelling — [[joinAlternatives]] says which of the two joins this is */
+  @deprecated("use Shape.joinAlternatives (the lattice lub) or Shape.unionTransfer (the A ∪ B transfer)", "consolidation")
   def lub(a: Shape, b: Shape): Shape = lub(a, b, MaxDepth)
   private def lub(a: Shape, b: Shape, d: Int): Shape =
     // NO `definitelyEmpty` short-circuit.  `∅` is NOT below a must-carrying shape: γ(∅) = {∅} and a
@@ -357,9 +464,80 @@ object Shape:
 
   /** the WIDENING for the `Fixpoint` Kleene chain: open every count channel and every head set, so
    *  the only remaining growth is the (finite) tracked key sets and the (3-valued) ε channel. */
-  def widenShape(s: Shape): Shape =
+  def widen(s: Shape): Shape =
     if s.definitelyEmpty then s
-    else Shape(s.eps, SortedMap.from(s.heads.view.mapValues(widenShape)), Ivl(s.others.lo, Ivl.INF), None)
+    else Shape(s.eps, SortedMap.from(s.heads.view.mapValues(widen)), Ivl(s.others.lo, Ivl.INF), None)
+  /** the old spelling of [[widen]] */
+  @deprecated("use Shape.widen", "consolidation")
+  def widenShape(s: Shape): Shape = widen(s)
+
+  // -----------------------------------------------------------------------------------------------
+  // THE MEET  (the glb — the operation the reduced product needs, review.md 5)
+  // -----------------------------------------------------------------------------------------------
+  /** THE MEET.  `meet(a, b) = Some(c)` with `γ(a) ∩ γ(b) ⊆ γ(c) ⊆ γ(a) ∩ γ(b)` up to the carrier's
+   *  representation limits; `None` PROVES `γ(a) ∩ γ(b) = ∅`, i.e. no concrete space is admitted by
+   *  both.  This is the operation a reduced product is built from, and the only sound way to combine
+   *  two independently-derived sound approximations of the SAME value: both channels' strongest claim
+   *  survives.
+   *
+   *  Channel by channel, for `V ∈ γ(a) ∩ γ(b)` and `K = a.heads.keys ∪ b.heads.keys` (the keys the
+   *  result tracks):
+   *
+   *    (a) ε: [[Presence.meet]] — `No` against `Must` is the contradiction.
+   *    (b) tracked head `h ∈ K`: `groups(V)(h)` is in both children's γ, so the child is their meet;
+   *        a `None` there means NO tail-set qualifies, hence no `V` at all.
+   *    (c) `U_result(V) = heads(V) ∖ K ⊆ U_a(V)`, so `min` of the two uppers bounds it.  The LOWER
+   *        bound may not be `max` of the two: a head `a` leaves untracked may be TRACKED by `b` and
+   *        therefore leave the result's untracked set, so each side's lower bound is discounted by the
+   *        number of live keys the OTHER side newly tracks (exactly the discount [[unionTransfer]]
+   *        needs, for the same reason).  `lo > hi` is a contradiction.
+   *    (d) an untracked head of the result is untracked on BOTH sides, so its tail-set is in both
+   *        summaries: the summaries meet.  A contradictory summary means there can be no untracked
+   *        head at all, which forces `others = [0,0]` — and a contradiction if `others.lo > 0`.
+   *
+   *  `mk` then re-establishes the carrier invariants (may-only `otherTail`, no definitely-empty
+   *  child, the depth/width caps), each of which only loosens — so the result is still an upper bound
+   *  of the intersection, which is the direction soundness needs. */
+  def meet(a: Shape, b: Shape): Option[Shape] = meetGo(a, b, MaxDepth)
+  private def meetGo(a: Shape, b: Shape, d: Int): Option[Shape] =
+    if a.isTop then Some(capDepth(b, d))
+    else if b.isTop then Some(capDepth(a, d))
+    else a.eps.meet(b.eps) match
+      case None => None
+      case Some(e) =>
+        val aLive = a.heads.iterator.filter((_, t) => t.possiblyNonEmpty).map(_._1).toSet
+        val bLive = b.heads.iterator.filter((_, t) => t.possiblyNonEmpty).map(_._1).toSet
+        val oLo = Ivl.relu(a.others.lo - (bLive diff aLive).size.toLong) max
+                  Ivl.relu(b.others.lo - (aLive diff bLive).size.toLong)
+        val oHi = a.others.hi min b.others.hi
+        if oLo > oHi then None
+        else if d <= 0 then
+          // out of budget: keep ε and the meet of the two head counts
+          val hc = Ivl(a.headCount.lo max b.headCount.lo, a.headCount.hi min b.headCount.hi)
+          if hc.lo > hc.hi then None
+          else if hc.hi == 0 then Some(Shape(e, SortedMap.empty, Ivl.zero, None))
+          else Some(Shape(e, SortedMap.empty, hc, None))
+        else
+          val keys = a.heads.keySet ++ b.heads.keySet
+          val kids = Vector.newBuilder[(PathItem, Shape)]
+          var dead = false
+          for h <- keys if !dead do
+            meetGo(a.under(h), b.under(h), d - 1) match
+              case None => dead = true
+              case Some(c) => kids += (h -> c)
+          if dead then None
+          else
+            val (others, ot) =
+              if oHi == 0 then (Ivl.zero, None)
+              else
+                val at = if a.headsClosed then empty else a.otherTail.getOrElse(top)
+                val bt = if b.headsClosed then empty else b.otherTail.getOrElse(top)
+                meetGo(at, bt, d - 1) match
+                  case Some(t) if t.possiblyNonEmpty => (Ivl(oLo, oHi), if t.isTop then None else Some(t))
+                  // no tail-set can inhabit an untracked head: there are none
+                  case _ => if oLo > 0 then (Ivl(1, 0), None) else (Ivl.zero, None)
+            if others.lo > others.hi then None
+            else Some(mk(e, kids.result(), others, ot))
 
   // -----------------------------------------------------------------------------------------------
   // abstraction of a concrete value
@@ -389,6 +567,11 @@ object Shape:
   // -----------------------------------------------------------------------------------------------
   // the transfers
   // -----------------------------------------------------------------------------------------------
+  /** THE UNION TRANSFER — the abstraction of the set operation `A ∪ B`.  NOT a lattice join: see
+   *  [[joinAlternatives]] for that, and the note there for why confusing the two was unsound. */
+  def unionTransfer(a: Shape, b: Shape): Shape = union(a, b, MaxDepth)
+  /** the old spelling — [[unionTransfer]] says which of the two joins this is */
+  @deprecated("use Shape.unionTransfer (the A ∪ B transfer) or Shape.joinAlternatives (the lattice lub)", "consolidation")
   def union(a: Shape, b: Shape): Shape = union(a, b, MaxDepth)
   private def union(a: Shape, b: Shape, d: Int): Shape =
     if a.definitelyEmpty then capDepth(b, d)
@@ -478,7 +661,7 @@ object Shape:
       val inner = if k.lo == k.hi then wrapUnknown(LenBounds(k.lo - 1, k.hi - 1), s) else top
       Shape(Presence.No, SortedMap.empty, Ivl(if s.definitelyNonEmpty then 1 else 0, 1),
             if inner.isTop then None else Some(weaken(capDepth(inner, MaxDepth - 1))))
-    else union(weaken(capDepth(s, MaxDepth)), Shape(Presence.No, SortedMap.empty, Ivl(0, 1), None))
+    else unionTransfer(weaken(capDepth(s, MaxDepth)), Shape(Presence.No, SortedMap.empty, Ivl(0, 1), None))
 
   /** drop a prefix of UNKNOWN content but bounded length.  `Unwrap(s, p)` with `|p| = j` keeps a
    *  SUBSET of the level-`j` tail-sets, and the union of all level-`j` tail-sets is [[tailsUnion]]
@@ -492,7 +675,7 @@ object Shape:
       var cur = s
       var j = 0L
       while j <= k.hi do
-        if j >= k.lo then acc = union(acc, cur)
+        if j >= k.lo then acc = unionTransfer(acc, cur)
         cur = tailsUnion(cur)
         j += 1
       weaken(acc)
@@ -514,7 +697,7 @@ object Shape:
   def tailsUnion(s: Shape): Shape =
     val parts = s.heads.values.toVector ++
       (if s.others.hi > 0 then Vector(openCounts(s.otherTail.getOrElse(top))) else Vector.empty)
-    if parts.isEmpty then empty else parts.reduce((x, y) => union(x, y))
+    if parts.isEmpty then empty else parts.reduce((x, y) => unionTransfer(x, y))
 
   /** the intersection of every head's tail-set (∅ when there is no head).  UNSOUND to intersect the
    *  children of heads that are only MAY-present: an absent head does not participate, so the true

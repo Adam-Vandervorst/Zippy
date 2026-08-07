@@ -1,7 +1,20 @@
 package morkl
 
-/** THE SEMANTIC LAYER OF THE SPATIAL DOMAIN — γ, α, the order that IS γ-containment, the lattice
- *  join, and the OPERATOR TABLE that drives the simulation squares.
+/** THE SEMANTIC LAYER OF THE SPATIAL DOMAIN — γ, α, the order that IS γ-containment, and the lattice
+ *  operations of the HISTOGRAM component.
+ *
+ *  ==WHO OWNS WHAT (review.md 6)==
+ *  This file is the OWNER of the length-histogram component's laws — [[gammaSpace]], [[leqSpace]],
+ *  [[lubSpace]], [[meetSpace]] — because `SpaceType`'s own file (SpatialTypes.scala) carries the
+ *  count TRANSFERS and its normalisation, and there was nowhere else the four semantic operations
+ *  could live without a third spelling.  Everything else here DELEGATES and states nothing of its
+ *  own:  the shape's γ/order/join/meet/widening belong to [[Shape]], and the product's to
+ *  [[SpatialType]].  The `gammaShape`/`leqShape`/`lubShape` entry points below are one-line
+ *  forwarders kept for their call sites, not second implementations.
+ *
+ *  The operator table, the finite universes and the grounded fixtures now live in
+ *  [[SpatialGamma.TestOnly]] and are re-exported for source compatibility; nothing in the production
+ *  analysis path may read them (review.md 6 — they were only ever consumed by tests).
  *
  *  review.md 6 asks for the law family the corpus is missing:
  *
@@ -65,33 +78,55 @@ object SpatialGamma:
       for (_, n) <- residual do tot = Ivl.add(tot, n)
       lensOk && t.rest.lo <= tot && tot <= t.rest.hi
 
-  /** γ for the SHAPE component, STRONG reading (Must is a real must). Total: the recursion is on
-   *  the finite `Shape` tree; the guard is belt-and-braces against a cyclic hand-built shape. */
-  def gammaShape(sh: Shape, v: SpaceValue): Boolean = gammaShape(sh, v, 64)
-  private def gammaShape(sh: Shape, v: SpaceValue, d: Int): Boolean =
-    if d <= 0 then true
+  /** THE HISTOGRAM MEET.  `Some(c)` with `γ(a) ∩ γ(b) ⊆ γ(c)`; `None` PROVES the intersection empty.
+   *  The two operands are sound approximations of the SAME concrete space, so per length class both
+   *  brackets hold and the tighter one survives.  Two subtleties, both about the single spill bucket:
+   *
+   *    - a length one side TRACKS and the other only covers with its spill becomes a tracked class of
+   *      the result, whose interval is `[max lo, min hi]` — `at(l)` already answers `[0, rest.hi]` for
+   *      the spill side, which is the sound reading;
+   *    - the result's spill counts the paths at lengths NEITHER side tracks.  Its upper is the min of
+   *      the two spill uppers.  Its LOWER cannot be `max` of the two spill lowers: some of the paths
+   *      a side's spill was counting may now sit in a class the OTHER side contributed, so a side's
+   *      lower bound only survives when the result tracks nothing new inside that side's window. */
+  def meetSpace(a: SpaceType, b: SpaceType): Option[SpaceType] =
+    val keys = (a.byLen.keySet ++ b.byLen.keySet).toVector.sorted
+    var bad = false
+    val cls = keys.map { l =>
+      val x = a.at(l); val y = b.at(l)
+      val i = Ivl(x.lo max y.lo, x.hi min y.hi)
+      if i.lo > i.hi then bad = true
+      l -> i
+    }
+    if bad then None
     else
-      val hasEps = v.paths.contains(PathValue(Nil))
-      val epsOk = sh.eps match
-        case Presence.No => !hasEps
-        case Presence.Must => hasEps
-        case Presence.May => true
-      if !epsOk then false
+      def newlyTracked(t: SpaceType): Boolean =
+        t.rest.hi > 0 && !t.restLens.isEmpty &&
+          keys.exists(l => !t.byLen.contains(l) && t.restLens.lo <= l && l <= t.restLens.hi)
+      def resid(t: SpaceType): Ivl =
+        if t.rest.hi == 0 then Ivl.zero
+        else Ivl(if newlyTracked(t) then 0L else t.rest.lo, t.rest.hi)
+      val (ra, rb) = (resid(a), resid(b))
+      val rest = Ivl(ra.lo max rb.lo, ra.hi min rb.hi)
+      if rest.lo > rest.hi then None
       else
-        val groups: Map[PathItem, SpaceValue] =
-          v.paths.iterator.collect { case PathValue(h :: t) => (h, PathValue(t)) }
-            .toVector.groupMap(_._1)(_._2).view.mapValues(ts => SpaceValue(ts.toSet)).toMap
-        val tracked = groups.filter((h, _) => sh.heads.contains(h))
-        val untracked = groups.filter((h, _) => !sh.heads.contains(h))
-        val n = untracked.size.toLong
-        sh.others.lo <= n && n <= sh.others.hi &&
-          tracked.forall((h, tv) => gammaShape(sh.heads(h), tv, d - 1)) &&
-          // a tracked head that is concretely ABSENT still has to be admitted by its child: this is
-          // where `Shape.of({a})`'s "the path a is present" claim is checked
-          sh.heads.forall((h, c) => tracked.contains(h) || gammaShape(c, SpaceValue(Set.empty), d - 1)) &&
-          (sh.otherTail match
-            case Some(ot) => untracked.forall((_, tv) => gammaShape(ot, tv, d - 1))
-            case None => true)
+        val win =
+          if rest.hi == 0 then LenBounds.empty
+          else LenBounds(a.restLens.lo max b.restLens.lo, a.restLens.hi min b.restLens.hi)
+        if rest.lo >= 1 && win.isEmpty then None
+        else
+          val live = cls.filter(_._2.hi > 0)
+          // a class the meet zeroes must not be re-admitted by the spill window, so a window that
+          // spans it would be a widening: `SpatialTypes.widen` re-establishes disjointness by folding
+          // such a class INTO the bucket, which only ever loosens (sound for the ⊇ direction).
+          Some(SpatialTypes.widen(SpaceType(SortedMap.from(live),
+                                            if win.isEmpty then Ivl.zero else rest,
+                                            if win.isEmpty then LenBounds.empty else win)))
+
+  /** γ for the SHAPE component, STRONG reading (Must is a real must) — the ONE implementation lives
+   *  in the domain that owns the carrier ([[Shape.contains]]); this is a forwarder so the law
+   *  statements in this file read as one piece. */
+  def gammaShape(sh: Shape, v: SpaceValue): Boolean = Shape.contains(sh, v)
 
   /** drop EVERY must claim from a shape, at every depth: `Must ↦ May`, `others.lo ↦ 0`.  The
    *  code's own `Shape.weaken` stops at `MaxDepth` and keeps `definitelyEmpty` nodes intact; this
@@ -106,9 +141,12 @@ object SpatialGamma:
   /** γ for the shape, WEAK (may-only) reading. */
   def gammaShapeMay(sh: Shape, v: SpaceValue): Boolean = gammaShape(weakenAll(sh), v)
 
-  /** γ for the reduced product — the predicate review.md 6 asks for. */
+  /** γ for the reduced product — the predicate review.md 6 asks for.  The product's own γ
+   *  ([[SpatialType.accepts]]) additionally checks the two REDUCED PROJECTIONS, so it is the
+   *  stronger predicate and the one the gates use; this is the componentwise conjunction the law
+   *  statements in this file are written against. */
   def gamma(t: SpatialType): SpaceValue => Boolean =
-    v => gammaShape(t.shape, v) && gammaSpace(t.lens, v)
+    v => !t.uninhabited && gammaShape(t.shape, v) && gammaSpace(t.lens, v)
   /** the may-only variant (shape Musts demoted; the histogram is unchanged) */
   def gammaMay(t: SpatialType): SpaceValue => Boolean =
     v => gammaShapeMay(t.shape, v) && gammaSpace(t.lens, v)
@@ -140,8 +178,7 @@ object SpatialGamma:
    *  concrete `Fixpoint` accumulates, so the usage is coherent; but the name in
    *  docs/design_spatial_lattice.md §2 ("join/meet are the lub/glb") does not describe the code's
    *  `join`.  See `proofs/spatial-semantic/gsem_join_not_lub.smt2`. */
-  def lub(a: SpatialType, b: SpatialType): SpatialType =
-    SpatialType(lubShape(a.shape, b.shape), lubSpace(a.lens, b.lens))
+  def lub(a: SpatialType, b: SpatialType): SpatialType = SpatialType.join(a, b)
 
   /** the shape lub.  There is exactly ONE implementation and it lives in the domain that owns the
    *  carrier ([[Shape.lub]]) — the `Fixpoint` transfer needs the same join this file's laws check, and
@@ -153,7 +190,7 @@ object SpatialGamma:
    *  (`proofs/spatial-semantic/gsem_l2_union_sound.smt2` is refuted without it: an untracked head of
    *  one operand need not be present in the other, so a Must in the summary would be attributed to a
    *  head whose tail-set is empty on that side). */
-  def lubShape(a: Shape, b: Shape): Shape = Shape.lub(a, b)
+  def lubShape(a: Shape, b: Shape): Shape = Shape.joinAlternatives(a, b)
 
   /** the histogram lub.  Only the classes tracked on BOTH sides keep exact per-class information
    *  (elsewhere one side's count is hidden inside a spill aggregate); everything else is folded
@@ -210,8 +247,7 @@ object SpatialGamma:
    *  witness.)  `within` is used only as the `Fixpoint` post-fixpoint test, where the lower bounds
    *  are re-supplied from `init` — so what it licenses is the upper half, exactly as
    *  docs/design_spatial_lattice.md §4 says. */
-  def leq(a: SpatialType, b: SpatialType): Boolean =
-    leqShape(a.shape, b.shape) && leqSpace(a.lens, b.lens)
+  def leq(a: SpatialType, b: SpatialType): Boolean = SpatialType.leq(a, b)
 
   def leqSpace(a: SpaceType, b: SpaceType): Boolean =
     val keys = (a.byLen.keySet ++ b.byLen.keySet).toVector
@@ -222,33 +258,42 @@ object SpatialGamma:
         (b.rest.hi > 0 && !b.restLens.isEmpty && b.restLens.lo <= a.restLens.lo && a.restLens.hi <= b.restLens.hi)
     // the aggregate at lengths b does NOT track
     var hiOut = if a.rest.hi > 0 then a.rest.hi else 0L
-    var loOut = 0L
+    // `a`'s own spill counts paths at lengths `a` does not track; they all land in `b`'s spill too
+    // UNLESS `b` tracks one of the lengths `a`'s window covers, in which case some of them may have
+    // moved into a tracked class of `b` and the lower bound does not survive.  Without this term the
+    // order was not even REFLEXIVE for a spill-carrying type (`leqSpace(x, x)` was false whenever
+    // `x.rest.lo >= 1`), which the decorated analysis' "root is never weaker than `infer`" law needs.
+    var loOut =
+      if a.rest.lo == 0 || a.restLens.isEmpty then 0L
+      else if b.byLen.keysIterator.exists(l => a.restLens.lo <= l && l <= a.restLens.hi) then 0L
+      else a.rest.lo
     for (l, c) <- a.byLen if !b.byLen.contains(l) do
       hiOut = Ivl.add(hiOut, c.hi); loOut = Ivl.add(loOut, c.lo)
     val aggOk = hiOut <= b.rest.hi && b.rest.lo <= loOut
     pointwise && windowOk && aggOk
 
-  def leqShape(a: Shape, b: Shape): Boolean = leqShape(a, b, 32)
-  private def leqShape(a: Shape, b: Shape, d: Int): Boolean =
-    if d <= 0 then b.isTop
-    else if b.isTop then true
-    else
-      val epsOk = b.eps == Presence.May || b.eps == a.eps
-      val keys = a.heads.keySet ++ b.heads.keySet
-      val childOk = keys.forall(h => leqShape(a.under(h), b.under(h), d - 1))
-      // heads untracked in b: a's own extra tracked heads, plus a's untracked ones
-      val hiOut = Ivl.add(a.heads.count((h, t) => !b.heads.contains(h) && t.possiblyNonEmpty).toLong, a.others.hi)
-      val cntOk = b.others.lo == 0 && hiOut <= b.others.hi
-      val tailOk = b.otherTail match
-        case None => true
-        case Some(bt) =>
-          a.heads.forall((h, t) => b.heads.contains(h) || !t.possiblyNonEmpty || leqShape(t, bt, d - 1)) &&
-            (a.others.hi == 0 || leqShape(a.otherTail.getOrElse(Shape.top), bt, d - 1))
-      epsOk && childOk && cntOk && tailOk
+  /** the shape half of [[leq]] — the STRONG-γ reading.  One implementation, in the domain that owns
+   *  the carrier: [[Shape.leqStrong]] (its may-only sibling is `Shape.leq`, and the table on those two
+   *  states the four channels where the readings differ). */
+  def leqShape(a: Shape, b: Shape): Boolean = Shape.leqStrong(a, b)
 
   // ==============================================================================================
-  // 5. EXACT γ-CONTAINMENT ON A FINITE UNIVERSE
+  // 5. TEST SUPPORT — NOT part of the analysis (review.md 6)
   // ==============================================================================================
+
+  /** THE FINITE UNIVERSES, THE OPERATOR TABLE, the grounded fixtures and the callee routine.  Only
+   *  tests consume these: they are the data the differential matrices and the simulation squares
+   *  iterate, and the exhaustive γ-containment decision procedure those matrices measure the order's
+   *  incompleteness against.  They live inside an explicitly test-only object so that reading
+   *  `SpatialGamma`'s API cannot mistake a generator for an analysis, and so a production dependency
+   *  on them is visible as `SpatialGamma.TestOnly.…` at the call site.
+   *
+   *  MIGRATION: the `export` at the bottom keeps the old unqualified spellings (`SpatialGamma.ops`,
+   *  `SpatialGamma.universe`, `import SpatialGamma.*` in `SpatialLawCheck`) compiling.  Once
+   *  `SpatialLawCheck` / `SpatialSoundnessHunt` name the object explicitly, delete the export and this
+   *  object moves wholesale into test support — nothing in `src/main` refers to it.  (Doing the move
+   *  now would break two test files this change does not own.) */
+  object TestOnly {
 
   /** every path over `items` of at most `maxLen` items */
   def allPaths(items: Vector[PathItem], maxLen: Int): Vector[PathValue] =
@@ -274,10 +319,7 @@ object SpatialGamma:
     val ga = gamma(a); val gb = gamma(b)
     u.find(v => ga(v) && !gb(v))
 
-  // ==============================================================================================
-  // 6. THE OPERATOR TABLE — one list driving the checks AND the report
-  // ==============================================================================================
-
+  // ---- the operator table --------------------------------------------------------------------
   /** binder names used by the binder-carrying operators.  Distinct from the operand names so a
    *  generated body can mention both. */
   val bindSym: PathRef = PathRef("h$")
@@ -340,4 +382,8 @@ object SpatialGamma:
     (p: PathValue) => SpaceValue(p.items.indices.map(i => PathValue(p.items.take(i + 1))).toSet)
   val groundedSS: SpaceValue => SpaceValue =
     (s: SpaceValue) => SpaceValue(s.paths.map(p => PathValue(p.items.reverse)))
+  }
+  /** source compatibility only — see the note on [[TestOnly]]; delete once the two test files that
+   *  `import SpatialGamma.*` name the object explicitly. */
+  export TestOnly.*
 end SpatialGamma
