@@ -19,10 +19,19 @@ import scala.language.implicitConversions
  *  5  the provenance is on the node and names the evidence      (and `assumedLaws` is separable)
  *  6  the budget is honoured and the ROOT is never starved
  *  7  observations of one position merge into one record        (bounded memory under a 16-level nest)
- *  8  the ORDER of the laws does not change the answer
+ *  8  the ORDER of the laws does not change the answer          (on a BASELINE-SENSITIVE law set)
  *  9  meeting a TRUE law never loses soundness                  (differential against `eval`)
  *  10 the library laws' PREMISES are checked, not assumed       (each declines where it must)
+ *  12 an UNDISCHARGED law licenses NOTHING                      (review.md 9, the reviewer's own attack)
  *  }}}
+ *
+ *  ==8 AND 12 ARE THE TWO review.md 9 ADDED, AND BOTH USED TO BE VACUOUS==
+ *  Gate 8 previously permuted laws whose `bound` ignores `site.inferred`, so every permutation met the
+ *  same bounds and the gate could not fail however the engine folded them.  It now permutes a law set in
+ *  which one law's bound is ENABLED by another's — the shape `SpatialLaws.finiteSolutionCount` has — which
+ *  is the case a left fold gets wrong.  Gate 12 runs the exact attack review.md 9 describes: an
+ *  always-applicable ASSUMED law claiming a live `Mention` is empty, through `optimizeGuarded` and through
+ *  `SpatialCheck`, with `eval` as ground truth on the residual.
  *
  *  ==NO EVALUATION INSIDE AN ANALYSIS==
  *  `eval` appears here only as GROUND TRUTH, outside every analysis, and gate 9 is the one place a law
@@ -52,6 +61,22 @@ class SpatialLawsCheck extends FunSuite:
   /** a law that applies at exactly ONE occurrence */
   def onlyAt(name: String, id: NodeId, t: SpatialType, e: LawEvidence = ev): SpatialBoundLaw =
     SpatialBoundLaw(name, _.id == id, _ => Some(t), e)
+
+  /** A BASELINE-SENSITIVE LAW — the shape that makes order independence a real property and not a
+   *  remark about commutativity.  Its `bound` READS `site.inferred` and declines unless the ∀-path length
+   *  is PINNED, exactly as `SpatialLaws.finiteSolutionCount` does ("with no pinned length there is no
+   *  class to put the count in").  Under a left fold over the law vector, whether it contributes depends
+   *  on whether a length-pinning law happens to precede it. */
+  def whenPinned(name: String, cap: Long, e: LawEvidence = ev): SpatialBoundLaw =
+    SpatialBoundLaw(name, _ => true,
+      site =>
+        val ln = site.inferred.len
+        if ln.isEmpty || ln.lo != ln.hi then None
+        else Some(SpatialType(Shape.top, SpaceType.closed(ln.lo -> Ivl(0, cap)))),
+      e)
+  /** …and the law that PINS the length, i.e. the one that ENABLES the above */
+  def pinLen(name: String, l: Long): SpatialBoundLaw =
+    always(name, SpatialType(Shape.top, SpaceType.bounded(LenBounds(l, l), Ivl.INF)))
 
   /** the term pool: every operator shape the recorder visits, plus the binder shapes that produce
    *  several observations of one position */
@@ -125,6 +150,9 @@ class SpatialLawsCheck extends FunSuite:
       always("at-most-1", SpatialType(Shape.top, SpaceType.bounded(LenBounds.unknown, 1))),
       always("under-k", SpatialType(Shape.wrap(List("k"), Shape.top), SpaceType.unknown)),
       always("exactly-two-a", SpatialType.of(spv(pv("a"), pv("a", "b")))),
+      // …and the most adversarial bound of all, on UNDISCHARGED evidence: the production policy must
+      // refuse it outright, so it can neither widen nor narrow (review.md 9)
+      always("assumed-empty", SpatialType.empty, LawEvidence.Assumed("an axiom nobody discharged")),
     )
     val rng = new java.util.Random(20260807L)
     val values = randomValues(rng, 4096)
@@ -160,9 +188,20 @@ class SpatialLawsCheck extends FunSuite:
             f"; $nodeTightened tightening records, $strictlyTighter roots strictly changed; the " +
             f"(sound-but-incomplete) order confirmed `refined ⊑ bare` on $leqHeld of ${pool.size * laws.size}")
     // the sweep must exercise every outcome, or it is not testing the channel
-    for o <- Vector(LawOutcome.Tightened, LawOutcome.Unchanged, LawOutcome.Contradicted) do
+    for o <- Vector(LawOutcome.Tightened, LawOutcome.Unchanged, LawOutcome.Contradicted,
+                    LawOutcome.Refused) do
       assert(outcomes(o) > 0, s"the adversarial pool never produced $o — gate 2 would be vacuous")
     assert(strictlyTighter > 0, "the adversarial pool must actually tighten something")
+    // the ASSUMED law never moved anything, at any occurrence of any term
+    val refusals = pool.map((n, t) =>
+      SpatialAnalysis.of(t, env, SpatialConfig.default.withLaws(laws.last)))
+    for (a, (n, t)) <- refusals.zip(pool) do
+      assertEquals(a.root, SpatialAnalysis.of(t, env, SpatialConfig.default).root,
+                   s"$n: an UNDISCHARGED law moved the answer")
+      assert(a.lawApplications.forall(_.outcome == LawOutcome.Refused), s"$n: ${a.lawApplications}")
+      assert(a.assumedLaws.isEmpty, s"$n: ${a.assumedLaws}")
+    println(s"[2] the ASSUMED ∅ bound was REFUSED at all ${refusals.map(_.lawApplications.size).sum} " +
+            s"applicable occurrences of ${pool.size} terms and moved no root")
   }
 
   // ================================================================================================
@@ -228,6 +267,7 @@ class SpatialLawsCheck extends FunSuite:
     val proved = onlyAt("proved", rootId, tight, LawEvidence.SmtProved("a SizeZ3 query"))
     val assumed = onlyAt("assumed", rootId, tight, LawEvidence.Assumed("the caller asserts it"))
     val checked = onlyAt("checked", rootId, tight, LawEvidence.ExecutableChecked("512 cases"))
+    val bareRoot = SpatialAnalysis.of(t, env2, SpatialConfig.default).root
     for (law, tag, discharged) <- Vector((proved, "SMT-proved", true), (assumed, "ASSUMED", false),
                                          (checked, "executable-checked", true)) do
       val a = SpatialAnalysis.of(t, env2, SpatialConfig.default.withLaws(law))
@@ -237,21 +277,39 @@ class SpatialLawsCheck extends FunSuite:
       assertEquals(root.head.evidence.tag, tag)
       assertEquals(root.head.evidence.discharged, discharged)
       assertEquals(root.head.at, NodeId(Vector.empty))
-      assertEquals(root.head.outcome, LawOutcome.Tightened,
-                   s"${law.name}: this fixture must really tighten, or the provenance gate is vacuous")
-      // before/after are BOTH kept, so a consumer can see the delta and not just the answer
-      assert(root.head.before != root.head.after, root.head.show)
-      assertEquals(a.assumedLaws, if discharged then Vector.empty else Vector(law.name))
-      assertEquals(a.notes.exists(_.contains("rests on ASSUMED law")), !discharged,
-                   s"${law.name}: the note must appear exactly when the evidence is undischarged")
-      assert(a.notes.exists(n => n.contains(s"law ${law.name} tightened") && n.contains(law.evidence.tag)),
-             s"${law.name}: the analysis must report the law and its evidence: ${a.notes}")
-      println(s"    [5] ${root.head.show.take(120)}")
+      // ---- THE EVIDENCE POLICY, ENFORCED (review.md 9) ---------------------------------------------
+      // The three fixtures contribute the SAME bound and differ only in their justification, so this is
+      // the policy and nothing else: the discharged two tighten, the ASSUMED one is REFUSED and the
+      // answer stays the transfers'.
+      if discharged then
+        assertEquals(root.head.outcome, LawOutcome.Tightened,
+                     s"${law.name}: a DISCHARGED bound must license the narrowing")
+        assert(root.head.before != root.head.after, root.head.show)
+        assert(a.root != bareRoot, s"${law.name}: the fixture must really move the root")
+        assert(a.notes.exists(n => n.contains(s"law ${law.name} tightened") &&
+                                   n.contains(law.evidence.tag)),
+               s"${law.name}: the analysis must report the law and its evidence: ${a.notes}")
+      else
+        assertEquals(root.head.outcome, LawOutcome.Refused,
+                     s"${law.name}: an UNDISCHARGED bound must be refused, not met")
+        assertEquals(root.head.before, root.head.after,
+                     s"${law.name}: a refused bound moved the recorded type")
+        assertEquals(a.root, bareRoot, s"${law.name}: a refused bound moved the ROOT")
+        // …and the report says what a discharged proof obligation would have bought, so the cost of the
+        // missing proof is visible rather than silent
+        assert(root.head.why.contains("REFUSED") && root.head.why.contains("would have given"),
+               s"${law.name}: ${root.head.why}")
+      // nothing rests on an undischarged axiom, under any of the three
+      assertEquals(a.assumedLaws, Vector.empty,
+                   s"${law.name}: no answer may rest on an undischarged axiom under the production policy")
+      assert(!a.notes.exists(_.contains("rests on ASSUMED law")), a.notes.mkString("; "))
+      println(s"    [5] ${root.head.show.take(140)}")
     // an UNCHANGED assumed law is NOT reported as assumed: nothing rests on it
     val weak = always("assumed-weak", SpatialType.top, LawEvidence.Assumed("nothing"))
     val aw = SpatialAnalysis.of(t, env2, SpatialConfig.default.withLaws(weak))
     assert(aw.assumedLaws.isEmpty, "an assumed law that changed nothing is not being rested on")
-    println("[5] `assumedLaws` lists an undischarged law only where it actually tightened an answer")
+    println("[5] the SAME bound on three justifications: the two DISCHARGED ones tighten, the ASSUMED " +
+            "one is REFUSED — `assumedLaws` is empty by construction under the production policy")
 
     // ---- A LAW AT A CHILD CHANGES THE PARENT'S ANSWER -----------------------------------------
     // this is the property that makes the channel worth having: the recorder hands the REFINED shape
@@ -317,26 +375,65 @@ class SpatialLawsCheck extends FunSuite:
   // ================================================================================================
   // 8.  ORDER INDEPENDENCE
   // ================================================================================================
-  test("8. the ORDER of the laws does not change the answer") {
+  test("8. the ORDER of the laws does not change the answer — on a BASELINE-SENSITIVE law set") {
+    // ---- (a) THE FIXTURE IS NON-VACUOUS: one law is ENABLED by another --------------------------
+    // `cnt` reads `site.inferred` and declines unless the ∀-path length is pinned; `pin` pins it.  Under
+    // a left fold, `[pin, cnt]` produces a count bound and `[cnt, pin]` does not — which is precisely why
+    // "meet is commutative" was never the order-independence argument (review.md 9).
+    val M3 = SpaceMention("m3")
+    val env3 = SpatialTyping.Env(spaces =
+      Map(M3 -> SpatialType(Shape.top, SpaceType.bounded(LenBounds(1, 2), 4))))
+    val t3 = Space.Mention(M3)
+    val pin = pinLen("pin-len-2", 2L)
+    val cnt = whenPinned("at-most-1-when-pinned", 1L)
+    val bare3 = SpatialAnalysis.of(t3, env3, SpatialConfig.default)
+    val alone = SpatialAnalysis.of(t3, env3, SpatialConfig.default.withLaws(cnt))
+    assertEquals(alone.lawsAt(NodeId(Vector.empty)).map(_.outcome), Vector(LawOutcome.NoBound),
+                 s"the fixture is vacuous unless `cnt` DECLINES on the transfers' own answer: " +
+                   s"${alone.lawsAt(NodeId(Vector.empty)).map(_.show)}")
+    assertEquals(alone.root, bare3.root, "…and therefore changes nothing on its own")
+    val ab = SpatialAnalysis.of(t3, env3, SpatialConfig.default.withLaws(pin, cnt))
+    val ba = SpatialAnalysis.of(t3, env3, SpatialConfig.default.withLaws(cnt, pin))
+    val abRoot = ab.lawsAt(NodeId(Vector.empty))
+    assert(abRoot.exists(a => a.law == cnt.name && a.outcome == LawOutcome.Tightened),
+           s"the SATURATION must let the enabled law fire in a later round: ${abRoot.map(_.show)}")
+    assertEquals(ab.root, ba.root,
+                 s"permuting the law set changed the ANSWER: ${ab.root.show} vs ${ba.root.show}")
+    assertEquals(ab.lawsAt(NodeId(Vector.empty)).toSet, ba.lawsAt(NodeId(Vector.empty)).toSet,
+                 "…and it must not change the audit trail either")
+    assert(ab.root.size.hi <= 1L, s"the enabled bound must really bite: ${ab.root.show}")
+    println(s"[8a] `${cnt.name}` alone: NoBound.  With `${pin.name}`, in BOTH orders: " +
+            s"${ab.root.size.hi} path(s) max, identical records — the saturation reaches the same " +
+            "fixpoint from either permutation")
+
+    // ---- (b) EVERY permutation of a three-law set, one of them baseline-sensitive, over the pool ----
     val a1 = always("len-2-at-most-4", SpatialType(Shape.top, SpaceType.closed(2L -> Ivl(0, 4))))
     val a2 = always("at-least-1", SpatialType(Shape.top, SpaceType.bounded(LenBounds(1, 3), 9)))
-    val a3 = always("under-a", SpatialType(Shape.wrap(List("a"), Shape.top), SpaceType.unknown))
+    val a3 = whenPinned("at-most-3-when-pinned", 3L)
     val rng = new java.util.Random(4242L)
     val values = randomValues(rng, 512)
     var pairs = 0
     var equal = 0
-    for (name, t) <- pool; perm <- Vector(Vector(a1, a2, a3), Vector(a3, a2, a1), Vector(a2, a1, a3)) do
+    var recordsEqual = 0
+    val perms = Vector(a1, a2, a3).permutations.toVector
+    assertEquals(perms.size, 6)
+    for (name, t) <- pool; perm <- perms do
       val ref = SpatialAnalysis.of(t, env, SpatialConfig.default.withLaws(a1, a2, a3))
       val alt = SpatialAnalysis.of(t, env, SpatialConfig.default.withLaws(perm*))
-      // the γ-level claim, which is the one the lattice guarantees
+      // the γ-level claim…
       for v <- values do
         assertEquals(SpatialTyping.accepts(v, alt.root), SpatialTyping.accepts(v, ref.root),
                      s"$name: reordering the laws changed γ on ${v.pretty}")
+      // …and the REPRESENTATION, which is what a consumer downstream actually compares
+      assertEquals(alt.root, ref.root, s"$name: reordering the laws changed the representation")
       pairs += 1
       if alt.root == ref.root then equal += 1
-    println(s"[8] $pairs orderings x ${values.size} values: γ identical throughout; the REPRESENTATION " +
-            s"was identical on $equal of $pairs")
-    assertEquals(equal, pairs, "meet is commutative here, so the representation should match too")
+      if alt.lawApplications.toSet == ref.lawApplications.toSet then recordsEqual += 1
+    println(s"[8b] $pairs orderings (all 6 permutations x ${pool.size} terms) x ${values.size} values: " +
+            s"γ identical throughout; the REPRESENTATION identical on $equal of $pairs; the AUDIT TRAIL " +
+            s"identical on $recordsEqual of $pairs")
+    assertEquals(equal, pairs, "the saturation must be a function of the law SET")
+    assertEquals(recordsEqual, pairs, "…and so must its audit trail")
   }
 
   // ================================================================================================
@@ -498,5 +595,85 @@ class SpatialLawsCheck extends FunSuite:
     println(s"[11] one law: facts gained ${gained.mkString(",")}; candidate GraphConstantFold; residual " +
             s"${SpatialPipeline.nodeCount(gBare.residual.body)} -> ${SpatialPipeline.nodeCount(gLaw.residual.body)} " +
             s"nodes; cost non-increasing on 4 backends; $conforming differential inputs agree with `eval`")
+  }
+
+  // ================================================================================================
+  // 12.  AN UNDISCHARGED LAW LICENSES NOTHING          (review.md 9, the reviewer's own attack)
+  // ================================================================================================
+  test("12. an ASSUMED law claiming a live Mention is empty licenses NO rewrite and NO certificate") {
+    // THE ATTACK, verbatim from review.md 9: an always-applicable ASSUMED law claims a live `Mention`
+    // denotes ∅.  Before, the meet accepted it ("a law cannot widen"), `optimizeGuarded` erased the term,
+    // and `SpatialCheck` certified the residual without naming the law.  Every step of that chain is
+    // gated below, and `eval` is the ground truth on the residual.
+    val m = SpaceMention("m")
+    val body: Space = Space.Mention(m)
+    val lie = SpatialBoundLaw("lie", _ => true, _ => Some(SpatialType.empty),
+                              LawEvidence.Assumed("unchecked"))
+    val base = SpatialAnnotations(spaces = Map(m -> SpatialType.top))
+    val r = Routine(RoutinePtr("r"), Vector.empty, Vector(m), body)
+
+    // (1) THE ANSWER DOES NOT MOVE, and the refusal is on the record with what it cost
+    val bare = SpatialPipeline.analyzeRoutine(r, base)
+    val a = SpatialPipeline.analyzeRoutine(r, base.withLaws(lie))
+    assertEquals(a.result, bare.result, "an UNDISCHARGED bound moved the answer")
+    assert(!a.result.isProvablyEmpty, s"the live mention must not be provably empty: ${a.result.show}")
+    val apps = a.decorated.lawApplications.filter(_.law == "lie")
+    assert(apps.nonEmpty, "the refusal must be RECORDED, not silently skipped")
+    assert(apps.forall(_.outcome == LawOutcome.Refused), apps.map(_.show).mkString("; "))
+    assert(apps.forall(_.why.contains("REFUSED")), apps.head.why)
+    assert(apps.exists(_.why.contains("would have given")),
+           s"the report must say what the missing proof obligation cost: ${apps.map(_.why)}")
+    assertEquals(a.decorated.assumedLaws, Vector.empty)
+
+    // (2) THE OPTIMIZER DOES NOT ERASE THE TERM — with `eval` as ground truth on real inputs
+    val g = SpatialPipeline.optimizeGuarded(r, a)
+    var agreed = 0
+    for items <- Vector(List("a"), List("b", "c"), List()) do
+      val input = SpaceValue(Set(PathValue(items)))
+      val ctx = SpaceContextMap(Map(m -> input))
+      val truth = eval(body)(using sc = ctx)
+      assertEquals(eval(g.residual.body)(using sc = ctx), truth,
+                   s"the residual erased a live mention on ${input.pretty}: ${g.residual.body}")
+      assert(truth == input)
+      agreed += 1
+    assert(!g.applied.exists(_.isInstanceOf[Rewrite.ConstantFold]),
+           s"an undischarged law must license no fold: ${g.applied.map(_.show)}")
+
+    // (3) THE CHECKER DOES NOT CERTIFY ∅
+    val sig = SpatialSignature(Map.empty, Map(m -> SpatialType.top), SpatialType.empty)
+    val rep = SpatialCheck.report(r, sig, cfg = SpatialConfig.default.withLaws(lie))
+    assert(!rep.check.isProved, s"the checker certified a signature the law lied about: ${rep.check.show}")
+    // …and the refusal reaches the USER, not only the internal record: a law that silently did nothing
+    // is indistinguishable from a law that was never consulted
+    assert(rep.diagnosis.notes.exists(n => n.contains("was REFUSED") && n.contains("lie")),
+           s"the report must name the refused law:\n${rep.diagnosis.notes.mkString("\n")}")
+
+    // (4) THE REFUSAL IS LOAD-BEARING: under `TrustAll` the very same bound IS met (so (1)-(3) are not
+    //     passing because the law is inert), and even then a certificate REFUSES to name it and the
+    //     verdict is downgraded rather than annotated.
+    val site = LawSite(NodeId(Vector.empty), body, base.env(), SpatialType.top)
+    val (refused, refusedApps) = SpatialLaws.refine(Vector(lie), site)
+    assertEquals(refused, SpatialType.top, "the production policy refuses the bound")
+    assertEquals(refusedApps.map(_.outcome), Vector(LawOutcome.Refused))
+    val (trusted, trustedApps) = SpatialLaws.refine(Vector(lie), site, LawEvidencePolicy.TrustAll)
+    assert(trusted.isProvablyEmpty, s"TrustAll must actually meet the bound: ${trusted.show}")
+    assertEquals(trustedApps.map(_.outcome), Vector(LawOutcome.Tightened))
+    assert(trustedApps.head.assumed, "…and the tightening is marked as resting on an axiom")
+    intercept[IllegalArgumentException](
+      CheckCertificate(order = "anything", inferred = SpatialType.empty, declared = SpatialType.empty,
+                       channels = Vector.empty, assumptions = Vector.empty, facts = Vector.empty,
+                       corroboration = None, laws = trustedApps, exhaustion = None))
+    val (v, d) = SpatialCheck.types(SpatialType.empty, SpatialType.empty, laws = trustedApps)
+    assert(v.isUnknown, s"a verdict resting on an undischarged axiom must not be Proved: ${v.show}")
+    assert(d.notes.exists(_.contains("REFUSED")), d.notes.mkString("; "))
+    // …and the same law with its obligation DISCHARGED does license the narrowing, so the policy is
+    // about the EVIDENCE and not about the law
+    val honest = lie.copy(evidence = LawEvidence.ExecutableChecked("all inputs, exhaustively"))
+    val (met, metApps) = SpatialLaws.refine(Vector(honest), site)
+    assert(met.isProvablyEmpty && metApps.map(_.outcome) == Vector(LawOutcome.Tightened))
+    println(s"[12] the review.md 9 attack: bound REFUSED at ${apps.size} occurrence(s); residual agrees " +
+            s"with `eval` on $agreed inputs; no ConstantFold; checker ${rep.check.show.linesIterator.next()
+              .take(40)}; TrustAll DOES meet it (so the refusal is load-bearing) and the certificate " +
+            "still refuses")
   }
 end SpatialLawsCheck

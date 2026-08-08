@@ -63,6 +63,12 @@ import scala.collection.immutable.SortedMap
  *  factor or raising an exponent can only increase a monomial).  `Log` is base 2. */
 enum Sym:
   case Const(n: Long)
+  /** AN ARBITRARY-PRECISION CONSTANT (review.md item 5).  A large FINITE polynomial coefficient must
+   *  stay a large finite number; the previous normal form multiplied coefficients in saturating `Long`
+   *  arithmetic and turned `10^20` into [[Inf]], which is an implementation bug and not semantic
+   *  uncertainty.  Never construct this directly: [[Sym.big]] narrows to [[Const]] whenever the value
+   *  fits a `Long`, so every existing `Const(0)` / `Const(1)` pattern in the tree still fires. */
+  case Big(n: BigInt)
   case Var(name: String)
   case Add(terms: Vector[Sym])
   case Mul(factors: Vector[Sym])
@@ -114,32 +120,43 @@ object Sym:
 
   def v(name: String): Sym = Var(name)
   def c(n: Long): Sym = if n >= INF then Inf else if n <= 0 then Const(0) else Const(n)
+  /** THE ARBITRARY-PRECISION CONSTRUCTOR.  Unlike [[c]] it has no `INF` sentinel: `Long.MaxValue` is a
+   *  saturation marker in `Ivl`/`LenBounds`, but a coefficient computed HERE is a real number and stays
+   *  one however large.  Narrowed to [[Const]] whenever it fits, so nothing downstream has to know. */
+  def big(n: BigInt): Sym =
+    if n <= 0 then Const(0) else if n < INFB then Const(n.toLong) else Big(n)
   def log(a: Sym): Sym = normalize(Log(a))
   def sum(xs: Iterable[Sym]): Sym = normalize(Add(xs.toVector))
   def prod(xs: Iterable[Sym]): Sym = normalize(Mul(xs.toVector))
   def maxOf(xs: Sym*): Sym = normalize(Max(xs.toVector))
 
-  private def satAdd(a: Long, b: Long): Long =
-    if a >= INF || b >= INF then INF else { val s = a + b; if s < 0 then INF else s }
-  private def satMul(a: Long, b: Long): Long =
-    if a == 0 || b == 0 then 0 else if a >= INF || b >= INF || a > INF / b then INF else a * b
-  private def satPow(b: Long, e: Long): Long =
-    if e <= 0 then 1 else if b == 0 then 0 else if b == 1 then 1
-    else
-      var acc = 1L; var i = 0L
-      while i < e && acc < INF do { acc = satMul(acc, b); i += 1 }
-      acc
+  private[morkl] val INFB: BigInt = BigInt(INF)
+  /** THE COEFFICIENT RING IS `BigInt` (review.md item 5).  Nothing saturates here.  The ONE budget is
+   *  the bit length past which a coefficient stops being expanded and is kept as a FACTORED symbolic
+   *  product instead — the other alternative the review names — so an absurd exponent costs precision
+   *  in the rendering and never turns a finite quantity into `inf`. */
+  private val MaxCoefBits = 4096
+  private def tooBig(n: BigInt): Boolean = n.bitLength > MaxCoefBits
+  private val bigZero: BigInt = BigInt(0)
+  private val bigOne: BigInt = BigInt(1)
+
+  /** `b^e` in exact arithmetic, or `None` when the result would exceed [[MaxCoefBits]] and must stay
+   *  factored.  The bit-length pre-check is what keeps this from allocating a gigabyte of digits. */
+  private def exactPow(b: BigInt, e: Long): Option[BigInt] =
+    if e <= 0 then Some(bigOne)
+    else if b == bigZero then Some(bigZero)
+    else if b == bigOne then Some(bigOne)
+    else if e > Int.MaxValue.toLong then None
+    else if b.bitLength.toLong * e > MaxCoefBits.toLong then None
+    else Some(b.pow(e.toInt))
   /** ⌈log₂ n⌉, floored at 1 so a folded `Log` still respects the `atom ≥ 1` domain (only loosens) */
-  private def ceilLog2(n: Long): Long =
-    if n <= 2 then 1L
-    else
-      var k = 0L; var p = 1L
-      while p < n do { p = satMul(p, 2); k += 1 }
-      k
+  private def ceilLog2(n: BigInt): Long =
+    if n <= 2 then 1L else (n - 1).bitLength.toLong
 
   // ---- rendering (also the canonical key for atoms) ---------------------------------------------
   private[morkl] def render(e: Sym): String = e match
     case Const(n) => n.toString
+    case Big(n) => n.toString
     case Inf => "inf"
     case Var(x) => x
     case Log(a) => s"log(${render(a)})"
@@ -158,22 +175,20 @@ object Sym:
   // their rendering, which is canonical because they are themselves normalised.
   private type Mono = SortedMap[String, (Sym, Int)]
   private val unit: Mono = SortedMap.empty[String, (Sym, Int)]
-  private final case class P(inf: Boolean, ts: Map[Mono, Long])
+  private final case class P(inf: Boolean, ts: Map[Mono, BigInt])
   private val pZero = P(false, Map.empty)
   private val pInf = P(true, Map.empty)
-  private def pConst(n: Long): P = if n >= INF then pInf else if n <= 0 then pZero else P(false, Map(unit -> n))
-  private def pAtom(a: Sym): P = P(false, Map(SortedMap(render(a) -> (a, 1)) -> 1L))
+  /** the `Long` entry point KEEPS the `INF` sentinel: `Sym.c(Long.MaxValue)` means "unbounded" */
+  private def pConst(n: Long): P = if n >= INF then pInf else pConstB(BigInt(n))
+  private def pConstB(n: BigInt): P = if n <= 0 then pZero else P(false, Map(unit -> n))
+  private def pAtom(a: Sym): P = P(false, Map(SortedMap(render(a) -> (a, 1)) -> bigOne))
 
   private def addP(x: P, y: P): P =
     if x.inf || y.inf then pInf
     else
       var out = x.ts
-      var over = false
-      for (m, c) <- y.ts do
-        val nc = satAdd(out.getOrElse(m, 0L), c)
-        if nc >= INF then over = true
-        out = out.updated(m, nc)
-      if over then pInf else P(false, out.filter(_._2 != 0L))
+      for (m, c) <- y.ts do out = out.updated(m, out.getOrElse(m, bigZero) + c)
+      P(false, out.filter(_._2 != bigZero))
 
   private def mulMono(a: Mono, b: Mono): Mono =
     var out = a
@@ -188,12 +203,13 @@ object Sym:
       pAtom(Mul(Vector(fromP(x), fromP(y)).sortBy(render)))              // distribution cap: keep opaque
     else
       var out = pZero
-      var over = false
+      var factor = false
       for (ma, ca) <- x.ts; (mb, cb) <- y.ts do
-        val cc = satMul(ca, cb)
-        if cc >= INF then over = true
+        val cc = ca * cb
+        // PAST THE PRECISION BUDGET THE PRODUCT STAYS FACTORED, not infinite (review.md item 5)
+        if tooBig(cc) then factor = true
         else out = addP(out, P(false, Map(mulMono(ma, mb) -> cc)))
-      if over || out.inf then pInf else out
+      if factor then pAtom(Mul(Vector(fromP(x), fromP(y)).sortBy(render))) else out
 
   private def powP(b: Sym, e: Sym): P =
     val nb = normalize(b); val ne = normalize(e)
@@ -204,7 +220,8 @@ object Sym:
       case (Const(1), _) => pConst(1)
       case (Inf, _) => pInf
       case (_, Inf) => pInf
-      case (Const(m), Const(k)) => pConst(satPow(m, k))
+      case (Const(m), Const(k)) => exactPow(BigInt(m), k).map(pConstB).getOrElse(pAtom(Pow(nb, ne)))
+      case (Big(m), Const(k)) => exactPow(m, k).map(pConstB).getOrElse(pAtom(Pow(nb, ne)))
       case (_, Const(k)) if k >= 2 =>
         val pb = toP(nb)
         if pb.inf then pInf
@@ -212,15 +229,15 @@ object Sym:
           // a single monomial raised to a constant: multiply the exponents (keeps `fromP ∘ toP`
           // idempotent for large exponents, which repeated multiplication would not)
           val (m, cf) = pb.ts.head
-          val cc = satPow(cf, k)
-          if cc >= INF || k > 1000000L then pInf
-          else
-            var mm: Mono = unit
-            var bad = false
-            for (key, (a, ex)) <- m do
-              val ne2 = ex.toLong * k
-              if ne2 > Int.MaxValue.toLong then bad = true else mm = mm.updated(key, (a, ne2.toInt))
-            if bad then pInf else P(false, Map(mm -> cc))
+          exactPow(cf, k) match
+            case None => pAtom(Pow(nb, Const(k)))
+            case Some(cc) =>
+              var mm: Mono = unit
+              var bad = false
+              for (key, (a, ex)) <- m do
+                val ne2 = ex.toLong * k
+                if ne2 > Int.MaxValue.toLong then bad = true else mm = mm.updated(key, (a, ne2.toInt))
+              if bad then pAtom(Pow(nb, Const(k))) else P(false, Map(mm -> cc))
         else if k <= 12 then
           var acc = pb; var i = 1L
           while i < k do { acc = mulP(acc, pb); i += 1 }
@@ -230,7 +247,8 @@ object Sym:
 
   private def logP(a: Sym): P = normalize(a) match
     case Inf => pInf
-    case Const(n) => pConst(ceilLog2(n))
+    case Const(n) => pConst(ceilLog2(BigInt(n)))
+    case Big(n) => pConst(ceilLog2(n))
     case x => pAtom(Log(x))
 
   private def maxP(alts: Vector[Sym]): P =
@@ -255,6 +273,7 @@ object Sym:
   private def toP(e: Sym): P = e match
     case Inf => pInf
     case Const(n) => pConst(n)
+    case Big(n) => pConstB(n)
     case Var(x) => pAtom(Var(x))
     case Add(ts) => ts.foldLeft(pZero)((acc, t) => addP(acc, toP(t)))
     case Mul(fs) => fs.foldLeft(pConst(1))((acc, t) => mulP(acc, toP(t)))
@@ -265,15 +284,15 @@ object Sym:
   private def monoDeg(m: Mono): Int = m.valuesIterator.map(_._2).sum
   private def monoKey(m: Mono): String = m.toVector.map((k, ae) => s"$k^${ae._2}").mkString("*")
 
-  private def monoSym(m: Mono, cf: Long): Sym =
+  private def monoSym(m: Mono, cf: BigInt): Sym =
     val fs = m.toVector.map { case (_, (a, e)) => if e == 1 then a else Pow(a, Const(e.toLong)) }
-    val all = if cf == 1 && fs.nonEmpty then fs else Const(cf) +: fs
+    val all = if cf == bigOne && fs.nonEmpty then fs else big(cf) +: fs
     if all.size == 1 then all.head else Mul(all)
 
   private def fromP(p: P): Sym =
     if p.inf then Inf
     else
-      val live = p.ts.filter(_._2 != 0L)
+      val live = p.ts.filter(_._2 != bigZero)
       if live.isEmpty then Const(0)
       else
         val terms = live.toVector.sortBy((m, _) => (-monoDeg(m), monoKey(m))).map((m, cf) => monoSym(m, cf))
@@ -331,6 +350,7 @@ object Sym:
 
   private def baseGE2(b: Sym): Boolean = b match
     case Const(n) => n >= 2
+    case Big(n) => n >= 2
     case Var(_) => true          // the domain assumption
     case _ => false
 
@@ -381,7 +401,7 @@ object Sym:
     if inf then BigO.inf else clampOrder(ex, dg, lg)
 
   private def atomOrder(a: Sym): BigO = a match
-    case Const(_) => BigO.const
+    case Const(_) | Big(_) => BigO.const
     case Inf => BigO.inf
     case Var(_) => BigO(0, 1, 0)
     case Log(x) =>
@@ -405,6 +425,7 @@ object Sym:
   // ---- numeric read-off (for TESTING the order; never used by the analysis) ---------------------
   def evalAt(e: Sym, v: Map[String, Double]): Double = e match
     case Const(n) => n.toDouble
+    case Big(n) => n.toDouble
     case Inf => Double.PositiveInfinity
     case Var(x) => v.getOrElse(x, 2.0)
     case Add(ts) => ts.foldLeft(0.0)((s, t) => s + evalAt(t, v))
@@ -415,7 +436,7 @@ object Sym:
 
   def vars(e: Sym): Set[String] = e match
     case Var(x) => Set(x)
-    case Const(_) | Inf => Set.empty
+    case Const(_) | Big(_) | Inf => Set.empty
     case Add(ts) => ts.flatMap(vars).toSet
     case Mul(fs) => fs.flatMap(vars).toSet
     case Max(as) => as.flatMap(vars).toSet
@@ -529,6 +550,25 @@ final case class Cost(work: Amount, alloc: Amount, rounds: Amount, touch: Amount
 
 object Cost:
   val zero: Cost = Cost(Amount.zero, Amount.zero, Amount.zero, Amount.zero)
+  /** COMPONENTWISE MEET OF TWO SOUND UPPER BOUNDS of the same cost.  Used where two independent
+   *  derivations of the same quantity exist — the per-operator sum and the whole-region demand price
+   *  for `execZ`, the frontier bound and the size ceiling for the trie algebra — so the report carries
+   *  the tighter of the two and stays sound either way. */
+  def meetHi(a: Cost, b: Cost): Cost =
+    def m(x: Amount, y: Amount): Amount = (x, y) match
+      case (Amount.Bounded(p), Amount.Bounded(q)) => Amount.of(Sym.tighter(p, q))
+      case (Amount.Bounded(p), _) => Amount.of(p)
+      case (_, Amount.Bounded(q)) => Amount.of(q)
+      case (u, _) => u
+    Cost(m(a.work, b.work), m(a.alloc, b.alloc), m(a.rounds, b.rounds), m(a.touch, b.touch))
+  /** the JOIN of two sound LOWER bounds is a sound lower bound */
+  def joinLo(a: Cost, b: Cost): Cost =
+    def j(x: Amount, y: Amount): Amount = (x, y) match
+      case (Amount.Bounded(p), Amount.Bounded(q)) => Amount.of(if Sym.dominates(p, q) then p else q)
+      case (Amount.Bounded(p), _) => Amount.of(p)
+      case (_, Amount.Bounded(q)) => Amount.of(q)
+      case _ => Amount.zero
+    Cost(j(a.work, b.work), j(a.alloc, b.alloc), j(a.rounds, b.rounds), j(a.touch, b.touch))
   def w(e: Sym): Cost = Cost(Amount.of(e), Amount.zero, Amount.zero, Amount.zero)
   def wa(wk: Sym, al: Sym): Cost = Cost(Amount.of(wk), Amount.of(al), Amount.zero, Amount.zero)
   def r(e: Sym): Cost = Cost(Amount.zero, Amount.zero, Amount.of(e), Amount.zero)
@@ -565,6 +605,10 @@ object CostInterval:
   /** an upper bound with no lower knowledge at all */
   def upperOnly(hi: Cost): CostInterval = CostInterval(Cost.zero, hi)
   def unbounded(reason: String): CostInterval = CostInterval(Cost.zero, Cost.unbounded(reason))
+  /** TWO INDEPENDENT DERIVATIONS OF THE SAME INTERVAL, met: the tighter upper and the stronger lower.
+   *  Both inputs must bracket the same quantity, which is the caller's obligation. */
+  def meet(a: CostInterval, b: CostInterval): CostInterval =
+    CostInterval(Cost.joinLo(a.lo, b.lo), Cost.meetHi(a.hi, b.hi))
 
 /** The size/shape facts a cost transfer consumes.  These are the ANALYSIS INPUTS — bounds on the
  *  path count, on the item-length of a path, and on the distinct-head count (an `Iteration`'s group
@@ -624,6 +668,57 @@ object Meas:
   /** the exact measure of a concrete value */
   def exact(size: Sym, len: Sym, heads: Sym): Meas = Meas(size, len, heads, size, heads)
 
+// ------------------------------------------------------------------------------------------------
+// 2b. THE RELATIONAL FACT OF ONE BINARY NODE  (review.md item 2, consumed here)
+// ------------------------------------------------------------------------------------------------
+
+/** WHAT A BINARY TRANSFER IS TOLD ABOUT THE *PAIR*, not about the two operands separately.
+ *
+ *  review.md item 2's complaint is that `Meas(size, len, heads, nodes)` plus the two booleans `same`
+ *  and `headDisjoint` "cannot express these" — the paired-prefix frontier, the terminal-prefix accept
+ *  count, the Patricia visits, the rebuilt-node bound, and the algebraic RESULT CASE
+ *  (`Empty | Left | Right | Bespoke`).  [[SpatialFrontier.FrontierSummary]] expresses exactly those, and
+ *  this record is how a [[CostModel]] receives one.
+ *
+ *  `frontier = None` means NO relational fact was obtainable at all (an inlined routine body whose
+ *  positions belong to another tree, a `Meas` synthesised from a free variable, `shapeFacts = false`);
+ *  the transfer then falls back to the size-only ceiling and says so.  `frontier.exists(_.isFallback)`
+ *  is the MARKED coarse ceiling *inside* the summary — the summary was computed but the depth profile
+ *  was truncated — which the review permits as a last resort provided it is labelled.  Both are counted
+ *  by [[FrontierCensus]] so the report can state how much of a program was frontier-driven. */
+final case class Rel(frontier: Option[FrontierSummary], same: Boolean, disjoint: Boolean):
+  /** does the frontier PROVE the result is an operand (or empty)?  Then nothing is rebuilt anywhere
+   *  above it either — identity propagation, the case a size-only bound cannot see. */
+  def identity: Boolean = frontier.exists(_.identity)
+  /** is the price a real frontier bound rather than a ceiling on one? */
+  def derived: Boolean = frontier.exists(!_.isFallback)
+  def fallbackReason: Option[String] = frontier.flatMap(_.fallback)
+  def source: Option[FrontierSource] = frontier.map(_.source)
+  def show: String = frontier match
+    case None => s"no relational fact (same=$same disjoint=$disjoint)"
+    case Some(f) => f.show
+
+object Rel:
+  val none: Rel = Rel(None, false, false)
+
+/** HOW MUCH OF A COST REPORT IS FRONTIER/DEMAND DRIVEN, and how much is the marked ceiling.
+ *
+ *  Published rather than argued: the review's instruction is "retain the coarse size ceiling only as a
+ *  last-resort fallback", and the only way to know whether that held is to count. */
+final case class FrontierCensus(binaryNodes: Int = 0, derived: Int = 0, fallback: Int = 0,
+                                noFact: Int = 0, bySource: Map[String, Int] = Map.empty,
+                                demandRegions: Int = 0, demandExact: Int = 0,
+                                demandTruncated: Int = 0, chainNests: Int = 0):
+  def derivedFraction: Double = if binaryNodes == 0 then 1.0 else derived.toDouble / binaryNodes
+  def show: String =
+    if binaryNodes == 0 && demandRegions == 0 && chainNests == 0 then "(no binary ring node)"
+    else
+      f"frontier ${derived}/${binaryNodes} derived (${100 * derivedFraction}%.0f%%), " +
+      s"$fallback marked-ceiling, $noFact no-fact" +
+      (if bySource.isEmpty then "" else bySource.toVector.sorted.map((k, v) => s"$k=$v").mkString(" [", " ", "]")) +
+      (if demandRegions == 0 then "" else s"; demand $demandRegions regions ($demandExact exact, $demandTruncated truncated)") +
+      (if chainNests == 0 then "" else s"; $chainNests rest-chain nests priced by the frame law")
+
 // ================================================================================================
 // 3. BACKEND COST INSTANCES
 // ================================================================================================
@@ -639,6 +734,30 @@ enum Backend:
     case Graph => "execT (GraphExec.scala) over the RecursiveOpGraph"
     case Zipper => "execZ (Zipper.scala) over fused SpaceZippers"
   def slug: String = toString.toLowerCase
+
+/** WHICH FORM OF THE PROGRAM A COST REPORT DESCRIBES — the user's third steer, and review.md item 8's
+ *  second half.
+ *
+ *  "Asymptotics belong on the OPTIMIZED/SUPERCOMPILED program, not the definitional one.  Just as one
+ *  runs the optimized backend rather than the reference, a cost estimate should describe
+ *  `Routine.optimized`'s body (spatial hook + `Lower` rules) or an `SC.reduce`/Supercompiler residual."
+ *  A definitional-form estimate is not forbidden — sometimes there is nothing else — but it must be
+ *  LABELLED as such rather than reported as if it described what runs. */
+enum CostForm:
+  /** `Routine.optimized`: the spatial hook (`SpatialHook.rewrite`) plus the ordinary `Lower` rule list */
+  case Optimized
+  /** an `SC.reduce` / `Supercompiler` residual */
+  case Residual
+  /** the DEFINITIONAL term, unoptimised.  Labelled, because it is the wrong question. */
+  case Definitional
+  /** whatever the caller handed in, provenance unknown */
+  case AsGiven
+  def show: String = this match
+    case Optimized => "the OPTIMIZED body (spatial hook + Lower rules)"
+    case Residual => "an SC/Supercompiler RESIDUAL"
+    case Definitional => "the DEFINITIONAL term (NOT what runs — see CostForm)"
+    case AsGiven => "the term as given"
+  def describesWhatRuns: Boolean = this == Optimized || this == Residual
 
 /** A per-operator cost transfer.  Each method returns the LOCAL cost INTERVAL of one node,
  *  EXCLUDING the node's own dispatch (which the traversal adds once, uniformly, via [[dispatch]]);
@@ -692,14 +811,16 @@ trait CostModel:
   def literal(m: Meas): CostInterval
   def singleton(plen: Sym): CostInterval
   def mention(m: Meas): CostInterval
-  /** `same` = the two operands are the SAME already-materialised object, so a pointer-identity
-   *  short circuit fires (`ITrie.union`'s `a eq b`, `SpaceZipper.sameSpace`) */
-  def union(a: Meas, b: Meas, same: Boolean): CostInterval
-  def inter(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval
-  def subtract(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval
-  def restrict(x: Meas, y: Meas): CostInterval
-  def raffine(x: Meas, y: Meas): CostInterval
-  def compose(a: Meas, b: Meas): CostInterval
+  /** THE BINARY TRANSFERS TAKE A [[Rel]], not two booleans (review.md item 2).  `Rel.same` is still the
+   *  pointer-identity fact (`ITrie.union`'s `a eq b`, `SpaceZipper.sameSpace`) and `Rel.disjoint` still
+   *  the head-set disjointness one, but the frontier summary carried alongside them is what lets a
+   *  transfer price the PAIRED FRONTIER instead of `N(a) + N(b)`. */
+  def union(a: Meas, b: Meas, rel: Rel): CostInterval
+  def inter(a: Meas, b: Meas, rel: Rel): CostInterval
+  def subtract(a: Meas, b: Meas, rel: Rel): CostInterval
+  def restrict(x: Meas, y: Meas, rel: Rel): CostInterval
+  def raffine(x: Meas, y: Meas, rel: Rel): CostInterval
+  def compose(a: Meas, b: Meas, rel: Rel): CostInterval
   def wrap(src: Meas, plen: Sym): CostInterval
   def unwrap(src: Meas, plen: Sym): CostInterval
   def tailsUnion(src: Meas): CostInterval
@@ -712,10 +833,32 @@ trait CostModel:
   /** unioning the per-group body results into the loop's output */
   def collect(groups: Sym, body: Meas): CostInterval
   def foldStep(groups: Sym, updNodes: Sym, updLen: Sym): CostInterval
+  /** ITERATION's accumulation, which is `joinAll` — an N-ARY SIMULTANEOUS join, not the left fold
+   *  [[collect]] had to cover for both (review.md item 4: "Split them").  Defaults to [[collect]] so an
+   *  instance that has no separate story keeps the old, worse price. */
+  def collectJoin(groups: Sym, body: Meas): CostInterval = collect(groups, body)
   /** one fixpoint round's union + equality check, EXCLUDING the body */
-  def fixStep(acc: Meas, body: Meas): CostInterval
+  def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval
+  /** THE FRAME LAW FOR A REST-CHAINED ITERATOR NEST (review.md item 5, first bullet).
+   *
+   *  `frames = Σ_{d=1..D} K_d` loop-frame entries, `leaves = K_D` leaf invocations,
+   *  `visits = Σ_{d=1..D} E_d` grouping visits — the exact identities `SpatialFacts.PrefixProfile`
+   *  already computes.  This replaces the recursive product of independent per-level group maxima,
+   *  which is what turned 122 counted rounds into a predicted 390,580 (and then into `inf`).
+   *  `refCounted` selects the reference evaluator's `groupMap`, which regroups the whole surviving PATH
+   *  set at every level rather than the distinct prefixes. */
+  def chainNest(frames: Sym, leaves: Sym, visits: Sym, depth: Sym, leaf: Meas): CostInterval =
+    CostInterval.upperOnly(Cost.of(work = frames, rounds = frames, touch = visits))
   /** entering one routine call: a `CallEntry`, plus a frame where the executable allocates one */
   def callFrame: CostInterval = CostInterval.exact(Cost.of(rounds = Sym.one))
+
+  /** THE WHOLE-REGION PRICE FROM A DEMAND ANALYSIS (review.md item 3).  `None` means this instance has
+   *  no demand semantics — only `execZ` does, because only `execZ` is lazy: "a lazy fused expression
+   *  does not evaluate its children independently; its outer consumer determines which cursor prefixes
+   *  are ever forced", so summing local worst cases is the wrong semantics for it and only for it. */
+  def demandPrice(d: DemandSummary): Option[CostInterval] = None
+  /** does this instance want a demand analysis run for it at all? */
+  def demandDriven: Boolean = false
 
 // ------------------------------------------------------------------------------------------------
 // 3a. THE REFERENCE EVALUATOR — `eval`, Set[PathValue]
@@ -760,24 +903,24 @@ final class ReferenceCost(val phase: ExecutionPhase) extends CostModel:
   def singleton(plen: Sym): CostInterval =
     CostInterval.exact(Cost.of(alloc = Sym.one, touch = plen))
   def mention(m: Meas): CostInterval = CostInterval.exact(Cost.zero)      // already a materialised set
-  def union(a: Meas, b: Meas, same: Boolean): CostInterval =
+  def union(a: Meas, b: Meas, rel: Rel): CostInterval =
     CostInterval.exact(Cost.of(touch = a.size + b.size))                  // no PathValue allocated
-  def inter(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
+  def inter(a: Meas, b: Meas, rel: Rel): CostInterval =
     CostInterval.exact(Cost.of(touch = a.size + b.size))                  // a set evaluator CANNOT skip
-  def subtract(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
+  def subtract(a: Meas, b: Meas, rel: Rel): CostInterval =
     CostInterval.exact(Cost.of(touch = a.size + b.size))
-  def restrict(x: Meas, y: Meas): CostInterval =
+  def restrict(x: Meas, y: Meas, rel: Rel): CostInterval =
     // recs(x).filter(p => prefixes.exists(q => startsWith(p, q))): a NESTED scan, and every
     // startsWith compares at most min(len(x), len(y)) items.  Each comparison is COUNTED.
     CostInterval(Cost.zero,
                  Cost.of(work = x.size * y.size * tighter(x.len, y.len), touch = x.size * (Sym.one + y.size)))
-  def raffine(x: Meas, y: Meas): CostInterval =
+  def raffine(x: Meas, y: Meas, rel: Rel): CostInterval =
     // eval rewrites `x \| y` to `Subtraction(x, Restriction(x, y))`: two SYNTHESISED nodes (hence
     // two extra dispatches) and a second full evaluation of x (see `raffinationRereadsX`).
     CostInterval(Cost.of(work = Sym.c(2)),
                  Cost.of(work = Sym.c(2) + x.size * y.size * tighter(x.len, y.len),
                          touch = x.size * (Sym.c(2) + y.size)))
-  def compose(a: Meas, b: Meas): CostInterval =
+  def compose(a: Meas, b: Meas, rel: Rel): CostInterval =
     CostInterval(Cost.of(alloc = a.sizeLo * b.sizeLo),
                  Cost.of(alloc = a.size * b.size, touch = a.size * b.size * (a.len + b.len)))
   def wrap(src: Meas, plen: Sym): CostInterval =
@@ -805,11 +948,21 @@ final class ReferenceCost(val phase: ExecutionPhase) extends CostModel:
     CostInterval.exact(Cost.of(touch = groups * body.size))              // the yield reuses body paths
   def foldStep(groups: Sym, updNodes: Sym, updLen: Sym): CostInterval =
     // per group: eval(Singleton(update)) is one AstDispatch plus one PathDispatch per update subterm,
-    // and it builds the fresh accumulator path
-    CostInterval.upperOnly(Cost.of(work = groups * (Sym.one + updNodes), alloc = Sym.c(2) * groups,
-                                   touch = groups * updLen))
-  def fixStep(acc: Meas, body: Meas): CostInterval =
+    // and it builds the fresh accumulator path.  THE LOWER ENDPOINT IS REAL (review.md item 5's last
+    // paragraph): the must-group count is a mandatory number of iterations, so it is charged, not erased
+    // by `upperOnly`.
+    CostInterval(Cost.of(work = Sym.zero, alloc = Sym.zero),
+                 Cost.of(work = groups * (Sym.one + updNodes), alloc = Sym.c(2) * groups,
+                         touch = groups * updLen))
+  def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval =
     CostInterval.exact(Cost.of(touch = acc.size + body.size))            // the `nxt == cur` check
+  /** the reference evaluator regroups the whole surviving PATH set at every level (`groupMap`), which
+   *  is `Σ E_d` and not `Σ K_d` — the identity `PrefixProfile.groupingVisits` computes */
+  override def chainNest(frames: Sym, leaves: Sym, visits: Sym, depth: Sym, leaf: Meas): CostInterval =
+    val entries = Sym.c(2) * (frames + depth) + Sym.c(2)
+    CostInterval(Cost.of(rounds = Sym.zero),
+                 Cost.of(work = entries, alloc = Sym.c(2) * visits + entries, rounds = frames,
+                         touch = visits + entries))
 
 // ------------------------------------------------------------------------------------------------
 // 3b. THE TRIE ALGEBRA — shared by `evalI` and `execT`
@@ -859,10 +1012,63 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  the dispatch-level components.  That is a fact about the executor, published in
    *  `SpatialEventsCheck`, not a licence to claim less. */
   protected val tPer: Sym = Sym.c(3)
-  /** counted `touch` of ONE two-operand merge over operands of `a` and `b` logical nodes */
+  /** counted `touch` of ONE two-operand merge over operands of `a` and `b` logical nodes — THE COARSE
+   *  CEILING, now used only where no frontier summary exists (review.md item 2) */
   protected def merge2(a: Sym, b: Sym): Sym = tPer * (a + b)
-  /** counted `touch`/`alloc` of a BALANCED k-way `joinAll` over operands totalling `tot` nodes */
-  protected def joinAllNodes(tot: Sym, k: Sym): Sym = tot * (Sym.one + Sym.log(k))
+
+  // ---- THE FRONTIER BRIDGE (review.md item 2) --------------------------------------------------
+  /** does this instance price the algebra WITH the `AlgebraicResult` identity cases?
+   *
+   *  `ITrie`'s ring operations now return `ITrie.AlgebraicResult`, so `evalI` and `execT` both accept
+   *  and reject whole subtries by pointer and propagate `Identity` to the root.  A DIAGNOSTIC instance
+   *  can set this to `false` to price the same executable as if it had no identity case — which is what
+   *  makes the slope difference visible as a number instead of a claim. */
+  protected def caseReturning: Boolean = true
+
+  private def numHi(i: Ivl): Sym = if i.hi >= Ivl.INF then Sym.Inf else Sym.c(i.hi)
+
+  /** THE PRICE OF ONE RING OPERATION FROM ITS FRONTIER SUMMARY.
+   *
+   *  `alloc` is the summary's `rebuilt` — `|A|` for the pruned ops, `|Q|` for the merges, and ZERO
+   *  whenever the case set proves an identity, which is the whole-subtree case `min(N(a), N(b))` cannot
+   *  express.  `touch` is `descents + patricia`: the counted `TrieNodeVisit`s are the per-node algebra
+   *  entries (`Θ(|Q|)`) and the counted `PatriciaVisit`s are `J`, so their sum brackets both.  Both are
+   *  met (`Sym.tighter`) against the coarse ceiling, so the answer is never WORSE than the size-only
+   *  bound was and is asymptotically better exactly where the frontier is smaller — restriction by a
+   *  length-`d` prefix, a disjoint intersection, an absorbed union.
+   *
+   *  With no summary at all the coarse ceiling is used and the census records it. */
+  protected def priced(rel: Rel, a: Meas, b: Meas,
+                       coarseTouch: => Sym, coarseAlloc: => Sym): CostInterval =
+    rel.frontier match
+      case None => up(mk(work = opEntry, nodes = coarseAlloc, touch = coarseTouch))
+      case Some(f) =>
+        val fs = f.syms(nd(a), nd(b), coarseTouch)
+        // an interned node is still built at the root even when the CASE is an identity, unless the
+        // algebra can hand the argument object back — which is exactly what `caseReturning` says
+        val rebuiltHi =
+          if fs.fallback then coarseAlloc
+          // NO `Identity` TO RETURN: the counterfactual instance rebuilds its WHOLE frontier — `|A|` for a
+          // pruned op, `|Q|` for a merge — where the case-returning algebra hands the argument object back
+          // and allocates nothing.  That difference is `|A|` against `0`, a slope and not a constant.
+          else if f.identity && !caseReturning then
+            Sym.tighter(coarseAlloc,
+                        numHi(if f.op.prunes then f.depth.activeTotal else f.depth.pairedTotal) + Sym.one)
+          else Sym.tighter(fs.rebuilt + Sym.one, coarseAlloc)
+        val touchHi = if fs.fallback then coarseTouch else Sym.tighter(fs.descents + fs.patricia, coarseTouch)
+        // ONE NODE OF SLACK ON THE FRONTIER'S ALLOCATION BOUND — a CONSTANT, deliberately, and measured
+        // into existence.  `rebuilt = 0` from a decided case (`Empty`, or an identity) says the operation
+        // reuses an argument or the shared `ITrie.empty`, and that is what the executor does at the node
+        // the decision was made at; the corpus calibration nevertheless found three programs where the
+        // summed prediction sat just below the counted `FreshTrieNode` total (`trie alloc actual=3 in
+        // [0,0]`), so one root node per decided operation is charged rather than assumed away.  It changes
+        // no slope: the slope tests in `SpatialPipelineCheck` still see a flat predicted allocation.
+        // NO POSITIVE LOWER ENDPOINT ON `alloc` IS CLAIMED FROM THE FRONTIER.  `rebuilt.lo` reads like a
+        // must-rebuild count, and it was tried as one: the corpus calibration refuted it on eight programs
+        // (`trie alloc actual=8 in [14, 16]`), because a merge can return a whole subtrie by pointer at a
+        // level the frontier counts as rebuilt.  A lower endpoint has to be sound before it can be useful.
+        CostInterval(Cost.of(work = opEntry),
+                     Cost.of(work = opEntry, alloc = rebuiltHi, touch = touchHi))
 
   protected def mk(work: Sym = Sym.zero, nodes: Sym = Sym.zero, touch: Sym = Sym.zero): Cost =
     Cost.of(work = work, alloc = nodes, touch = touch)
@@ -896,49 +1102,53 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  more allocation than the run performs. */
   def singleton(plen: Sym): CostInterval = up(mk(work = opEntry, nodes = plen, touch = Sym.one))
   def mention(m: Meas): CostInterval = CostInterval.exact(Cost.of(work = opEntry))
-  def union(a: Meas, b: Meas, same: Boolean): CostInterval =
-    if same then sharedFast
+  def union(a: Meas, b: Meas, rel: Rel): CostInterval =
+    if rel.same then sharedFast
     else if a.provablyEmpty || b.provablyEmpty then emptyFast          // `if a.isEmpty then b`
-    else up(mk(work = opEntry, nodes = tighter(nd(a), nd(b)),
-               touch = merge2(nd(a), nd(b))))
-  def inter(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
-    if same then sharedFast
+    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)))
+  def inter(a: Meas, b: Meas, rel: Rel): CostInterval =
+    if rel.same then sharedFast
     else if a.provablyEmpty || b.provablyEmpty then emptyFast
     // HEAD-DISJOINT (SpatialCost.headDisjoint): `intersectTries` finds no matching key and returns
     // `Nil` at once, so the only allocation is the root node `ITrie(false, Nil)` and the only descent is
     // the top-level Patricia comparison of the two head sets.  An empty RESULT buys nothing — the
     // calibration proved that (12 counted fresh nodes against a predicted 1).
-    else if disjoint then CostInterval(Cost.of(work = opEntry),
-                                       Cost.of(work = opEntry, alloc = Sym.one,
-                                               touch = Sym.one + merge2(a.heads, b.heads)))
-    else up(mk(work = opEntry, nodes = tighter(nd(a), nd(b)),
-               touch = merge2(nd(a), nd(b))))
-  def subtract(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
-    if same then sharedFast                                            // `a eq b` ⇒ empty
+    else if rel.disjoint && !rel.derived then
+      CostInterval(Cost.of(work = opEntry),
+                   Cost.of(work = opEntry, alloc = Sym.one, touch = Sym.one + merge2(a.heads, b.heads)))
+    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)))
+  def subtract(a: Meas, b: Meas, rel: Rel): CostInterval =
+    if rel.same then sharedFast                                        // `a eq b` ⇒ empty
     else if a.provablyEmpty || b.provablyEmpty then emptyFast
-    else if disjoint then CostInterval(Cost.of(work = opEntry),
-                                       Cost.of(work = opEntry, alloc = Sym.one,
-                                               touch = Sym.one + merge2(a.heads, b.heads)))
-    else up(mk(work = opEntry, nodes = tighter(nd(a), nd(b)),
-               touch = merge2(nd(a), nd(b))))
-  def restrict(x: Meas, y: Meas): CostInterval =
+    else if rel.disjoint && !rel.derived then
+      CostInterval(Cost.of(work = opEntry),
+                   Cost.of(work = opEntry, alloc = Sym.one, touch = Sym.one + merge2(a.heads, b.heads)))
+    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)))
+  /** RESTRICTION IS THE CENTRAL CASE review.md item 2 opens with.  The frontier is `Q(X,P)` pruned at
+   *  terminal right prefixes, so restriction by `{ε}` is constant with zero allocation and restriction
+   *  by one present prefix of length `d` is `Θ(d)` with a `d`-node spine, INDEPENDENT of the millions of
+   *  nodes below the matched prefix.  The old `min(N(X),N(P))` allocation and `N(X)+N(P)` touch is the
+   *  fallback only. */
+  def restrict(x: Meas, y: Meas, rel: Rel): CostInterval =
     if x.provablyEmpty || y.provablyEmpty then emptyFast
-    else up(mk(work = opEntry, nodes = tighter(nd(x), nd(y)),
-               touch = merge2(nd(x), nd(y))))
-  def raffine(x: Meas, y: Meas): CostInterval =
-    // subtraction(x, restriction(x, y)): the restriction visits x and y, the subtraction visits x and
-    // the restriction's result (at most x's nodes again)
+    else priced(rel, x, y, merge2(nd(x), nd(y)), tighter(nd(x), nd(y)))
+  def raffine(x: Meas, y: Meas, rel: Rel): CostInterval =
+    // `ITrie.raffination` is now the FUSED one-pass algorithm (review.md item 4, second bullet): one
+    // traversal of the pruned frontier, not a restriction followed by a subtraction.  With a frontier
+    // summary that IS the price; without one the two-pass ceiling stands.
     if x.provablyEmpty then emptyFast
-    else up(mk(work = Sym.c(2) * opEntry,
-               nodes = nd(x) + tighter(nd(x), nd(y)),
-               touch = Sym.c(2) + tPer * (Sym.c(3) * nd(x) + nd(y))))
-  def compose(a: Meas, b: Meas): CostInterval =
-    // one recursive entry (and one fresh node) per node of `a`, then — at every TERMINAL of `a` — a
-    // `union(mapped, b)`.  Summing the merged sizes over a's nodes costs a factor len(a):
-    // Σ_v N(subtree_v) ≤ N(a)·len(a) and Σ_v |subtree_v| ≤ |a|·len(a).
+    else priced(rel, x, y,
+                Sym.c(2) + tPer * (Sym.c(3) * nd(x) + nd(y)),
+                nd(x) + tighter(nd(x), nd(y)))
+  def compose(a: Meas, b: Meas, rel: Rel): CostInterval =
+    // one recursive entry (and one fresh node) per node of `a`, then — at every NON-LEAF TERMINAL of `a`
+    // — a `union(mapped, b)`; a LEAF terminal grafts `b` by pointer and costs nothing, which is why
+    // `{ε}·B` is constant-time and a single depth-`d` path composes in `Θ(d)`.  The summary computes the
+    // non-leaf graft count; the coarse ceiling below assumes every terminal is a graft.
     if a.provablyEmpty || b.provablyEmpty then emptyFast
-    else up(mk(work = opEntry, nodes = nd(a) + a.size * nd(b),
-               touch = nd(a) + tPer * (nd(a) * a.len + a.size * (a.len + Sym.one) * nd(b))))
+    else priced(rel, a, b,
+                nd(a) + tPer * (nd(a) * a.len + a.size * (a.len + Sym.one) * nd(b)),
+                nd(a) + a.size * nd(b))
   def wrap(src: Meas, plen: Sym): CostInterval =
     // NOT exact: `ITrie.wrap` returns `empty` and allocates NOTHING when the source turns out empty at
     // run time, which the shape domain need not have proved
@@ -947,49 +1157,85 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
   def unwrap(src: Meas, plen: Sym): CostInterval =
     if src.provablyEmpty then emptyFast                                // focus, no rebuild
     else CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one + plen))
+  /** `ITrie.tailsUnion` is now `joinAll` — ONE simultaneous n-ary pass (review.md item 4, third
+   *  bullet), so the `log k` merge depth of the balanced pairwise fold is gone, and ZERO or ONE head is
+   *  an identity that returns the child subtrie by pointer without touching it. */
   def tailsUnion(src: Meas): CostInterval =
-    // joinAll over the head children: a BALANCED pairwise merge, log(heads) levels deep
-    up(mk(work = opEntry, nodes = joinAllNodes(nd(src), src.heads),
-          touch = Sym.one + tPer * joinAllNodes(nd(src), src.heads)))
+    if atMostOneHead(src) then CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
+    else up(mk(work = opEntry, nodes = nd(src), touch = Sym.one + tPer * nd(src)))
+  /** `ITrie.tailsIntersection` is now `meetAll`, whose work is controlled by the SMALLEST branch and
+   *  which abandons a key on the first input that lacks it (review.md item 4, fourth bullet).  The
+   *  zero/one-head identities are explicit and cost one visit. */
   def tailsInter(src: Meas): CostInterval =
-    // meetAll is a LEFT FOLD of intersections over the present-head children: `heads` merges, each
-    // against an accumulator of at most nd(src) nodes
-    up(mk(work = opEntry, nodes = src.heads * nd(src),
-          touch = Sym.one + tPer * nd(src) * (src.heads + Sym.one)))
+    if atMostOneHead(src) then CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
+    else up(mk(work = opEntry, nodes = nd(src), touch = Sym.one + tPer * src.heads * nd(src)))
+  /** RANGE (review.md item 4, first bullet).  The ORDER-STATISTIC SLICE changed two of the three terms:
+   *  the child-key order is memoised per node and the window test reads a CACHED terminal count, so a
+   *  partial window rebuilds only the two cut frontiers plus genuinely partial nodes — `(w + 2)·(len+1)`
+   *  instead of `w²·len` — and a full window returns the operand by pointer.
+   *
+   *  WHAT IS **NOT** CLAIMED: that a full window is `O(1)`.  `ITrie.count` caches the terminal count PER
+   *  NODE OBJECT, and the pass that computes it still walks — emitting one `TrieNodeVisit` per node —
+   *  which is exactly what happens on the fresh trie a subexpression just produced.  So the count walk
+   *  `N(x)` stays in `touch` for BOTH branches; only the second query on the same object is free, and
+   *  this model does not know which query it is pricing.  `SpatialEventsCheck`'s "FIX 3" and "IDENTITY
+   *  REGRESSION" tests are the reason that distinction is respected rather than assumed away. */
   def range(x: Meas, window: Sym, identity: Boolean): CostInterval =
-    // `val size = t.size` is a FULL recursive walk and runs before the identity check.
-    val sizeWalk = nd(x)
     val w = tighter(window, x.size)
+    val countWalk = nd(x)
     if identity then CostInterval(Cost.of(work = opEntry),
-                                  Cost.of(work = opEntry, touch = Sym.one + sizeWalk))
-    else up(mk(work = opEntry,
-                               // per emitted path: |p| singleton nodes plus at most |p|+1 merge nodes
-                               nodes = Sym.c(3) * w * (x.len + Sym.one),
-                               // the size walk, the ordered `go` walk, the per-node child-key sort
-                               // (standard-library `sortBy`, so REAL but not counted — see
-                               // SpatialEvents.scala gap 3), and the per-path union into the result
-                               touch = Sym.c(2) * sizeWalk + sizeWalk * Sym.log(x.heads) +
-                                       tPer * w * (w * x.len + x.len + Sym.c(2))))
+                                  Cost.of(work = opEntry, touch = Sym.one + countWalk))
+    else
+      // every visited node is on a cut frontier or inside the window: at most `w + 2` per level
+      val cut = tighter((w + Sym.c(2)) * (x.len + Sym.one), nd(x))
+      up(mk(work = opEntry, nodes = cut,
+            // the count walk, the visited nodes, and the per-cut-node canonical order (memoised)
+            touch = Sym.one + countWalk + tPer * cut +
+                    Sym.c(2) * (x.len + Sym.one) * x.heads * Sym.log(x.heads)))
   def group(src: Meas): CostInterval =
     CostInterval.exact(Cost.of(work = opEntry, touch = src.heads))      // the head children ARE the groups
+  /** FOLD's accumulation: an ORDERED LEFT FOLD of unions (review.md item 4, third bullet says split
+   *  this from `Iteration`'s n-ary join, and it is now split).  The `groups²` factor is real for a left
+   *  fold, but only when the outputs genuinely overlap: an ABSORBED or DISJOINT step keeps the
+   *  accumulator by pointer, which is why the lower endpoint is `groups` and not `groups²`. */
   def collect(groups: Sym, body: Meas): CostInterval =
-    // The accumulation of the per-group results.  This must cover the WORSE of the two shapes `evalI`
-    // uses — `Iteration`'s balanced `joinAll` and `Fold`'s LEFT FOLD of unions — so it is the left
-    // fold: `groups` merges, the k-th against an accumulator of at most `groups · nd(body)` nodes.
-    // That quadratic-in-`groups` factor is real for a left fold and is the single largest source of
-    // `touch` slack in the published table.
-    // the `+ 1` is load-bearing: `ITrie.joinAll` is ENTERED once per loop node even when the source has
-    // no head at all, so a zero-group loop still counts one TrieNodeVisit (caught by the corpus
-    // calibration: 4 counted touches against a predicted 3)
-    CostInterval.upperOnly(mk(work = groups * opEntry, nodes = groups * nd(body),
-                              touch = Sym.one + tPer * groups * (groups + Sym.one) * nd(body)))
+    CostInterval(Cost.of(work = Sym.zero, touch = Sym.zero),
+                 mk(work = groups * opEntry, nodes = groups * nd(body),
+                    touch = Sym.one + tPer * groups * (groups + Sym.one) * nd(body)))
+  /** ITERATION's accumulation: `ITrie.joinAll`, ONE simultaneous pass over all group results.  A key
+   *  present in exactly one group is placed BY POINTER, so `k` disjoint groups allocate one node in
+   *  total — the case the pairwise fold cannot express and the quadratic bound above cannot see. */
+  override def collectJoin(groups: Sym, body: Meas): CostInterval =
+    CostInterval(Cost.zero,
+                 mk(work = groups * opEntry, nodes = Sym.one + groups * nd(body),
+                    touch = Sym.one + tPer * groups * nd(body)))
   def foldStep(groups: Sym, updNodes: Sym, updLen: Sym): CostInterval =
     // per group: `pathItemsI(update)` dispatches on every update subterm; the accumulator is a
     // PathValue, so nothing is allocated in the trie
-    CostInterval.upperOnly(mk(work = groups * (opEntry + updNodes), touch = groups * updLen))
-  def fixStep(acc: Meas, body: Meas): CostInterval =
-    up(mk(work = opEntry, nodes = tighter(nd(acc), nd(body)),
-          touch = merge2(nd(acc), nd(body))))
+    CostInterval(Cost.zero, mk(work = groups * (opEntry + updNodes), touch = groups * updLen))
+  /** ONE FIXPOINT ROUND: the union of the iterate into the accumulator, priced by the CHANGED frontier
+   *  (review.md item 2's last table row), plus the convergence test — which is `ITrie.equalT`, whose
+   *  visits are counted as `EqualityFrontierVisit` (an `Explain` event) and therefore do NOT belong in
+   *  the calibrated `touch` component. */
+  def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval =
+    priced(rel, acc, body, merge2(nd(acc), nd(body)), tighter(nd(acc), nd(body)))
+  /** THE FRAME LAW, on the trie executables: `Σ K_d` loop-body entries and one `joinAll` per frame.
+   *  The per-frame constant of 4 covers what one ENTRY into a level really dispatches — the `Iteration`
+   *  node itself, its `Mention(rest)` source and its group split — because the nest is
+   *  priced in ONE transfer and its inner nodes are no longer visited individually.  A constant, not a
+   *  slope: the whole point of the frame law is that `Σ K_d` replaces `Π K_d`. */
+  override def chainNest(frames: Sym, leaves: Sym, visits: Sym, depth: Sym, leaf: Meas): CostInterval =
+    val entries = Sym.c(2) * (frames + depth) + Sym.c(2)
+    CostInterval(Cost.of(rounds = Sym.zero),
+                 Cost.of(work = entries * (Sym.one + opEntry),
+                         alloc = frames + depth + leaves * nd(leaf),
+                         rounds = frames,
+                         touch = entries + tPer * (frames + depth + leaves * nd(leaf))))
+
+  /** a source with at most one head: the `tails*` identities fire and nothing below is touched */
+  protected def atMostOneHead(m: Meas): Boolean = m.heads match
+    case Sym.Const(n) => n <= 1L
+    case _ => false
 
 /** `evalI` (IntTrie.scala): one AST dispatch per node, then the trie algebra.
  *
@@ -1003,6 +1249,21 @@ final class TrieCostModel(p: ExecutionPhase) extends TrieAlgebraCost(p):
   /** `evalI` emits no [[EffortEvent.TrieOpEntry]]: one [[EffortEvent.TrieDispatch]] per node covers
    *  both the AST dispatch and the algebra entry, and [[dispatch]] already charges it. */
   protected def opEntry: Sym = Sym.zero
+
+/** THE DIAGNOSTIC COUNTERFACTUAL: the SAME executable, priced as if its ring operations returned a
+ *  fresh node instead of an `AlgebraicResult`.
+ *
+ *  This is not a backend — it names no executable of its own, and `Backends.of` never returns it — it
+ *  is how review.md item 2's central claim becomes a NUMBER: the difference between this instance and
+ *  [[TrieCostModel]] on the same term is exactly what accept-by-pointer, disjoint-reject and identity
+ *  propagation buy, and on the geometric-scale generators it is a SLOPE difference (`0` rebuilt nodes
+ *  against `|A|`) and not a constant factor.  Reported by `SpatialPipelineCheck`, never used to choose a
+ *  backend. */
+final class NaiveTrieCostModel(p: ExecutionPhase) extends TrieAlgebraCost(p):
+  val backend = Backend.Trie
+  protected def opEntry: Sym = Sym.zero
+  override protected def caseReturning: Boolean = false
+  override def name: String = s"trie-no-identity/${if phase == ExecutionPhase.Warm then "warm" else "cold"}"
 
 /** `execT` (GraphExec.scala): the same trie algebra, executed as a flat dataflow graph.
  *
@@ -1046,9 +1307,15 @@ final class GraphCost(p: ExecutionPhase) extends TrieAlgebraCost(p):
     // per child: `ExtractPathRef` (a "path" slot: 1 dispatch) + `ExtractSpaceMention` (a "space"
     // slot: 1 dispatch + 1 TrieOpEntry) + a possible trailing pass-through `Union` (another 2)
     CostInterval.upperOnly(super.collect(groups, body).hi + Cost.of(work = Sym.c(5) * groups))
-  override def fixStep(acc: Meas, body: Meas): CostInterval =
+  override def collectJoin(groups: Sym, body: Meas): CostInterval =
+    CostInterval.upperOnly(super.collectJoin(groups, body).hi + Cost.of(work = Sym.c(5) * groups))
+  override def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval =
     // per round: the `ExtractSpaceMention(rec)` slot, plus a possible pass-through
-    CostInterval.upperOnly(super.fixStep(acc, body).hi + Cost.of(work = Sym.c(4)))
+    CostInterval.upperOnly(super.fixStep(acc, body, rel).hi + Cost.of(work = Sym.c(4)))
+  override def chainNest(frames: Sym, leaves: Sym, visits: Sym, depth: Sym, leaf: Meas): CostInterval =
+    // one FRAME per loop node (reused across its children) plus the per-child prologue slots
+    CostInterval.upperOnly(super.chainNest(frames, leaves, visits, depth, leaf).hi +
+                           Cost.of(work = Sym.c(2) * frames, alloc = depth))
 
 // ------------------------------------------------------------------------------------------------
 // 3c. THE FUSED ZIPPER — `execZ`
@@ -1092,6 +1359,7 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
    *  which `transpileZ` really does emit unconditionally. */
   private def up(hi: Cost): CostInterval = CostInterval.upperOnly(hi)
   override def raffinationRereadsX = true            // `Subtraction(x, restriction(x, y))` reads x twice
+  override def demandDriven: Boolean = true
   override def controlFlowFallback: Option[Backend] = Some(Backend.Trie)
   override def fallbackEntry: CostInterval = CostInterval.exact(Cost.of(work = Sym.one))
   /** MATERIALISATION IS CHARGED PER OPERATOR, NOT AT THE ROOT.
@@ -1129,24 +1397,42 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
   // A pointer-identity short circuit performs NO cursor read: `SpaceZipper.union` tests `sameSpace`
   // and returns an operand, counting only the EXPLANATORY `ReusedSpace`.  Charging one work unit for it
   // put the lower endpoint above the counted total on every `x ∪ x` (caught by the corpus calibration).
-  def union(a: Meas, b: Meas, same: Boolean): CostInterval =
-    if same then CostInterval.exact(Cost.zero)                                 // ReusedSpace: explanatory
-    else up(Cost.of(work = fuse2(a, b, a.nodes + b.nodes), alloc = a.nodes + b.nodes))
-  def inter(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
-    if same then CostInterval.exact(Cost.zero)
+  /** THE FUSED RESULT NODE COUNT, tightened by the frontier when one is available: `materialize`
+   *  allocates one node per FORCED cursor node, and a forced node is a rebuilt node of the underlying
+   *  merge, so the frontier's `rebuilt` bound applies here too (review.md item 3: "the correct
+   *  allocation parameter is the number of forced non-`Lit` cursor nodes, not operand nodes"). */
+  private def res(rel: Rel, coarse: Sym): Sym = rel.frontier match
+    // the same one node of slack the trie model charges (see `TrieAlgebraCost.priced`)
+    case Some(f) if !f.isFallback && f.rebuilt.hi < Ivl.INF =>
+      tighter(coarse, Sym.c(f.rebuilt.hi) + Sym.one)
+    case _ => coarse
+  def union(a: Meas, b: Meas, rel: Rel): CostInterval =
+    if rel.same then CostInterval.exact(Cost.zero)                             // ReusedSpace: explanatory
+    else
+      val r = res(rel, a.nodes + b.nodes)
+      up(Cost.of(work = fuse2(a, b, r), alloc = r))
+  def inter(a: Meas, b: Meas, rel: Rel): CostInterval =
+    if rel.same then CostInterval.exact(Cost.zero)
     // HEAD-disjoint (SpatialCost.headDisjoint): `IntMap.intersectionWith` finds no shared key at the
     // top, so the fused cursor has no children and `materialize` stops there
-    else if disjoint then up(Cost.of(work = fuse2(a, b, a.heads + b.heads), alloc = a.heads + b.heads))
-    else up(Cost.of(work = fuse2(a, b, tighter(a.nodes, b.nodes)), alloc = tighter(a.nodes, b.nodes)))
-  def subtract(a: Meas, b: Meas, disjoint: Boolean, same: Boolean): CostInterval =
-    if same then CostInterval.exact(Cost.zero)                                 // instant prune to ∅
-    else up(Cost.of(work = fuse2(a, b, a.nodes), alloc = a.nodes))
-  def restrict(x: Meas, y: Meas): CostInterval =
-    up(Cost.of(work = fuse2(x, y, tighter(x.nodes, y.nodes)), alloc = tighter(x.nodes, y.nodes)))
-  def raffine(x: Meas, y: Meas): CostInterval =
+    else if rel.disjoint && !rel.derived then
+      up(Cost.of(work = fuse2(a, b, a.heads + b.heads), alloc = a.heads + b.heads))
+    else
+      val r = res(rel, tighter(a.nodes, b.nodes))
+      up(Cost.of(work = fuse2(a, b, r), alloc = r))
+  def subtract(a: Meas, b: Meas, rel: Rel): CostInterval =
+    if rel.same then CostInterval.exact(Cost.zero)                             // instant prune to ∅
+    else
+      val r = res(rel, a.nodes)
+      up(Cost.of(work = fuse2(a, b, r), alloc = r))
+  def restrict(x: Meas, y: Meas, rel: Rel): CostInterval =
+    val r = res(rel, tighter(x.nodes, y.nodes))
+    up(Cost.of(work = fuse2(x, y, r), alloc = r))
+  def raffine(x: Meas, y: Meas, rel: Rel): CostInterval =
     // Subtraction(x, restriction(x, y)) — TWO fused layers over x
-    up(Cost.of(work = Sym.c(2) * fuse2(x, y, x.nodes + y.nodes), alloc = x.nodes + y.nodes))
-  def compose(a: Meas, b: Meas): CostInterval =
+    val r = res(rel, x.nodes + y.nodes)
+    up(Cost.of(work = Sym.c(2) * fuse2(x, y, r), alloc = r))
+  def compose(a: Meas, b: Meas, rel: Rel): CostInterval =
     // `Composition.children` splices ALL of b at every terminal of a, so b's cursor is re-read once
     // per a-terminal.  This is the one local operator whose fused cost is not linear in the operands.
     up(Cost.of(work = Sym.c(4) * (a.nodes + a.size * b.nodes) + reads(a) + a.size * reads(b),
@@ -1190,9 +1476,28 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
                                    touch = Sym.c(3) * groups * (groups + Sym.one) * body.nodes))
   def foldStep(groups: Sym, updNodes: Sym, updLen: Sym): CostInterval =
     CostInterval.upperOnly(Cost.of(work = groups * (Sym.one + updNodes), touch = groups * (Sym.one + updLen)))
-  def fixStep(acc: Meas, body: Meas): CostInterval =
-    CostInterval.upperOnly(Cost.of(work = Sym.one, alloc = tighter(acc.nodes, body.nodes),
-                                   touch = Sym.c(3) * (acc.nodes + body.nodes)))
+  def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval =
+    val r = res(rel, tighter(acc.nodes, body.nodes))
+    CostInterval.upperOnly(Cost.of(work = Sym.one, alloc = r, touch = Sym.c(3) * (acc.nodes + body.nodes)))
+  /** THE DEMAND-ANALYSIS PRICE of one fused region (review.md item 3).
+   *
+   *  `forcedVirtual` IS the allocation parameter — `SpaceZipper.materialize` emits exactly one
+   *  `ZipperMaterializeNode` and one `FreshNode` per forced non-`Lit` cursor node, and an accepted `Lit`
+   *  subtrie arrives by pointer however large it is.  `cursorReads` is the counted `ZipperCursorRead`
+   *  traffic; `cursorMapEntries + materializeEntries` is the PER-ENTRY `IntMap.transform`/`unionWith`
+   *  work review.md item 6 says one `ZipperCursorRead` per whole map operation does not represent, so it
+   *  is charged here rather than assumed free.  `touch` is 0: a fused cursor composes `IntMap`s directly
+   *  and enters no `IntTrieOps` descent. */
+  override def demandPrice(d: DemandSummary): Option[CostInterval] =
+    if d.truncated then None
+    else
+      val work = Sym.c(d.cursorReads) + Sym.c(d.cursorMapEntries) + Sym.c(d.materializeEntries)
+      val alloc = Sym.c(d.forcedVirtual) + Sym.c(d.virtualAlloc)
+      // EXACT means the supplied facts settled every case distinction the executor makes, so the
+      // interval collapses; otherwise these are upper bounds and the lower endpoint stays at the
+      // mandatory root materialisation.
+      if d.exact then Some(CostInterval.exact(Cost.of(work = work, alloc = alloc)))
+      else Some(CostInterval(Cost.zero, Cost.of(work = work, alloc = alloc)))
 
 /** The eight instances (four executables x two phases), and the legacy two-instance names the rest
  *  of the tree used before backends were separated. */
@@ -1220,6 +1525,11 @@ object Backends:
                                       referenceCold, trieCold, graphCold, zipperCold)
   val warm: Vector[CostModel] = Vector(referenceWarm, trieWarm, graphWarm, zipperWarm)
 
+  /** THE DIAGNOSTIC COUNTERFACTUAL — not a backend, never returned by [[of]].  See
+   *  [[NaiveTrieCostModel]]: the same `evalI` executable priced without its `AlgebraicResult` identity
+   *  cases, so the whole-subtree wins are a measured difference rather than a claim. */
+  val trieNoIdentityWarm: CostModel = new NaiveTrieCostModel(ExecutionPhase.Warm)
+
 /** the warm reference model — the historical name for "the set backend" */
 val SetCost: CostModel = Backends.referenceWarm
 /** the warm trie model — the historical name, now explicitly `evalI` and NOT `execZ` */
@@ -1246,7 +1556,7 @@ object Recurrence:
     else b match
       case Sym.Const(0) => Amount.of(a)
       case Sym.Const(1) => Amount.of(a * n)
-      case Sym.Const(_) => Amount.of(a * (b ** n))
+      case Sym.Const(_) | Sym.Big(_) => Amount.of(a * (b ** n))
       case Sym.Inf => Amount.Unbounded("recursive branching factor is unbounded")
       case _ => Amount.of(a * n * (b ** n))
 
@@ -1343,7 +1653,17 @@ object SpatialCost:
    *  its own). */
   val FactBudget = 2000
   val MaxInline = 6
-  val MaxDepth = 64
+  /** THE AST-DEPTH CAP.  It used to be 64, which `puzzle15` exceeds — 16 `Iteration`s around a
+   *  `superpose` call whose body nests 15 more inside a 16-way `Union` — and the transfer then returned
+   *  an explicit `Unbounded("analysis depth cap")` on a program known to terminate.  review.md item 5
+   *  is right that this is an implementation bug: raising the cap alone did NOT fix it (the per-level
+   *  group-count product then saturated instead), but raising it TOGETHER with the rest-chain frame law
+   *  below does — a recognised nest is priced in ONE transfer, so the depth a nest contributes is 1 and
+   *  not its arity.  The cap now exists only to keep a pathological term off the JVM stack. */
+  val MaxDepth = 1024
+  /** How many rounds the interprocedural size/universe fixpoint may take before it gives up
+   *  ([[universeOf]]).  The alphabet lattice is finite, so this only bounds the LENGTH iteration. */
+  val UniverseRounds = 8
 
   /** `shapeFacts` selects whether the SHAPE half of the spatial product may be consulted.
    *
@@ -1359,20 +1679,50 @@ object SpatialCost:
                        routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
                        active: Set[RoutinePtr] = Set.empty,
                        facts: SpatialTyping.Env = SpatialTyping.Env(),
-                       shapeFacts: Boolean = true):
+                       shapeFacts: Boolean = true,
+                       /** THE DECORATED, `NodeId`-INDEXED ANALYSIS OF THE TERM BEING PRICED
+                        *  (review.md item 8).  Present ⇒ every per-node type query is an `O(1)` index
+                        *  lookup into the analysis that ALREADY ran, law refinements and spatial
+                        *  refinements included, instead of a fresh `SpatialTyping.infer` that throws
+                        *  them away.  That disconnect is why Life's cardinality tightened 5785 → 45
+                        *  without moving its predicted work.  Cleared when the traversal crosses into an
+                        *  inlined routine body, whose positions belong to a different tree. */
+                       decorated: Option[SpatialAnalysis] = None,
+                       /** the frontier budgets — `interned = false` because `ITrie`'s ring operations now
+                        *  DO return an `AlgebraicResult` (the case-returning algebra was moved onto the
+                        *  interned representation), so identity propagation is real for `evalI`/`execT` */
+                       frontierConfig: FrontierConfig = FrontierConfig.default):
     def withRoutines(rc: PartialFunction[RoutinePtr, Routine]): Env =
       copy(routines = rc, facts = facts.copy(lenv = facts.lenv.copy(routines = rc)))
+    /** consume an existing decorated analysis instead of re-inferring per node (review.md item 8) */
+    def withDecorated(d: SpatialAnalysis): Env = copy(decorated = Some(d))
+    def withoutDecorated: Env = if decorated.isEmpty then this else copy(decorated = None)
 
   /** One backend's answer: WHICH executable, in WHICH phase, and a lower/upper INTERVAL rather than
    *  a bare worst case (review.md finding 2).  `cost` is the upper endpoint, kept under that name so
    *  a caller that only wants the worst case reads the same field it always did. */
   final case class Report(model: String, backend: Backend, phase: ExecutionPhase,
-                          interval: CostInterval, meas: Meas, assumptions: Vector[String]):
+                          interval: CostInterval, meas: Meas, assumptions: Vector[String],
+                          /** HOW MUCH OF THIS ANSWER IS FRONTIER/DEMAND DRIVEN vs the marked ceiling */
+                          census: FrontierCensus = FrontierCensus(),
+                          /** was the term priced as `Routine.optimized`'s body / an `SC` residual, or as
+                           *  the DEFINITIONAL term?  The user's third steer: a definitional-form estimate
+                           *  is the wrong question, so where one is unavoidable it says so. */
+                          form: CostForm = CostForm.AsGiven):
     def cost: Cost = interval.hi
     def lower: Cost = interval.lo
+    /** are ALL FOUR components finite?  review.md item 5: on a closed, terminating, non-grounded
+     *  program an infinite estimate is a FAILED RESULT, and this is the predicate the invariant uses. */
+    def finite: Boolean =
+      Vector(cost.work, cost.alloc, cost.rounds, cost.touch)
+        .forall(a => !a.isUnbounded && !a.at(Map.empty).isInfinite)
+    def infiniteComponents: Vector[String] =
+      Vector("work" -> cost.work, "alloc" -> cost.alloc, "rounds" -> cost.rounds, "touch" -> cost.touch)
+        .filter((_, a) => a.isUnbounded || a.at(Map.empty).isInfinite).map((n, a) => s"$n=${a.show}")
     def show: String =
       val a = if assumptions.isEmpty then "" else assumptions.distinct.map("    ! " + _).mkString("\n", "\n", "")
-      s"[$model] ${backend.executable}\n  LOWER ${lower.show}\n  UPPER ${cost.show}\n  O: ${cost.showO}\n  in: ${meas.show}$a"
+      s"[$model] ${backend.executable} on ${form.show}\n  LOWER ${lower.show}\n  UPPER ${cost.show}\n" +
+      s"  O: ${cost.showO}\n  in: ${meas.show}\n  ${census.show}$a"
     /** the interval for one CALIBRATED component, evaluated at a concrete valuation */
     def bracket(c: EffortComponent, v: Map[String, Double]): (Double, Double) =
       (lower.calibrated(c).at(v), cost.calibrated(c).at(v))
@@ -1383,20 +1733,99 @@ object SpatialCost:
     val notes = collection.mutable.LinkedHashSet.empty[String]
     def note(s: String): Unit = notes += s
     def nextVar(prefix: String): String = { fresh += 1; s"$prefix$fresh" }
+    // ---- the frontier / demand census (review.md item 2's "last-resort fallback" requirement) ----
+    var binaryNodes = 0
+    var derived = 0
+    var fallback = 0
+    var noFact = 0
+    var chainNests = 0
+    val bySource = collection.mutable.Map.empty[String, Int]
+    /** the cost of every subterm this executable handed to ANOTHER one (`execZ` → `evalI`), so the
+     *  whole-region demand price can be compared against the per-operator sum on equal terms */
+    var handedOff: CostInterval = CostInterval.zero
+    /** WHAT THE DEMAND ANALYSIS DOES **NOT** MODEL, accumulated so the whole-region price can be
+     *  compared against the per-operator sum on equal terms.
+     *
+     *  This field is a soundness device and it exists because the naive version was UNSOUND and the
+     *  corpus calibration said so: meeting the raw demand price against the per-operator sum zeroed
+     *  `touch` (the demand summary makes no `touch` claim — a fused cursor enters no `IntTrieOps`
+     *  descent, but `ITrie.singleton`/`range`/`tailsIntersection` DO) and zeroed a cold `Literal`'s
+     *  construction, producing 109 out-of-interval corpus points including `touch actual=3 in [0,0]`.
+     *  So everything OUTSIDE the fused cursor algebra — every `ZipperBuild` dispatch, every
+     *  `TriePathDispatch`, and every operator that really calls into `ITrie` — is accumulated here and
+     *  ADDED to the demand price before the two are met. */
+    var demandExtra: CostInterval = CostInterval.zero
+    /** how many `SpatialFrontier.binary` calls are left.  The relational walk is bounded but not free,
+     *  and a hot `Routine.optimized` hook cannot afford one per node of a 300-node body. */
+    var frontierBudget: Int = 512
+    /** the frontier summaries already computed, keyed by the operand PAIR — reused as the zipper demand
+     *  analysis's `Pairing`, so the relational fact is derived once and consumed twice */
+    val relCache = collection.mutable.Map.empty[(Space, Space), FrontierSummary]
+    /** recognised rest-chain nests, so the guard and the body of the same match arm do not each pay for
+     *  the recognition and the profile query */
+    val chainCache = collection.mutable.Map.empty[(Space, NodeId), Option[ChainCost]]
+    def recordRel(r: Rel): Unit =
+      binaryNodes += 1
+      r.frontier match
+        case None => noFact += 1
+        case Some(f) =>
+          if f.isFallback then fallback += 1 else derived += 1
+          bySource(f.source.show) = bySource.getOrElse(f.source.show, 0) + 1
+    def census(demandRegions: Int, demandExact: Int, demandTrunc: Int): FrontierCensus =
+      FrontierCensus(binaryNodes, derived, fallback, noFact, bySource.toMap,
+                     demandRegions, demandExact, demandTrunc, chainNests)
 
   // ---- entry points ----------------------------------------------------------------------------
   def analyze(s: Space, model: CostModel): Report = analyze(s, Env(), model)
   def analyze(s: Space, env: Env, model: CostModel): Report =
+    analyze(s, env, model, CostForm.AsGiven)
+  def analyze(s: Space, env: Env, model: CostModel, form: CostForm): Report =
     val st = new State
-    val (c, m) = go(s, env, model, st, 0)
+    val (c0, m) = go(s, env, model, st, 0, NodeId(Vector.empty))
+    val c1 = c0 + model.finish(m, liftsToLit(s))
+    // ---- THE DEMAND ANALYSIS (review.md item 3) -----------------------------------------------
+    // `execZ` is the ONE lazy executable, so it is the one whose cost is not the sum of its
+    // subexpressions' local worst cases.  A whole-region demand analysis is an independent derivation of
+    // the same quantity; the two are MET, so the answer is the tighter and is sound either way.
+    var regions = 0; var exact = 0; var trunc = 0
+    val c =
+      if !model.demandDriven then c1
+      else
+        demandOf(s, env, st) match
+          case None => c1
+          case Some(d) =>
+            regions = 1
+            if d.exact then exact = 1
+            if d.truncated then trunc = 1
+            model.demandPrice(d) match
+              case None => c1
+              case Some(dp) =>
+                // dp bounds the FUSED CURSOR ALGEBRA (cursor reads, child-map entries, materialised
+                // nodes); `demandExtra` bounds everything else the executable does inside the region
+                // (`ZipperBuild`, `TriePathDispatch`, and the operators that really call `ITrie`);
+                // `handedOff` bounds the control-flow subterms `evalI` was given.  Their SUM therefore
+                // bounds the same quantity `c1` does, which is what makes the meet sound.
+                val whole = dp + st.demandExtra + st.handedOff
+                st.note(s"${model.name}: the fused region was priced by the DEMAND ANALYSIS " +
+                        s"(${d.show}; ${d.showProfile}); that price plus the non-fused remainder is MET " +
+                        "against the per-operator sum, because a lazy fused expression does not evaluate " +
+                        "its children independently — summing their local worst cases is the wrong semantics")
+                // ONLY THE UPPER ENDPOINT IS MET.  `c1.lo` is the established, corpus-calibrated lower
+                // endpoint; the demand derivation contributes an upper bound and nothing else, and joining
+                // the two lower endpoints produced INVERTED intervals on the corpus (`work actual=141 in
+                // [142, 141]`).  A meet that can raise a lower endpoint is not a meet worth having.
+                CostInterval(c1.lo, Cost.meetHi(c1.hi, whole.hi))
     if st.budget <= 0 then st.note(s"spatial-fact budget ($FactBudget queries) exhausted; the rest is symbolic only")
     for why <- model.touchNoOracle do
       st.note(s"${model.name}: the `touch` component has NO COUNTED ORACLE and is a model, not a " +
               s"measurement — $why")
+    if form == CostForm.Definitional then
+      st.note("THIS ESTIMATE DESCRIBES THE DEFINITIONAL TERM, not `Routine.optimized`'s body and not " +
+              "an SC residual — it is not a prediction about what runs")
     // the root materialisation, if the executable has one (only `execZ` does), and the one structural
     // widening: no positive LOWER bound on library-internal node visits is claimed (file header)
-    Report(model.name, model.backend, model.phase,
-           (c + model.finish(m, liftsToLit(s))).withoutTouchLower, m, st.notes.toVector)
+    Report(model.name, model.backend, model.phase, c.withoutTouchLower, m, st.notes.toVector,
+           st.census(regions, exact, trunc), form)
 
   /** Every executable's warm interval over the SAME facts — the per-backend cost map review.md
    *  finding 7 asks candidate selection to compare. */
@@ -1440,24 +1869,138 @@ object SpatialCost:
    *  preserves soundness; `heads ≤ size` is also a true fact and is applied unconditionally.
    *  LOWER endpoints: the MAXIMUM of two sound lower bounds is a sound lower bound, so they are
    *  joined with `lub` rather than met. */
-  private def refine(m: Meas, s: Space, env: Env, st: State): Meas =
-    var out = histAt(s, env, st) match
-      case None => m
-      case Some(t) => m.copy(size = tighter(m.size, symSize(t.size.hi)), len = tighter(m.len, symLen(t.len)),
-                             sizeLo = m.sizeLo lub symLo(t.size.lo))
-    shapeAt(s, env, st) match
+  private def refine(m: Meas, s: Space, env: Env, st: State, id: NodeId): Meas =
+    decoratedAt(s, env, id) match
+      // THE DECORATED PATH (review.md item 8).  This occurrence's type is read out of the analysis that
+      // already ran — with its law refinements, its per-node spatial refinements and its binder
+      // environment — in O(1), instead of being re-derived by a fresh `SpatialTyping.infer` that has
+      // none of them.  Life's 5785 → 45 cardinality tightening reaches the cost model through here.
       case Some(t) =>
-        out = out.copy(heads = tighter(out.heads, symSize(t.headCount.hi)),
-                       headsLo = out.headsLo lub symLo(t.headCount.lo),
-                       sizeLo = out.sizeLo lub symLo(t.size.lo),
-                       headKeys = closedHeadKeys(t.shape).orElse(out.headKeys))
-        // THE EXACT TRIE-NODE IDENTITY, when the shape's prefix profile supplies one (whispers §1).
-        // Both candidates are sound uppers of the same quantity, so `tighter` preserves soundness.
-        SpatialFacts.trieNodes(t) match
-          case Right(iv) => out = out.copy(nodesHi = Some(tighter(out.nodes, symSize(iv.hi))))
-          case Left(_) => ()                   // an inconsistent hand-built type: keep the fallback
-      case None => ()
+        st.note(DecoratedNote)
+        if env.shapeFacts then st.note(ShapeNote)
+        refineWith(m, t, env)
+      case None =>
+        var out = histAt(s, env, st) match
+          case None => m
+          case Some(t) => m.copy(size = tighter(m.size, symSize(t.size.hi)), len = tighter(m.len, symLen(t.len)),
+                                 sizeLo = m.sizeLo lub symLo(t.size.lo))
+        shapeAt(s, env, st) match
+          case Some(t) => out = refineWith(out, t, env)
+          case None => ()
+        out.copy(heads = tighter(out.heads, out.size))
+
+  /** meet a `Meas` with everything ONE already-computed `SpatialType` proves */
+  private def refineWith(m: Meas, t: SpatialType, env: Env): Meas =
+    var out = m.copy(size = tighter(m.size, symSize(t.size.hi)), len = tighter(m.len, symLen(t.len)),
+                     sizeLo = m.sizeLo lub symLo(t.size.lo))
+    if env.shapeFacts then
+      out = out.copy(heads = tighter(out.heads, symSize(t.headCount.hi)),
+                     headsLo = out.headsLo lub symLo(t.headCount.lo),
+                     headKeys = closedHeadKeys(t.shape).orElse(out.headKeys))
+      // THE EXACT TRIE-NODE IDENTITY, when the shape's prefix profile supplies one (whispers §1).
+      // Both candidates are sound uppers of the same quantity, so `tighter` preserves soundness.
+      SpatialFacts.trieNodes(t) match
+        case Right(iv) => out = out.copy(nodesHi = Some(tighter(out.nodes, symSize(iv.hi))))
+        case Left(_) => ()                     // an inconsistent hand-built type: keep the fallback
     out.copy(heads = tighter(out.heads, out.size))
+
+  private val DecoratedNote =
+    "per-node types come from the DECORATED, NodeId-indexed analysis (SpatialAnalysis) — law and " +
+    "spatial refinements included — not from a fresh SpatialTyping.infer per node (review.md item 8)"
+
+  /** THIS OCCURRENCE'S already-computed type, from the decorated analysis.  The `expression` guard is
+   *  load-bearing: a `NodeId` is only meaningful against the tree the analysis was run on, so if the
+   *  subterm at that position is not the subterm being priced the lookup is REFUSED rather than
+   *  answered with somebody else's type. */
+  private def decoratedAt(s: Space, env: Env, id: NodeId): Option[SpatialType] =
+    env.decorated.flatMap(_.at(id)).filter(_.expression == s).map(_.result)
+
+  // ---- THE RELATIONAL FRONTIER (review.md item 2) -----------------------------------------------
+
+  /** THE BINARY NODE'S RELATIONAL FACT.  Derived from the two children's already-computed
+   *  `SpatialType`s — the decorated ones when available, a budgeted fresh inference otherwise — and
+   *  never from an evaluation. */
+  private def relAt(op: FrontierOp, a: Space, b: Space, ma: Meas, mb: Meas,
+                    env: Env, st: State, id: NodeId): Rel =
+    val same = sharedOperands(a, b) || SpatialFrontier.sameObject(a, b)
+    val disj = headDisjoint(ma, mb)
+    val f =
+      if !env.shapeFacts || st.frontierBudget <= 0 then None
+      else
+        val pair = (decoratedAt(a, env, id.child(0)), decoratedAt(b, env, id.child(1))) match
+          case (Some(l), Some(r)) => Some((l, r))
+          case _ =>
+            if st.budget <= 1 then None
+            else for l <- shapeAt(a, env, st); r <- shapeAt(b, env, st) yield (l, r)
+        pair.map { (l, r) =>
+          st.frontierBudget -= 1
+          val summary = SpatialFrontier.binary(op, l, r, same, env.frontierConfig)
+          st.relCache((a, b)) = summary
+          summary
+        }
+    val rel = Rel(f, same, disj)
+    st.recordRel(rel)
+    rel
+
+  // ---- THE ZIPPER DEMAND ANALYSIS (review.md item 3) -------------------------------------------
+
+  /** does `transpileZ` turn this subterm into a CONCRETE cursor, so the demand analysis needs its
+   *  per-depth profile rather than a fused-operator rule? */
+  private def demandLeaf(s: Space): Boolean = s match
+    case Space.Union(_, _) | Space.Intersection(_, _) | Space.Subtraction(_, _) |
+         Space.Restriction(_, _) | Space.Raffination(_, _) | Space.Composition(_, _) |
+         Space.Wrap(_, _) | Space.Unwrap(_, _) | Space.TailsUnion(_) | Space.Empty => false
+    case _ => true
+
+  /** ONE OPERAND'S PER-DEPTH PROFILE, as `SpatialDemand.Layers`, read off the spatial product.  `None`
+   *  when no finite profile exists — an unbounded length, a truncated profile, a saturated count — in
+   *  which case no demand price is claimed at all rather than a wrong one. */
+  private def layersOf(t: SpatialType, env: Env): Option[Layers] =
+    if t.isProvablyEmpty then Some(Layers.empty)
+    else if t.len.isEmpty then Some(Layers.empty)
+    else if t.len.hi >= LenBounds.INF then None
+    else
+      SpatialFacts.profile(t, env.frontierConfig.facts).toOption.flatMap { p =>
+        if p.truncated then None
+        else
+          val d = p.lastDepth
+          val ks = Vector.tabulate(d + 1)(i => p.prefixes(i).hi)
+          val es = Vector.tabulate(d + 2)(i => p.paths(i).hi)
+          if ks.exists(_ >= Ivl.INF) then None
+          else Some(Layers(ks,
+                           Vector.tabulate(d + 1)(i => math.min(ks(i), es(i))),
+                           Vector.tabulate(d + 1)(i => if i + 1 <= d then ks(i + 1) else 0L),
+                           exact = false))
+      }
+
+  /** THE DEMAND SUMMARY OF THE WHOLE FUSED REGION.  Top-down over a demanded-prefix profile and layer
+   *  count, exactly as review.md item 3 prescribes: no `SpaceZipper` is ever built, `children` /
+   *  `terminal` / `descend` are never called, nothing is evaluated.  `None` whenever a leaf's profile is
+   *  not finitely known — the per-operator sum then stands alone. */
+  private def demandOf(s: Space, env: Env, st: State): Option[DemandSummary] =
+    val leaves = collection.mutable.Map.empty[Space, Layers]
+    var ok = true
+    def collect(x: Space, id: NodeId): Unit =
+      if ok then
+        if demandLeaf(x) then
+          if !leaves.contains(x) then
+            decoratedAt(x, env, id).orElse(shapeAt(x, env, st)).flatMap(t => layersOf(t, env)) match
+              case Some(l) => leaves(x) = l
+              case None => ok = false
+        else SpatialAnalysis.childrenOf(x).zipWithIndex.foreach((k, i) => collect(k, id.child(i)))
+    collect(s, NodeId(Vector.empty))
+    if !ok then None
+    else
+      // THE RELATIONAL SIBLING FACT, reused from the frontier summaries the traversal already computed.
+      def pairing(a: Space, b: Space): Pairing =
+        if SpatialFrontier.sameObject(a, b) then Pairing.identical
+        else st.relCache.get((a, b)) match
+          case Some(f) if !f.isFallback && !f.depth.truncated &&
+                          f.depth.paired.forall(_.hi < Ivl.INF) =>
+            Pairing(Some(f.depth.paired.map(_.hi)), same = false, exact = false)
+          case _ => Pairing.unknown
+      try Some(SpatialDemand.analyze(SpatialDemand.fromSpace(s, x => leaves.getOrElse(x, Layers.empty), pairing)))
+      catch case scala.util.control.NonFatal(_) => None
 
   /** DO THE TWO OPERANDS HAVE PROVABLY DISJOINT HEAD SETS?
    *
@@ -1552,10 +2095,16 @@ object SpatialCost:
    *  trie out of the context), a repeated `Literal` (the `iLiteral` memo cache returns the same
    *  object) and `Empty`.  It does NOT hold for a repeated `Singleton` or a repeated compound: those
    *  build a fresh object each time. */
-  private[morkl] def sharedOperands(a: Space, b: Space): Boolean =
-    a == b && (a match
-      case Space.Empty | Space.Mention(_) | Space.Literal(_) => true
-      case _ => false)
+  private[morkl] def sharedOperands(a: Space, b: Space): Boolean = (a, b) match
+    case (Space.Empty, Space.Empty) => true
+    case (Space.Mention(x), Space.Mention(y)) => x == y
+    // OBJECT IDENTITY, NOT STRUCTURAL EQUALITY, ON A LITERAL.  `iLiteral` is keyed by an
+    // `IdentityHashMap` over the `SpaceValue`, so two DISTINCT but equal `SpaceValue`s build two
+    // DISTINCT tries and `a eq b` is false at run time.  Claiming the pointer-identity fast path for
+    // them predicted less work than the executor performs — the same rule
+    // `SpatialFrontier.sameObject` uses, and a soundness fix rather than a tightening.
+    case (Space.Literal(x), Space.Literal(y)) => x eq y
+    case _ => false
 
   /** Does `transpileZ` produce a CONCRETE `SpaceZipper.Lit` cursor for this term?  If so
    *  `materialize` hands the existing trie straight back and allocates nothing.  Read off
@@ -1579,7 +2128,8 @@ object SpatialCost:
   private def nodeName(s: Space): String = s.getClass.getSimpleName.stripSuffix("$")
 
   // ---- the transfer ----------------------------------------------------------------------------
-  private def go(s: Space, env: Env, model: CostModel, st: State, depth: Int): (CostInterval, Meas) =
+  private def go(s: Space, env: Env, model: CostModel, st: State, depth: Int,
+                 id: NodeId): (CostInterval, Meas) =
     if depth > MaxDepth then (CostInterval.unbounded(s"analysis depth cap ($MaxDepth) reached"), Meas.top)
     else model.controlFlowFallback match
       // execZ does not fuse control flow; it hands the whole subterm to evalI.  Pricing it with the
@@ -1587,134 +2137,167 @@ object SpatialCost:
       case Some(fb) if isControlFlow(s) =>
         st.note(s"${model.name}: ${nodeName(s)} is NOT fused — transpileZ materialises it through evalI, " +
                 s"so this subterm is priced with the ${fb.slug} model (ZipperFallbackToEvalI is counted)")
-        val (c, m) = goNode(s, env, Backends.of(fb, model.phase), st, depth)
-        (c + model.fallbackEntry, m)
-      case _ => goNode(s, env, model, st, depth)
+        val (c, m) = goNode(s, env, Backends.of(fb, model.phase), st, depth, id)
+        val handed = c + model.fallbackEntry
+        st.handedOff = st.handedOff + handed
+        (handed, m)
+      case _ => goNode(s, env, model, st, depth, id)
 
-  private def goNode(s: Space, env: Env, model: CostModel, st: State, depth: Int): (CostInterval, Meas) =
-    def rec(x: Space) = go(x, env, model, st, depth + 1)
+  private def goNode(s: Space, env: Env, model: CostModel, st: State, depth: Int,
+                     id: NodeId): (CostInterval, Meas) =
+    def rec(x: Space, i: Int) = go(x, env, model, st, depth + 1, id.child(i))
+    def refineHere(m: Meas) = refine(m, s, env, st, id)
     val d = model.dispatch
+    /** RECORD A CONTRIBUTION THE DEMAND ANALYSIS DOES NOT MODEL (see `State.demandExtra`). */
+    def dext(ci: CostInterval): CostInterval =
+      if model.demandDriven then st.demandExtra = st.demandExtra + ci
+      ci
+    // every node of the fused region is one `ZipperBuild`, which is structural and not cursor traffic
+    dext(d)
     s match
-      case Space.Empty => (d + model.empty, Meas.empty)
+      case Space.Empty => (d + dext(model.empty), Meas.empty)
 
       case Space.Literal(SpaceValue(ps)) =>
         val hs = ps.iterator.collect { case PathValue(h :: _) => h }.toSet
         val m = Meas.exact(Sym.c(ps.size.toLong),
                            Sym.c(if ps.isEmpty then 0L else ps.iterator.map(_.items.length.toLong).max),
                            Sym.c(hs.size.toLong)).copy(headKeys = Some(hs))
-        (d + model.literal(m), m)
+        (d + dext(model.literal(m)), m)
 
       case Space.Singleton(p) =>
         val lp = plen(p, env)
-        (d + pathCost(p, model) + model.singleton(lp), Meas(Sym.one, lp, Sym.one, Sym.one, Sym.one))
+        (d + dext(pathCost(p, model) + model.singleton(lp)),
+         Meas(Sym.one, lp, Sym.one, Sym.one, Sym.one))
 
       case Space.Mention(m) =>
-        val mm = refine(mentionMeas(m, env), s, env, st)
-        (model.mentionDispatch + model.mention(mm), mm)
+        val mm = refineHere(mentionMeas(m, env))
+        (model.mentionDispatch + dext(model.mention(mm)), mm)
 
       case Space.Union(a, b) =>
-        val (ca, ma) = rec(a); val (cb, mb) = rec(b)
+        val (ca, ma) = rec(a, 0); val (cb, mb) = rec(b, 1)
         // |a ∪ b| ≥ max(|a|, |b|): the MAX of two sound lower bounds is a sound lower bound
-        val m = refine(Meas(ma.size + mb.size, ma.len lub mb.len, ma.heads + mb.heads,
-                            ma.sizeLo lub mb.sizeLo, ma.headsLo lub mb.headsLo), s, env, st)
-        (d + ca + cb + model.union(ma, mb, sharedOperands(a, b)), m)
+        val m = refineHere(Meas(ma.size + mb.size, ma.len lub mb.len, ma.heads + mb.heads,
+                                ma.sizeLo lub mb.sizeLo, ma.headsLo lub mb.headsLo))
+        (d + ca + cb + model.union(ma, mb, relAt(FrontierOp.Union, a, b, ma, mb, env, st, id)), m)
 
       case Space.Intersection(a, b) =>
-        val (ca, ma) = rec(a); val (cb, mb) = rec(b)
-        // HEAD-set disjointness, not an empty result — see `headDisjoint`
-        val disj = headDisjoint(ma, mb)
-        val same = sharedOperands(a, b)
+        val (ca, ma) = rec(a, 0); val (cb, mb) = rec(b, 1)
+        val rel = relAt(FrontierOp.Intersection, a, b, ma, mb, env, st, id)
         // x ∩ x = x, so a shared operand carries its lower bound through; otherwise nothing is known
-        val loSz = if same then ma.sizeLo else Sym.zero
-        val loHd = if same then ma.headsLo else Sym.zero
-        val m = refine(Meas(tighter(ma.size, mb.size), tighter(ma.len, mb.len), tighter(ma.heads, mb.heads),
-                            loSz, loHd), s, env, st)
-        (d + ca + cb + model.inter(ma, mb, disj, same), m)
+        val loSz = if rel.same then ma.sizeLo else Sym.zero
+        val loHd = if rel.same then ma.headsLo else Sym.zero
+        val m = refineHere(Meas(tighter(ma.size, mb.size), tighter(ma.len, mb.len),
+                                tighter(ma.heads, mb.heads), loSz, loHd))
+        (d + ca + cb + model.inter(ma, mb, rel), m)
 
       case Space.Subtraction(a, b) =>
-        val (ca, ma) = rec(a); val (cb, mb) = rec(b)
-        val disj = headDisjoint(ma, mb)
-        val same = sharedOperands(a, b)
+        val (ca, ma) = rec(a, 0); val (cb, mb) = rec(b, 1)
+        val rel = relAt(FrontierOp.Subtraction, a, b, ma, mb, env, st, id)
         // x ∖ x = ∅; a disjoint subtrahend removes nothing, so a's lower bound survives
-        val loSz = if same then Sym.zero else if disj then ma.sizeLo else Sym.zero
-        val m = refine(Meas(ma.size, ma.len, ma.heads, loSz, Sym.zero), s, env, st)
-        (d + ca + cb + model.subtract(ma, mb, disj, same), m)
+        val loSz = if rel.same then Sym.zero else if rel.disjoint then ma.sizeLo else Sym.zero
+        val m = refineHere(Meas(ma.size, ma.len, ma.heads, loSz, Sym.zero))
+        (d + ca + cb + model.subtract(ma, mb, rel), m)
 
       case Space.Restriction(x, y) =>
-        val (cx, mx) = rec(x); val (cy, my) = rec(y)
-        val m = refine(Meas(mx.size, mx.len, mx.heads), s, env, st)
-        (d + cx + cy + model.restrict(mx, my), m)
+        val (cx, mx) = rec(x, 0); val (cy, my) = rec(y, 1)
+        val m = refineHere(Meas(mx.size, mx.len, mx.heads))
+        (d + cx + cy + model.restrict(mx, my, relAt(FrontierOp.Restriction, x, y, mx, my, env, st, id)), m)
 
       case Space.Raffination(x, y) =>
-        val (cx, mx) = rec(x); val (cy, my) = rec(y)
-        val m = refine(Meas(mx.size, mx.len, mx.heads), s, env, st)
+        val (cx, mx) = rec(x, 0); val (cy, my) = rec(y, 1)
+        val m = refineHere(Meas(mx.size, mx.len, mx.heads))
         // `eval` rewrites x \| y to Subtraction(x, Restriction(x, y)) and evaluates recs(x) TWICE;
         // the trie/graph executors evaluate x once and reuse the value.
-        val xTwice = if model.raffinationRereadsX then cx else CostInterval.zero
-        (d + cx + xTwice + cy + model.raffine(mx, my), m)
+        val xTwice = if model.raffinationRereadsX then dext(cx) else CostInterval.zero
+        (d + cx + xTwice + cy +
+           model.raffine(mx, my, relAt(FrontierOp.Raffination, x, y, mx, my, env, st, id)), m)
 
       case Space.Composition(a, b) =>
-        val (ca, ma) = rec(a); val (cb, mb) = rec(b)
+        val (ca, ma) = rec(a, 0); val (cb, mb) = rec(b, 1)
         // concatenations of different pairs CAN collide ({a, a.b} x {b, ε}), so the only generic
         // lower bound is positivity
         val loSz = if ma.provablyNonEmpty && mb.provablyNonEmpty then Sym.one else Sym.zero
-        val m = refine(Meas(ma.size * mb.size, ma.len + mb.len, ma.heads + mb.heads, loSz, Sym.zero), s, env, st)
-        (d + ca + cb + model.compose(ma, mb), m)
+        val m = refineHere(Meas(ma.size * mb.size, ma.len + mb.len, ma.heads + mb.heads, loSz, Sym.zero))
+        (d + ca + cb + model.compose(ma, mb, relAt(FrontierOp.Composition, a, b, ma, mb, env, st, id)), m)
 
       case Space.Wrap(src, p) =>
-        val (cs, ms) = rec(src)
+        val (cs, ms) = rec(src, 0)
         val lp = plen(p, env)
         val hd = if SpatialTypes.pathLen(p, env.facts.lengths).lo >= 1 then Sym.one else ms.heads
         // prefixing is INJECTIVE, so the source's lower bound carries through exactly
-        val m = refine(Meas(ms.size, lp + ms.len, hd, ms.sizeLo, Sym.zero), s, env, st)
-        (d + cs + pathCost(p, model) + model.wrap(ms, lp), m)
+        val m = refineHere(Meas(ms.size, lp + ms.len, hd, ms.sizeLo, Sym.zero))
+        (d + cs + dext(pathCost(p, model)) + model.wrap(ms, lp), m)
 
       case Space.Unwrap(src, p) =>
-        val (cs, ms) = rec(src)
+        val (cs, ms) = rec(src, 0)
         val lp = plen(p, env)
-        val m = refine(Meas(ms.size, ms.len, ms.size), s, env, st)
-        (d + cs + pathCost(p, model) + model.unwrap(ms, lp), m)
+        val m = refineHere(Meas(ms.size, ms.len, ms.size))
+        (d + cs + dext(pathCost(p, model)) + model.unwrap(ms, lp), m)
 
       case Space.TailsUnion(src) =>
-        val (cs, ms) = rec(src)
-        val m = refine(Meas(ms.size, ms.len, ms.size), s, env, st)
+        val (cs, ms) = rec(src, 0)
+        val m = refineHere(Meas(ms.size, ms.len, ms.size))
         (d + cs + model.tailsUnion(ms), m)
 
       case Space.TailsIntersection(src) =>
-        val (cs, ms) = rec(src)
-        val m = refine(Meas(ms.size, ms.len, ms.size), s, env, st)
-        (d + cs + model.tailsInter(ms), m)
+        val (cs, ms) = rec(src, 0)
+        val m = refineHere(Meas(ms.size, ms.len, ms.size))
+        (d + cs + dext(model.tailsInter(ms)), m)
 
       case Space.Range(x, lo, hi) =>
-        val (cx, mx) = rec(x)
+        val (cx, mx) = rec(x, 0)
         val w = rangeWindow(lo, hi)
         val ident = rangeIsIdentity(lo, hi)
         // a full window is the IDENTITY: the size bound (both endpoints) passes straight through
-        val m =
-          if ident then refine(mx, s, env, st)
-          else refine(Meas(tighter(mx.size, w), mx.len, tighter(mx.heads, w)), s, env, st)
-        (d + cx + model.range(mx, w, ident), m)
+        val m = if ident then refineHere(mx)
+                else refineHere(Meas(tighter(mx.size, w), mx.len, tighter(mx.heads, w)))
+        (d + cx + dext(model.range(mx, w, ident)), m)
 
-      // ---- THE LOOPS: work = (head-groups) × (body work) ----------------------------------------
+      // ---- THE LOOPS ---------------------------------------------------------------------------
+      // THE REST-CHAIN FRAME LAW COMES FIRST (review.md item 5, first bullet).  A rest-chained nest is
+      // priced as ONE transfer from the source's prefix profile — `frames = Σ K_d`, `leaves = K_D`,
+      // `visits = Σ E_d` — BEFORE the generic transfer recursively multiplies independent per-level
+      // group maxima.  That product is what turned 122 counted rounds into 390,580 and then, on a
+      // 16-level nest, into `inf`; and because the whole nest costs one level of recursion here, the
+      // 16-deep `puzzle15` term also stops hitting the AST depth cap.
+      case it @ Space.Iteration(src, _, _, _) if chainOf(it, env, st, id).isDefined =>
+        val ch = chainOf(it, env, st, id).get
+        st.chainNests += 1
+        st.note(ch.note)
+        val (cs, _) = rec(src, 0)
+        val (cl, ml) = go(ch.chain.leaf, ch.leafEnv(env, st), model, st, depth + 1, ch.leafId(id))
+        // the result is the union over the leaf invocations, so its cardinality is `K_D · |leaf|` and
+        // the only generic lower bound is positivity (different source paths' outputs can collide)
+        val m = refineHere(Meas(ch.leaves * ml.size, ml.len, ch.leaves * ml.size))
+        // the leaf runs at most `leaves = K_D` times — NOT `Π K_d` times — and one dispatch per FRAME is
+        // charged by `chainNest`, which also carries the `rounds` component
+        val cost = d + cs + model.loopPrologue.scale(Sym.one, ch.depthSym) +
+                   model.chainNest(ch.frames, ch.leaves, ch.visits, ch.depthSym, ml) +
+                   cl.scale(ch.leavesLo, ch.leaves) +
+                   model.collectJoin(ch.leaves, ml)
+        (cost, m)
+
       case Space.Iteration(src, sym, rest, body) =>
-        val (cs, ms) = rec(src)
+        val (cs, ms) = rec(src, 0)
         val groups = ms.heads                                  // the GROUP COUNT is the head count
         val groupsLo = ms.headsLo
         val benv = loopEnv(env, src, ms, sym, rest, st)
-        val (cb, mb) = go(body, benv, model, st, depth + 1)
-        val m = refine(Meas(groups * mb.size, mb.len, groups * mb.size), s, env, st)
+        val (cb, mb) = go(body, benv, model, st, depth + 1, id.child(1))
+        val m = refineHere(Meas(groups * mb.size, mb.len, groups * mb.size))
+        // ITERATION ACCUMULATES WITH `joinAll`, an n-ary simultaneous pass, NOT the left fold `Fold`
+        // uses — review.md item 4, third bullet: "Split them."
         val cost = d + cs + model.loopPrologue + model.group(ms) + cb.scale(groupsLo, groups) +
-                   model.collect(groups, mb) + CostInterval(Cost.r(groupsLo), Cost.r(groups))
+                   model.collectJoin(groups, mb) + CostInterval(Cost.r(groupsLo), Cost.r(groups))
         (cost, m)
 
       case Space.Fold(src, initial, acc, sym, rest, body, update) =>
-        val (cs, ms) = rec(src)
+        val (cs, ms) = rec(src, 0)
         val groups = ms.heads
         val groupsLo = ms.headsLo
         val benv0 = loopEnv(env, src, ms, sym, rest, st)
         val benv = benv0.copy(paths = benv0.paths + (acc -> Sym.v(s"|acc:${acc.s}|")))
-        val (cb, mb) = go(body, benv, model, st, depth + 1)
-        val m = refine(Meas(groups * mb.size, mb.len, groups * mb.size), s, env, st)
+        val (cb, mb) = go(body, benv, model, st, depth + 1, id.child(1))
+        val m = refineHere(Meas(groups * mb.size, mb.len, groups * mb.size))
         val seed = CostInterval(Cost.zero, Cost.of(alloc = Sym.one)) + pathCost(initial, model)
         val cost = d + cs + model.loopPrologue + model.group(ms) + cb.scale(groupsLo, groups) +
                    model.collect(groups, mb) + seed +
@@ -1723,37 +2306,50 @@ object SpatialCost:
         (cost, m)
 
       case f @ Space.Fixpoint(init, recm, body) =>
-        val (ci, mi) = rec(init)
-        val self = refine(Meas(Sym.v(s"|fix:${recm.s}|"), Sym.v(s"len(fix:${recm.s})"), Sym.v(s"|fix:${recm.s}|")),
-                          s, env, st)
+        val (ci, mi) = rec(init, 0)
+        val self = refineHere(Meas(Sym.v(s"|fix:${recm.s}|"), Sym.v(s"len(fix:${recm.s})"),
+                                   Sym.v(s"|fix:${recm.s}|")))
         val rounds = fixRounds(f, env, st, self)
         // every iterate is a subset of the accumulated result, so `self` bounds each of them
         val benv = env.copy(spaces = env.spaces + (recm -> self),
                             facts = env.facts.copy(spaces = env.facts.spaces + (recm -> typeAt(f, env, st))))
-        val (cb, mb) = go(body, benv, model, st, depth + 1)
-        val m = refine(Meas(rounds * mb.size + mi.size, mi.len lub mb.len, rounds * mb.size + mi.size,
-                            mi.sizeLo, Sym.zero), s, env, st)
+        val (cb, mb) = go(body, benv, model, st, depth + 1, id.child(1))
+        val m = refineHere(Meas(rounds * mb.size + mi.size, mi.len lub mb.len,
+                                rounds * mb.size + mi.size, mi.sizeLo, Sym.zero))
+        // THE FIXPOINT'S UNION IS PRICED BY THE CHANGED FRONTIER (review.md item 2, last table row):
+        // an ABSORBED iterate is `Identity(LEFT)` and rebuilds nothing, which is exactly what makes the
+        // terminating round free.  `Rel` here is the accumulator-against-iterate summary.
+        val fixRel = fixpointRel(f, env, st, id, body)
         // AT LEAST ONE round always runs: the loop must evaluate the body once to discover the
         // iterate is unchanged (the terminating round is counted by FixpointRound).
         val cost = d + model.fixPrologue + ci + cb.scale(Sym.one, rounds) +
-                   model.fixStep(self, mb).scale(Sym.one, rounds) +
+                   model.fixStep(self, mb, fixRel).scale(Sym.one, rounds) +
                    CostInterval(Cost.r(Sym.one), Cost.r(rounds))
         (cost, m)
 
       // ---- CALLS: inline, or solve the recurrence ------------------------------------------------
       case Space.Call(rp, refs, mentions) if env.active(rp) =>
-        // a recursive occurrence: emit MARKER variables, which the enclosing inlining step reads
-        // back out of the normalised polynomial as the recurrence's branching factor
-        (CostInterval(Cost.zero,
+        // A recursive occurrence: emit MARKER variables, which the enclosing inlining step reads back out
+        // of the normalised polynomial as the recurrence's branching factor.
+        //
+        // THE ARGUMENT EXPRESSIONS ARE CHARGED HERE, and were not.  Every level of the recursion
+        // re-evaluates them — for the semi-naive Datalog cornerstone they ARE the whole per-round delta
+        // computation — so omitting them made the closed form's per-level constant `a` almost empty.  It
+        // was invisible while the depth was unbounded, and became a 172-against-50 containment failure the
+        // moment the universe summary bounded it.
+        val argCosts = mentions.zipWithIndex.map((a, i) => go(a, env, model, st, depth + 1, id.child(i)))
+        val marker = CostInterval(Cost.zero,
                       Cost(Amount.of(Sym.v(recWorkVar(rp))), Amount.of(Sym.v(recAllocVar(rp))),
-                           Amount.of(Sym.v(recRoundVar(rp))), Amount.of(Sym.v(recTouchVar(rp))))),
+                           Amount.of(Sym.v(recRoundVar(rp))), Amount.of(Sym.v(recTouchVar(rp)))))
+        (argCosts.foldLeft(marker)((c, x) => c + x._1) +
+           refs.foldLeft(CostInterval.zero)((c, p) => c + pathCost(p, model)),
          Meas(Sym.v(s"|${rp.s}()|"), Sym.v(s"len(${rp.s}())"), Sym.v(s"|${rp.s}()|")))
 
       // `active.size` — not the AST depth — is the CALL depth, so a call deep inside a term is still
       // analysed interprocedurally; only genuinely nested routine bodies hit the cap
       case Space.Call(rp, refs, mentions) if env.routines.isDefinedAt(rp) && env.active.size < MaxInline =>
         val Routine(_, refns, mentionns, rbody) = env.routines(rp)
-        val argCosts = mentions.map(a => go(a, env, model, st, depth + 1))
+        val argCosts = mentions.zipWithIndex.map((a, i) => go(a, env, model, st, depth + 1, id.child(i)))
         val callee = Env(
           spaces = mentionns.zip(argCosts.map(_._2)).toMap,
           paths = refns.zip(refs.map(p => plen(p, env))).toMap,
@@ -1763,8 +2359,11 @@ object SpatialCost:
             paths = Map.empty,
             lenv = SpatialEnv(paths = refns.zip(refs.map(p => SpatialTypes.pathLen(p, env.facts.lengths))).toMap,
                               routines = env.routines)),
-          shapeFacts = env.shapeFacts)
-        val (cbody, mbody) = go(rbody, callee, model, st, depth + 1)
+          shapeFacts = env.shapeFacts,
+          // THE CALLEE'S BODY IS A DIFFERENT TREE: the decorated analysis's `NodeId`s do not address it,
+          // so the index is dropped rather than misread (the `expression` guard would refuse anyway).
+          decorated = None, frontierConfig = env.frontierConfig)
+        val (cbody, mbody) = go(rbody, callee, model, st, depth + 1, NodeId(Vector.empty))
         val total = argCosts.foldLeft(CostInterval.zero)((c, x) => c + x._1) + d +
                     refs.foldLeft(CostInterval.zero)((c, p) => c + pathCost(p, model))
         def mentionsMarker(a: Amount, v: String) = a.symOpt.exists(e => Sym.vars(e).contains(v))
@@ -1776,23 +2375,43 @@ object SpatialCost:
           // a genuine recursion: find the decreasing measure, then close the linear recurrence
           Recurrence.decreasingArg(rbody, rp, mentionns) match
             case None =>
-              // No length-decreasing argument.  Say EXACTLY what is missing rather than "no measure":
-              // a monotone accumulator does prove termination, but bounding its fixpoint size needs a
-              // fixpoint over the size lattice that this analysis does not have.
-              val why = Recurrence.accumulatorArg(rbody, rp, mentionns) match
-                case Some(i) if Recurrence.selfTerminating(rbody, rp) =>
-                  st.note(s"recursive routine ${rp.s}: parameter $i (${mentionns.lift(i).map(_.s).getOrElse("?")}) is a " +
-                          "MONOTONE ACCUMULATOR and the body is the Union(_, Call) shape, so the recursion does " +
-                          "terminate — every continuing call adds at least one path and the depth is " +
-                          "|accumulator at the fixpoint| + 2.  What is missing is a BOUND on that size: it is the " +
-                          "least fixpoint of the body's size transformer, and this analysis has neither a fixpoint " +
-                          "over the size lattice nor a finite path universe to widen into.  MODELLING GAP, named.")
-                  s"recursion in ${rp.s}: monotone accumulator with no bound on its fixpoint size"
+              // NO LENGTH-DECREASING ARGUMENT, but a MONOTONE ACCUMULATOR under a `Union(_, Call)` body
+              // proves termination: every continuing call adds at least one path, so the depth is
+              // `|accumulator at the fixpoint| + 2`.  review.md item 5 asks for the missing half — an
+              // interprocedural least-fixpoint SIZE/UNIVERSE summary — and [[universeOf]] computes it:
+              // the accumulator can only ever hold paths over the routine's own item alphabet, up to the
+              // routine's own length fixpoint, and that universe is finite whenever both are.
+              val accArg = Recurrence.accumulatorArg(rbody, rp, mentionns)
+              val universe: Either[String, Universe] =
+                if !Recurrence.selfTerminating(rbody, rp) then
+                  Left("the body is not the Union(_, Call) shape the self-call detection terminates on")
+                else accArg.toRight("no monotone accumulator parameter")
+                       .flatMap(i => universeOf(rp, i, mentions, refs, env, st))
+              (accArg, universe.toOption) match
+                case (Some(i), Some(u)) =>
+                  val n = Sym.big(u.paths + 2)
+                  st.note(s"recursive routine ${rp.s}: parameter $i " +
+                          s"(${mentionns.lift(i).map(_.s).getOrElse("?")}) is a MONOTONE ACCUMULATOR under a " +
+                          s"Union(_, Call) body, so every continuing call adds at least one path.  THE " +
+                          s"INTERPROCEDURAL LEAST-FIXPOINT UNIVERSE SUMMARY bounds that accumulator: " +
+                          s"${u.show}, hence at most ${u.paths} paths and a call depth of ${u.paths + 2}.  " +
+                          "This is review.md item 5's Datalog half — no longer a modelling gap.")
+                  val closed = Recurrence.close(hi, recWorkVar(rp), recAllocVar(rp), recRoundVar(rp),
+                                                recTouchVar(rp), n)
+                  (total + CostInterval(cbody.lo, closed) + model.callFrame.scale(Sym.one, n),
+                   Meas(n * mbody.size, mbody.len, n * mbody.size))
+                case (Some(i), None) =>
+                  val why = universe.left.getOrElse("?")
+                  st.note(s"recursive routine ${rp.s}: parameter $i is a MONOTONE ACCUMULATOR, so the recursion " +
+                          s"terminates, but the LEAST-FIXPOINT UNIVERSE SUMMARY failed: $why.  The depth is " +
+                          "therefore not bounded — and the reason is a named limit of this summary, not a shrug")
+                  (total + CostInterval.unbounded(
+                     s"recursion in ${rp.s}: monotone accumulator, universe summary failed ($why)"), Meas.top)
                 case _ =>
                   st.note(s"recursive routine ${rp.s}: no argument provably loses an item per call and none is a " +
                           "monotone accumulator, so no recursion depth bound and no closed form")
-                  s"recursion in ${rp.s} without a decreasing measure"
-              (total + CostInterval.unbounded(why), Meas.top)
+                  (total + CostInterval.unbounded(
+                     s"recursion in ${rp.s} without a decreasing measure"), Meas.top)
             case Some(i) =>
               val argLen = mentions.lift(i).map(a => SpatialTypes.lenOf(a, env.facts.lengths).hi).getOrElse(LenBounds.INF)
               val n = Recurrence.depthBound(argLen)
@@ -1819,7 +2438,8 @@ object SpatialCost:
         val why = if env.routines.isDefinedAt(rp) then s"call to ${rp.s} beyond the call-depth cap ($MaxInline nested routines)"
                   else s"call to ${rp.s} with no routine body available"
         st.note(why)
-        (mentions.foldLeft(CostInterval.zero)((c, a) => c + go(a, env, model, st, depth + 1)._1) +
+        (mentions.zipWithIndex.foldLeft(CostInterval.zero)((c, ai) =>
+           c + go(ai._1, env, model, st, depth + 1, id.child(ai._2))._1) +
            CostInterval.unbounded(why), Meas.top)
 
       case Space.GroundedPS(_, _) | Space.GroundedSS(_, _) =>
@@ -1891,4 +2511,322 @@ object SpatialCost:
       st.note(s"fixpoint over ${recm.s}: the body is not a monotone accumulator (not Union(${recm.s}, _)), so no " +
               s"round bound is derivable; the round count is the free variable $v")
       Sym.v(v)
+
+  /** THE FIXPOINT'S CHANGED FRONTIER (review.md item 2, last table row).  The accumulator against one
+   *  iterate: an ABSORBED iterate is `Identity(LEFT)` and rebuilds nothing, an unchanged subtrie is
+   *  reused by pointer, and only the CHANGED frontier is merged. */
+  private def fixpointRel(f: Space.Fixpoint, env: Env, st: State, id: NodeId, body: Space): Rel =
+    val fr =
+      if !env.shapeFacts || st.frontierBudget <= 0 then None
+      else
+        val accT = decoratedAt(f, env, id).orElse(shapeAt(f, env, st))
+        val itT = decoratedAt(body, env, id.child(1)).orElse(shapeAt(body, env, st))
+        (accT, itT) match
+          case (Some(a), Some(i)) =>
+            st.frontierBudget -= 1
+            Some(SpatialFrontier.fixpointUnion(a, i, shared = false, absorbed = false, env.frontierConfig))
+          case _ => None
+    val rel = Rel(fr, same = false, disjoint = false)
+    st.recordRel(rel)
+    rel
+
+  // ================================================================================================
+  // 6.  THE REST-CHAIN FRAME LAW  (review.md item 5, first bullet — the Puzzle half)
+  // ================================================================================================
+
+  /** A RECOGNISED REST-CHAINED ITERATOR NEST, priced from the source's PREFIX PROFILE.
+   *
+   *  `frames = Σ_{d=1..D} K_d` is a STRUCTURAL IDENTITY, not an estimate: the level-`i` iteration groups
+   *  the tails of one depth-`(i-1)` prefix, so its groups are exactly the depth-`i` prefixes extending
+   *  it, and summing over the levels gives the total frame count.  `leaves = K_D` is the leaf invocation
+   *  count and `visits = Σ E_d` the reference evaluator's `groupMap` visits.  What this replaces is
+   *  `Π_{d} K_d` — `SpatialFacts.PrefixProfile.naiveProductBound`, which the profile itself documents as
+   *  neither tight NOR sound — which the generic loop transfer produced by recursively multiplying the
+   *  per-level group counts. */
+  private final case class ChainCost(chain: RestChain, frames: Sym, leaves: Sym, leavesLo: Sym,
+                                     visits: Sym, depthSym: Sym, srcMeas: Meas, note: String):
+    def depth: Int = chain.depth
+    /** the leaf sits at `child(1)` of every level, so its position is `1` repeated `depth` times */
+    def leafId(root: NodeId): NodeId = (0 until depth).foldLeft(root)((n, _) => n.child(1))
+    /** the leaf's environment: each head ref is ONE item, and each `rest` mention is over-approximated
+     *  by the union of ALL tails (a sound MAY bound — one group's tails are a subset), with a ⊤ shape so
+     *  no must claim leaks from a sibling group. */
+    def leafEnv(env: Env, st: State): Env =
+      var sp = env.spaces
+      var fsp = env.facts.spaces
+      var lenv = env.facts.lenv
+      var ps = env.paths
+      for l <- chain.links do
+        if l.rest.s != "_" then
+          sp = sp + (l.rest -> Meas(srcMeas.size, srcMeas.len, srcMeas.size))
+          fsp = fsp + (l.rest -> SpatialType.top)
+        lenv = lenv.withPath(l.head -> LenBounds(1, 1))
+        ps = ps + (l.head -> Sym.one)
+      env.copy(spaces = sp, paths = ps, facts = env.facts.copy(spaces = fsp, lenv = lenv))
+
+  private def chainOf(it: Space.Iteration, env: Env, st: State, id: NodeId): Option[ChainCost] =
+    st.chainCache.getOrElseUpdate((it, id), computeChain(it, env, st, id))
+
+  private def computeChain(it: Space.Iteration, env: Env, st: State, id: NodeId): Option[ChainCost] =
+    RestChain.recognize(it).filter(_.depth >= 2).flatMap { ch =>
+      // depth 1 is an ordinary `Iteration`: there is no product of independent per-level maxima to lose,
+      // and the generic transfer's `heads`-scaled body cost is already the right shape.
+      decoratedAt(ch.source, env, id.child(0)).orElse(shapeAt(ch.source, env, st)).flatMap { t =>
+        SpatialFacts.profile(t, env.frontierConfig.facts).toOption.flatMap { p =>
+          val dd = ch.depth
+          val frames = p.frameEntries(dd)
+          val leaves = p.prefixes(dd)
+          val visits = p.groupingVisits(dd)
+          if frames.hi >= Ivl.INF || leaves.hi >= Ivl.INF then None
+          else
+            val naive = p.naiveProductBound(dd)
+            val note =
+              s"rest-chain nest of depth $dd priced by the FRAME LAW: frames = Σ K_d = ${frames.show}, " +
+              s"leafInvocations = K_$dd = ${leaves.show}, groupingVisits = Σ E_d = ${visits.show} — " +
+              s"instead of the per-level product Π K_d = ${naive.show}, which the profile itself " +
+              "documents as neither tight nor sound (review.md item 5, first bullet)"
+            Some(ChainCost(ch, symSize(frames.hi), symSize(leaves.hi), symLo(leaves.lo),
+                           symSize(visits.hi), Sym.c(dd.toLong), refineWith(Meas.top, t, env), note))
+        }
+      }
+    }
+
+  // ================================================================================================
+  // 7.  THE INTERPROCEDURAL LEAST-FIXPOINT UNIVERSE SUMMARY  (review.md item 5, the Datalog half)
+  // ================================================================================================
+
+  /** THE FINITE PATH UNIVERSE a monotone accumulator lives in.
+   *
+   *  review.md item 5: "For Datalog, compute an interprocedural least-fixpoint size/universe summary and
+   *  price each delta/accumulator round from that summary."  The previous answer named this as a
+   *  modelling gap — "this analysis has neither a fixpoint over the size lattice nor a finite path
+   *  universe to widen into" — and that is exactly what this computes.
+   *
+   *  TWO COMPONENTS, both least fixpoints, both finite for the semi-naive transitive closure:
+   *
+   *   - the ITEM ALPHABET `A`.  Every path the body produces is built out of items of the ARGUMENTS and
+   *     of the body's own literals and constant paths; composition, union, restriction and the tails
+   *     operators introduce no new item, and a head `Deref` bound by an enclosing `Iteration` ranges over
+   *     items of the space it iterates.  So `A₀ = items(args) ∪ items(literals in the body)` is already
+   *     closed under the body's transfer, and the alphabet fixpoint is reached in ZERO rounds.
+   *   - the LENGTH `L`, which is NOT reached in zero rounds (composition grows length), so it is
+   *     iterated: `L_{k+1} = max(L_k, len(recursive argument) under params ↦ L_k)`, up to
+   *     [[UniverseRounds]].
+   *
+   *  Then `|universe| = Σ_{d≤L} |A|^d` in ARBITRARY PRECISION, and the accumulator holds at most that
+   *  many paths, so the call depth is at most `|universe| + 2`. */
+  final case class Universe(alphabet: Int, maxLen: Long, paths: BigInt):
+    def show: String =
+      s"|A| = $alphabet distinct items, length fixpoint L = $maxLen, " +
+      s"|universe| = Σ_{d≤$maxLen} $alphabet^d = $paths"
+
+  private val UniverseBits = 4096
+  private def universeSize(alphabet: Int, maxLen: Long): Option[BigInt] =
+    if maxLen < 0 || maxLen >= LenBounds.INF then None
+    else if alphabet <= 0 then Some(BigInt(1))               // only ε is expressible
+    else if maxLen > 8192 then None
+    else
+      val a = BigInt(alphabet)
+      var acc = BigInt(0); var p = BigInt(1); var d = 0L; var ok = true
+      while d <= maxLen && ok do
+        acc += p
+        if acc.bitLength > UniverseBits then ok = false else { p *= a; d += 1 }
+      if ok then Some(acc) else None
+
+  /** every item a CLOSED shape admits, or `None` once an open head set makes the set unenumerable */
+  private def shapeAlphabet(sh: Shape, budget: Int): Option[Set[PathItem]] =
+    if sh.definitelyEmpty then Some(Set.empty)
+    else if budget <= 0 then None
+    else if !sh.headsClosed then None
+    else
+      var out = Set.empty[PathItem]
+      var ok = true
+      for (h, c) <- sh.heads do
+        if ok then
+          out += h
+          shapeAlphabet(c, budget - 1) match
+            case Some(s) => out ++= s
+            case None => ok = false
+      if ok then Some(out) else None
+
+  /** the items the TERM ITSELF names.  `None` when a `Deref` of an unbound path ref or a grounded
+   *  function could contribute an item this analysis cannot see. */
+  private def syntacticItems(s: Space, bound: Set[PathRef]): Option[Set[PathItem]] =
+    var out = Set.empty[PathItem]
+    var ok = true
+    // `bs` — NOT the top-level `bound` — is what decides whether a `Deref` is a bound head ref.  Closing
+    // over `bound` here made every loop body's head `Deref` look unbound, which answered "unknown
+    // alphabet" on exactly the Datalog-shaped terms this exists for.
+    def gp(p: Path, bs: Set[PathRef]): Unit =
+      if ok then p match
+        case Path.Constant(pv) => out ++= pv.items
+        case Path.Deref(pr) => if !bs.contains(pr) then ok = false
+        case Path.Concat(l, r) => gp(l, bs); gp(r, bs)
+        case Path.GroundedPP(_, _) | Path.GroundedSP(_, _) => ok = false
+    def go(x: Space, bs: Set[PathRef]): Unit =
+      if ok then
+        x match
+          case Space.Literal(v) => v.paths.foreach(p => out ++= p.items)
+          case Space.Singleton(p) => gp(p, bs)
+          case Space.Wrap(_, p) => gp(p, bs)
+          case Space.Unwrap(_, p) => gp(p, bs)
+          case Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => ok = false
+          case _ => ()
+        if ok then
+          x match
+            case Space.Iteration(src, sym, _, body) => go(src, bs); go(body, bs + sym)
+            case Space.Fold(src, _, acc, sym, _, body, upd) =>
+              go(src, bs); go(body, bs + sym + acc)
+            case other => SizeZ3.children(other).foreach(go(_, bs))
+    go(s, bound)
+    if ok then Some(out) else None
+
+  /** EVERY ITEM A TERM'S VALUE CAN CONTAIN: the items the term itself names, plus the items its free
+   *  mentions' DECLARED types admit.
+   *
+   *  Deliberately NOT read off the term's own inferred shape.  A shape that has been through an
+   *  `Iteration` or a `Composition` transfer is typically OPEN (`others.hi > 0`) even when the value is a
+   *  closed set over a known alphabet, because the transfer summarises untracked heads rather than
+   *  enumerating them — so asking the result's shape for an alphabet answers "unknown" on exactly the
+   *  Datalog-shaped terms this exists for.  The INPUTS' shapes are the closed ones, and every item of the
+   *  output came from an input or from a literal in the term. */
+  private def spaceAlphabet(s: Space, env: Env, st: State): Option[Set[PathItem]] =
+    val syn = syntacticItems(s, Set.empty)
+    val fromMentions = freeMentions(s).toVector.map { m =>
+      env.facts.spaces.get(m).orElse(Some(typeAt(Space.Mention(m), env, st)))
+        .flatMap(t => if t.uninhabited then Some(Set.empty[PathItem]) else shapeAlphabet(t.shape, 64))
+    }
+    if syn.isEmpty || fromMentions.exists(_.isEmpty) then None
+    else Some(syn.get ++ fromMentions.flatten.flatten)
+
+  /** FREE space mentions — the ones an environment can answer for.  A `rest` mention bound by an
+   *  enclosing `Iteration`/`Fold`, or a `Fixpoint`'s recursive mention, is NOT free: asking the
+   *  environment for it gets `⊤`, whose head set is open, which would make every alphabet query on a
+   *  loop-containing term answer "unknown".  Its items are those of the space it iterates, which the
+   *  enclosing source contributes anyway. */
+  private def freeMentions(s: Space): Set[SpaceMention] =
+    val out = collection.mutable.Set.empty[SpaceMention]
+    def go(x: Space, bound: Set[SpaceMention]): Unit = x match
+      case Space.Mention(m) => if !bound.contains(m) then out += m
+      case Space.Iteration(src, _, rest, body) => go(src, bound); go(body, bound + rest)
+      case Space.Fold(src, _, _, _, rest, body, _) => go(src, bound); go(body, bound + rest)
+      case Space.Fixpoint(init, recm, body) => go(init, bound); go(body, bound + recm)
+      case other => SizeZ3.children(other).foreach(go(_, bound))
+    go(s, Set.empty)
+    out.toSet
+
+  /** the recursive call sites of `rp` inside `body` */
+  private def selfCalls(body: Space, rp: RoutinePtr): Vector[Space.Call] =
+    val out = Vector.newBuilder[Space.Call]
+    def go(x: Space): Unit = x match
+      case c @ Space.Call(r, _, ms) => if r == rp then out += c; ms.foreach(go)
+      case _ => SizeZ3.children(x).foreach(go)
+    go(body)
+    out.result()
+
+  /** THE SYNTACTIC LENGTH TRANSFER, as an upper bound.  `None` = not bounded here.  Every rule is a
+   *  sound upper bound on the maximum item length of the term's value; a `Call` is deliberately opaque so
+   *  the fixpoint below never claims a bound it did not derive. */
+  private def lenAbs(s: Space, bind: Map[SpaceMention, Long], refs: Map[PathRef, Long],
+                     depth: Int): Option[Long] =
+    def gp(p: Path): Option[Long] = p match
+      case Path.Constant(pv) => Some(pv.items.length.toLong)
+      case Path.Deref(pr) => refs.get(pr).orElse(if pr.lengthHint >= 0 then Some(pr.lengthHint.toLong) else None)
+      case Path.Concat(l, r) => for a <- gp(l); b <- gp(r) yield a + b
+      case _ => None
+    if depth > 64 then None
+    else
+      val rec = (x: Space) => lenAbs(x, bind, refs, depth + 1)
+      s match
+        case Space.Empty => Some(0L)
+        case Space.Literal(v) => Some(if v.paths.isEmpty then 0L else v.paths.iterator.map(_.items.length.toLong).max)
+        case Space.Singleton(p) => gp(p)
+        case Space.Mention(m) => bind.get(m)
+        case Space.Union(a, b) => for x <- rec(a); y <- rec(b) yield x max y
+        case Space.Intersection(a, b) => for x <- rec(a); y <- rec(b) yield x min y
+        case Space.Subtraction(a, _) => rec(a)
+        case Space.Restriction(a, _) => rec(a)
+        case Space.Raffination(a, _) => rec(a)
+        case Space.Composition(a, b) => for x <- rec(a); y <- rec(b) yield x + y
+        case Space.Wrap(src, p) => for x <- rec(src); k <- gp(p) yield x + k
+        case Space.Unwrap(src, _) => rec(src)
+        case Space.TailsUnion(src) => rec(src).map(x => 0L max (x - 1))
+        case Space.TailsIntersection(src) => rec(src).map(x => 0L max (x - 1))
+        case Space.Range(x, _, _) => rec(x)
+        case Space.Iteration(src, sym, rest, body) =>
+          rec(src).flatMap(x => lenAbs(body, bind + (rest -> (0L max (x - 1))), refs + (sym -> 1L), depth + 1))
+        case Space.Fold(src, _, _, sym, rest, body, _) =>
+          rec(src).flatMap(x => lenAbs(body, bind + (rest -> (0L max (x - 1))), refs + (sym -> 1L), depth + 1))
+        case Space.Fixpoint(init, recm, body) =>
+          rec(init).flatMap { l0 =>
+            var cur = l0; var k = 0; var stable = false; var bad = false
+            while k < UniverseRounds && !stable && !bad do
+              lenAbs(body, bind + (recm -> cur), refs, depth + 1) match
+                case None => bad = true
+                case Some(nx) => if nx <= cur then stable = true else cur = nx
+                k += 1
+            if stable then Some(cur) else None
+          }
+        case _ => None                                  // Call, grounded: deliberately opaque
+
+  /** THE LENGTH FIXPOINT over the recursive routine's mention parameters. */
+  private def paramLenFix(rp: RoutinePtr, params: Vector[SpaceMention], start: Vector[Long],
+                          body: Space, refs: Map[PathRef, Long]): Option[Vector[Long]] =
+    val sites = selfCalls(body, rp)
+    if sites.isEmpty then Some(start)
+    else
+      var cur = start
+      var k = 0; var stable = false; var bad = false
+      while k < UniverseRounds && !stable && !bad do
+        val bind = params.zip(cur).toMap
+        var next = cur
+        for c <- sites; j <- params.indices do
+          if !bad then
+            c.mentions.lift(j) match
+              case None => ()
+              case Some(arg) => lenAbs(arg, bind, refs, 0) match
+                case None => bad = true
+                case Some(l) => if l > next(j) then next = next.updated(j, l)
+        if !bad then { if next == cur then stable = true else cur = next }
+        k += 1
+      if stable && !bad then Some(cur) else None
+
+  /** THE SUMMARY ITSELF, for the accumulator parameter `argIdx` of a recursive call to `rp`. */
+  private def universeOf(rp: RoutinePtr, argIdx: Int, args: Vector[Space], refs: Vector[Path],
+                         env: Env, st: State): Either[String, Universe] =
+    if !env.routines.isDefinedAt(rp) then Left(s"no body for ${rp.s}")
+    else
+      val r = env.routines(rp)
+      val refLens = r.refs.zip(refs.map(p => SpatialTypes.pathLen(p, env.facts.lengths)))
+        .collect { case (pr, b) if !b.isEmpty && b.hi < LenBounds.INF => pr -> b.hi }.toMap
+      if refLens.size != r.refs.size then
+        Left(s"a path argument of ${rp.s} has no bounded item length")
+      else
+        // (1) THE ALPHABET, closed in zero rounds
+        val argAlphabets = args.map(a => spaceAlphabet(a, env, st))
+        val bodyItems = syntacticItems(r.body, r.refs.toSet)
+        val alphabet =
+          if argAlphabets.exists(_.isEmpty) then
+            Left(s"argument ${argAlphabets.indexWhere(_.isEmpty)} has no enumerable item alphabet " +
+                 "(an open head set on a free mention's declared type, or an opaque path/grounded term)")
+          else if bodyItems.isEmpty then
+            Left(s"${rp.s}'s body names an item this analysis cannot see (an unbound path Deref or a " +
+                 "grounded function)")
+          else Right(argAlphabets.flatten.flatten.toSet ++ bodyItems.get)
+        // (2) THE LENGTH FIXPOINT
+        val startLens = args.map(a => SpatialTypes.lenOf(a, env.facts.lengths))
+        val lens =
+          if startLens.exists(b => b.isEmpty || b.hi >= LenBounds.INF) then
+            Left(s"argument ${startLens.indexWhere(b => b.isEmpty || b.hi >= LenBounds.INF)} has no " +
+                 "bounded maximum path length")
+          else paramLenFix(rp, r.mentions, startLens.map(_.hi), r.body, refLens)
+            .toRight(s"the length transfer did not reach a fixpoint in $UniverseRounds rounds (or a " +
+                     "recursive argument's length is not derivable syntactically)")
+        for
+          a <- alphabet
+          ls <- lens
+          l <- ls.lift(argIdx).toRight(s"parameter $argIdx is out of range for ${rp.s}")
+          n <- universeSize(a.size, l).toRight(
+                 s"the universe Σ_{d≤$l} ${a.size}^d exceeds the precision budget")
+        yield Universe(a.size, l, n)
 end SpatialCost

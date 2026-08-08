@@ -22,21 +22,40 @@ package morkl
  *  A law is carried on [[SpatialConfig.laws]], which `SpatialAnnotations` already holds, so every stage
  *  that takes annotations takes laws — no new plumbing at any call site.
  *
- *  ==WHY A LAW CAN NEVER WIDEN==
- *  The channel is a MEET.  A law supplies one operand of [[SpatialType.meet]]; the other is the type
- *  the transfers derived.  `meet` is the greatest lower bound of the product (componentwise
- *  `Shape.meet` / `SpatialGamma.meetSpace`, then the bidirectional reducer), so
- *  `γ(after) ⊆ γ(before)` holds by the ALGEBRA, whatever the law says — a law can only remove concrete
- *  values from the answer, never add one.  An INAPPLICABLE law is not consulted at all, and a law that
- *  is applicable but contributes no bound is recorded as such and changes nothing.
+ *  ==A MEET IS NOT A SAFETY ARGUMENT  (review.md 9)==
+ *  The channel is a MEET, so `γ(after) ⊆ γ(before)` holds by the ALGEBRA whatever the law says.  That
+ *  used to be written here as if it were the safety argument, and it is NOT one.  An OVER-approximation
+ *  is only useful because it CONTAINS the real value; a bound that narrows it below the real value
+ *  breaks exactly that, and "meet cannot widen" says nothing about whether the narrowing was true.  A
+ *  FALSE narrowing law is the most dangerous input this subsystem takes: it makes a live `Mention` look
+ *  empty, `optimizeGuarded` erases the term, and the residual is wrong on every input.
+ *
+ *  ==SO THE EVIDENCE IS ENFORCED, NOT DOCUMENTED  ([[LawEvidencePolicy]])==
+ *  Every law carries [[LawEvidence]] — `executable-checked`, `SMT-proved` or `ASSUMED` — and
+ *  [[SpatialLaws.refine]] takes a [[LawEvidencePolicy]] that DECIDES on it.  Under the production
+ *  policy ([[LawEvidencePolicy.RequireDischarged]], the default at every call site including
+ *  `SpatialAnalysis`' recorder) an UNDISCHARGED bound is computed, REPORTED, and NOT MET: the outcome
+ *  is [[LawOutcome.Refused]], the answer is the one the transfers derived, and therefore no fact, no
+ *  candidate, no rewrite and no certificate downstream can rest on it.  The refusal is in the engine,
+ *  in one place, so an optimizer does not have to remember to check — a law that would license a
+ *  rewrite has to carry a discharged proof obligation to reach the optimizer at all.
+ *  `SpatialAnalysis.assumedLaws` is consequently EMPTY under the production policy, and that is now a
+ *  theorem about the engine rather than a hope about consumers.
  *
  *  ==WHAT A LAW IS RESPONSIBLE FOR, THEN==
- *  Exactly one thing: that the bound it contributes is TRUE of the values the site can denote.  It is
- *  not a widening hazard, it is a SOUNDNESS PREMISE, and that is why every law carries
- *  [[LawEvidence]] — `executable-checked`, `SMT-proved`, or `ASSUMED` — and why the provenance travels
- *  all the way to the node ([[NodeAnalysis.laws]]) instead of being folded silently into a number.
- *  `SpatialAnalysis.assumedLaws` names every law that tightened an answer without a discharged proof
- *  obligation, so a consumer can refuse to act on one.
+ *  Exactly one thing: that the bound it contributes is TRUE of the values the site can denote.  It is a
+ *  SOUNDNESS PREMISE, which is why the provenance travels all the way to the node
+ *  ([[NodeAnalysis.laws]]) instead of being folded silently into a number, and why a consumer can name
+ *  every law an answer depends on ([[LawApplication.tightened]]).
+ *
+ *  ==ORDER INDEPENDENCE IS A SATURATION, NOT A COMMUTATIVITY REMARK  (review.md 9)==
+ *  `refine` used to apply laws left to right with each one OBSERVING the previous one's result, and
+ *  argue order-independence from the commutativity of meet.  That argument is wrong: a law's `bound`
+ *  reads `site.inferred`, so a permutation changes the BOUNDS, not only the order they are combined in
+ *  (`finiteSolutionCount` needs a pinned length; a law that pins the length enables it).  The engine now
+ *  runs a MONOTONE SATURATION — in each round every law is asked against the SAME baseline, the bounds
+ *  are combined in a CANONICAL order derived from the laws themselves, and the rounds repeat until the
+ *  answer stops moving.  The result is a function of the law SET.  See [[SpatialLaws.refine]].
  *
  *  ==A CONTRADICTION IS REFUSED, NOT PROPAGATED==
  *  If meeting a law's bound would produce [[SpatialType.bottom]] — the law and the transfers describe
@@ -78,6 +97,42 @@ enum LawEvidence:
     case _ => true
   def show: String = s"$tag ($detail)"
 
+/** WHICH JUSTIFICATIONS MAY NARROW AN ANSWER  (review.md 9: "make the policy explicit and enforced in
+ *  code, not documented").
+ *
+ *  A law's bound is a soundness PREMISE, and a false one breaks an over-approximation — so the question
+ *  "may this bound be met into the analysis" is a policy decision with exactly one honest default.
+ *  [[RequireDischarged]] is that default at every call site in the tree, and it is enforced by
+ *  [[SpatialLaws.refine]] rather than by the consumers: a bound with no discharged proof obligation is
+ *  computed, reported as [[LawOutcome.Refused]], and NOT met.  Nothing downstream — facts, candidates,
+ *  the residual, the cost, a [[CheckCertificate]] — can then rest on it, because the per-node type it
+ *  would have moved was never moved.
+ *
+ *  [[TrustAll]] exists so that "what would this axiom buy?" is answerable, and it is deliberately NOT
+ *  reachable from `SpatialConfig`: a caller has to invoke `refine` directly, and the resulting
+ *  applications still report the undischarged evidence, so [[SpatialCheck]] still refuses to certify a
+ *  result that rests on one. */
+enum LawEvidencePolicy:
+  /** THE PRODUCTION POLICY: `executable-checked` and `SMT-proved` bounds are met, `ASSUMED` ones are
+   *  refused.  This is the default parameter of [[SpatialLaws.refine]] and therefore what the decorated
+   *  analysis, the optimizer and the checker all see. */
+  case RequireDischarged
+  /** meet every applicable bound, undischarged axioms included — an EXPLORATION setting.  The records
+   *  still carry the evidence, and `LawApplication.assumed` still marks the tightenings that rest on an
+   *  axiom, which is what a certificate refuses on. */
+  case TrustAll
+  /** may a bound with this justification narrow an answer? */
+  def licenses(e: LawEvidence): Boolean = this match
+    case RequireDischarged => e.discharged
+    case TrustAll => true
+  def show: String = this match
+    case RequireDischarged => "require-discharged (an ASSUMED bound is refused, not met)"
+    case TrustAll => "TRUST-ALL (an ASSUMED bound is met; exploration only)"
+
+object LawEvidencePolicy:
+  /** the policy every production call site uses */
+  val production: LawEvidencePolicy = RequireDischarged
+
 /** WHERE a law is asked to contribute: the occurrence, the term at it, the binder environment it was
  *  analysed in, and the type the TRANSFERS derived for it (already refined by any earlier law in the
  *  same set).  A law may read `inferred` as a premise — "all paths here have one length, so a total
@@ -109,6 +164,10 @@ enum LawOutcome:
   case NoBound
   /** the bound and the transfers describe no common value: the law was DROPPED */
   case Contradicted
+  /** applicable, contributed a bound, and the ACTIVE [[LawEvidencePolicy]] refused it: the bound was
+   *  NOT met and the answer is the transfers' own (review.md 9).  The bound it WOULD have contributed is
+   *  reported in [[LawApplication.why]], so the cost of the missing proof obligation is visible. */
+  case Refused
   def show: String = toString
 
 /** ONE LAW APPLICATION, kept ON the node so a consumer can see WHICH law tightened WHAT (review.md 2).
@@ -119,8 +178,17 @@ final case class LawApplication(law: String, evidence: LawEvidence, at: NodeId, 
                                 before: SpatialType, after: SpatialType, why: String,
                                 occurrences: Int = 1):
   def tightened: Boolean = outcome == LawOutcome.Tightened
-  /** the bound is in use AND rests on an undischarged axiom */
+  /** the bound is in use AND rests on an undischarged axiom.  Under
+   *  [[LawEvidencePolicy.RequireDischarged]] this is UNREACHABLE by construction — `refine` refuses to
+   *  meet an undischarged bound — which is the point: a consumer reading this does not have to trust
+   *  that some other consumer checked. */
   def assumed: Boolean = tightened && !evidence.discharged
+  /** the bound was computed and REFUSED by the evidence policy: nothing rests on it, and the report says
+   *  what a discharged proof obligation would have bought */
+  def refused: Boolean = outcome == LawOutcome.Refused
+  /** does the answer at this occurrence DEPEND on this law?  This is the predicate a certificate
+   *  enumerates over ("name every law it depended on"). */
+  def dependedOn: Boolean = tightened
   def show: String =
     s"$law ${outcome.show} at ${at.show}" + (if occurrences > 1 then s" (x$occurrences)" else "") +
     s" [${evidence.tag}]" + (if outcome == LawOutcome.Tightened then s": ${before.show.take(60)} -> ${after.show.take(60)}" else "") +
@@ -133,40 +201,148 @@ object SpatialLaws:
   // 1.  THE ENGINE
   // ================================================================================================
 
-  /** MEET every applicable law's bound into `site.inferred`, in order, and report what each did.
+  /** rounds of the saturation below.  Round 0 asks every law against the transfers' own answer; a
+   *  further round runs only when the previous one MOVED the answer, so a law set whose bounds do not
+   *  read `site.inferred` costs exactly one extra confirming round and a set that cannot be saturated in
+   *  four stops with the (sound, weaker) answer it reached. */
+  val SaturationRounds: Int = 4
+
+  /** MEET every applicable law's bound into `site.inferred` and report what each law did.
    *
-   *  Laws are applied LEFT TO RIGHT and each sees the previous one's result, so a law whose premise is
-   *  "the length is pinned" can be enabled by an earlier law that pinned it.  The result is
-   *  order-INDEPENDENT in γ (meet is commutative and associative on the lattice) but the recorded
-   *  `before`/`after` of an individual application is not, which is the honest reading of "this law
-   *  tightened this much GIVEN what was already known". */
-  def refine(laws: Vector[SpatialBoundLaw], site: LawSite): (SpatialType, Vector[LawApplication]) =
+   *  ==A CHECKED MONOTONE SATURATION, NOT A LEFT FOLD  (review.md 9)==
+   *  The previous engine walked the vector left to right and handed each law the PREVIOUS law's result.
+   *  That makes the answer depend on the permutation, because a law's `bound` reads `site.inferred` as a
+   *  premise: `finiteSolutionCount` declines unless the length is pinned, so `[pin, count]` produces a
+   *  count bound and `[count, pin]` does not.  Commutativity of meet does not rescue that — the two
+   *  orders meet DIFFERENT bounds.
+   *
+   *  This engine instead runs rounds:
+   *
+   *   1. in one round, every law is asked `applies`/`bound` against the SAME baseline — the answer the
+   *      previous round produced (round 0: the transfers' own answer).  No law observes a sibling's
+   *      refinement WITHIN a round, so the set of contributed bounds is a function of the baseline;
+   *   2. the bounds are combined in a CANONICAL order — `(name, evidence tag, rendered bound)`, taken
+   *      from the laws and their bounds rather than from their position — so the accumulation, and in
+   *      particular WHICH law is blamed when two laws jointly contradict, does not depend on the
+   *      permutation either;
+   *   3. rounds repeat while the baseline moves, up to [[SaturationRounds]].  Each round's result is a
+   *      MEET with the previous baseline, so the sequence descends and the saturation is monotone by
+   *      construction; it normally terminates at the first round that changes nothing, which is the
+   *      fixpoint.  And the fixpoint claim is CHECKED rather than assumed: if the round budget runs out
+   *      while the answer is still moving, every record says so, because that answer is sound but weaker
+   *      than the law set implies and a reader must not mistake it for a fixpoint.
+   *
+   *  The result is therefore a function of the law SET, which `SpatialLawsCheck` 8 gates by permuting a
+   *  baseline-SENSITIVE law set and comparing the answer AND the records.  γ-monotonicity of the whole
+   *  engine — "no law, in any combination, ADDS a concrete value" — is gated by `SpatialLawsCheck` 2 over
+   *  a 368640-check random sweep, which is where a bug in `meet` itself would surface.
+   *
+   *  ==WHAT EACH RECORD MEANS NOW==
+   *  `before`/`after` are the law's OWN contribution against its round's COMMON baseline — "what this law
+   *  proves beyond what was already known when the round started" — not "given the laws that happen to
+   *  precede it in the vector".  A law that tightens in some round is recorded `Tightened` even if a
+   *  sibling would have reached the same answer, because it did prove that much; the joint answer is the
+   *  meet of everything that was accepted.
+   *
+   *  ==THE EVIDENCE POLICY IS ENFORCED HERE  (review.md 9)==
+   *  A bound whose evidence `policy` does not license is computed (so the report can say what it would
+   *  have bought) and then NOT met: [[LawOutcome.Refused]].  Under the default
+   *  [[LawEvidencePolicy.RequireDischarged]] no undischarged axiom can move the answer, hence none can
+   *  license a rewrite or be depended on by a certificate. */
+  def refine(laws: Vector[SpatialBoundLaw], site: LawSite,
+             policy: LawEvidencePolicy = LawEvidencePolicy.production,
+             rounds: Int = SaturationRounds): (SpatialType, Vector[LawApplication]) =
     if laws.isEmpty then (site.inferred, Vector.empty)
     else
-      var cur = site.inferred
-      val out = Vector.newBuilder[LawApplication]
-      for law <- laws do
-        val here = site.copy(inferred = cur)
-        if law.applies(here) then
-          law.bound(here) match
-            case None =>
-              out += LawApplication(law.name, law.evidence, site.id, LawOutcome.NoBound, cur, cur,
-                                    "applicable, but its premises are not established at this occurrence")
+      // ---- the laws the policy REFUSES: asked once, against the transfers' answer, and never met ----
+      val (licensed, refusedLaws) = laws.partition(l => policy.licenses(l.evidence))
+      val refusedApps = Vector.newBuilder[LawApplication]
+      for law <- refusedLaws do
+        if law.applies(site) then
+          val what = law.bound(site) match
             case Some(b) =>
-              // THE MEET IS THE WHOLE SAFETY ARGUMENT: γ(next) ⊆ γ(cur) by construction, so a law
-              // cannot widen no matter what it claims (see the file header).
-              val next = SpatialType.meet(cur, b)
-              if next.uninhabited && !cur.uninhabited then
-                out += LawApplication(law.name, law.evidence, site.id, LawOutcome.Contradicted, cur, cur,
-                                      s"the law's bound ${b.show.take(60)} and the transfers describe no " +
-                                      "common concrete space: the law is DROPPED, not propagated")
-              else if next == cur then
-                out += LawApplication(law.name, law.evidence, site.id, LawOutcome.Unchanged, cur, cur,
-                                      "the transfers already proved at least this much")
+              val would = SpatialType.meet(site.inferred, b)
+              s"REFUSED by the ${policy.show} evidence policy: the bound ${b.show.take(60)} is " +
+                s"${law.evidence.show} and no proof obligation was discharged for it, so it was NOT met" +
+                (if would != site.inferred && !would.uninhabited then
+                   s" — a discharged proof would have given ${would.show.take(60)}"
+                 else " — and it would not have tightened this occurrence anyway")
+            case None =>
+              s"REFUSED by the ${policy.show} evidence policy (and its premises are not established " +
+                "at this occurrence either)"
+          refusedApps += LawApplication(law.name, law.evidence, site.id, LawOutcome.Refused,
+                                        site.inferred, site.inferred, what)
+
+      // ---- the saturation over the licensed laws ---------------------------------------------------
+      // one record per law, keyed by the law's own identity so the output is a function of the SET
+      val keep = collection.mutable.LinkedHashMap.empty[(String, String), LawApplication]
+      /** which of two records for the SAME law survives across rounds: a law that tightened in ANY round
+       *  really did tighten, and that is the record a consumer must see; otherwise the latest round is
+       *  the most informed one. */
+      def better(old: LawApplication, fresh: LawApplication): LawApplication =
+        def rank(o: LawOutcome): Int = o match
+          case LawOutcome.Tightened => 3
+          case LawOutcome.Contradicted => 2
+          case LawOutcome.Refused => 2
+          case _ => 1
+        if rank(old.outcome) >= rank(fresh.outcome) then old else fresh
+      var baseline = site.inferred
+      var round = 0
+      var moved = true
+      while moved && round < rounds do
+        moved = false
+        val here = site.copy(inferred = baseline)
+        // (1) EVERY law against the SAME baseline
+        val offers = licensed.filter(_.applies(here)).map(l => (l, l.bound(here)))
+        // (2) a CANONICAL combination order, from the laws and bounds rather than their position
+        val ordered = offers.sortBy((l, b) => (l.name, l.evidence.tag, b.map(_.show).getOrElse("")))
+        var cur = baseline
+        for (law, offer) <- ordered do
+          def rec(outcome: LawOutcome, after: SpatialType, why: String): Unit =
+            val app = LawApplication(law.name, law.evidence, site.id, outcome, baseline, after, why)
+            val k = (law.name, law.evidence.tag)
+            keep(k) = keep.get(k).map(better(_, app)).getOrElse(app)
+          offer match
+            case None =>
+              rec(LawOutcome.NoBound, baseline,
+                  "applicable, but its premises are not established at this occurrence")
+            case Some(b) =>
+              // the law's OWN contribution, against the round's common baseline: order-independent
+              val own = SpatialType.meet(baseline, b)
+              if own.uninhabited && !baseline.uninhabited then
+                rec(LawOutcome.Contradicted, baseline,
+                    s"the law's bound ${b.show.take(60)} and the transfers describe no common concrete " +
+                      "space: the law is DROPPED, not propagated")
               else
-                out += LawApplication(law.name, law.evidence, site.id, LawOutcome.Tightened, cur, next, "")
-                cur = next
-      (cur, out.result())
+                // the JOINT answer.  `cur eq baseline` until some law has been accepted, and then the
+                // extra meet is what a second bound costs — not one per law unconditionally.
+                val joint = if cur == baseline then own else SpatialType.meet(cur, b)
+                if joint.uninhabited && !cur.uninhabited then
+                  rec(LawOutcome.Contradicted, baseline,
+                      s"the law's bound ${b.show.take(60)} is consistent with the transfers but " +
+                        "contradicts another law in the same set (canonical order): it is DROPPED")
+                else if own == baseline then
+                  rec(LawOutcome.Unchanged, baseline, "the transfers already proved at least this much")
+                else
+                  rec(LawOutcome.Tightened, own, "")
+                  cur = joint
+        if cur != baseline then { baseline = cur; moved = true }
+        round += 1
+      // THE FIXPOINT CLAIM IS CHECKED, not assumed.  The loop stops either because a round changed
+      // nothing — the answer IS the saturation's fixpoint — or because the round budget ran out while the
+      // answer was still moving.  The second case is sound (every round is a meet, so the answer only
+      // ever narrowed) but WEAKER than the law set implies, and it is said so rather than passed off as a
+      // fixpoint.  It is also the only way the result can depend on `rounds`, which is why it is reported
+      // on every record instead of being left for a reader to infer from the round count.
+      val unsaturated = moved && round >= rounds
+      val suffix =
+        if !unsaturated then ""
+        else s"  [the law saturation was STILL MOVING after $rounds round(s): this answer is sound — " +
+             "every round is a meet — but may be weaker than the law set implies]"
+      // the records are sorted CANONICALLY too, so even the audit trail is permutation-invariant
+      val apps = (refusedApps.result() ++ keep.values.toVector)
+        .sortBy(a => (a.law, a.evidence.tag, a.outcome.ordinal))
+      (baseline, if suffix.isEmpty then apps else apps.map(x => x.copy(why = x.why + suffix)))
 
   /** merge two records of the same (law, outcome) at the same position — see
    *  [[LawApplication.occurrences]] */

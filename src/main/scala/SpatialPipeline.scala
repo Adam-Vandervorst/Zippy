@@ -127,8 +127,15 @@ final case class SpatialAnnotations(
                       lenv = SpatialEnv(routines = routines, active = active))
 
   /** the cost environment over the SAME facts — `withRoutines` keeps the two routine tables
-   *  (`SpatialCost.Env.routines` and the one inside `facts.lenv`) from drifting apart. */
+   *  (`SpatialCost.Env.routines` and the one inside `facts.lenv`) from drifting apart.
+   *
+   *  THIS FORM HAS NO DECORATED ANALYSIS, so every per-node type query inside `SpatialCost` is a FRESH
+   *  `SpatialTyping.infer` and every law/spatial refinement the decorated analysis made is thrown away
+   *  (review.md item 8).  Use [[costEnvFor]] wherever a decorated analysis exists — which is everywhere
+   *  in this pipeline. */
   def costEnv: SpatialCost.Env = SpatialCost.Env(facts = env()).withRoutines(routines)
+  /** the cost environment THAT CONSUMES THE DECORATED, `NodeId`-INDEXED ANALYSIS (review.md item 8). */
+  def costEnvFor(d: SpatialAnalysis): SpatialCost.Env = costEnv.withDecorated(d)
 
   def restrictingSpaces: Map[SpaceMention, SpatialType] =
     spaces.filter((_, t) => !SpatialAnnotations.admitsEverything(t))
@@ -241,8 +248,27 @@ final case class RoutineAnalysis(routine: Routine,
   def at(id: NodeId): Option[NodeAnalysis] = decorated.at(id)
   /** the per-depth prefix profile of the result, when the two components are consistent */
   def profile: Option[PrefixProfile] = SpatialFacts.profile(result, annotations.factConfig).toOption
-  /** every executable's predicted warm interval over the SAME facts (review.md finding 7) */
-  def backendCost: Map[Backend, CostInterval] =
+
+  /** THE COST ENVIRONMENT THIS ANALYSIS LICENSES.  It carries `decorated`, so `SpatialCost` reads every
+   *  per-node type out of the analysis that already ran — law refinements and per-node spatial
+   *  refinements included — instead of starting a fresh `SpatialTyping.infer` traversal and discarding
+   *  them (review.md item 8: "Life tightens cardinality from 5,785 to 45 without changing its predicted
+   *  work"). */
+  def costEnv: SpatialCost.Env = annotations.costEnvFor(decorated)
+
+  /** every executable's predicted warm interval over the SAME facts (review.md finding 7), CONSUMING the
+   *  decorated result.  The form is `AsGiven`: this is whatever body the analysis was run on — use
+   *  [[SpatialPipeline.costOfOptimized]] / [[SpatialPipeline.costOfResidual]] for a statement about what
+   *  actually runs. */
+  def backendCost: Map[Backend, CostInterval] = SpatialCost.analyzeAll(routine.body, costEnv)
+  /** the same, as full reports (census, notes, `CostForm`) */
+  def backendReports: Vector[SpatialCost.Report] =
+    Backend.values.toVector.map(b =>
+      SpatialCost.analyze(routine.body, costEnv, Backends.of(b, ExecutionPhase.Warm), CostForm.AsGiven))
+  /** THE COUNTERFACTUAL the decorated wiring is measured against: the SAME term, priced from a fresh
+   *  traversal with no decorated input.  Publishing both is how "the analysis is now connected to the
+   *  cost model" becomes a number. */
+  def backendCostUndecorated: Map[Backend, CostInterval] =
     SpatialCost.analyzeAll(routine.body, annotations.costEnv)
   def show: String =
     (s"routine ${routine.name.s}  ${scope.show}" +:
@@ -623,7 +649,17 @@ object SpatialPipeline:
           case e: MatchError =>
             notes += s"transpile has no operation-graph node for a subterm of this program: ${e.getMessage.take(90)}"
             None
-    val cost = SpatialCost.analyze(body, ann.costEnv, Backends.of(backend, ExecutionPhase.Warm)).interval
+    // COST CONSUMES THE DECORATED ANALYSIS (review.md item 8) whenever the lowering left the body's
+    // positions intact.  A candidate rewrite invalidates every `NodeId`, and `SpatialCost` refuses a
+    // position whose subterm does not match, so in that case the decorated input is dropped explicitly
+    // rather than silently ignored — and it is SAID, because it costs precision.
+    val costEnv =
+      if body eq r.body then ann.costEnvFor(a.decorated)
+      else
+        notes += "a candidate rewrite changed the body, so the decorated analysis's NodeIds no longer " +
+                 "address it: this backend's cost is priced from a fresh traversal (less precise)"
+        ann.costEnv
+    val cost = SpatialCost.analyze(body, costEnv, Backends.of(backend, ExecutionPhase.Warm)).interval
     LoweredRoutine(backend, lowered, graph, spec, consumed.result(), applied.result(),
                    offered.distinct, cost, notes.result())
 
@@ -640,18 +676,116 @@ object SpatialPipeline:
     val ra = if g.residual.body == r.body then a else analyzeRoutine(g.residual, ann)
     Backend.values.iterator.map(b => b -> lower(g, b, ann, ra)).toMap
 
-  /** BACKEND SELECTION by predicted cost (review.md finding 7: "let candidate selection compare
-   *  them").  `valuation` gives the free symbolic variables their concrete sizes; the score is the sum
-   *  of the three CALIBRATED components of the UPPER endpoint (`touch` is excluded — it has no
-   *  counted oracle, see SpatialEvents.scala).  Ties break in `Backend.values` order, deterministically. */
+  // ------------------------------------------------------------------------------------------------
+  // COST ON THE FORM THAT ACTUALLY RUNS  (the user's third steer; review.md item 8's second half)
+  // ------------------------------------------------------------------------------------------------
+
+  /** THE COST OF `Routine.optimized`'s BODY — the spatial hook plus the ordinary `Lower` rule list.
+   *
+   *  This, not the definitional term, is what a cost estimate should describe: one runs the optimized
+   *  backend rather than the reference, and the same asymmetry applies to the program.  The analysis is
+   *  re-run on the OPTIMIZED body so the decorated result addresses the term being priced. */
+  def costOfOptimized(r: Routine, ann: SpatialAnnotations): Map[Backend, SpatialCost.Report] =
+    given PartialFunction[RoutinePtr, Routine] = ann.routines
+    val opt = r.optimized
+    val a = analyzeRoutine(opt, ann)
+    Backend.values.iterator.map(b =>
+      b -> SpatialCost.analyze(opt.body, ann.costEnvFor(a.decorated),
+                               Backends.of(b, ExecutionPhase.Warm), CostForm.Optimized)).toMap
+
+  /** THE COST OF AN `SC.reduce` RESIDUAL, where the supercompiler produces one.  `None` when it does
+   *  not change the term (then `costOfOptimized` is the right answer and this would be a second name for
+   *  it) or when it raises. */
+  def costOfResidual(r: Routine, ann: SpatialAnnotations,
+                     cap: Int = 100000): Option[(Space, Map[Backend, SpatialCost.Report])] =
+    given PartialFunction[RoutinePtr, Routine] = ann.routines
+    val base = r.optimized.body
+    val res = try SC.reduce(base, cap) catch case scala.util.control.NonFatal(_) => base
+    if res == base then None
+    else
+      val rr = Routine(r.name, r.refs, r.mentions, res)
+      val a = analyzeRoutine(rr, ann)
+      Some((res, Backend.values.iterator.map(b =>
+        b -> SpatialCost.analyze(res, ann.costEnvFor(a.decorated),
+                                 Backends.of(b, ExecutionPhase.Warm), CostForm.Residual)).toMap))
+
+  /** THE DEFINITIONAL ESTIMATE, LABELLED AS SUCH.  Kept reachable because sometimes there is nothing
+   *  else — a term with no routine, a body the optimizer refuses — but its `CostForm` says, in the
+   *  report, that it is not a prediction about what runs. */
+  def costOfDefinitional(body: Space, ann: SpatialAnnotations): Map[Backend, SpatialCost.Report] =
+    val a = analyzeTerm(body, ann)
+    Backend.values.iterator.map(b =>
+      b -> SpatialCost.analyze(body, ann.costEnvFor(a.decorated),
+                               Backends.of(b, ExecutionPhase.Warm), CostForm.Definitional)).toMap
+
+  // ------------------------------------------------------------------------------------------------
+  // BACKEND SELECTION
+  // ------------------------------------------------------------------------------------------------
+
+  /** WHY A BACKEND WON, with the components that decided it and the form they were measured on. */
+  final case class BackendChoice(best: Backend, scores: Map[Backend, Double],
+                                 components: Map[Backend, CostPoint], form: CostForm,
+                                 modelledTouch: Set[Backend], notes: Vector[String]):
+    def show: String =
+      val rows = Backend.values.toVector.map { b =>
+        val c = components(b)
+        f"  ${b.slug}%-10s work=${c.work}%12.0f alloc=${c.alloc}%12.0f rounds=${c.rounds}%10.0f " +
+        f"touch=${c.touch}%14.0f${if modelledTouch(b) then " (touch MODELLED)" else ""}  => ${scores(b)}%.0f"
+      }
+      (s"backend selection on ${form.show} => ${best.slug}" +: rows ++: notes.map("  ! " + _)).mkString("\n")
+
+  /** BACKEND SELECTION BY PREDICTED COST, over COMPARABLE COMPONENTS (review.md item 8, last sentence).
+   *
+   *  ==WHAT WAS WRONG==
+   *  The score was `work + alloc + rounds` with `touch` dropped for EVERY backend, because ONE backend
+   *  (`Reference`) has no counted oracle for it.  `touch` is where the trie algebra's whole asymptotic
+   *  content lives — a merge of two n-node tries is ONE `TrieOpEntry` but `Θ(n)` node visits — so
+   *  dropping it made the comparison reward whichever executable is least instrumented, which is the
+   *  opposite of what a cost model is for.
+   *
+   *  ==WHAT IT IS NOW==
+   *  All four components, for all backends.  `Reference`'s `touch` is a MODEL rather than a measurement
+   *  and the choice says so ([[BackendChoice.modelledTouch]]) instead of solving the problem by deleting
+   *  the axis: a declared model is comparable, an omitted component is not.  Ties still break in
+   *  `Backend.values` order, deterministically. */
+  def chooseBackend(body: Space, ann: SpatialAnnotations,
+                    valuation: Map[String, Double] = Map.empty,
+                    form: CostForm = CostForm.AsGiven,
+                    decorated: Option[SpatialAnalysis] = None): BackendChoice =
+    val env = decorated.map(ann.costEnvFor).getOrElse(ann.costEnv)
+    val reports = Backend.values.iterator.map { b =>
+      b -> SpatialCost.analyze(body, env, Backends.of(b, ExecutionPhase.Warm), form)
+    }.toMap
+    val comps = reports.view.mapValues(_.cost.at(valuation)).toMap
+    val scores = comps.view.mapValues(p => p.work + p.alloc + p.rounds + p.touch).toMap
+    val modelled =
+      Backend.values.iterator.filter(b => Backends.of(b, ExecutionPhase.Warm).touchNoOracle.isDefined).toSet
+    val best = Backend.values.toVector.minBy(b => (scores(b), b.ordinal))
+    val notes = Vector(
+      "the score is work + alloc + rounds + TOUCH.  Dropping `touch` — which is what this did before —" +
+      " omits the component that carries the trie algebra's asymptotics and therefore rewards the" +
+      " least-instrumented executable (review.md item 8).",
+      if modelled.isEmpty then "every backend's `touch` has a counted oracle"
+      else s"`touch` is a MODEL (no counted oracle) for: ${modelled.toVector.map(_.slug).sorted.mkString(", ")}" +
+           " — declared, not omitted") ++
+      (if form.describesWhatRuns then Vector.empty
+       else Vector(s"priced on ${form.show}; prefer `costOfOptimized` / `costOfResidual` for a statement " +
+                   "about what actually runs"))
+    BackendChoice(best, scores, comps, form, modelled, notes)
+
+  /** THE HISTORICAL TWO-VALUE FORM, now scoring all four components (see [[chooseBackend]]). */
   def selectBackend(body: Space, ann: SpatialAnnotations,
                     valuation: Map[String, Double] = Map.empty): (Backend, Map[Backend, Double]) =
-    val scores = Backend.values.iterator.map { b =>
-      val p = SpatialCost.analyze(body, ann.costEnv, Backends.of(b, ExecutionPhase.Warm)).cost.at(valuation)
-      b -> (p.work + p.alloc + p.rounds)
-    }.toMap
-    val best = Backend.values.toVector.minBy(b => (scores(b), b.ordinal))
-    (best, scores)
+    val c = chooseBackend(body, ann, valuation)
+    (c.best, c.scores)
+
+  /** SELECTION ON THE FORM THAT RUNS: `Routine.optimized`'s body, with its own decorated analysis. */
+  def selectBackendOptimized(r: Routine, ann: SpatialAnnotations,
+                             valuation: Map[String, Double] = Map.empty): BackendChoice =
+    given PartialFunction[RoutinePtr, Routine] = ann.routines
+    val opt = r.optimized
+    val a = analyzeRoutine(opt, ann)
+    chooseBackend(opt.body, ann, valuation, CostForm.Optimized, Some(a.decorated))
 
   // ------------------------------------------------------------------------------------------------
   // THE HOOK FOR THE ORDINARY OPTIMIZER

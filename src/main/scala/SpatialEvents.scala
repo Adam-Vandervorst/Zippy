@@ -33,7 +33,7 @@ package morkl
  *  All FOUR backends therefore have counted runs, and `touch` — previously an oracle-free component —
  *  is a CALIBRATED component on the three trie-shaped backends.
  *
- *  THREE GAPS REMAIN, all named and all bounded:
+ *  FOUR GAPS REMAIN, all named and all bounded:
  *
  *   1. `scala.collection.immutable.Set`/`Map` internals behind the REFERENCE evaluator (`eval` over
  *      `Set[PathValue]`) — hash probes, bucket copies.  A `Set` union of two 1000-element sets counts
@@ -51,9 +51,31 @@ package morkl
  *      `FreshTrieNode` total in the same operation — the same order, with a constant this file
  *      states rather than hides.  The same `2k-1` fact is what makes the `touch` upper bounds in
  *      `SpatialCost` sound (see `TrieAlgebraCost.tPer`).
- *   3. The per-node child-key sort inside `ITrie.range` uses the standard library's `sortBy`, so its
+ *   3. The child-key sort inside `ITrie.range` uses the standard library's `sortBy`, so its
  *      comparisons are not counted.  The models keep the `log` factor anyway (it is real work), which
- *      shows up as slack on `Range` rather than as an unsound bound. */
+ *      shows up as slack on `Range` rather than as an unsound bound.  The gap SHRANK with the
+ *      order-statistic slice: the sort now runs once per node the window actually cuts (and is
+ *      memoised per node), not once per node of the operand, and a full window sorts nothing at all.
+ *   4. `Interner.intern` PER PATH ITEM (IntTrie.scala).  `internPath` / `uninternPath` do one
+ *      `ConcurrentHashMap` lookup and one cons cell per item of the path, and the only event on that
+ *      route is ONE [[EffortEvent.TriePathDispatch]] for the whole `Path` subterm — so a length-`L`
+ *      constant costs `L` map probes and is counted as 1.  review.md item 6, fourth bullet, names this
+ *      and it is NOT closed.  The gap is bounded by the path-length channel the cost model already
+ *      carries (`Lower.LenBounds`): it is at most `len(p)` per counted `TriePathDispatch`, i.e. a
+ *      factor the model can name, not an unbounded one.  It is a `Work` gap only; `intern` allocates
+ *      nothing per hit and performs no `ITrie` descent, so `Alloc` and `Touch` are unaffected.
+ *      Closing it means one hook inside `Interner.intern`, which would move every hand-computed count
+ *      in `SpatialEventsCheck` and every calibrated `Work` bound at once — hence it is declared here
+ *      rather than done quietly.
+ *
+ *  WHAT THE CASE-RETURNING ALGEBRA ADDED (review.md items 1 and 2).  `ITrie`'s ring operations return
+ *  `ITrie.AlgebraicResult`, so `evalI` — the executable `Backend.Trie` names — accepts and rejects
+ *  whole subtries by pointer.  That control state is now counted: [[EffortEvent.AlgebraEmpty]],
+ *  [[EffortEvent.AlgebraIdentityLeft]], [[EffortEvent.AlgebraIdentityRight]],
+ *  [[EffortEvent.AlgebraBespoke]], [[EffortEvent.SubtrieAcceptedByPointer]],
+ *  [[EffortEvent.SubtrieRejectedByPointer]], [[EffortEvent.PatriciaEntry]] and
+ *  [[EffortEvent.EqualityFrontierVisit]].  All eight are `Explain`: they do not ADD work, they say
+ *  which work was avoided, and a relational cost model (item 2) needs them as its oracle. */
 enum EffortComponent:
   /** elementary steps the executor itself performs: node dispatches, cursor reads, item comparisons */
   case Work
@@ -107,7 +129,7 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
    *  node walked by `size`/`nodeCount`/`prefixCount`/`toPaths`/`range`. */
   case TrieNodeVisit extends EffortEvent(EffortComponent.Touch, "evalI,execT,execZ")
   /** one recursive entry into an `IntTrieOps` Patricia descent (`unionTries`/`intersectTries`/
-   *  `diffTries`/`restrictTries`) — the simultaneous two-sided walk the algebra is built on */
+   *  `diffTries`/`restrictTries`/`raffTries`) — the simultaneous two-sided walk the algebra is built on */
   case PatriciaVisit extends EffortEvent(EffortComponent.Touch, "evalI,execT,execZ")
 
   // ---- allocation ------------------------------------------------------------------------------
@@ -128,6 +150,43 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
   case FixpointRound extends EffortEvent(EffortComponent.Rounds, "eval,evalI,execT")
   /** one routine call entered */
   case CallEntry extends EffortEvent(EffortComponent.Rounds, "eval,evalI,execT")
+
+  // ---- the ALGEBRAIC RESULT CASE of the case-returning trie algebra (review.md items 1 and 2) ----
+  // Explanatory by construction: these do not add work, they say WHICH work was avoided.  A cost
+  // model cannot express "an entire left subspace was accepted by pointer" unless the oracle counts
+  // it, and a `Meas`-only summary (size/len/heads/nodes plus `same`/`headDisjoint`) cannot express it
+  // either.  Exactly ONE of the four `Algebra*` events fires per algebraic decision made by
+  // `ITrie.{unionR,intersectionR,subtractionR,restrictionR,raffinationR,compositionR}`, and the one
+  // that fires names the object the caller reuses — so their sum is the number of decisions, and
+  // `AlgebraIdentityLeft + AlgebraIdentityRight` is the number of nodes reused whole.  `Identity(BOTH)`
+  // is reported as LEFT, because that is the object `pick` hands back.
+  /** the operation's result is the empty set at this node (disjointness, annihilation, full removal) */
+  case AlgebraEmpty extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
+  /** the result IS the left argument node: containment / disjoint-subtraction / terminal-prefix
+   *  restriction / `a·{ε}` — the whole left subspace is accepted by pointer, nothing is allocated */
+  case AlgebraIdentityLeft extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
+  /** the result IS the right argument node: reverse containment, `{ε}·b` */
+  case AlgebraIdentityRight extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
+  /** the result genuinely mixes the arguments and a fresh node was built */
+  case AlgebraBespoke extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
+  /** a whole subtrie became part of the result WITHOUT being traversed: an `Identity` decision, a
+   *  Patricia branch attached unchanged, an `n`-ary group with a single contributor, or a child of a
+   *  `range` window that lies entirely inside it.  THE headline number of the optimal algebra. */
+  case SubtrieAcceptedByPointer extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
+  /** a whole subtrie was discarded WITHOUT being traversed: a Patricia prefix mismatch (disjointness),
+   *  a missing key in a `meetAll` round, or a `range` child entirely outside the window */
+  case SubtrieRejectedByPointer extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
+  /** one single-key Patricia ENTRY operation performed by the algebra (`get`/`updated`/`- k`, or a
+   *  `Tip` arm of a descent) — the per-entry work `PatriciaVisit` (per recursive descent) omits */
+  case PatriciaEntry extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
+  /** one node compared by `ITrie.equalT` — the fixpoint convergence test's EQUALITY FRONTIER.
+   *
+   *  Accounted separately from `touch` DELIBERATELY.  It is real executor work (review.md item 6 is
+   *  right that a structural `==` walk was uninstrumented), but folding it into a calibrated component
+   *  would silently change what every existing `touch` bound in `SpatialCost` is compared against.
+   *  Counting it here makes the frontier visible now; re-attributing it belongs with the cost-model
+   *  work of item 6. */
+  case EqualityFrontierVisit extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
 
   // ---- explanatory -----------------------------------------------------------------------------
   /** an identity / pointer-equality short circuit was taken at the ZIPPER level (`x ∪ x`, `x ∖ x`) */

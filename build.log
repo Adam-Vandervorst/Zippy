@@ -3868,3 +3868,309 @@ SpatialCheckCheck 25/0, SpatialLawCheck 22/0, SpatialAcceptance 18/0. The soundn
 re-run cold as a final check: CorpusValidation 1/0 ("1000 programs x 1000 inputs = 1000000 pairs, 7
 executors each agree", 34.8 s), SpatialShapeCheck 18/0, SpatialSoundnessHunt 13/0, SpillSoundness 5/0.
 No suite regressed. Nothing was marked .ignore.
+
+================================================================================
+2026-08-08  review.md's ten items: integration, the asymptotic verdict, docs
+================================================================================
+This increment added no feature of my own. Five concurrent agents landed review.md items 1-10 (trie
+algebra, relational frontier, zipper demand, semantic trust, cost model, product gates); my job was to
+compile the union, run the gates, correct what the integration got wrong, and answer ONE question with
+numbers: ARE THE ASYMPTOTIC SLOPES NOW RIGHT ON THE SHARING / WHOLE-SUBTREE CASES?  The short answer is
+in section 4: right in the EXECUTORS, right-with-a-bad-constant in the estimate on three families,
+and STILL WRONG on three. Every number below I observed on this tree.
+
+`whispers.md` DOES NOT EXIST in this repo (`ls` says so). Nothing was adopted from it, and the two
+agents who said the same are corroborated.
+
+--------------------------------------------------------------------------------
+1. COMPILE: no interface drift
+--------------------------------------------------------------------------------
+`scala-cli compile src` and the test scope both compile clean on the union of the five agents' work,
+exit 0, zero `[error]` lines. Warnings are the pre-existing MORKL.scala exhaustivity/unreachable-case
+set only. No consumer needed adapting: nobody changed a public signature. That is a real fact about
+how the work was partitioned, not luck -- the two new main-source files (SpatialFrontier.scala,
+SpatialDemand.scala) are additive, and the case-returning algebra was added to `ITrie` as new `...R`
+methods with the old names kept as `pick(opR(a,b), a, b)` wrappers.
+
+--------------------------------------------------------------------------------
+2. THE BATTERY: 59 suites, 496 tests, 0 failures, 0 newly ignored
+--------------------------------------------------------------------------------
+Each suite was run in its own scala-cli invocation (`--test-only` takes exactly one pattern, and a
+glob with `*` silently ran a SUBSET of the tests -- 1 of 5 in TrieOps -- so every row below is an
+exact-suite-name run). Times are wall clock including bloop dispatch.
+
+SOUNDNESS AND EXECUTOR GATES (these decide whether the features stay):
+  CorpusValidation      1/0   38 s  (1000 programs x 1000 inputs = 1M pairs, 7 executors agree)
+  CorpusLawValidation   1/0    6 s
+  TrieAlgebra           4/0    4 s     TrieEval        6/0   4 s     TrieOps      5/0   1 s
+  ITrieEval             5/0    4 s     ITrieOps        2/0   4 s     AlgebraicLaws 1/0  5 s
+  ZipperTest            3/0    4 s     GraphExecT     25/0   4 s
+  OptimizerProperties   2/0    4 s     SpatialShapeCheck 18/0 6 s
+  SpatialSoundnessHunt 13/0   26 s     SpillSoundness  5/0   8 s
+  SizeBoundsCheck       6/0    8 s     LenBoundsCheck  4/0   9 s
+  --> ZERO regressions. Nothing was reverted.
+
+THE NEW SUITES (the four files that did not exist before this round):
+  OptimalTrieCheck     17/0    4 s   SpatialFrontierCheck 19/0  9 s
+  SpatialDemandCheck    9/0    3 s   SpatialScaleCheck     2/0  3 s
+
+EVERY OTHER Spatial* SUITE:
+  SpatialAcceptance    18/0   44 s   SpatialAnalysisCheck 19/0  4 s
+  SpatialCheckCheck    27/0    5 s   SpatialCostCheck     21/0  9 s
+  SpatialElimination    6/0    3 s   SpatialEventsCheck   17/0  8 s
+  SpatialFactsCheck    26/0    4 s   SpatialLawCheck      22/0 100 s
+  SpatialLawsCheck     12/0    3 s   SpatialPipelineCheck 36/0  31 s
+  SpatialRecursionCheck 18/0   4 s   SpatialTypeCheck      5/0  14 s
+
+THROUGH `Routine.optimized`:
+  SCHardening 7/0   SCFacade 7/0   SCDriver 4/0   Imperative 6/0 (2 pre-existing ign)
+  Routines 5/0      MORKL2Space 8/0  Unification 9/0 (1 pre-existing ign)
+  ExGameOfLife 4/0  ExNQueens 10/0 (57 s)  ExAuntMetta 1/0  ExDatalog 4/0
+
+SUPPLEMENTARY SWEEP (run because four agents touched executor internals):
+  ProductUnionCheck 7/0  ZipperEggTest 7/0 (31 s)  SCDegeneracies 1/0  SCMatching 7/0
+  SCGeneralization 3/0   CornerstoneTypes 4/0 (58 s)  Datalog 2/0  AuntQuery 7/0
+  Lowering 2/0  Grounded 6/0  GroundedAudit 3/0  Permutations 4/0  SpacialType 2/0
+  Poly 1/0  IV 0/0  UnionFind 0/0 (1 pre-existing ign)
+
+DELIBERATELY NOT RUN, per the user's second steer: ExSlidingPuzzle (~442 s), EquivPipelineTest
+(~792 s, pre-existing RED for prover capacity), ProgramExpressivity (pre-existing OOM), CorpusRuntimes,
+TrieBench / GraphBench / ZipperScaleBench / ExecutorOverheadBench / RecursionLoweringBench (no agent
+extended them). The two pre-existing REDs are OUT OF SCOPE and I did not observe them this increment;
+build.log section "5. THE TWO RED SUITES" of the previous entry still describes them.
+
+The three pre-existing `.ignore`s (Imperative "scc exec", Imperative "push out", Unification
+"double transform", all in src/test/scala/MORKL.scala) are unchanged. I MARKED NOTHING `.ignore`.
+
+--------------------------------------------------------------------------------
+3. WHAT I CHANGED, AND WHY
+--------------------------------------------------------------------------------
+(a) docs/ALGEBRA.md 216-222 and 253-264 -- REQUIRED by review.md item 2. The old text said the trie
+    executors "descend to each prefix in `P` and enumerate the subtree below it", giving "work
+    proportional to the size of the answer rather than the size of the database". Both halves are
+    wrong for both persistent backends: nothing is enumerated, and answer size is not the parameter.
+    Replaced with the `Q`/`A`/`J` frontier definitions, the four-row case table with its measured
+    evidence, and the statement that "proportional to the answer" is wrong IN BOTH DIRECTIONS (a
+    terminal prefix accepts an arbitrarily large answer in O(1); `|Q| + J` is what controls the
+    traversal). Also corrected the implementation table ("descend to the prefix node, then RETURN IT
+    BY POINTER"), the three-executor claim (there are four executables, and `evalI` is the optimal
+    one), and section 4.3's "this can be a guided descent" to "this IS a guided descent".
+
+(b) SpatialEvents.scala header -- it said "THREE GAPS REMAIN". There are FOUR: `Interner.intern` per
+    path item is uncounted (a length-L constant costs L ConcurrentHashMap probes and is counted as ONE
+    `TriePathDispatch`), which is review.md item 6's fourth bullet and was not closed. I DECLARED it
+    rather than instrumented it: adding a hook there would move every hand-computed count in
+    SpatialEventsCheck and every calibrated `Work` bound at once, which is not an integration-time
+    change. The gap is bounded by the path-length channel the model already carries, and it is a
+    `Work` gap only.
+
+(c) Zipper.scala header -- it said "`ZipperCost` (SpatialCost.scala) still sums local worst cases and
+    is wrong here". That is now half-stale: the demand analysis DOES reach `Touch` (predicted [0,0]
+    against a counted 0 on every fused family) and does NOT reach `Work`/`Alloc`. Rewritten to say
+    exactly which component is closed and which two are open, with the measured numbers.
+
+(d) SpatialScaleCheck.scala, LIM-4 and LIM-5 prose ONLY (no cap, no subject, no statistic changed) --
+    see section 4. LIM-4 called a constant factor a growth class; LIM-5's cause was unlocated. Both
+    are now corrected by measurement.
+
+(e) docs/design_spatial_lattice.md -- corrected two stale bullets in section 7a (the cornerstone slack
+    table and "two cornerstone predictions remain unbounded", both superseded) and the section 0a
+    evidence row, and added SECTION 8, "What the estimate gets right and what it does not
+    (asymptotics)", which is what ALGEBRA.md now points at. It separates executable-checked from
+    SMT-proved from assumed, and separates the three outcome classes.
+
+(f) docs/atlas.md -- section 5 (both trie backends now carry the case-returning ring; `raffination` is
+    fused, not `subtraction(x, restriction(x,y))`; fixpoint convergence is `equalT`, not structural
+    `==`; `AlgebraicResult` is no longer sole to `Trie`), section 9.8 (the `Cost` vector has four
+    components and the binary transfers are relational), section 9.13 (30 events not 22, the product
+    requirements replacing the self-derived thresholds, the new cornerstone table, four oracle gaps
+    not one), section 9.16 point 3, and section 9.17 + 13.2 rows for the four new suites.
+
+--------------------------------------------------------------------------------
+4. THE MAKE-OR-BREAK QUESTION, MEASURED: ARE THE SLOPES RIGHT?
+--------------------------------------------------------------------------------
+I wrote a throwaway probe suite (IntegrationLadderProbe.scala, DELETED before this entry) that runs the
+SAME families SpatialScaleCheck gates, on `Routine.optimized`'s body, out to n = 65536 instead of 1024.
+Eleven rungs, ten doublings. It changed two of the agents' conclusions.
+
+(A) THE EXECUTORS: YES. Every sharing / whole-subtree case has measured slope 0.00, and the
+    improvements are slope changes against the previous implementations, not constant factors
+    (OptimalTrieCheck, counted events, geometric ladder 512..8192 or 64..1024):
+      restriction by {eps}        touch 1        alloc 0     slope 0.00
+      restriction by one prefix   touch 17       alloc 1     slope 0.00  (8 accepted by pointer)
+      disjoint union              touch 2        alloc 1     slope 0.00
+      subset intersection         touch 3        alloc 0     slope 0.00
+      disjoint intersection       touch 2        alloc 0     slope 0.00  (2 rejected by pointer)
+      self / disjoint subtraction touch 1 / 2    alloc 0     slope 0.00
+      {eps}.B and A.{eps}         touch 1        alloc 0     slope 0.00
+      full Range (warm)           touch 1        alloc 0     slope 0.00  BEFORE: 1023..16383, slope 1.00
+      joinAll of k disjoint       alloc 1                    slope 0.00  BEFORE: alloc k-1, slope 1.00
+      meetAll smallest frontier   touch 19..27   slope 0.14  BEFORE: 2595..41011, slope 1.00
+      one-head tailsIntersection  touch 1        alloc 0     slope 0.00
+      fused raffination           touch 9 alloc 1            BEFORE: touch 12 alloc 2
+      fixpoint equalT (converged) equality 1                 BEFORE: 1023..16383, slope 1.00
+
+(B) THE ESTIMATE, CASE 1 -- RIGHT SLOPE, BAD CONSTANT. LIM-4 recorded predicted `touch` slope
+    0.87-0.93 against a measured 0.00 and called it a GROWTH-CLASS error. IT IS NOT, and this is the
+    correction I am most confident matters. `SpatialFrontier`'s Patricia term is
+    `min(2(fanL+fanR), 2*PatriciaBits*(gateFan+|A|))` with `PatriciaBits = 33`, so the
+    operand-INDEPENDENT branch cannot win until the growing fan passes ~33x the gating fan -- and the
+    five-rung ladder (64..1024) sits ENTIRELY inside that crossover. Measured out to 65536:
+      restrict/prefix-cylinder  pred touch 311, 567, 1079, 1591, then 1591 at SIX more doublings
+                                meas 13 flat.   per-doubling slopes 0.86, 0.93, 0.56, 0.00 x 6
+      union/subset              pred 216, 408, 792, 1458, then 1458 x 6;  meas 16 -> 26
+      inter/shared-subtrie      pred 86 at EVERY rung 64..65536;          meas 26 flat
+      absorption (x u x)        pred touch 1, alloc 0;                    meas 1, 0  -- EXACT
+    So the whole-subtree accept DOES reach `touch`, the bound IS constant in the operand size, and
+    what remains is a constant of 122x / 56x / 3.3x. The user's steer says care about slopes, not
+    constants: by that standard this class is DONE. I kept LIM-4 as a failure (122x still fails the
+    budget tier) and rewrote its text; I did NOT lengthen the ladder, because changing the rung set
+    moves all 129 ladder numbers and can trip a cap in either direction at integration time.
+
+(C) THE ESTIMATE, CASE 2 -- STILL WRONG. Three families are genuinely linear, slope 1.00 at every one
+    of ten doublings:
+      union/disjoint-keys  pred alloc 66, 130, 258, ..., 65538   meas alloc 2, FLAT       (LIM-5)
+      range/full           pred touch 67, 131, ..., 65539        meas touch 1, FLAT       (LIM-3)
+      zipper Work/Alloc    pred prop. to Meas.nodes              meas flat, worst 2053x   (LIM-1/2)
+    LIM-5's CAUSE IS NOW LOCATED, which LIM-5 did not know. Sweeping keys-per-side upward, the
+    frontier reports source `Exact` and a FLAT predicted alloc of 3 for 1..12 keys, then switches to
+    `Relational` with 16, 18, 26, 66 at 14, 16, 24, 64. The crossover is
+    `SpatialConfig.default.shapeWidth = 12`: above it the head set spills into `Shape.others` and
+    key-disjointness stops being PROVABLE, so `paired(d)` falls back to `min(K_d, K_d) = n`. This is
+    review.md item 2's FIRST table row ("non-overlapping branches are attached unchanged") and it is
+    not fixed in the model. Raising `shapeWidth` only moves the crossover; the fix is a per-depth
+    disjointness fact or a key-set summary. I did not do it -- `shapeWidth` is a domain-wide carrier
+    value and changing it moves every spatial suite's numbers.
+    LIM-3 is the one every reviewer should read first: `ITrie.range` was IMPROVED to O(1) on a full
+    window and `CostModel.range` still charges the size walk the OLD implementation performed. A model
+    left behind by its own backend, caught by the gate that exists for exactly that.
+
+(D) THE PRODUCT REQUIREMENTS, in aggregate:
+      ladders      711 of 840 checks MET; 129 not met, covered by 23 named limitations
+      cornerstones  85 of 118 checks MET;  33 not met, covered by 18 named limitations
+    The ledger is NOT the allow-list it replaced, and the difference is mechanical: every entry has an
+    error cap and a width cap (the number cannot grow), every entry names an owning file, and an entry
+    whose subject STOPS failing makes the suite RED (`s"${l.id}: subject `$s` NO LONGER FAILS"`,
+    asserted equal to empty). I did not weaken a single cap.
+
+--------------------------------------------------------------------------------
+5. ITEM 5's INVARIANT, VERIFIED RATHER THAN QUOTED
+--------------------------------------------------------------------------------
+`SpatialPipelineCheck` "ITEM 5 INVARIANT: no infinite estimate on a closed, terminating,
+non-grounded cornerstone" is green: `=> 24 (cornerstone, backend) estimates; 0 infinite`. It is an
+invariant, not an allow-list. What that buys, on the OPTIMIZED body:
+  nqueens4    53 -> 1 Space nodes, COMPILE-TIME EVALUATED by the ordinary rule list; every interval
+              is exact ([1,1] work, [0,0] alloc/rounds). The review's "3,839x work, 213,465x alloc,
+              3.98 millionx touch" is gone because there is no run-time cost left to estimate.
+  puzzle15    Work 1.01x, Rounds 1.00x -- the rest-chain frame law (Sum_d K_d) reaches those two.
+              Alloc [0, 8.3e55] and Touch [0, 3.2e56] against counted 1334 / 3478. FINITE IS NOT
+              USEFUL: replacing `inf` with a 10^55 polynomial is not progress and CS-P1..CS-P4 exist
+              so nothing can call it progress.
+  datalog-sn  finite on the trie model (Work 6.01x, Rounds 6.78x); the reference and zipper models are
+              still SYMBOLIC in `|sn_tc()|`, i.e. no interprocedural least-fixpoint size summary.
+  aunt / temperature / gol   all finite; Rounds exact on aunt and temperature.
+
+--------------------------------------------------------------------------------
+6. WHAT REMAINS OPEN AFTER THIS INCREMENT
+--------------------------------------------------------------------------------
+1. THREE GENUINE GROWTH-CLASS FAILURES IN THE ESTIMATE, section 4(C): key-disjoint union `alloc`
+   (cause located: shapeWidth = 12), full `Range` `touch` (stale model), zipper `Work`/`Alloc` (the
+   demand region reaches `Touch` only). These are the make-or-break items still open.
+2. NO LOWER ENDPOINT IS DERIVED FOR `touch` OR `alloc`. `Cost.withoutTouchLower` is unconditional and
+   most ring transfers use `CostInterval.upperOnly`, so those widths are `upper + 1` BY CONSTRUCTION
+   (LIM-6 family, CS-8..CS-11). On `aunt` and `temperature` that is the ONLY failing statistic.
+   review.md item 5's second half is the fix and it did not land.
+3. `puzzle15` Alloc/Touch at 10^55 (CS-P1..CS-P4) and `datalog-sn`'s missing interprocedural size
+   summary (CS-5/CS-6, and the symbolic reference/zipper rows).
+4. `Interner.intern` PER PATH ITEM is uncounted -- review.md item 6's fourth bullet. Now DECLARED in
+   SpatialEvents.scala as the fourth gap; closing it moves every hand-computed count at once.
+5. The 122x / 56x constant on the frontier's `touch` (section 4(B)) -- right slope, unusable constant.
+   Two fixes compose: subtract `FrontierSummary.reuse` from `touch := descents + patricia`, and lower
+   the `2*PatriciaBits` factor.
+6. The 5-rung ladder cannot see the difference between 4(B) and 4(C). SpatialScaleCheck's `ladder`
+   should be lengthened; I declined to do it at integration time because it moves all 129 numbers.
+7. NO LAW IS SMT-PROVED (carried forward, re-verified: every `LawEvidence` construction in the tree is
+   `ExecutableChecked`; `SmtProved` has no occupant in the shipped library).
+8. Carried forward unchanged from the previous entry: the law channel has no bomb-subterm test of its
+   own; the product order's residual incompleteness is structural (52 of 202); the reducer has no SMT
+   obligation and no termination proof; Shape.MaxDepth/MaxHeads remain carrier-wide vals.
+9. The two pre-existing REDs (EquivPipelineTest prover capacity, ProgramExpressivity OOM) -- out of
+   scope, not run, not observed this increment.
+
+--------------------------------------------------------------------------------
+CONFIRMATION: re-run AFTER my last source edit
+--------------------------------------------------------------------------------
+My edits to main sources were comment-only (SpatialEvents.scala, Zipper.scala) plus test prose
+(SpatialScaleCheck.scala), but they force a recompile, so the gate was re-run afterwards:
+CorpusValidation 1/0 (37 s), ZipperTest 3/0, OptimalTrieCheck 17/0, TrieAlgebra 4/0, ITrieOps 2/0,
+SpatialDemandCheck 9/0, SpatialShapeCheck 18/0, SpatialSoundnessHunt 13/0, SpatialScaleCheck 2/0,
+SpatialEventsCheck 17/0. No suite regressed. Nothing was marked `.ignore`.
+
+================================================================================================
+SESSION 2026-08-08 (cont) — THE N-ARY TRIE OPERATIONS WERE ASYMPTOTICALLY WRONG ON WIDE OPERANDS
+================================================================================================
+Steer: "The primary goal should be to improve the asymptotics of the trie operations." followed by
+"Different data distributions will have different asymptotics: this is expected ... capture this,
+and drive it down.  No over-approximations."
+
+TWO GROWTH-CLASS DEFECTS FOUND AND FIXED in the executing backend (`evalI` over `ITrie`):
+
+1. `ITrie.joinAll`'s children step grouped every child of every operand into a LongMap of buffers and
+   rebuilt the result map key by key: Theta(sum of fan) UNCONDITIONALLY.  The pairwise Patricia union
+   it was introduced to beat answers non-interleaving operands in O(1).  So the n-ary pass was WORSE
+   than the fold for few/wide operands -- a TailsUnion over 3 wide head-groups.
+2. `ITrie.meetAll`'s children step iterated the smallest node's keys and probed the other k-1 maps:
+   Theta(fan) probes where a Patricia prefix comparison rejects the pair outright.
+
+FIX: `IntTrieOps.joinAllTries` / `meetAllTries` -- true n-ary simultaneous Patricia descents.  A
+branch with one live operand is that operand BY POINTER; opposite sides of a branching bit means
+disjoint regions (empty meet); k==2 delegates to the proven pairwise descent; reconstruction is
+pointer-preserving so the n-ary ops can now conclude Identity, which the old ones could not (both
+ended in an unconditional fresh node).
+
+A FOLD IS NOT THE FIX, and OptimalTrieCheck's before/after gate caught the attempt: a pairwise fold
+walks the first two operands' shared structure in full before a small third operand can prune it,
+which loses the smallest-branch-at-every-level property.  The n-ary descent keeps both properties.
+
+MEASURED (steps = ITrie/Patricia descents + per-key entries; OptimalTrieCheck DISTRIBUTION SWEEP):
+  distribution   union/inter/sub        joinAll over 3        class
+  separated      2 flat                 5 flat                O(1)
+  adjacent       2 flat                 5 flat                O(1)
+  offset-block   3 flat                 -                     O(1)
+  striped        192..3072  slope 1.00  384..6144 slope 1.00   Theta(n), inherent
+  half-paired    194..3074, 6.0 steps per paired key           Theta(paired)
+  equal          384..6144, 6.0 steps per paired key           Theta(paired)
+  joinAll of 3 WIDE operands: 16..24 (maxslope 0.30) against the group-by-key pass at 193..3073
+  (slope 1.00) -- 128x at n=1024.  meetAll of 3 wide operands: 2 flat against 129..2049.
+  absorbed joinAll / contained meetAll: 0 alloc, operand returned by pointer (was impossible before).
+
+TWO OF MY OWN OVER-APPROXIMATIONS, REFUTED BY THE SWEEP AND RELABELLED: "adjacent" and
+"offset-block" were labelled O(log n); both measure constant.  The honest statement is that
+NON-INTERLEAVING key sets merge in O(1) however they are offset.
+
+ALSO: `Trie.range` (TreeMap backend) had a DOCUMENTED degeneracy -- a full recursive size walk before
+the identity check and a window rebuilt path-by-path through singleton+union.  Ported ITrie's
+order-statistic slice: cached per-node terminal count (so a full window is the identity in O(1)) and
+whole-subtrie accept/reject by pointer.  TreeMap already iterates in canonical order, so no memoised
+child order is needed here.
+
+A GENERATOR BUG IN MY OWN GATE, found by the gate: the distributions were expressed in SYMBOL names,
+but `Interner` assigns ids in first-use order, so name-striping produced two ADJACENT id blocks and
+the sweep measured the same layout twice ("striped" read flat, which is impossible).  The sweep now
+interns one consecutive key pool and every distribution is an index set into it, asserted consecutive.
+
+DOCS: docs/atlas.md rewritten as a compact index (1174 -> 357 lines): one row per component with its
+file and one line of role, review.md references and rationale essays removed, stale line-number
+anchors dropped in favour of greppable symbol names.  docs/ALGEBRA.md NOT touched (it is the theory
+paper and does not describe the implementation) -- confirmed by `git diff`.
+================================================================================================
+
+--- ERRATA to the entry above (numbers verified after adding a `steps` row to OptimalTrieCheck's table)
+The wide-operand before/after figures in the entry above quoted the `touch` column for the AFTER side
+and an INFERRED value for the meetAll BEFORE side.  The measured `steps` statistic (descents +
+per-key entries), which is what the gate asserts, is:
+  joinAll of 3 wide operands   AFTER  18,22,24,24,26      maxslope 0.28
+  joinAll BEFORE (group-by-key) 385,769,1537,3073,6145    maxslope 1.00   -> 236x at n=1024
+  meetAll of 3 wide operands   AFTER  2,2,2,2,2           maxslope 0.00
+  meetAll BEFORE (probe loop)  65,129,257,513,1025        maxslope 1.00   -> 512x at n=1024
+The claim "meetAll ... against 129..2049" above is wrong; the correct BEFORE row is 65..1025.

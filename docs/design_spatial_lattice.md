@@ -65,7 +65,7 @@ is deliberately separated from the SMT rows:
 | `γ(a op# b) ⊇ γ(a) op γ(b)` at abstract operands | `SpatialLawCheck` (900/operator, incl. open head sets) + `SpatialSoundnessHunt` HUNT 7 (246 300 checks) | proved |
 | the whole analysis on adversarial terms | `SpatialSoundnessHunt` HUNT 1–6, delta-debugged witnesses | proved |
 | `specialize(s, facts) ≡ s` under the facts | `SpatialLawCheck` conditional-rewrite tests + corpus | proved |
-| `cost#` bounds a backend's real cost | `SpatialEventsCheck` calibration against **counted executor events** — 4 backends × 4 components, 3000 corpus points + 66 cornerstone points, **100% containment**, with p95 and worst-case slack **gated per (backend, component)**. Rank correlation is now the secondary metric. | proved; **and the bound is loose** — see §7a: cornerstone slack reaches 3.96 M× on `touch` |
+| `cost#` bounds a backend's real cost | `SpatialEventsCheck` calibration against **counted executor events** — 4 backends × 4 components, 3000 points on the definitional corpus + 59 points on the **optimized** cornerstones, **100% containment** on both. Tightness is gated only on the optimized form, against **product requirements** (interval width, multiplicative error, asymptotic slope) stratified by (backend, component), never against a self-derived threshold. | proved; **and the bound is loose** — 85/118 cornerstone and 711/840 ladder requirement checks are met, and the 33 + 129 that are not are named, capped entries in `ProductRequirement.exclusions`. See §7a and §8 |
 
 **Termination is not addressed here either.** The `Shape` widening (`widenShape`) and the `Fixpoint`
 iteration bound are structural arguments plus an explicit iteration cap, exactly as §7 says for the
@@ -289,20 +289,31 @@ result.
 - **Effort calibration now covers four backends with no structural exclusion, and is *loose*.** `evalI`,
   every `ITrie` node the algebra builds, and the recursive `ITrie`/`IntTrieOps` descent are instrumented,
   so the review's "177 of 200 zipper programs excluded because they delegated to `evalI`" is gone —
-  `0 of 200` predictions are skipped. Containment is 100% (3000 corpus points, 66 cornerstone points),
-  and the honest half is the slack: corpus worst-case is 36× (zipper `Work`), 151× (zipper `Alloc`) and
-  110× (zipper `Touch`); the **cornerstones** are 5,368× / 55,648× / 3,175× on the reference backend and
-  **3,962,335×** on trie/zipper `Touch`. `touch` is the worst component because it bounds a worst-case
-  Patricia descent that pointer identity, empty operands and prefix mismatches routinely cut to nothing,
-  and because `collect` must cover `Fold`'s quadratic left fold of unions. **`Cost.touch` is not a
-  runtime predictor at cornerstone scale.** The p95-and-worst gate exists so this is a tracked number
-  rather than a discovered surprise.
-- **Two cornerstone predictions remain unbounded, and the reasons are structural, not constants.**
-  `datalog-sn` needs a fixpoint over the size lattice (an interprocedural size summary) and `puzzle15`
-  needs the loop transfer restructured for a whole rest-chained nest — raising `SpatialCost.MaxDepth`
-  from 64 to 512 was tried and the bound then saturates to `inf` because a 16-level product of per-level
-  group counts overflows the algebra's `Long`. The exclusion list is asserted equal, in both directions,
-  to the set of cornerstones that actually come out unbounded.
+  `0 of 200` predictions are skipped. Containment is 100% (3000 corpus points on the definitional form,
+  59 cornerstone points on the **optimized** form), and the honest half is the slack. On the
+  *definitional* random corpus the worst multiplicative errors are now 29× (zipper `Work`), 227× (zipper
+  `Alloc`), 36× (trie `Touch`) — and **tightness is not gated on that form**, because a definitional-form
+  tightness number is the wrong question. On the **optimized cornerstones**, which is what ships, the
+  medians are 1.01× (trie `Work`), 1.00× (`Rounds`), 18.0× (trie `Alloc`) and 28.8× (trie `Touch`); the
+  worst finite non-`puzzle15` figures are 6.01× (`datalog-sn` trie `Work`) and 432.6× (`datalog-sn` trie
+  `Touch`), and `puzzle15`'s `Alloc`/`Touch` are 6.2e52× / 9.1e52×. `touch` is the worst component
+  because it bounds a worst-case Patricia descent that pointer identity, empty operands and prefix
+  mismatches routinely cut to nothing, **and because no lower endpoint is derived for it at all**
+  (`Cost.withoutTouchLower` is unconditional, so every `touch` interval is `[0, upper]` and its width is
+  `upper + 1` by construction). **`Cost.touch` is not a runtime predictor at cornerstone scale.** Each
+  remaining failure is a *named* entry in `ProductRequirement.exclusions` with an error cap, a width cap,
+  an owning file and a stated fix; the ledger is asserted in both directions, so an entry that stops
+  failing must be deleted or the suite goes red.
+- **No cornerstone prediction is unbounded any more; two are finite-but-useless, which is a different
+  failure.** `SpatialPipelineCheck`'s "ITEM 5 INVARIANT" asserts **0 infinite estimates over 24
+  (cornerstone, backend) pairs**, and it is an invariant, not an allow-list. `puzzle15` is now accurate to
+  1.01× on `Work` and 1.00× on `Rounds` because the rest-chain frame law (`Σ_d K_d`) reaches those two
+  components — but its `Alloc`/`Touch` come out `[0, 8.3e55]` / `[0, 3.2e56]` against counted 1334 / 3478,
+  because the loop transfer still multiplies per-level group maxima over a 16-level nest instead of
+  pricing the nest from `SpatialFacts.PrefixProfile`. Replacing `inf` with a 10^55 polynomial is not
+  progress and `CS-P1`…`CS-P4` exist so nothing can call it progress. `datalog-sn` is finite on the trie
+  backend (`Work` 6.01×, `Rounds` 6.78×) and still **symbolic** in `|sn_tc()|` on the reference and zipper
+  models, because there is no interprocedural least-fixpoint size summary.
 - **Reference `touch` has no oracle at all, and that is declared in the model.** `ReferenceCost` carries
   `touchNoOracle`: `eval`'s `Set` operations delegate union/intersection/hash probing to the Scala
   collection library, so these hooks cannot count its internal element touches. `touch` is excluded from
@@ -331,3 +342,130 @@ result.
   the *product structure*, not a missing clause: `SpatialType.leq` is `Shape.leqStrong × leqSpace`, and a
   containment visible only to the conjunction is out of reach for any componentwise test. That is what
   `orderFailures` now says on a one-sided failure, and what `SpatialCheckCheck` 4a–4c pin.
+
+## 8. What the estimate gets right and what it does not (asymptotics)
+
+This section exists because a cost model can be *sound* — 100% containment, every point inside its
+interval — and still be useless: a bound that is linear where the algorithm is `O(1)` or `O(depth)`
+does not answer any question anyone asks of it. What follows separates the two.
+
+Every number below describes **`Routine.optimized`'s body** on the optimal backends, never the
+definitional term (that is the wrong question) and never the reference evaluator (`eval` over
+`Set[PathValue]` is allowed to be slow and its `touch` has no counted oracle). Every row is measured,
+by the named suite, and each carries its evidence class:
+
+| class | what it means |
+| --- | --- |
+| executable-checked | a counted run of `evalI` / `execZ` / `execT` against a hand-derived expectation, or a differential run against `eval` |
+| SMT-proved | a discharged obligation under `proofs/` |
+| assumed | an axiom with no proof obligation |
+
+No claim in this section is SMT-proved; all are executable-checked. No spatial *law* in the shipped
+library is SMT-proved either — every one is `ExecutableChecked` by exhaustive finite search — and under
+`LawEvidencePolicy.RequireDischarged` an `Assumed` bound is **refused**, not met, so it cannot move an
+answer, license a rewrite or appear in a certificate.
+
+### 8.1 The executors: the slopes are right
+
+`ITrie`'s ring operations return `ITrie.AlgebraicResult` (`Empty | Identity(mask) | Bespoke`) at every
+node, so `evalI` — which is what `Backend.Trie` *means* — accepts, rejects and reuses whole subtries by
+pointer. `OptimalTrieCheck` runs each case over a geometric ladder and reports
+`log2((C(2n)+1)/(C(n)+1))`; all of these are **0.00** (executable-checked, counted events):
+
+| case | touch | alloc | slope |
+| --- | --- | --- | --- |
+| `X <| {ε}`, `|X| = 512 … 8192` | 1 | 0 | 0.00 |
+| `X <| {p}`, `p` present, `|p|` fixed | 17 | 1 | 0.00 |
+| union of two disjoint deep tries | 2 | 1 | 0.00 |
+| intersection with a shared subset | 3 | 0 | 0.00 |
+| disjoint intersection | 2 | 0 | 0.00 |
+| self- and disjoint subtraction | 1 / 2 | 0 | 0.00 |
+| `{ε}·B` and `A·{ε}` | 1 | 0 | 0.00 |
+| full `Range` (warm) | 1 | 0 | 0.00 |
+| `tailsIntersection` of a one-head space | 1 | 0 | 0.00 |
+| fixpoint convergence (`equalT`, unchanged round) | 0 | 0 | 0.00, 1 equality visit |
+
+and the improvements are slope changes against the previous implementations, not constant factors:
+full `Range` 1 visit against 1023→16383 (slope 1.00) before; `joinAll` of `k` disjoint operands 1 fresh
+node against `k-1`; `meetAll` 19→27 against 2595→41011 (slope 1.00) before; fixpoint equality 1 visit
+against 1023→16383 before; fused `raffination` 9 visits / 1 node against 12 / 2.
+
+### 8.2 The estimate: three cases
+
+**(a) Right slope and usable constant.** `Rounds` is exact on every closed cornerstone
+(`slack = 1.00`); trie `Work` is 1.01× on `puzzle15` and 1.00× on `aunt`; the frontier summary itself
+(`SpatialFrontier`, independent of how the cost model consumes it) is **exact** — predicted/derived
+ratio `1.00` — on restriction by `{ε}`, restriction by a covering prefix, a non-covering prefix over a
+growing bush, disjoint one-head chains under intersection and subtraction, a one-path RHS against a
+growing LHS, and shared-representation equality, with slope 0.00 throughout.
+
+**(b) Right slope, bad constant.** The frontier-driven `touch` bound is **constant in the operand
+size** on the whole-subtree families, but with a large crossover, because the Patricia term is
+`min(2(fanL+fanR), 2·PatriciaBits·(gateFan+|A|))` with `PatriciaBits = 33`. Measured out to
+`n = 65536`:
+
+| family | predicted `touch` | measured | verdict |
+| --- | --- | --- | --- |
+| `restrict/prefix-cylinder` | 311, 567, 1079, **1591 flat for six more doublings** | 13 flat | constant, 122× |
+| `union/subset` | 216, 408, 792, **1458 flat for six more doublings** | 16 → 26 | constant, 56× |
+| `inter/shared-subtrie` | **86 at every rung 64 … 65536** | 26 | constant, 3.3× |
+| `absorption` (`x ∪ x`) | **1** | 1 | exact |
+
+The five-rung ladder in `SpatialScaleCheck` (64…1024) sits entirely inside the crossover, so its slope
+statistic reads 0.87–0.96 there. `LIM-4` records both the statistic and this correction; the fix is to
+subtract `FrontierSummary.reuse` from `touch := descents + patricia` and to lengthen the ladder, not to
+relabel the failure.
+
+**(c) Wrong slope — the genuine remaining growth-class failures.** Measured out to `n = 65536`, slope
+1.00 at every rung:
+
+- **head/key-disjoint union allocation** (`LIM-5`, `LIM-5g`). Predicted `alloc` 66 → 65538 against a
+  measured **2, flat**. The cause is located: sweeping keys-per-side upward, the frontier reports source
+  `Exact` and a flat predicted `alloc` of 3 for 1…12 keys, then switches to `Relational` with 16, 18, 26,
+  66 at 14, 16, 24, 64. The crossover is `SpatialConfig.default.shapeWidth = 12` — above it the head set
+  spills into `Shape.others` and key-disjointness stops being provable, so `paired(d)` falls back to
+  `min(K_d, K_d) = n`. This is review item 2's first table row and it is **not** fixed in the model.
+  Raising `shapeWidth` only moves the crossover; the fix is a per-depth disjointness fact or a key-set
+  summary.
+- **a full `Range`** (`LIM-3`, `LIM-3g`, `LIM-3z`). `ITrie.range` returns its input after one node visit;
+  `CostModel.range` still charges the pre-order size walk the *previous* implementation performed —
+  predicted 67 → 65539 against a measured **1**. A model left behind by its own backend.
+- **the zipper's `Work` and `Alloc`** (`LIM-1`, `LIM-2`, `CS-7`, `CS-14`). The demand analysis
+  (`SpatialDemand`) *is* wired in and it *does* fix `Touch`: the predicted zipper `Touch` is correctly
+  `[0,0]` on every fused family, matching a counted 0. But `Work` and `Alloc` remain the per-operator
+  sum, charged in proportion to each operand's `Meas.nodes`, and the meet keeps the eager number — so
+  `(A ∪ B) ∩ C` with a fixed `C` is priced as the full inner union. Predicted slope 0.96–1.00 against a
+  measured 0.00, worst error 2053×. This is review item 3 verbatim, still open for two components.
+
+### 8.3 Where an estimate is frontier-driven and where it falls back
+
+`SpatialCost` records a per-report census. On the optimized cornerstone bodies, of 696 binary ring
+nodes, **631 are priced from a derived relational frontier**; the sources are `Exact`, `Relational`,
+`Profile`, `NodeCeiling` and `SizeCeiling`, and only the last two are fallbacks. Per cornerstone:
+
+```text
+aunt         frontier   4/4   (100%)  [Relational=4]
+temperature  frontier   3/3   (100%)  [Relational=3]
+gol          frontier 102/102 (100%)  [Profile=50 Relational=52]  + 1 rest-chain nest by the frame law
+puzzle15     frontier 510/575 ( 89%)  [Exact=52 Profile=173 Relational=285 SizeCeiling=2]
+                                       2 marked-ceiling, 63 no-fact
+datalog-sn   frontier  12/12  (100%)  [Exact=6 Relational=6]
+nqueens4     (no binary ring node — the ordinary rule list evaluates it at compile time)
+```
+
+A `FrontierSummary` whose depth profile truncates past `Shape.MaxDepth = 4` falls back to the coarse
+`min(N(L), N(R))` ceiling **and says so** (`source = NodeCeiling`, non-empty `fallback`), so a consumer
+can always tell a real frontier bound from a ceiling. That truncation is the published `log` factor:
+over a family whose *depth* grows, `Σ_d min(K_d, K_d)` is `N·len`, not `N` — the frontier model is
+strictly better than the size-only bound everywhere else and exactly as good there.
+
+### 8.4 Counted-oracle gaps
+
+`Work`/`Alloc`/`Rounds`/`Touch` are calibrated against 19 counted events; 11 further events are
+`Explain`-only (they say which work was *avoided* and are never summed). Four gaps remain, all named in
+`SpatialEvents.scala`: the reference evaluator's `Set` internals (so reference `touch` has **no** oracle
+and is the single declared exclusion), `IntMap` spine allocation (bounded by 2× the counted
+`FreshTrieNode` total), the child-key sort inside `ITrie.range`, and `Interner.intern` **per path item**
+(one map probe per item, counted as one `TriePathDispatch` for the whole `Path`; bounded by the path-length
+channel the model already carries). Until the fourth is closed, `Work` is a count of dispatches and
+explicit comparisons — not of machine steps.

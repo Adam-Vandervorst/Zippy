@@ -1,6 +1,8 @@
 package morkl
 
 import munit.FunSuite
+import morkl.Syntax.{*, given}
+import scala.language.implicitConversions
 
 /** THE PIPELINE, unit by unit and end to end (review.md finding 3).
  *
@@ -987,5 +989,307 @@ class SpatialPipelineCheck extends FunSuite:
     assert(l.graph.isEmpty, "transpile has no node for a grounded function")
     assert(l.notes.exists(n => n.contains("transpile")), l.notes.mkString("; "))
     println(s"[no-eval] grounded-path term: ${l.notes.mkString("; ").take(120)}")
+  }
+
+  // ================================================================================================
+  //  THE CORNERSTONES, ON THE FORM THAT RUNS
+  //
+  //  Every number below is measured on `Routine.optimized`'s body (spatial hook + `Lower` rules) or on
+  //  an `SC.reduce` residual — never on the definitional term.  A definitional estimate answers a
+  //  question nobody asked: one runs the optimized backend, so one should price the optimized program.
+  // ================================================================================================
+
+  /** the six named cornerstones, with their inputs DECLARED and never their outputs */
+  def cornerstones: Vector[(String, Routine, SpatialAnnotations)] =
+    val rr = new scala.util.Random(12)
+    val tempCells = (0 until 16)
+      .map(i => PathValue(NOAA.bits(i, 4) :+ Vector("VC", "C", "N", "W", "VW")(rr.nextInt(5)))).toSet
+    val world = Space.Mention(SpaceMention("world"))
+    val temperature = Space.Union(Space.Restriction(world, Space.Literal(NOAA.interval(0, 4, 4))),
+                                  Space.Restriction(world, Space.Literal(NOAA.interval(12, 16, 4))))
+    val live = Set((1, 0), (1, 1), (1, 2))
+    val golRules = GoL.rulesFor(live)
+    val puz = Sliding.puzzle(4, 4)
+    val queens = NQueens.board(4)
+    val edges = SpaceValue(Set(p("0", "1"), p("1", "2"), p("2", "3")))
+    def join(r: Space, s: Space): Space = r.iter(P"n", S"nbs", P"n" x \/(s <| S"nbs"))
+    val snTC = Routine(RoutinePtr("sn_tc"), Vector.empty,
+                       Vector(SpaceMention("e"), SpaceMention("all"), SpaceMention("delta")),
+                       S"all" \/ Space.Call(RoutinePtr("sn_tc"), Vector.empty,
+                         Vector(S"e", S"all" \/ (join(S"delta", S"e") \ S"all"), join(S"delta", S"e") \ S"all")))
+    /** an input mention DECLARED at exactly its value's spatial type — the honest closed-program setting */
+    def declared(kv: (SpaceMention, SpaceValue)*): Map[SpaceMention, SpatialType] =
+      kv.iterator.map((m, v) => m -> SpatialType.of(v)).toMap
+    def rt(name: String, ms: Vector[SpaceMention], body: Space,
+           spaces: Map[SpaceMention, SpatialType] = Map.empty,
+           rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty)
+        : (String, Routine, SpatialAnnotations) =
+      (name, Routine(RoutinePtr(name), Vector.empty, ms, body),
+       SpatialAnnotations(spaces = spaces, routines = rc))
+    Vector(
+      rt("aunt", Vector.empty, Routines.aunt_query_routine.body,
+         AuntQuery.context.asInstanceOf[SpaceContextMap].m.view
+           .mapValues(SpatialType.of).toMap,
+         Syntax.mod(Routines.child_routine)),
+      rt("temperature", Vector(SpaceMention("world")), temperature,
+         declared(SpaceMention("world") -> SpaceValue(tempCells))),
+      rt("gol", Vector(SpaceMention("field")),
+         Space.Call(RoutinePtr("nextStep"), Vector.empty, Vector(Space.Mention(SpaceMention("field")))),
+         declared(SpaceMention("field") -> GoL.field(live)), golRules.defs),
+      rt("puzzle15", Vector(SpaceMention("frontier")), puz.expandStep(Space.Mention(SpaceMention("frontier"))),
+         declared(SpaceMention("frontier") -> SpaceValue(Set(puz.initial))), puz.defs),
+      rt("nqueens4", Vector.empty, queens.program, Map.empty, queens.defs),
+      rt("datalog-sn", Vector(SpaceMention("edges")),
+         Space.Call(RoutinePtr("sn_tc"), Vector.empty,
+           Vector(Space.Mention(SpaceMention("edges")), Space.Mention(SpaceMention("edges")),
+                  Space.Mention(SpaceMention("edges")))),
+         declared(SpaceMention("edges") -> edges), Syntax.mod(snTC)))
+
+  /** a cornerstone is CLOSED, TERMINATING and NON-GROUNDED: every one of the six is known to execute
+   *  and terminate (`SpatialEventsCheck` runs all six under `EffortSink.count`), and none contains a
+   *  grounded host function.  That is precisely the class review.md item 5 says may not produce an
+   *  infinite estimate. */
+  def hasGrounded(s: Space): Boolean =
+    var found = false
+    def go(x: Space): Unit =
+      if !found then
+        x match
+          case Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => found = true
+          case _ => SizeZ3.children(x).foreach(go)
+    go(s)
+    found
+
+  test("ITEM 5 INVARIANT: no infinite estimate on a closed, terminating, non-grounded cornerstone") {
+    // THE INVARIANT REPLACES THE ALLOW-LIST.  `SpatialEventsCheck.unboundedCornerstones` names two
+    // expected failures (`datalog-sn` and `puzzle15`) and asserts the observed set EQUALS them; review.md
+    // item 5 says that is the wrong shape of test — `[0, inf]` on a closed terminating non-grounded
+    // program is a FAILED RESULT, not semantic uncertainty — so here the requirement is stated positively
+    // and gated.  Both former failures now come out finite, for the two reasons the review names: the
+    // rest-chain FRAME LAW (`Σ K_d`, not `Π K_d`) for `puzzle15`, and the interprocedural
+    // LEAST-FIXPOINT UNIVERSE SUMMARY for `datalog-sn`.
+    println("\n[item5] the infinity ledger, ON THE OPTIMIZED BODY (Routine.optimized)")
+    var infinite = Vector.empty[String]
+    var rows = 0
+    for (name, r, ann) <- cornerstones do
+      given PartialFunction[RoutinePtr, Routine] = ann.routines
+      assert(!hasGrounded(r.body), s"$name is not grounded-free; it does not belong in this class")
+      val t0 = System.nanoTime()
+      val reports = SpatialPipeline.costOfOptimized(r, ann)
+      val ms = (System.nanoTime() - t0) / 1e6
+      for b <- Backend.values.toVector do
+        val rep = reports(b)
+        rows += 1
+        if !rep.finite then infinite = infinite :+ s"$name/${b.slug}: ${rep.infiniteComponents.mkString(" ")}"
+      val worst = Backend.values.toVector.filterNot(b => reports(b).finite).map(_.slug)
+      println(f"  $name%-12s ${if worst.isEmpty then "ALL FINITE" else "INFINITE on " + worst.mkString(",")}%-28s " +
+              f"${ms}%7.0f ms   ${reports(Backend.Trie).census.show}")
+      println(f"      trie   UPPER ${reports(Backend.Trie).cost.show}")
+      println(f"      zipper UPPER ${reports(Backend.Zipper).cost.show}")
+    println(s"  => $rows (cornerstone, backend) estimates; ${infinite.size} infinite")
+    for x <- infinite do println(s"  !! $x")
+    assert(infinite.isEmpty,
+           s"infinite estimates on closed, terminating, non-grounded cornerstones: ${infinite.mkString("; ")}")
+  }
+
+  test("ITEM 5: the two former allow-list entries, with the law that bounds each") {
+    // Named specifically, because these are the two the previous generation exempted.
+    val byName = cornerstones.map(c => c._1 -> c).toMap
+    for name <- Vector("puzzle15", "datalog-sn") do
+      val (_, r, ann) = byName(name)
+      given PartialFunction[RoutinePtr, Routine] = ann.routines
+      val rep = SpatialPipeline.costOfOptimized(r, ann)(Backend.Trie)
+      println(s"\n[item5/$name] rounds = ${rep.cost.rounds.show}   work = ${rep.cost.work.show}")
+      val why = rep.assumptions.filter(a => a.contains("FRAME LAW") || a.contains("UNIVERSE SUMMARY"))
+      for w <- why do println(s"  ! ${w.take(700)}")
+      assert(rep.finite, s"$name is still infinite: ${rep.infiniteComponents.mkString(" ")}")
+      assert(why.nonEmpty,
+             s"$name came out finite but named neither the frame law nor the universe summary; " +
+             s"the reason must be stated: ${rep.assumptions.mkString(" | ").take(400)}")
+  }
+
+  test("ITEM 2 + 3 CENSUS: how much of each cornerstone is frontier/demand driven vs marked ceiling") {
+    // review.md item 2: "retain the coarse size ceiling only as a last-resort fallback".  The only way to
+    // know whether that held is to COUNT, so the census is published per cornerstone and gated.
+    println("\n[census] frontier / demand coverage on the OPTIMIZED body")
+    var totalBinary = 0; var totalDerived = 0; var totalFallback = 0; var totalNoFact = 0
+    var demandRegions = 0
+    for (name, r, ann) <- cornerstones do
+      given PartialFunction[RoutinePtr, Routine] = ann.routines
+      val reports = SpatialPipeline.costOfOptimized(r, ann)
+      val trie = reports(Backend.Trie).census
+      val zip = reports(Backend.Zipper).census
+      totalBinary += trie.binaryNodes; totalDerived += trie.derived
+      totalFallback += trie.fallback; totalNoFact += trie.noFact
+      demandRegions += zip.demandRegions
+      println(f"  $name%-12s trie: ${trie.show}")
+      println(f"  ${""}%-12s zip : ${zip.show}")
+    println(f"  => $totalDerived/$totalBinary binary ring nodes frontier-derived, " +
+            f"$totalFallback marked-ceiling, $totalNoFact with no relational fact; " +
+            f"$demandRegions zipper regions demand-priced")
+    // the gate: the MARKED CEILING must be the exception, not the rule.  It is stated as a fraction of
+    // the nodes that had a relational fact at all — a node with no `SpatialType` pair (an inlined callee
+    // body) is a different, named limitation.
+    val withFact = totalDerived + totalFallback
+    if withFact > 0 then
+      assert(totalFallback * 4 <= withFact,
+             s"$totalFallback of $withFact frontier summaries fell back to the coarse ceiling; " +
+             "the review permits it only as a last resort")
+  }
+
+  test("ITEM 8: cost consumes the DECORATED result — Life and n-queens, with and without") {
+    // review.md item 8: "Life tightens cardinality from 5,785 to 45 without changing its predicted work
+    // ... Let cost analysis consume the existing NodeId-indexed result."  Both numbers are printed: the
+    // tightened cardinality AND the predicted work, so the connection is visible rather than asserted.
+    println("\n[item8] decorated vs fresh-traversal cost, on the SAME optimized body")
+    val byName = cornerstones.map(c => c._1 -> c).toMap
+    var improved = 0
+    for name <- Vector("gol", "nqueens4", "aunt", "temperature") do
+      val (_, r, ann) = byName(name)
+      given PartialFunction[RoutinePtr, Routine] = ann.routines
+      val opt = r.optimized
+      val a = SpatialPipeline.analyzeRoutine(opt, ann)
+      val card = a.result.size
+      for b <- Vector(Backend.Trie, Backend.Zipper) do
+        val model = Backends.of(b, ExecutionPhase.Warm)
+        val dec = SpatialCost.analyze(opt.body, ann.costEnvFor(a.decorated), model, CostForm.Optimized)
+        val fresh = SpatialCost.analyze(opt.body, ann.costEnv, model, CostForm.Optimized)
+        val dw = dec.cost.at(Map.empty); val fw = fresh.cost.at(Map.empty)
+        val tighter = dw.work <= fw.work && dw.alloc <= fw.alloc && dw.touch <= fw.touch
+        if dw.work < fw.work || dw.alloc < fw.alloc || dw.touch < fw.touch then improved += 1
+        println(f"  $name%-12s ${b.slug}%-8s |result| = ${card.lo}..${card.hi}%-14s " +
+                f"decorated work=${dw.work}%12.0f alloc=${dw.alloc}%12.0f touch=${dw.touch}%14.0f")
+        println(f"  ${""}%-12s ${""}%-8s ${""}%-25s fresh     work=${fw.work}%12.0f alloc=${fw.alloc}%12.0f touch=${fw.touch}%14.0f")
+        assert(tighter,
+               s"$name/${b.slug}: consuming the decorated analysis made the prediction WORSE " +
+               s"(decorated ${dec.cost.show} vs fresh ${fresh.cost.show})")
+    println(s"  => the decorated result moved $improved of 8 (cornerstone, backend) predictions")
+    assert(improved >= 1,
+           "wiring the decorated analysis into cost changed NO prediction — which is exactly the " +
+           "disconnect review.md item 8 objects to")
+  }
+
+  test("ITEM 8 + D: backend selection over COMPARABLE components, and a case where the choice changes") {
+    // The old score was `work + alloc + rounds` with `touch` dropped for every backend because ONE of
+    // them has no counted oracle for it.  `touch` is where the trie algebra's asymptotics live, so
+    // dropping it rewards the least-instrumented executable.  Here is a term where it decides the answer.
+    val big = SpaceValue((0 until 64).map(i => p("k" + (i % 8), "v" + i)).toSet)
+    val body = Space.Intersection(Space.Union(Space.Literal(big), Space.Literal(big)),
+                                  Space.Literal(SpaceValue(Set(p("k0", "v0")))))
+    val ann = SpatialAnnotations.open()
+    val choice = noEvaluation("chooseBackend")(SpatialPipeline.chooseBackend(body, ann))
+    println("\n[select] " + choice.show)
+    // the OLD score, reconstructed from the same components, so the difference is arithmetic and not
+    // a second measurement
+    val oldScores = Backend.values.toVector.map { b =>
+      val c = choice.components(b); b -> (c.work + c.alloc + c.rounds)
+    }.toMap
+    val oldBest = Backend.values.toVector.minBy(b => (oldScores(b), b.ordinal))
+    println("[select] touch-omitted score => " + oldBest.slug + "   " +
+            oldScores.toVector.sortBy(_._1.ordinal).map((b, s) => f"${b.slug}=$s%.0f").mkString("  "))
+    println("[select] all-four score      => " + choice.best.slug)
+    assertEquals(choice.scores.size, 4)
+    assert(choice.modelledTouch == Set(Backend.Reference),
+           s"exactly the reference backend's `touch` is a declared model, got ${choice.modelledTouch}")
+    assertNotEquals(oldBest, choice.best,
+                    "on this term the omitted `touch` component does not change the choice; the test " +
+                    "needs a term where it does, or the claim is unsupported")
+    // and on the form that runs
+    val r = Routine(RoutinePtr("sel"), Vector.empty, Vector.empty, body)
+    given PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
+    val onOpt = SpatialPipeline.selectBackendOptimized(r, ann)
+    println("[select] on Routine.optimized's body => " + onOpt.best.slug + s" (form ${onOpt.form})")
+    assertEquals(onOpt.form, CostForm.Optimized)
+  }
+
+  test("ITEM 2 SLOPES: restriction by a fixed prefix is depth-only, not linear in the selected subtree") {
+    // review.md item 2: "These tests must show constant or depth-only restriction and sharing cases
+    // rather than merely contain the run below a linear upper bound."  The generator is geometric: one
+    // FIXED length-2 prefix restricting a subtree that doubles.  A linear predicted slope is a FAILURE
+    // here even though it would "contain" the run.
+    def selected(n: Int): Space =
+      Space.Literal(SpaceValue((0 until n).map(i => p("A", "B", "leaf" + i)).toSet))
+    val prefixes = Space.Literal(sv(p("A", "B")))
+    val ann = SpatialAnnotations.open()
+    val model = Backends.of(Backend.Trie, ExecutionPhase.Warm)
+    println("\n[slope] restriction by ONE fixed present prefix of length 2, selected subtree doubling")
+    var prev = -1.0
+    var slopes = Vector.empty[Double]
+    for n <- Vector(8, 16, 32, 64, 128, 256) do
+      val body = Space.Restriction(selected(n), prefixes)
+      val a = SpatialPipeline.analyzeTerm(body, ann)
+      val rep = SpatialCost.analyze(body, ann.costEnvFor(a.decorated), model, CostForm.AsGiven)
+      val pt = rep.cost.at(Map.empty)
+      println(f"  n=$n%4d  alloc=${pt.alloc}%8.0f  touch=${pt.touch}%10.0f  work=${pt.work}%6.0f  " +
+              f"${rep.census.show}")
+      if prev >= 0 then slopes = slopes :+ math.log((pt.alloc + 1) / (prev + 1)) / math.log(2)
+      prev = pt.alloc
+    println(f"  => predicted alloc slopes log2(C(2n)+1 / C(n)+1): ${slopes.map(s => f"$s%.2f").mkString(", ")}")
+    // A LINEAR predicted allocation would give slopes near 1.0.  The whole-subtree accept — a terminal
+    // right prefix takes X_u by pointer — must make it 0.
+    assert(slopes.forall(_ < 0.25),
+           s"predicted restriction allocation grows with the SELECTED SUBTREE (slopes ${slopes.mkString(", ")}); " +
+           "the terminal-prefix accept-by-pointer case is not reaching the cost model")
+  }
+
+  test("ITEM 2 SLOPES: a disjoint intersection and a subset union stay flat as both sides grow") {
+    def deep(head: String, n: Int): Space =
+      Space.Literal(SpaceValue((0 until n).map(i => p(head, "x" + i)).toSet))
+    val ann = SpatialAnnotations.open()
+    val model = Backends.of(Backend.Trie, ExecutionPhase.Warm)
+    println("\n[slope] disjoint-head intersection and subset union")
+    var interPrev = -1.0; var unionPrev = -1.0
+    var interSlopes = Vector.empty[Double]; var unionSlopes = Vector.empty[Double]
+    for n <- Vector(8, 16, 32, 64, 128) do
+      val l = deep("L", n); val r = deep("R", n)
+      def price(s: Space): CostPoint =
+        val a = SpatialPipeline.analyzeTerm(s, ann)
+        SpatialCost.analyze(s, ann.costEnvFor(a.decorated), model).cost.at(Map.empty)
+      val ip = price(Space.Intersection(l, r))
+      val up = price(Space.Union(l, l))            // the subset/absorption case: `x ∪ x`
+      println(f"  n=$n%4d  disjoint ∩ alloc=${ip.alloc}%8.0f touch=${ip.touch}%10.0f   " +
+              f"x∪x alloc=${up.alloc}%8.0f touch=${up.touch}%10.0f")
+      if interPrev >= 0 then interSlopes = interSlopes :+ math.log((ip.alloc + 1) / (interPrev + 1)) / math.log(2)
+      if unionPrev >= 0 then unionSlopes = unionSlopes :+ math.log((up.alloc + 1) / (unionPrev + 1)) / math.log(2)
+      interPrev = ip.alloc; unionPrev = up.alloc
+    println(f"  => ∩ slopes ${interSlopes.map(s => f"$s%.2f").mkString(", ")};  " +
+            f"x∪x slopes ${unionSlopes.map(s => f"$s%.2f").mkString(", ")}")
+    assert(interSlopes.forall(_ < 0.25),
+           s"a PROVABLY DISJOINT intersection's predicted allocation grows with the operands " +
+           s"(${interSlopes.mkString(", ")}) — disjoint-reject is not reaching the cost model")
+    assert(unionSlopes.forall(_ < 0.25),
+           s"`x ∪ x` predicted allocation grows with |x| (${unionSlopes.mkString(", ")})")
+  }
+
+  test("ITEM 2: the case-returning algebra is a SLOPE difference, not a constant factor") {
+    // The counterfactual instance prices the SAME executable as if its ring operations returned a fresh
+    // node instead of an `AlgebraicResult`.  That is how "identity propagation is asymptotic, not
+    // cosmetic" becomes a number.
+    // THE GENERATOR IS `X <| Y` WITH `Y` AN EQUAL BUT DISTINCT OBJECT: the two denote the same set, so
+    // the algebraic result is `Identity`, but the pointer-identity short circuit does NOT fire — which is
+    // exactly the case where propagating `Identity` is the whole win.  `|A|`, the active frontier the
+    // interned algebra must rebuild, is the number of NON-terminal paired prefixes and grows with `n`.
+    // A COMPLETE DEPTH-3 TRIE of branching `b`: `b^3` paths and `1 + b + b^2` internal nodes, which is
+    // `|A|` — the active frontier the interned algebra must rebuild where the case-returning one hands
+    // the argument object back.  Depth 3 because `SpatialConfig.default.shapeDepth = 4` is the DOMAIN-WIDE
+    // trie depth of the shape carrier: past it a shape is not exact, `SpatialFacts.exactValue` returns
+    // `None`, and no frontier source can see the identity at all (see the report's note on that ceiling).
+    def cube(b: Int): Space =
+      val alpha = (0 until b).map("s" + _)
+      Space.Literal(SpaceValue((for x <- alpha; y <- alpha; z <- alpha yield PathValue(List(x, y, z))).toSet))
+    val ann = SpatialAnnotations.open()
+    println("\n[identity] X <| Y with Y an equal-but-distinct object: with vs without the AlgebraicResult cases")
+    var withId = Vector.empty[Double]; var without = Vector.empty[Double]
+    for n <- Vector(2, 4, 6) do
+      val body = Space.Restriction(cube(n), cube(n))
+      val a = SpatialPipeline.analyzeTerm(body, ann)
+      val env = ann.costEnvFor(a.decorated)
+      val yes = SpatialCost.analyze(body, env, Backends.of(Backend.Trie, ExecutionPhase.Warm)).cost.at(Map.empty)
+      val no = SpatialCost.analyze(body, env, Backends.trieNoIdentityWarm).cost.at(Map.empty)
+      withId = withId :+ yes.alloc; without = without :+ no.alloc
+      println(f"  n=$n%4d  alloc with identity = ${yes.alloc}%8.0f    without = ${no.alloc}%8.0f")
+    println(s"  => with identity ${withId.mkString(", ")};  without ${without.mkString(", ")}")
+    assert(withId.distinct.size == 1, s"the identity-propagating price is not flat: ${withId.mkString(", ")}")
+    assert(without.last > without.head,
+           s"the counterfactual must GROW for the comparison to mean anything: ${without.mkString(", ")}")
   }
 end SpatialPipelineCheck

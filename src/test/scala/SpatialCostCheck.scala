@@ -221,10 +221,24 @@ class SpatialCostCheck extends FunSuite:
     val env = SpatialCost.Env(facts = SpatialTyping.Env(spaces = Map(ma -> SpatialType.of(av), mb -> SpatialType.of(bv))))
     val (ds, dt) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(mb)), env)
     assertEquals(touch(ds).show, "120", "a set intersection touches all 60+60 paths")
-    // The trie compares 2+2 HEADS and stops — and `touch` is now a COUNTED component
-    // (EffortEvent.TrieNodeVisit + PatriciaVisit), so the claim is what a run can produce: one
-    // ITrie-level entry plus the top Patricia descent over the two head sets, at most 2(m+n) visits.
-    assertEquals(touch(dt).show, "13", "1 entry + 3(2+2) for the head-set Patricia descent")
+    // The trie compares 2+2 HEADS and stops.  THE ASSERTION IS ASYMPTOTIC, NOT A CONSTANT (this used to
+    // pin `touch` to the literal string "13" and went red at 17 when `TrieAlgebraCost.tPer` changed):
+    // what matters is that the head-disjoint skip makes the trie's descent INDEPENDENT OF THE FIBER
+    // SIZE, so growing 30 tails per head to 300 must not move it.  A constant here is a constant factor
+    // the product requirements in `SpatialScaleCheck` measure against counted events; a GROWTH in it
+    // would be the failure.
+    val fatA = SpaceValue(heads.flatMap(h => (0 until 300).map(i => p(h, "x" + i))).toSet)
+    val fatB = SpaceValue(other.flatMap(h => (0 until 300).map(i => p(h, "x" + i))).toSet)
+    val fatEnv = SpatialCost.Env(facts = SpatialTyping.Env(
+      spaces = Map(ma -> SpatialType.of(fatA), mb -> SpatialType.of(fatB))))
+    val fatT = SpatialCost.analyze(Space.Intersection(Space.Mention(ma), Space.Mention(mb)), fatEnv, TrieCost)
+    assertEquals(touch(fatT).show, touch(dt).show,
+                 s"a 10x fatter fiber must not change the head-disjoint descent bound: " +
+                 s"${touch(dt).show} vs ${touch(fatT).show}")
+    assert(Sym.vars(touch(dt)).isEmpty && Sym.evalAt(touch(dt), Map.empty) <= 32.0,
+           s"the head-disjoint descent must be a small CONSTANT: ${touch(dt).show}")
+    println(s"COST: head-disjoint trie touch = ${touch(dt).show} at 2x30 tails and ${touch(fatT).show} " +
+            s"at 2x300 — flat, while the set evaluator goes ${touch(ds).show} -> ${touch(SpatialCost.analyze(Space.Intersection(Space.Mention(ma), Space.Mention(mb)), fatEnv, SetCost)).show}")
     // and it allocates exactly the ONE root node it builds before discovering the result is empty
     assertEquals(alloc(dt).show, "1", "the merged root node, and nothing below it")
     assert(Sym.dominates(touch(ds), touch(dt)), s"${ds.show}\n${dt.show}")
@@ -319,14 +333,32 @@ class SpatialCostCheck extends FunSuite:
     assertEquals(eval(headsOf(lit(p()))), SpaceValue(Set.empty))
   }
 
-  test("fixpoint rounds: bounded by the result when monotone, an explicit free variable otherwise") {
+  test("fixpoint rounds: a NUMBER when the seed is exact, tied to the result when it is not") {
     val r = SpaceMention("r")
+    // EXACT SEED.  This assertion used to demand the free variable `|fix:r|` and the assumption string
+    // "monotone accumulator, so rounds"; the transfer now DERIVES A NUMBER when the seed and the body
+    // are closed, which is strictly better and is what the product requirements ask for (a free variable
+    // in the answer is `[0, inf]` in a different costume — see `symbolicEstimates` in
+    // `SpatialEventsCheck`).  So the test now asserts the stronger property AND checks it against the
+    // counted truth, with `eval` as the oracle.
     val mono = Space.Fixpoint(lit(p("a")), r, Space.Union(Space.Mention(r), lit(p("b"))))
     val rm = SpatialCost.analyze(mono, SetCost)
-    assert(rm.assumptions.exists(_.contains("monotone accumulator, so rounds")), rm.show)
-    assert(Sym.vars(rounds(rm)).contains("|fix:r|"), s"rounds must be tied to the result size: ${rounds(rm).show}")
+    assert(Sym.vars(rounds(rm)).isEmpty, s"an exactly seeded monotone fixpoint must give a NUMBER: ${rm.show}")
     assert(rounds(rm) != Sym.Inf, "never saturate")
+    val trueRounds = EffortSink.count(eval(mono))._2(EffortEvent.FixpointRound)
+    val (loR, hiR) = rm.bracket(EffortComponent.Rounds, Map.empty)
+    assert(loR <= trueRounds && trueRounds <= hiR,
+           s"the counted $trueRounds rounds must lie in the predicted [$loR, $hiR]: ${rm.show}")
+    println(f"COST: exact monotone fixpoint — counted $trueRounds rounds in [$loR%.0f, $hiR%.0f]")
     assertEquals(eval(mono).paths.size, 2)
+
+    // UNKNOWN SEED: the size is not available, so the round count must be tied to the fixpoint's own
+    // result size rather than invented — that is where `|fix:r|` belongs.
+    val openMono = Space.Fixpoint(S"s0", r, Space.Union(Space.Mention(r), lit(p("b"))))
+    val ro = SpatialCost.analyze(openMono, SetCost)
+    assert(ro.assumptions.exists(_.contains("monotone accumulator, so rounds")), ro.show)
+    assert(Sym.vars(rounds(ro)).contains("|fix:r|"),
+           s"rounds must be tied to the result size when the seed is unknown: ${rounds(ro).show}")
 
     val nonmono = Space.Fixpoint(lit(p("a", "b", "c")), r, Space.TailsUnion(Space.Mention(r)))
     val rn = SpatialCost.analyze(nonmono, SetCost)
@@ -545,4 +577,116 @@ class SpatialCostCheck extends FunSuite:
             f"(${100.0 * differing / recs.length}%.0f%%)")
     assert(differing > recs.length / 4, s"the backends should differ on a large share of the corpus, got $differing")
   }
+
+  // ==============================================================================================
+  // 7. THE INTERVAL-WIDTH PRODUCT REQUIREMENT, PER OPERATOR AND BACKEND  (review.md item 7)
+  // ==============================================================================================
+
+  /** WIDTH is the one product requirement that needs no execution: it is a property of the ANSWER, not
+   *  of a run.  `(upper + 1) / (lower + 1)` says how much a caller who trusts the estimate still does not
+   *  know.  `[0, inf]` is the degenerate case and `[0, 10^55]` — Puzzle's, today — is the same failure
+   *  with a finite number in it.
+   *
+   *  This table is the per-OPERATOR stratification of that requirement, on `Routine.optimized`'s body
+   *  (the user's third steer) with the inputs DECLARED exactly, so every endpoint is a number.  The
+   *  ERROR and SLOPE halves of the requirement need counted runs and geometric ladders and live in
+   *  `SpatialEventsCheck` and `SpatialScaleCheck`; this is the third leg and the cheapest. */
+  test("PRODUCT REQUIREMENT: interval WIDTH per operator and backend, on the OPTIMIZED form") {
+    val a = SpaceMention("a"); val b = SpaceMention("b")
+    // 64 paths over 8 heads, depth 2 — a closed shape, so `SpatialFacts.trieNodes` gives the analysis an
+    // exact prefix profile and nothing here is loose for want of an input fact
+    val av = SpaceValue((0 until 64).map(i => p("h" + (i % 8), "t" + i)).toSet)
+    val bv = SpaceValue((0 until 16).map(i => p("h" + (i % 4), "t" + i)).toSet)
+    val ann = SpatialAnnotations(spaces = Map(a -> SpatialType.of(av), b -> SpatialType.of(bv)))
+    val A = Space.Mention(a); val B = Space.Mention(b)
+    val h = PathRef("h").known(1)
+    val ops: Vector[(String, Space)] = Vector(
+      "union"        -> Space.Union(A, B),
+      "intersection" -> Space.Intersection(A, B),
+      "subtraction"  -> Space.Subtraction(A, B),
+      "restriction"  -> Space.Restriction(A, B),
+      "raffination"  -> Space.Raffination(A, B),
+      "composition"  -> Space.Composition(A, B),
+      "wrap"         -> Space.Wrap(A, "k"),
+      "unwrap"       -> Space.Unwrap(A, "h0"),
+      "tails-union"  -> Space.TailsUnion(A),
+      "tails-inter"  -> Space.TailsIntersection(A),
+      "range-full"   -> Space.Range(A, 0, 0),
+      "range-part"   -> Space.Range(A, 0, 4),
+      "iteration"    -> Space.Iteration(A, h, SpaceMention("t"), Space.Mention(SpaceMention("t"))),
+      "fixpoint"     -> Space.Fixpoint(A, SpaceMention("r"),
+                                       Space.Union(Space.Mention(SpaceMention("r")), B)))
+    var rows = Vector.empty[GateRow]
+    var infinite = Vector.empty[String]
+    var symbolic = Vector.empty[String]
+    println("=" * 122)
+    println("WIDTH: (upper+1)/(lower+1) on Routine.optimized's body, inputs declared exactly (|a|=64, |b|=16)")
+    println("=" * 122)
+    for (name, prog) <- ops do
+      val r = Routine(RoutinePtr("w_" + name.replace('-', '_')), Vector.empty, Vector(a, b), prog)
+      val opt = r.optimized(using ann.routines)
+      val an = SpatialPipeline.analyzeRoutine(opt, ann)
+      val env = ann.costEnvFor(an.decorated)
+      for bk <- Backend.values do
+        val rep = SpatialCost.analyze(opt.body, env, Backends.of(bk, ExecutionPhase.Warm), CostForm.Optimized)
+        assertEquals(rep.form, CostForm.Optimized)
+        val cells = EffortEvent.calibratedComponents.map { comp =>
+          val (lo, hi) = rep.bracket(comp, Map.empty)
+          if hi.isInfinite then
+            infinite :+= s"$name/${bk.slug}/$comp"
+            comp -> Double.PositiveInfinity
+          else
+            val w = (hi + 1.0) / (lo + 1.0)
+            ProductRequirement.tierOf(bk.slug, comp).foreach { t =>
+              rows :+= GateRow("operator", name, bk.slug, comp, "width", w, t)
+            }
+            comp -> w
+        }
+        if freeVars(rep.cost).nonEmpty then symbolic :+= s"$name/${bk.slug}"
+        println(f"WIDTH: $name%-13s ${bk.slug}%-10s " +
+                cells.map((c, w) => f"$c%-6s ${if w.isInfinite then "inf" else f"$w%10.2f"}%10s").mkString("  "))
+    // review.md item 5, as an invariant on a CLOSED one-operator program with declared exact inputs:
+    // an infinite endpoint here would be an analysis bug, not semantic uncertainty
+    assertEquals(infinite, Vector.empty[String],
+                 "an INFINITE endpoint on a closed one-operator program with exactly declared inputs:\n  " +
+                 infinite.mkString("\n  "))
+    assertEquals(symbolic, Vector.empty[String],
+                 "a FREE VARIABLE in the answer for a closed one-operator program:\n  " + symbolic.mkString("\n  "))
+    publishOperatorGate(rows)
+  }
+
+  /** the same ledger machinery the other two suites use, over the `operator` scope */
+  def publishOperatorGate(rows: Vector[GateRow]): Unit =
+    var failures = Vector.empty[String]
+    val met = rows.count(_.ok)
+    for r <- rows.filterNot(_.ok).sortBy(_.key) do
+      r.limitation match
+        case Some(l) =>
+          println("REQUIREMENT: " + r.show + s"  <== NOT MET — named limitation ${l.id}")
+          if r.measured > l.cap(r.what) + 1e-9 then
+            failures :+= s"${r.key}: ${GateRow.fmt(r.measured)} REGRESSED past ${l.id}'s recorded " +
+                         GateRow.fmt(l.cap(r.what))
+        case None =>
+          println("REQUIREMENT: " + r.show + "  <== FAILS THE PRODUCT REQUIREMENT, UNNAMED")
+          failures :+= s"${r.key}: measured ${GateRow.fmt(r.measured)} exceeds the ${r.tier.name} " +
+                       s"requirement ${GateRow.fmt(r.permitted)}"
+    for l <- ProductRequirement.limitations if l.scope == "operator" do
+      val mine = rows.filter(x => l.matches(x.scope, x.subject, x.backend, x.comp, x.what))
+      if mine.isEmpty then
+        failures :+= s"${l.id}: declared over ${l.subjects.mkString(",")} but no requirement check " +
+                     "produced a matching row"
+      for s <- l.subjects do
+        val hers = mine.filter(_.subject == s)
+        if hers.nonEmpty && hers.forall(_.ok) then
+          failures :+= s"${l.id}: subject `$s` NO LONGER FAILS — remove it from the limitation"
+    println(s"PRODUCT REQUIREMENTS — width per operator: $met of ${rows.length} MET, " +
+            s"${rows.length - met} not met")
+    assertEquals(failures, Vector.empty[String],
+                 s"width-per-operator: ${failures.length} failure(s) with no named limitation (or a " +
+                 s"stale one):\n  " + failures.mkString("\n  "))
+
+  def freeVars(c: Cost): Set[String] =
+    Vector(c.work, c.alloc, c.rounds, c.touch)
+      .flatMap(x => x.symOpt.map(Sym.vars).getOrElse(Set.empty[String])).toSet
+
 end SpatialCostCheck

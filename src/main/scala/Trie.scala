@@ -19,8 +19,21 @@ import scala.collection.mutable
 final case class Trie(terminal: Boolean, children: TreeMap[PathItem, Trie]):
   def isEmpty: Boolean = !terminal && children.isEmpty
   def nonEmpty: Boolean = !isEmpty
-  /** number of paths (terminals) in the set */
-  def size: Int = (if terminal then 1 else 0) + children.valuesIterator.map(_.size).sum
+  /** CACHED TERMINAL COUNT — computed at most once per node object, read in O(1) after.
+   *
+   *  Same device as [[ITrie.count]] and for the same reason: [[Trie.range]]'s window test and its
+   *  order-statistic slice both need the terminal count of a subtrie, and recomputing it by a full
+   *  recursive walk at every query made a FULL-window `Range` — the identity — proportional to the
+   *  operand.  A plain non-volatile `int`: the write is idempotent and `int` writes do not tear, so a
+   *  benign race can only recompute. */
+  private var szc: Int = -1
+  /** number of paths (terminals) in the set — O(1) once computed */
+  def size: Int =
+    var s = szc
+    if s < 0 then
+      s = (if terminal then 1 else 0) + children.valuesIterator.map(_.size).sum
+      szc = s
+    s
   /** number of trie nodes (a structural-size measure) */
   def nodeCount: Int = 1 + children.valuesIterator.map(_.nodeCount).sum
   def toSpaceValue: SpaceValue = SpaceValue(Trie.toPaths(this))
@@ -45,25 +58,44 @@ object Trie:
   def suffixClosure(t: Trie): Trie =
     if t.children.isEmpty then empty
     else t.children.foldLeft(Trie(false, t.children): Trie) { case (acc, (_, c)) => union(acc, suffixClosure(c)) }
-  /** Native ordered slice `[start, end)` in canonical order — no path materialization.  The TreeMap
-   *  children already iterate in `String` order, so we walk in order (prefixes before
-   *  extensions), count terminals and emit only those in the window, stopping once it is filled. */
+  /** ORDER-STATISTIC SLICE `[start, end)` in canonical order — no path materialization.
+   *
+   *  `TreeMap` iterates its children in `String` order, which IS the canonical order
+   *  `pathValueOrdering` induces, so — unlike `ITrie`, which has to memoise a canonical order over its
+   *  interned integer keys — the offsets can be accumulated on the fly.  A child whose terminal window
+   *  lies entirely inside `[lo, hi)` is accepted WHOLE by pointer; a child entirely before or after is
+   *  skipped by reading its cached [[Trie.size]] without descending it; only genuinely partial children
+   *  are visited, and only they and the two cut frontiers are rebuilt.
+   *
+   *  This replaces the DEGENERACY documented here previously: a full recursive `size` walk before the
+   *  identity check (now O(1) through the cached count) and a window rebuilt path by path through
+   *  `singleton` + `union`, which cost `Θ(window · depth)` allocations and re-merged every emitted path
+   *  into the accumulator.  `ITrie.range` (IntTrie.scala) is the same algorithm on the interned
+   *  representation. */
   def range(t: Trie, start: Int, end: Int): Trie =
     val size = t.size
     val (lo, hi) = RangeBounds.normalize(size, start, end)
     if hi <= lo then empty
     else if lo == 0 && hi == size then t
+    else slice(t, lo, hi)
+
+  /** `[lo, hi)` are indices into `n`'s own canonical terminal list */
+  private def slice(n: Trie, lo: Int, hi: Int): Trie =
+    if hi <= lo then empty
+    else if lo <= 0 && hi >= n.size then n                       // whole subtrie, by pointer
     else
-      var idx = 0
-      var out = empty
-      def go(n: Trie, acc: List[PathItem]): Unit =
-        if idx < hi then
-          if n.terminal then { if idx >= lo then out = union(out, singleton(acc.reverse)); idx += 1 }
-          if idx < hi then
-            val it = n.children.iterator
-            while it.hasNext && idx < hi do { val (k, c) = it.next(); go(c, k :: acc) }
-      go(t, Nil)
-      out
+      val term = n.terminal && lo <= 0
+      var acc = if n.terminal then 1 else 0
+      var out = TreeMap.empty[PathItem, Trie]
+      val it = n.children.iterator
+      while it.hasNext && acc < hi do
+        val (k, c) = it.next()
+        val cs = c.size
+        if acc + cs > lo then                                    // else: entirely before the window
+          val r = slice(c, lo - acc, hi - acc)
+          if r.nonEmpty then out = out.updated(k, r)
+        acc += cs
+      if out.isEmpty && !term then empty else Trie(term, out)
 
   def fromPaths(ps: IterableOnce[PathValue]): Trie =
     ps.iterator.foldLeft(empty)((t, p) => union(t, singleton(p)))
@@ -291,8 +323,20 @@ object Trie:
     case Nil => s
     case h :: t => s.children.get(h).map(unwrap(_, t)).getOrElse(empty)
 
-  /** composition (concatenation product) {p ++ q : p ∈ a, q ∈ b}: graft b at every terminal of
-   *  a.  With persistent sharing, each graft reuses the SAME b — O(#terminals of a) new nodes. */
+  /** composition (concatenation product) {p ++ q : p ∈ a, q ∈ b}: graft b at every terminal of a.
+   *
+   *  THE GRAFT FRONTIER IS a's NODES, NOT ITS TERMINALS.  The previous claim here — "each graft
+   *  reuses the SAME b, so O(#terminals of a) new nodes" — was wrong, and wrong in the direction that
+   *  flatters the algorithm (review.md item 4, fifth bullet).  Sharing `b` is real: the same object is
+   *  attached at every graft, so nothing proportional to `N(b)` is ever copied.  But the recursion
+   *  rebuilds the SPINE above every graft, so a single depth-`d` path — which has exactly ONE
+   *  terminal — allocates `d` fresh nodes.  The correct account is `Theta(N(a))` fresh nodes (every
+   *  non-terminal node of `a` is rebuilt by the `children.map`, plus one `union` frontier at each
+   *  terminal of `a` where `b` merges into the mapped children).
+   *
+   *  The degenerate cases are the ones that must not pay that: `a·{ε} == a` and `{ε}·b == b` are
+   *  decided by [[compositionR]] before any traversal, in constant time, and `{ε}·b` in particular is
+   *  the adversarial case for any size-only cost bound. */
   def composition(a: Trie, b: Trie): Trie = pick(compositionR(a, b), a, b)
   def compositionR(a: Trie, b: Trie): AlgebraicResult =
     if a.isEmpty || b.isEmpty then AlgebraicResult.Empty

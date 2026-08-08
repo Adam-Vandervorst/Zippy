@@ -11,8 +11,25 @@ import Lower.LenBounds
  *  | question                                                     | entry point                    | soundness / completeness                                        |
  *  |--------------------------------------------------------------|--------------------------------|-----------------------------------------------------------------|
  *  | does this CONCRETE space inhabit this spatial type?           | [[SpatialCheck.value]]         | SOUND and COMPLETE for this carrier — it *is* γ                  |
- *  | is an inferred type ABSTRACTLY INCLUDED in a declared one?    | [[SpatialCheck.types]]         | `Proved` sound-incomplete; `Refuted` sound and witnessed         |
+ *  | is an inferred type ABSTRACTLY INCLUDED in a declared one?    | [[SpatialCheck.types]]         | SOUND; COMPLETE (decided) whenever the inferred shape's head sets are closed and the enumeration fits the budget, otherwise `Unknown` |
  *  | does this ROUTINE have the declared spatial signature?        | [[SpatialCheck.checkRoutine]]  | `Proved` sound modulo the annotations; never `Refuted` from imprecision |
+ *
+ *  ==WHERE THE ABSTRACT QUESTION IS DECIDED, AND WHERE IT IS NOT  (review.md 10)==
+ *  `SpatialType.leq` is `Shape.leqStrong × SpatialGamma.leqSpace` — two COMPONENTWISE tests — so a
+ *  containment visible only to the CONJUNCTION of shape and histogram is invisible to it, whatever is
+ *  repaired inside either clause.  That class used to come back `Unknown`.  [[SpatialCheck.decide]] now
+ *  answers the COMBINED question directly: `γ(inferred)` is ENUMERATED and every member is tested with the
+ *  full product γ ([[SpatialTyping.accepts]]).  A witness then refutes; the absence of one over a COMPLETE
+ *  enumeration is a PROOF of containment, not a failure to find a counterexample.  [[SpatialCheck.plan]]
+ *  carries the completeness argument — the tracked heads of both types bound the alphabet, `len.hi` bounds
+ *  the depth, and finitely many FRESH items cover an OPEN node because both `γ`s are invariant under any
+ *  permutation of items neither type tracks — and [[ProductSearch]] carries the budget.
+ *
+ *  THE RESIDUAL INCOMPLETENESS IS A MEASURED NUMBER WITH A NAMED CAUSE, never a disclaimer.  The query
+ *  declines on an unbounded `len.hi`, an unbounded `size.hi`, or an enumeration past the budget;
+ *  [[SpatialCheck.declined]] returns exactly which, the `Unknown` reason quotes it to the user, and
+ *  `SpatialCheckCheck` 4d measures the before/after `Unknown` rate on its diagnostic pool with
+ *  `ProductSearch.off` as the "before" so the delta is this query's and nothing else's.
  *
  *  ==WHAT EACH VERDICT MEANS, EXACTLY==
  *   - `Proved(inferred, cert)` — `SpatialType.leq(inferred, declared)` held, so `γ(inferred) ⊆
@@ -274,6 +291,16 @@ enum SpatialAssumption:
   case FixpointPostFixpoint
   /** the head-group union: one body shape per group, count channels opened for the untracked arm */
   case HeadGroupUnion
+  /** A SEMANTIC LAW the answer DEPENDS ON (review.md 9: "any certificate must name every law it
+   *  depended on").  Emitted for every [[LawApplication]] that TIGHTENED a node of the analysis the
+   *  verdict was computed from — one per (law, evidence), with the number of occurrences it moved.
+   *
+   *  A law's bound is the one premise here that is not about the analysis: it is a claim about the
+   *  PROGRAM, contributed from outside.  `evidence` is why it may be believed, and
+   *  [[CheckCertificate]] refuses to be constructed naming an UNDISCHARGED one — under
+   *  [[LawEvidencePolicy.RequireDischarged]] such a law cannot have tightened anything in the first
+   *  place, so the two enforcements meet in the middle. */
+  case LawBound(law: String, evidence: LawEvidence, occurrences: Int)
 
   def show: String = this match
     case InputSpaceAnnotation(m, t) => s"declared input ${m.s}: ${t.show} (TRUSTED)"
@@ -290,6 +317,9 @@ enum SpatialAssumption:
     case OpaqueGrounded => "a grounded Scala function is ⊤"
     case FixpointPostFixpoint => "the Fixpoint transfer's certified post-fixpoint"
     case HeadGroupUnion => "the head-group union (one body per group; untracked arm count-opened)"
+    case LawBound(l, e, n) =>
+      s"the SEMANTIC LAW $l tightened $n occurrence(s) — its bound is a PREMISE, believed because " +
+        s"${e.show}"
 
 // ==================================================================================================
 // 4.  THE CHANNEL MIRRORS
@@ -619,6 +649,72 @@ final case class WitnessReport(universe: WitnessUniverse, examined: Long, budget
     s"$head — ${universe.show}; examined $examined, $prunedByCardinality pruned by cardinality"
 
 // ==================================================================================================
+// 5b.  THE COMBINED SHAPE×HISTOGRAM DECISION  (review.md 10)
+// ==================================================================================================
+
+/** THE BUDGET of the exhaustive product decision.
+ *
+ *  `maxPaths` caps the number of DISTINCT PATHS the inferred type may admit (the enumeration is over
+ *  subsets of that set, so it is the exponent), `maxCandidates` caps the subsets actually examined, and
+ *  `maxFresh` caps the number of items an OPEN node's untracked heads may need (see
+ *  [[SpatialCheck.plan]]).  All three are checked BEFORE any work is done: past any of them,
+ *  [[SpatialCheck.decide]] returns `None` — "not decided", with [[SpatialCheck.declined]] naming which —
+ *  and the sound-but-incomplete order plus the bounded refuter answer instead. */
+final case class ProductSearch(maxPaths: Int = 24, maxCandidates: Long = 20000L, maxFresh: Int = 24):
+  require(maxPaths >= 0 && maxCandidates >= 1 && maxFresh >= 0)
+
+object ProductSearch:
+  val default: ProductSearch = ProductSearch()
+  /** no product decision at all — restores the purely componentwise behaviour */
+  val off: ProductSearch = ProductSearch(maxPaths = 0, maxCandidates = 1L, maxFresh = 0)
+
+/** THE RESULT OF A COMPLETE, EXHAUSTIVE PRODUCT QUERY on `γ(inferred)`.
+ *
+ *  ==WHY THIS DECIDES WHAT `SpatialType.leq` CANNOT==
+ *  `leq` is `Shape.leqStrong × SpatialGamma.leqSpace`: two COMPONENTWISE tests.  A containment that is
+ *  only visible to the CONJUNCTION of the two — the shape forbids a second path under any head, so a
+ *  count vector the histogram admits is unreachable — is invisible to both clauses and to their
+ *  conjunction, and is exactly the class review.md 10 measures (10 of 62 contained pairs in
+ *  `SpatialCheckCheck` 4d's pool).  This query does not compare the components at all: it ENUMERATES
+ *  `γ(inferred)` and asks `SpatialTyping.accepts` — the full product γ — about each member.
+ *
+ *  ==WHY THE ENUMERATION IS COMPLETE, WHICH IS THE ONLY THING THAT MAKES A `Proved` SOUND==
+ *  `paths` comes from [[SpatialCheck.plan]]; its completeness argument is written out there.  In short: the
+ *  tracked heads of BOTH types bound the item alphabet that matters, `inferred.len.hi` bounds the depth,
+ *  and an OPEN node's untracked heads are covered by finitely many FRESH items because both `γ`s are
+ *  invariant under any permutation of items that neither type tracks.  Every member of `γ(inferred)` is
+ *  therefore — up to such a permutation, which changes neither membership — a subset of `paths`, and
+ *  enumerating the subsets whose cardinality `inferred.size` admits enumerates `γ(inferred)` exactly.
+ *  Hence:
+ *
+ *   - `witness.isDefined` — a REAL member of `γ(inferred) ∖ γ(declared)`, verified by `accepts` on both
+ *     sides.  A refutation, on the same footing as the bounded refuter's;
+ *   - `witness.isEmpty && members > 0` — `γ(inferred) ⊆ γ(declared)` is a THEOREM, not an approximation:
+ *     every member was constructed and tested;
+ *   - `members == 0` — `γ(inferred)` is EMPTY although `inferred` is not the explicit ⊥.  Containment
+ *     holds VACUOUSLY and proves nothing about the routine, so it is reported as such and never as a
+ *     proof (the same trap `SpatialCheck.types` refuses for ⊥).
+ *
+ *  `examined` is the number of candidate spaces tested; when a witness was found the enumeration stopped
+ *  there, so `members` is a lower bound on `|γ(inferred)|` in that case and exact otherwise. */
+final case class ProductDecision(paths: Vector[PathValue], examined: Long, members: Long,
+                                 witness: Option[SpaceValue]):
+  /** the enumeration was complete and held no counterexample: containment PROVED */
+  def decidesContainment: Boolean = witness.isEmpty && members > 0
+  /** `γ(inferred)` is empty: containment is vacuous and must not read as a proof */
+  def vacuous: Boolean = witness.isEmpty && members == 0
+  def refutes: Boolean = witness.isDefined
+  def show: String =
+    val head = witness match
+      case Some(w) => s"WITNESS ${w.pretty}"
+      case None if members == 0 =>
+        "VACUOUS: the complete enumeration of γ(inferred) is EMPTY, so containment holds of nothing"
+      case None => s"CONTAINMENT PROVED by exhaustion over all $members member(s) of γ(inferred)"
+    s"$head — a COMPLETE path set of ${paths.size} path(s) " +
+      s"{${paths.map(_.show).take(6).mkString(",")}${if paths.size > 6 then ",…" else ""}}; examined " +
+      s"$examined candidate space(s) with the full product γ"
+
+// ==================================================================================================
 // 6.  THE VERDICTS
 // ==================================================================================================
 
@@ -648,13 +744,38 @@ final case class CheckCertificate(order: String,
                                   channels: Vector[String],
                                   assumptions: Vector[SpatialAssumption],
                                   facts: Vector[Fact],
-                                  corroboration: Option[WitnessReport]):
+                                  corroboration: Option[WitnessReport],
+                                  /** EVERY SEMANTIC LAW THE ANSWER DEPENDS ON (review.md 9).  One
+                                   *  record per law application that tightened a node of the analysis
+                                   *  the verdict came from — never a summary, never omitted.  The
+                                   *  `require` below is the enforcement: a certificate CANNOT be
+                                   *  constructed naming an undischarged one. */
+                                  laws: Vector[LawApplication] = Vector.empty,
+                                  /** the COMPLETE product query, when one was possible — a `Proved` may
+                                   *  rest on this instead of on the componentwise order */
+                                  exhaustion: Option[ProductDecision] = None):
+  // REFUSE UNDISCHARGED LAW EVIDENCE IN CERTIFICATES.  This is a class invariant and not a check a
+  // caller may forget: an `ASSUMED` bound that moved the answer makes the whole verdict conditional on
+  // an axiom nobody discharged, and a `Proved` is exactly the wrong place to record that quietly.
+  // `SpatialLaws.refine` refuses to MEET such a bound under the production policy, so reaching this
+  // `require` means a caller deliberately ran `LawEvidencePolicy.TrustAll` and then tried to certify.
+  require(laws.forall(a => a.evidence.discharged || !a.tightened),
+          "a certificate may not name an UNDISCHARGED law it depended on: " +
+            laws.filter(_.assumed).map(_.show).mkString("; "))
+  /** every law the answer depends on, as premises */
+  def lawAssumptions: Vector[SpatialAssumption] =
+    laws.filter(_.dependedOn).groupBy(a => (a.law, a.evidence)).toVector.sortBy(_._1._1)
+      .map { case ((n, e), as) => SpatialAssumption.LawBound(n, e, as.map(_.occurrences).sum) }
   def show: String =
     (Vector(s"PROVED by $order", s"  inferred ${inferred.show}", s"  declared ${declared.show}",
             s"  channels: ${channels.mkString(", ")}") ++
       assumptions.map(a => s"  assuming ${a.show}") ++
-      Vector(s"  facts: ${facts.map(_.show).mkString(", ")}") ++
-      corroboration.map(c => s"  corroboration: ${c.show}").toVector).mkString("\n")
+      Vector(s"  laws depended on: " +
+               (if laws.forall(!_.dependedOn) then "NONE — no semantic law moved this answer"
+                else laws.filter(_.dependedOn).map(_.show).mkString("; ")),
+             s"  facts: ${facts.map(_.show).mkString(", ")}") ++
+      corroboration.map(c => s"  corroboration: ${c.show}").toVector ++
+      exhaustion.map(d => s"  exhaustion: ${d.show}").toVector).mkString("\n")
 
 /** THE THREE-WAY RESULT review.md 1 requires, and nothing else may stand in for it. */
 enum SpatialCheck:
@@ -699,12 +820,22 @@ final case class CheckDiagnosis(failures: Vector[ChannelFailure],
                                 blame: Vector[Blame],
                                 assumptions: Vector[SpatialAssumption],
                                 search: Option[WitnessReport],
-                                notes: Vector[String]):
+                                notes: Vector[String],
+                                /** the COMBINED shape×histogram query, when the inferred type's shape
+                                 *  admitted a complete finite enumeration (review.md 10).  `None` means
+                                 *  the checker could not decide the product and fell back to the
+                                 *  componentwise order plus the bounded refuter. */
+                                product: Option[ProductDecision] = None):
   def channels: Vector[ResultChannel] = failures.map(_.channel).distinct
+  /** THE QUERY THAT DECIDED, whichever it was.  A `Refuted` always has one, and it is the thing a caller
+   *  has to be able to re-run: the COMPLETE product enumeration when the shape allowed one, otherwise the
+   *  bounded witness search over its reported universe. */
+  def decidedBy: Option[String] =
+    product.map("product enumeration: " + _.show).orElse(search.map("bounded search: " + _.show))
   def show: String =
     (failures.map("  channel " + _.show) ++ blame.map("  blame " + _.show) ++
       assumptions.map("  assuming " + _.show) ++ search.map("  search " + _.show).toVector ++
-      notes.map("  ! " + _)).mkString("\n")
+      product.map("  product " + _.show).toVector ++ notes.map("  ! " + _)).mkString("\n")
 
 /** the full answer: the verdict, its diagnosis, and the ONE decorated analysis both came from — so a
  *  consumer gets per-node facts with lexical provenance out of the same traversal (review.md 4). */
@@ -864,6 +995,160 @@ object SpatialCheck:
     WitnessReport(u, examined, cfg.maxCandidates, pruned, finished = found.isEmpty && !stopped,
                   outOfScope = kLo > kHi, found)
 
+  // ---- the COMBINED shape×histogram decision  (review.md 10) -------------------------------------
+
+  /** THE PATH SET A COMPLETE ENUMERATION OF `γ(a)` NEEDS — `Right` with the paths, or `Left` with the
+   *  reason no finite one is provably complete.
+   *
+   *  ==THE COMPLETENESS ARGUMENT, WHICH IS WHAT MAKES A `Proved` FROM THIS A PROOF==
+   *  Let `T` be every item either type TRACKS anywhere (the keys of every `heads` map in `a.shape` or
+   *  `b.shape`).  Both `γ`s are INVARIANT under any permutation `π` of the item universe that fixes `T`
+   *  pointwise: the only item-sensitive operations in `Shape.contains` are `heads.contains(h)` and
+   *  `heads(h)`, whose keys all lie in `T`, and `SpatialGamma.gammaSpace` plus the `size`/`len`
+   *  projections read only path LENGTHS and COUNTS.  So for any `v`,
+   *  `v ∈ γ(a) ∖ γ(b) ⟺ π(v) ∈ γ(a) ∖ γ(b)`.
+   *
+   *  A member of `γ(a)` holds at most `a.size.hi` paths of at most `a.len.hi` items, so it uses at most
+   *  `size.hi · len.hi` items OUTSIDE `T`.  With that many FRESH items available, every member has a
+   *  `π`-image over the alphabet `T ∪ FRESH` — and `π` changes neither side of the containment.  Hence
+   *  enumerating subsets of the paths below answers the containment question exactly.
+   *
+   *  ==THE WALK==
+   *  Descends `a.shape`: tracked heads by name, and at an OPEN node (`!headsClosed`) every item of `T`
+   *  that this node does not track PLUS every fresh item, through `Shape.under` (which returns the
+   *  weakened `otherTail`, or ⊤ — a SUPERSET of the admissible tails, which is what completeness needs).
+   *  Depth is bounded by `a.len.hi`, because `accepts` rejects any longer path outright; a path is emitted
+   *  when the node's ε channel may be present and its length is within `a.len`.
+   *
+   *  ==WHY IT CAN DECLINE==
+   *  An infinite `len.hi` (no depth bound), an infinite `size.hi` (no bound on the fresh items needed),
+   *  more fresh items than `cfg.maxFresh`, or more paths than `cfg.maxPaths`.  Each is reported, so the
+   *  residual incompleteness is a measured number with a named cause and not a shrug. */
+  private[morkl] def plan(a: SpatialType, b: SpatialType,
+                          cfg: ProductSearch): Either[String, Vector[PathValue]] =
+    val ln = a.len
+    val sz = a.size
+    if cfg.maxPaths <= 0 then Left("the product query is switched off (ProductSearch.off)")
+    else if ln.isEmpty then Right(Vector.empty)
+    else if ln.hi == LenBounds.INF then
+      Left("the inferred type admits paths of UNBOUNDED length, so no finite path set can be complete")
+    else if sz.hi == Ivl.INF then
+      Left("the inferred type admits UNBOUNDEDLY many paths, so the number of items its members can " +
+             "use outside the tracked alphabet is not bounded either")
+    else
+      // does any node within reach actually have an OPEN head set?  When none does, no fresh item is
+      // needed at all and the alphabet is exactly the tracked heads (the common case).
+      def anyOpen(s: Shape, d: Long): Boolean =
+        d > 0 && (!s.headsClosed || s.heads.valuesIterator.exists(anyOpen(_, d - 1)))
+      val needFresh: Long = if !anyOpen(a.shape, ln.hi) then 0L else Ivl.mul(sz.hi, ln.hi)
+      if needFresh > cfg.maxFresh then
+        Left(s"an OPEN head set needs up to $needFresh fresh item(s) for a complete alphabet " +
+               s"(size.hi ${sz.hi} x len.hi ${ln.hi}), above the ProductSearch.maxFresh " +
+               s"budget of ${cfg.maxFresh}")
+      else
+        val tracked = headItems(a.shape, 64) ++ headItems(b.shape, 64)
+        var fresh = Vector.empty[PathItem]
+        var i = 0
+        while fresh.size < needFresh.toInt do
+          val c = s"#p$i"
+          if !tracked.contains(c) then fresh = fresh :+ c
+          i += 1
+        val out = Vector.newBuilder[PathValue]
+        var n = 0
+        var over = false
+        // THE WALK NEEDS A NODE BUDGET AND NOT ONLY A PATH BUDGET.  An open node branches over the whole
+        // alphabet, and a type whose `len.lo` is large emits NOTHING until that depth — so `maxPaths`
+        // alone would let the walk explore `|A|^len.lo` nodes before it could trip.  Declining is the
+        // sound answer; hanging is not one.
+        var visited = 0L
+        val nodeBudget = 64L * cfg.maxPaths + 4096L
+        def go(s: Shape, revPrefix: List[PathItem], depth: Long): Unit =
+          if over then ()
+          else
+            visited += 1
+            if visited > nodeBudget then over = true
+            else
+              if s.eps.mayBe && depth >= ln.lo then
+                if n >= cfg.maxPaths then over = true
+                else { out += PathValue(revPrefix.reverse); n += 1 }
+              if !over && depth < ln.hi then
+                for (h, c) <- s.heads if !over do go(c, h :: revPrefix, depth + 1)
+                if !s.headsClosed then
+                  // every item of T this node does NOT track is a distinct case (it may be tracked
+                  // elsewhere, or by `b`); the fresh ones stand for every item neither type names
+                  for x <- (tracked.diff(s.heads.keySet.toSet).toVector.sorted ++ fresh) if !over do
+                    go(s.under(x), x :: revPrefix, depth + 1)
+        go(a.shape, Nil, 0L)
+        if over then
+          Left(s"a complete path set exceeds the ProductSearch.maxPaths budget of ${cfg.maxPaths} " +
+                 s"(or the $nodeBudget-node walk budget derived from it)")
+        else Right(out.result())
+
+  /** WHY [[decide]] returned `None`, in the caller's words.  `None` when it did not. */
+  def declined(inferred: SpatialType, declared: SpatialType,
+               cfg: ProductSearch = ProductSearch.default): Option[String] =
+    if inferred.uninhabited then Some("the inferred type is the explicit ⊥")
+    else plan(inferred, declared, cfg) match
+      case Left(why) => Some(why)
+      case Right(paths) => candidateCount(inferred, paths.size) match
+        case Some(total) if total > BigInt(cfg.maxCandidates) =>
+          Some(s"a complete enumeration of γ(inferred) is $total candidate space(s), above the " +
+                 s"ProductSearch.maxCandidates budget of ${cfg.maxCandidates}")
+        case _ => None
+
+  /** the number of subsets of a `p`-path set whose cardinality `inferred.size` admits; `None` when the
+   *  interval is empty (γ has no member at all, which is decided and vacuous) */
+  private def candidateCount(inferred: SpatialType, p: Int): Option[BigInt] =
+    val sz = inferred.size
+    val kLo = if sz.lo < 0 then 0 else sz.lo.toInt
+    val kHi = if sz.hi == Ivl.INF || sz.hi > p then p else sz.hi.toInt
+    if kLo > kHi then None
+    else
+      var total = BigInt(0)
+      var k = kLo
+      while k <= kHi do { total += binomial(p, k); k += 1 }
+      Some(total)
+
+  /** THE EXHAUSTIVE PRODUCT DECISION: enumerate `γ(inferred)` and ask the full product γ about every
+   *  member (review.md 10).  `None` when no provably complete enumeration is available or it would exceed
+   *  `cfg` — nothing is claimed then, [[declined]] says which, and the caller falls back to the
+   *  componentwise order plus the bounded refuter.
+   *
+   *  See [[ProductDecision]] for why a negative answer here is a PROOF of containment while a negative
+   *  answer from [[searchWitness]] is not: the universe is not a sample, it is the whole of `γ(inferred)`.
+   *
+   *  NO EVALUATION: `SpatialTyping.accepts` is γ, a predicate on an abstract element and a concrete
+   *  space.  The routine is never run. */
+  def decide(inferred: SpatialType, declared: SpatialType,
+             cfg: ProductSearch = ProductSearch.default): Option[ProductDecision] =
+    if inferred.uninhabited then None
+    else plan(inferred, declared, cfg).toOption.flatMap { paths =>
+      val p = paths.size
+      // an empty cardinality window ⇒ no space can inhabit the type at all: a complete enumeration with
+      // no members, which is vacuous, decided, and not a proof.
+      candidateCount(inferred, p) match
+        case None => Some(ProductDecision(paths, 0L, 0L, None))
+        case Some(total) if total > BigInt(cfg.maxCandidates) => None
+        case Some(_) =>
+          val sz = inferred.size
+          val kLo = if sz.lo < 0 then 0 else sz.lo.toInt
+          val kHi = if sz.hi == Ivl.INF || sz.hi > p then p else sz.hi.toInt
+          var members = 0L
+          var examined = 0L
+          var witness: Option[SpaceValue] = None
+          var k = kLo
+          while witness.isEmpty && k <= kHi do
+            val it = paths.combinations(k)
+            while witness.isEmpty && it.hasNext do
+              val v = SpaceValue(it.next().toSet)
+              examined += 1
+              if SpatialTyping.accepts(v, inferred) then
+                members += 1
+                if !SpatialTyping.accepts(v, declared) then witness = Some(v)
+            k += 1
+          Some(ProductDecision(paths, examined, members, witness))
+    }
+
   private def binomial(n: Int, k: Int): BigInt =
     if k < 0 || k > n then BigInt(0)
     else
@@ -881,14 +1166,52 @@ object SpatialCheck:
                                     "per-length counts", "spill window", "spill aggregate",
                                     "size projection", "length projection")
 
-  /** ABSTRACT CONFORMANCE of two types, with no routine involved: `Proved` from the sound order,
-   *  `Refuted` only with a witness in hand, `Unknown` otherwise.  This is the kernel [[checkRoutine]]
-   *  and every other consumer share, so the three-way decision is made in exactly one place. */
+  /** ABSTRACT CONFORMANCE of two types, with no routine involved: `Proved` from the sound order OR from
+   *  a COMPLETE product enumeration, `Refuted` only with a witness in hand, `Unknown` otherwise.  This is
+   *  the kernel [[checkRoutine]] and every other consumer share, so the three-way decision is made in
+   *  exactly one place.
+   *
+   *  `laws` are the law applications the inferred type was computed under; a verdict may not be a
+   *  `Proved` when one of them tightened it on UNDISCHARGED evidence (review.md 9).  `product` is the
+   *  budget of the combined shape×histogram query (review.md 10). */
   def types(inferred: SpatialType, declared: SpatialType,
             search: WitnessSearch = WitnessSearch.default,
             assumptions: Vector[SpatialAssumption] = Vector(SpatialAssumption.TransferSoundness),
             facts: Vector[Fact] = Vector.empty,
-            corroborate: WitnessSearch = WitnessSearch.corroboration): (SpatialCheck, CheckDiagnosis) =
+            corroborate: WitnessSearch = WitnessSearch.corroboration,
+            laws: Vector[LawApplication] = Vector.empty,
+            product: ProductSearch = ProductSearch.default): (SpatialCheck, CheckDiagnosis) =
+    // A certificate CANNOT be constructed naming an undischarged law it depended on (that is a `require`
+    // on [[CheckCertificate]]), so the offending applications are withheld from the kernel and the verdict
+    // it produces is downgraded below.  Withholding rather than filtering-and-forgetting: the note names
+    // every one of them, so nothing is lost except the ability to certify.
+    val undischarged0 = laws.filter(_.assumed)
+    val (v, d) = verdict(inferred, declared, search, assumptions, facts, corroborate,
+                         if undischarged0.isEmpty then laws else laws.filterNot(_.assumed), product)
+    // ---- REFUSE UNDISCHARGED LAW EVIDENCE IN A VERDICT  (review.md 9) -----------------------------
+    // A law that tightened the inferred type with no discharged proof obligation makes the whole verdict
+    // conditional on an axiom.  `SpatialLaws.refine` will not MEET such a bound under the production
+    // policy, so this is the belt to that braces: it fires only when a caller deliberately ran
+    // `LawEvidencePolicy.TrustAll`, and it DOWNGRADES the proof rather than annotating it, because a
+    // `Proved` is not a place to record "…if you believe this".
+    val undischarged = undischarged0
+    if undischarged.isEmpty then (v, d)
+    else
+      val named = undischarged.map(a => s"${a.law} [${a.evidence.show}] at ${a.at.show}").distinct
+      val note = "REFUSED: the inferred type was tightened by law(s) with NO discharged proof " +
+        s"obligation — ${named.mkString("; ")} — so no certificate may rest on it.  Use the default " +
+        "LawEvidencePolicy.RequireDischarged, or discharge the obligation " +
+        "(LawEvidence.ExecutableChecked / LawEvidence.SmtProved)."
+      val dd = d.copy(notes = d.notes :+ note)
+      v match
+        case SpatialCheck.Proved(t, _) => (SpatialCheck.Unknown(t, note), dd)
+        case other => (other, dd)
+
+  /** the three-way decision itself, before the law-evidence policy is applied to it */
+  private def verdict(inferred: SpatialType, declared: SpatialType, search: WitnessSearch,
+                      assumptions: Vector[SpatialAssumption], facts: Vector[Fact],
+                      corroborate: WitnessSearch, laws: Vector[LawApplication],
+                      product: ProductSearch): (SpatialCheck, CheckDiagnosis) =
     val failures = SpatialChannels.orderFailures(inferred, declared)
     val mirror = orderMirrorNote(inferred, declared).toVector
 
@@ -901,57 +1224,110 @@ object SpatialCheck:
           "inputs, so abstract inclusion holds for EVERY declaration and proves nothing.  Fix the " +
           "input annotations (or the transfer that produced the contradiction)."),
        CheckDiagnosis(failures, Vector.empty, assumptions, None, mirror))
-    else if SpatialType.leq(inferred, declared) then
-      // the cross-check on a `Proved` is a CHEAPER search than the refuter: it exists to catch an
-      // unsound order, not to decide the question, and the deciding branch below is the one that should
-      // get the caller's full budget.
-      val corr = if corroborate.maxPaths == 0 then None
-                 else Some(searchWitness(inferred, declared, corroborate))
-      corr.flatMap(_.witness) match
-        case Some(w) =>
-          // the order said yes and a concrete counterexample exists.  The witness is ground truth for
-          // γ-containment and the order is a proof procedure, so the honest verdict is the refutation —
-          // loudly, because it means `SpatialType.leq` is unsound on this pair.
-          (SpatialCheck.Refuted(inferred, w),
-           CheckDiagnosis(failures, Vector.empty, assumptions, corr,
-             mirror :+ s"SOUNDNESS ALARM: SpatialType.leq proved inclusion, yet ${w.pretty} inhabits " +
-               "the inferred type and not the declared one"))
-        case None =>
-          (SpatialCheck.Proved(inferred,
-            CheckCertificate("SpatialType.leq = Shape.leqStrong × SpatialGamma.leqSpace (⇒ γ ⊆ γ)",
-              inferred, declared, ChannelNames, assumptions, facts, corr)),
-           CheckDiagnosis(Vector.empty, Vector.empty, assumptions, corr, mirror))
     else
-      val rep = searchWitness(inferred, declared, search)
-      rep.witness match
-        case Some(w) => (SpatialCheck.Refuted(inferred, w),
-                         CheckDiagnosis(failures, Vector.empty, assumptions, Some(rep), mirror))
-        case None =>
-          val chans = failures.map(_.channel.show).mkString("; ")
-          val head =
-            if rep.outOfScope then
-              s"UNDECIDED: the sound abstract order rejected the declaration on [$chans], and the " +
-                "witness search could not look — no space in its universe has enough paths to inhabit " +
-                "the inferred type at all.  Raise WitnessSearch.maxPaths/maxLen"
-            else if rep.completeOnUniverse then
-              s"NOT PROVED and NOT refuted: the sound abstract order rejected the declaration on " +
-                s"[$chans], but an EXHAUSTIVE search of ${rep.universe.spaceCount} concrete spaces " +
-                s"found NO member of the inferred type outside the declared one" +
-                (if failures.exists(_.sufficientOnly) then
-                   " — and at least one failing channel's test is a SUFFICIENT CONDITION ONLY, so this " +
-                     "is the order's documented incompleteness, not a violation"
-                 else " — the bounded universe cannot see a witness, so nothing is claimed either way") +
-                (if hintDepth(failures) > rep.universe.lens.hi then
-                   s".  CAVEAT: the deepest failing channel sits at depth ${hintDepth(failures)}, DEEPER " +
-                     s"than the length ceiling ${rep.universe.lens.hi} the search reached — raise " +
-                     "WitnessSearch.maxLen to look there"
-                 else "")
+      // ---- THE COMBINED SHAPE×HISTOGRAM QUERY, WHEN IT CAN DECIDE  (review.md 10) ------------------
+      // Not a sharper heuristic: a DIFFERENT KIND of answer.  A complete enumeration of γ(inferred),
+      // each member tested with the full product γ, decides the containment outright — including the
+      // PRODUCT INTERACTION class no componentwise order can see.  It therefore runs before `leq` is
+      // believed in either direction: a witness it finds refutes even a `leq` that said yes (which would
+      // be a soundness bug in `leq`), and its absence PROVES what `leq` is incomplete on.
+      val dec = decide(inferred, declared, product)
+      val leq = SpatialType.leq(inferred, declared)
+      dec match
+        case Some(d) if d.refutes =>
+          val w = d.witness.get
+          val alarm =
+            if leq then Vector(s"SOUNDNESS ALARM: SpatialType.leq proved inclusion, yet ${w.pretty} " +
+                                 "inhabits the inferred type and not the declared one — and the " +
+                                 "enumeration that found it was COMPLETE")
+            else Vector.empty
+          (SpatialCheck.Refuted(inferred, w),
+           CheckDiagnosis(failures, Vector.empty, assumptions, None, mirror ++ alarm, Some(d)))
+
+        case Some(d) if d.vacuous =>
+          // a complete enumeration with NO member: containment holds of nothing.  The same trap as ⊥,
+          // reached without an explicit bottom, and it must not read as a proof either.
+          (SpatialCheck.Unknown(inferred,
+            "VACUOUS: γ(inferred) is EMPTY.  The inferred type is not the explicit ⊥, but a COMPLETE " +
+              s"enumeration over the ${d.paths.size} path(s) its closed shape admits found no concrete " +
+              "space inhabiting it at all, so abstract inclusion holds for EVERY declaration and proves " +
+              s"nothing.  ${d.show}"),
+           CheckDiagnosis(failures, Vector.empty, assumptions, None, mirror, Some(d)))
+
+        case Some(d) =>
+          // COMPLETE and counterexample-free ⇒ γ(inferred) ⊆ γ(declared) is a THEOREM.
+          val order =
+            if leq then
+              "SpatialType.leq = Shape.leqStrong × SpatialGamma.leqSpace (⇒ γ ⊆ γ), CORROBORATED by a " +
+                s"complete enumeration of γ(inferred) (${d.members} member(s), full product γ)"
             else
-              s"UNDECIDED: the sound abstract order rejected the declaration on [$chans], and the " +
-                s"witness search stopped after ${rep.examined} of ${rep.universe.spaceCount} " +
-                s"candidates (budget ${rep.budget}) without deciding"
-          (SpatialCheck.Unknown(inferred, s"$head.  ${rep.show}"),
-           CheckDiagnosis(failures, Vector.empty, assumptions, Some(rep), mirror))
+              s"EXHAUSTION over a COMPLETE enumeration of γ(inferred) (${d.members} member(s)), each " +
+                "tested with the full product γ.  The componentwise order does NOT prove this pair: a " +
+                "containment visible only to the CONJUNCTION of shape and histogram is precisely what " +
+                "Shape.leqStrong × SpatialGamma.leqSpace cannot see"
+          (SpatialCheck.Proved(inferred,
+            CheckCertificate(order, inferred, declared, ChannelNames, assumptions, facts, None, laws,
+                             Some(d))),
+           CheckDiagnosis(Vector.empty, Vector.empty, assumptions, None, mirror, Some(d)))
+
+        case None if leq =>
+          // the cross-check on a `Proved` is a CHEAPER search than the refuter: it exists to catch an
+          // unsound order, not to decide the question, and the deciding branch below is the one that
+          // should get the caller's full budget.
+          val corr = if corroborate.maxPaths == 0 then None
+                     else Some(searchWitness(inferred, declared, corroborate))
+          corr.flatMap(_.witness) match
+            case Some(w) =>
+              // the order said yes and a concrete counterexample exists.  The witness is ground truth
+              // for γ-containment and the order is a proof procedure, so the honest verdict is the
+              // refutation — loudly, because it means `SpatialType.leq` is unsound on this pair.
+              (SpatialCheck.Refuted(inferred, w),
+               CheckDiagnosis(failures, Vector.empty, assumptions, corr,
+                 mirror :+ s"SOUNDNESS ALARM: SpatialType.leq proved inclusion, yet ${w.pretty} " +
+                   "inhabits the inferred type and not the declared one"))
+            case None =>
+              (SpatialCheck.Proved(inferred,
+                CheckCertificate("SpatialType.leq = Shape.leqStrong × SpatialGamma.leqSpace (⇒ γ ⊆ γ)",
+                  inferred, declared, ChannelNames, assumptions, facts, corr, laws, None)),
+               CheckDiagnosis(Vector.empty, Vector.empty, assumptions, corr, mirror))
+
+        case None =>
+          val rep = searchWitness(inferred, declared, search)
+          rep.witness match
+            case Some(w) => (SpatialCheck.Refuted(inferred, w),
+                             CheckDiagnosis(failures, Vector.empty, assumptions, Some(rep), mirror))
+            case None =>
+              val chans = failures.map(_.channel.show).mkString("; ")
+              // the product query could not run here, and saying WHY is what keeps the residual
+              // incompleteness a measured number with a named cause rather than a shrug
+              val why = declined(inferred, declared, product)
+                .map(r => s"  The COMBINED shape×histogram query could not decide it either: $r.")
+                .getOrElse("")
+              val head =
+                if rep.outOfScope then
+                  s"UNDECIDED: the sound abstract order rejected the declaration on [$chans], and the " +
+                    "witness search could not look — no space in its universe has enough paths to " +
+                    "inhabit the inferred type at all.  Raise WitnessSearch.maxPaths/maxLen"
+                else if rep.completeOnUniverse then
+                  s"NOT PROVED and NOT refuted: the sound abstract order rejected the declaration on " +
+                    s"[$chans], but an EXHAUSTIVE search of ${rep.universe.spaceCount} concrete spaces " +
+                    s"found NO member of the inferred type outside the declared one" +
+                    (if failures.exists(_.sufficientOnly) then
+                       " — and at least one failing channel's test is a SUFFICIENT CONDITION ONLY, so " +
+                         "this is the order's documented incompleteness, not a violation"
+                     else " — the bounded universe cannot see a witness, so nothing is claimed either " +
+                       "way") +
+                    (if hintDepth(failures) > rep.universe.lens.hi then
+                       s".  CAVEAT: the deepest failing channel sits at depth ${hintDepth(failures)}, " +
+                         s"DEEPER than the length ceiling ${rep.universe.lens.hi} the search reached — " +
+                         "raise WitnessSearch.maxLen to look there"
+                     else "")
+                else
+                  s"UNDECIDED: the sound abstract order rejected the declaration on [$chans], and the " +
+                    s"witness search stopped after ${rep.examined} of ${rep.universe.spaceCount} " +
+                    s"candidates (budget ${rep.budget}) without deciding"
+              (SpatialCheck.Unknown(inferred, s"$head.$why  ${rep.show}"),
+               CheckDiagnosis(failures, Vector.empty, assumptions, Some(rep), mirror))
 
   // ---- the routine check -------------------------------------------------------------------------
 
@@ -961,15 +1337,17 @@ object SpatialCheck:
                    routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
                    search: WitnessSearch = WitnessSearch.default,
                    cfg: SpatialConfig = SpatialConfig.default,
-                   corroborate: WitnessSearch = WitnessSearch.corroboration): SpatialCheck =
-    report(routine, signature, routines, search, cfg, corroborate).check
+                   corroborate: WitnessSearch = WitnessSearch.corroboration,
+                   product: ProductSearch = ProductSearch.default): SpatialCheck =
+    report(routine, signature, routines, search, cfg, corroborate, product).check
 
   /** the same, plus the diagnosis and the decorated analysis both were computed from */
   def report(routine: Routine, signature: SpatialSignature,
              routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
              search: WitnessSearch = WitnessSearch.default,
              cfg: SpatialConfig = SpatialConfig.default,
-             corroborate: WitnessSearch = WitnessSearch.corroboration): SpatialCheckReport =
+             corroborate: WitnessSearch = WitnessSearch.corroboration,
+             product: ProductSearch = ProductSearch.default): SpatialCheckReport =
     val (missingP, missingS) = signature.missing(routine)
     // ONE traversal: the decorated analysis IS the inference here, so the verdict and the per-node facts
     // an optimizer consumes cannot come from two different runs (review.md 4).
@@ -978,8 +1356,13 @@ object SpatialCheck:
     val inferred = analysis.root
     val assumptions = premises(routine, signature, routines, analysis, cfg, missingP, missingS)
     val facts = analysis.rootFacts
+    // EVERY LAW THE ANSWER DEPENDS ON travels into the verdict (review.md 9), so the certificate names
+    // them and an undischarged one cannot be certified.  `lawApplications` is the whole audit trail —
+    // the refused and the declining ones included — because the verdict's notes report those too.
+    val lawApps = analysis.lawApplications
 
-    val (verdict0, diag0) = types(inferred, signature.result, search, assumptions, facts, corroborate)
+    val (verdict0, diag0) =
+      types(inferred, signature.result, search, assumptions, facts, corroborate, lawApps, product)
     // the per-node failing-channel sets, computed ONCE: `blameFor` used to re-run the whole order
     // comparison per (node, channel), which is the quadratic re-query pattern review.md 4 objects to.
     val perNode: Map[NodeId, Set[ResultChannel]] =
@@ -997,9 +1380,17 @@ object SpatialCheck:
           s"[${missingS.map(_.s).mkString(",")}] are UNDECLARED and were analysed as ⊤; declaring them " +
           "is usually what makes a signature provable.")
       case (v, _) => v
+    // A LAW WHOSE EVIDENCE WAS REFUSED IS REPORTED HERE (review.md 9).  Nothing rests on it — that is the
+    // point — but a user who wrote a law and saw no effect must be told WHY, and told what discharging
+    // the obligation would buy, rather than left to wonder whether the law ever fired.
+    val refusedNotes = lawApps.filter(_.refused).groupBy(a => (a.law, a.evidence)).toVector
+      .sortBy(_._1._1).map { case ((n, e), as) =>
+        s"law $n was REFUSED at ${as.map(_.occurrences).sum} occurrence(s): its justification is " +
+          s"${e.show} and the ${LawEvidencePolicy.production.show} policy does not let an undischarged " +
+          s"bound narrow an answer.  ${as.head.why}" }
     SpatialCheckReport(verdict, signature, analysis,
                        diag0.copy(blame = blame, assumptions = assumptions,
-                                  notes = diag0.notes ++ analysis.notes))
+                                  notes = diag0.notes ++ refusedNotes ++ analysis.notes))
 
   /** every premise the verdict rests on, gathered from the signature, the routine table and the
    *  decorated analysis — which is where the ⊤-producing occurrences become visible. */
@@ -1015,6 +1406,13 @@ object SpatialCheck:
     for r <- routine.refs; t <- sig.paths.get(r) do out += SpatialAssumption.InputPathAnnotation(r, t)
     for m <- missingS do out += SpatialAssumption.MissingSpaceAnnotation(m)
     for r <- missingP do out += SpatialAssumption.MissingPathAnnotation(r)
+    // EVERY SEMANTIC LAW THE ANSWER DEPENDS ON, named as the premise it is (review.md 9).  Only the
+    // TIGHTENING applications are premises: a law that declined, that added nothing, that contradicted
+    // the transfers and was dropped, or that the evidence policy REFUSED, moved no answer and is
+    // therefore not something the verdict rests on — those are reported in the diagnosis notes instead.
+    for ((name, ev), as) <- a.lawApplications.filter(_.dependedOn).groupBy(x => (x.law, x.evidence))
+                              .toVector.sortBy(_._1._1) do
+      out += SpatialAssumption.LawBound(name, ev, as.map(_.occurrences).sum)
     for n <- a.nodes do
       n.expression match
         case Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => out += SpatialAssumption.OpaqueGrounded
