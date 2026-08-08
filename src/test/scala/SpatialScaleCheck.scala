@@ -261,22 +261,23 @@ object ProductRequirement:
 
     // ============================ LIM-6: there is no lower endpoint ===============================
     Limitation("LIM-6", "ladder", "trie", EffortComponent.Touch, WidthOnly,
-      Vector("inter/shared-subtrie", "select/fixed-consumer", "union/paired-keys", "union/disjoint-keys",
-             "rest-chain/nest"),
+      Vector("select/fixed-consumer", "union/paired-keys", "union/disjoint-keys", "rest-chain/nest"),
       Double.PositiveInfinity, 25000.0,
       "SpatialCost.scala (`CostInterval.upperOnly`, `Cost.withoutTouchLower`)",
-      "NO LOWER ENDPOINT IS DERIVED FOR `touch`.  `SpatialCost.analyze` applies `withoutTouchLower` " +
-      "unconditionally (the file header declines to claim a positive lower bound on library-internal node " +
-      "visits) and most ring transfers are built with `CostInterval.upperOnly`, so every interval is " +
-      "[0, upper] and its WIDTH is `upper + 1` BY CONSTRUCTION.  review.md item 5's second half — 'the " +
-      "widespread upperOnly calls erase must-prefix counts, must groups, mandatory path lengths and " +
-      "mandatory rounds' — is the fix.  Until it lands WIDTH cannot discriminate on this component at " +
-      "all, which is why it is recorded as a failure here rather than quietly dropped from the " +
-      "requirement set."),
+      "WHAT IS LEFT NOW THAT `touch` HAS A LOWER ENDPOINT.  This entry used to say `analyze` applied " +
+      "`withoutTouchLower` unconditionally so every width was `upper + 1` BY CONSTRUCTION, and that " +
+      "review.md item 5's second half was the fix.  It landed: `evalI`'s algebra entry is forced (the " +
+      "visit hook precedes every fast-path test) and the frontier's must-paired count is added wherever " +
+      "the whole-skip paths are discharged, which took `inter/shared-subtrie` to width 7.91 and out of " +
+      "this entry.  The four families that remain have a must-count of ZERO for a real reason — a subset " +
+      "union and a key-disjoint union are decided at the root, and a fixed selective consumer forces only " +
+      "its own frontier — so for THOSE the width is genuinely `upper + 1` and the remedy is the upper " +
+      "endpoint, not the lower."),
     Limitation("LIM-6g", "ladder", "graph", EffortComponent.Touch, WidthOnly,
-      Vector("inter/shared-subtrie", "select/fixed-consumer", "union/paired-keys", "union/disjoint-keys",
-             "rest-chain/nest"),
-      Double.PositiveInfinity, 25000.0, "SpatialCost.scala", "as LIM-6."),
+      Vector("select/fixed-consumer", "union/paired-keys", "union/disjoint-keys", "rest-chain/nest"),
+      Double.PositiveInfinity, 25000.0, "SpatialCost.scala",
+      "as LIM-6, and `inter/shared-subtrie` left it too (width 7.91) once `GraphCost.forcedEntry` learned " +
+      "that `execT`'s guard reads the left operand only."),
     Limitation("LIM-6z", "ladder", "zipper", EffortComponent.Touch, WidthOnly, Vector("rest-chain/nest"),
       Double.PositiveInfinity, 18000.0, "SpatialCost.scala", "as LIM-6."),
     Limitation("LIM-6a", "ladder", "trie", EffortComponent.Alloc, WidthOnly,
@@ -389,13 +390,17 @@ object ProductRequirement:
     Limitation("CS-9", "cornerstone", "zipper", EffortComponent.Alloc, WidthAll, Vector("aunt", "gol"),
       Inf, 32000.0, "SpatialCost.scala", "as CS-8."),
     Limitation("CS-10", "cornerstone", "trie", EffortComponent.Touch, WidthAll,
-      Vector("aunt", "temperature", "gol", "datalog-sn"), Inf, 180000.0, "SpatialCost.scala",
-      "LIM-6 on whole programs: `Cost.withoutTouchLower` is applied unconditionally, so every `touch` " +
-      "interval starts at 0 and its width is `upper + 1`.  On `aunt` and `temperature` this is the ONLY " +
-      "failing statistic — their errors are 6.94x and 4.85x, inside the budget tier — so the whole gap " +
-      "there is the missing lower endpoint."),
-    Limitation("CS-11", "cornerstone", "zipper", EffortComponent.Touch, WidthAll, Vector("aunt", "gol"),
-      Inf, 180000.0, "SpatialCost.scala", "as CS-10."),
+      Vector("gol", "datalog-sn"), Inf, 180000.0, "SpatialCost.scala",
+      "WHAT IS LEFT OF LIM-6 ON WHOLE PROGRAMS.  `touch` now HAS a lower endpoint: `evalI` is eager and " +
+      "every `ITrie` operation emits its visit before any fast-path test, so one visit per algebra node " +
+      "is forced, and the must-paired frontier count is added where the whole-skip paths are discharged. " +
+      "That removed `aunt` (width 180000 -> 12.99) and `temperature` (-> 24.25) from this entry outright: " +
+      "on both, the missing lower endpoint WAS the whole gap, exactly as the previous revision of this " +
+      "entry predicted.  `gol` (70.06) and `datalog-sn` (1198) remain, and their residue is the UPPER " +
+      "endpoint — LIM-4's Patricia constant on `gol`, CS-5's fixpoint round bound on `datalog-sn` — not " +
+      "the lower one."),
+    Limitation("CS-11", "cornerstone", "zipper", EffortComponent.Touch, WidthAll, Vector("gol"),
+      Inf, 180000.0, "SpatialCost.scala", "as CS-10; `aunt` (width 13.11) left this entry with it."),
     Limitation("CS-12", "cornerstone", "trie", EffortComponent.Work, WidthAll, Vector("datalog-sn"),
       Inf, 16.0, "SpatialCost.scala / SpatialRecursion.scala", "as CS-5: the round bound widens the " +
       "interval [87, 901] around a counted 149."),
@@ -436,19 +441,42 @@ object ProductRequirement:
     // ==============================================================================================
 
     Limitation("OP-1", "operator", "trie", EffortComponent.Touch, WidthAll,
-      Vector("union", "intersection", "subtraction", "restriction", "raffination", "composition",
-             "range-full", "range-part", "iteration", "fixpoint", "tails-union", "tails-inter"),
-      Inf, 90000.0, "SpatialCost.scala (`Cost.withoutTouchLower`)",
-      "`SpatialCost.analyze` ends with `c.withoutTouchLower`, so the lower endpoint of `touch` is ZERO for " +
-      "EVERY term on every backend and the width is `upper + 1` by construction — 254 for a union of a " +
-      "64-path and a 16-path operand, 56868 for a fixpoint.  This is a single line's worth of policy " +
-      "(the file header declines to claim a positive lower bound on library-internal node visits) and it " +
-      "costs the WIDTH requirement its entire discriminating power on this component.  A `touch` lower " +
-      "bound is derivable wherever the frontier proves paired prefixes MUST be descended."),
+      Vector("composition", "range-part", "iteration", "fixpoint", "tails-union", "tails-inter"),
+      Inf, 90000.0, "SpatialCost.scala (`TrieAlgebraCost.entryVisit` / `mustDescend`)",
+      "WHAT IS LEFT AFTER THE `touch` LOWER ENDPOINT LANDED.  The previous revision of this entry said " +
+      "`analyze` ended with an unconditional `withoutTouchLower`, so every `touch` width was `upper + 1` " +
+      "BY CONSTRUCTION, and that a lower bound was derivable wherever the frontier proves paired prefixes " +
+      "MUST be descended.  Both halves are now done and this entry lost FOUR subjects to them: `evalI` is " +
+      "eager and every `ITrie` operation emits its visit BEFORE any fast-path test, so one visit per " +
+      "algebra node is forced (halving every width here), and on the three symmetric merges the frontier's " +
+      "must-paired count is added once the whole-skip paths (`isEmpty`, `a eq b`) are discharged by " +
+      "cardinality — which took `union`, `intersection`, `subtraction` and `range-full` inside the budget " +
+      "outright.  `restriction` AND `raffination` THEN LEFT TOO: their extra whole-skip path is " +
+      "`ε ∈ right` (ε prefixes everything, so all of `x` is accepted or dropped by pointer), and " +
+      "`Meas.epsAbsent` — the shape's ε-presence, which the domain always had and the measure did not " +
+      "carry — discharges it.  THE SIX THAT REMAIN: `composition` reaches only the entry visit (69), " +
+      "because the graft frontier derives no must side even with both `{ε}` cases discharged; " +
+      "`iteration` (113) and `range-part` (136.5) need a must-count of their own; and `fixpoint` " +
+      "(28434) is an UPPER-endpoint problem — its round bound — not a lower-endpoint one.  THE TWO `tails` " +
+      "OPERATORS ARE NOW WITHIN 15%: both read 73.67 = 221/3.  Their upper lost a whole `heads` factor " +
+      "when `tails-inter` stopped being priced as the per-key probe loop `IntTrieOps.meetAllTries` " +
+      "replaced (877 -> 73.67, a 12x tightening derived from the algorithm: the meet's frontier lies " +
+      "inside the SMALLEST child and min <= mean cancels the factor).  Their lower is TWO — the `tails*` " +
+      "entry and the `joinAll`/`meetAll` entry — and it cannot be three without proving the source's two " +
+      "children are distinct OBJECTS, which needs the per-head sub-shapes the shape domain has and `Meas` " +
+      "does not carry.  That, or `nodesHi` reaching this transfer, is what closes the last 15%."),
     Limitation("OP-1g", "operator", "graph", EffortComponent.Touch, WidthAll,
-      Vector("union", "intersection", "subtraction", "restriction", "raffination", "composition",
-             "range-full", "range-part", "iteration", "fixpoint", "tails-union", "tails-inter"),
-      Inf, 90000.0, "SpatialCost.scala", "as OP-1."),
+      Vector("composition", "range-full", "range-part", "iteration", "fixpoint", "tails-union",
+             "tails-inter"),
+      Inf, 90000.0, "SpatialCost.scala (`GraphCost.forcedEntry`)",
+      "as OP-1, and it lost the same five operators plus `union` for a REASON SPECIFIC TO `execT`: its " +
+      "space slots are guarded by `if a.isEmpty then ITrie.empty`, but the guard reads the LEFT operand " +
+      "ONLY and `Union` carries no guard at all (`GraphExec.scala`), so the algebra entry is forced " +
+      "whenever the shape domain proves the left operand non-empty.  THE UNARY OPERATORS FOLLOWED: `GraphExec.scala` guards " +
+      "`Wrap`/`Unwrap` on their SOURCE but calls `TailsUnion`/`TailsIntersection`/`Range` with NO guard " +
+      "at all, so those three force their entry on `execT` exactly as on `evalI` — graph `tails-*` Touch " +
+      "221 -> 73.67, level with the trie.  The SEVEN that remain are the operators whose entry `execT` " +
+      "really can skip or whose upper endpoint is the problem."),
     Limitation("OP-1z", "operator", "zipper", EffortComponent.Touch, WidthAll,
       Vector("range-full", "range-part", "iteration", "fixpoint", "tails-inter"),
       Inf, 90000.0, "SpatialCost.scala",

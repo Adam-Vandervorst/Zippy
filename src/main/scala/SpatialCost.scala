@@ -622,7 +622,8 @@ object CostInterval:
 final case class Meas(size: Sym, len: Sym, heads: Sym,
                       sizeLo: Sym = Sym.zero, headsLo: Sym = Sym.zero,
                       nodesHi: Option[Sym] = None,
-                      headKeys: Option[Set[PathItem]] = None):
+                      headKeys: Option[Set[PathItem]] = None,
+                      epsAbsent: Boolean = false):
   /** Worst-case LOGICAL trie node count: the always-present root plus one node per distinct
    *  non-empty prefix, with no prefix sharing assumed.
    *
@@ -1038,10 +1039,68 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  length-`d` prefix, a disjoint intersection, an absorbed union.
    *
    *  With no summary at all the coarse ceiling is used and the census records it. */
+  /** CAN THE TWO OPERANDS FAIL TO BE THE SAME OBJECT?
+   *
+   *  Every ring operation tests `a eq b` at the top and returns without descending, so a must-descent
+   *  claim is only sound when that test cannot succeed.  Cardinality settles it without any sharing
+   *  analysis: if one operand's PROVEN minimum size exceeds the other's maximum, they are different
+   *  sets, hence different objects.  Conservative by construction — `false` simply means no must-paired
+   *  count is claimed. */
+  protected def provablyDifferent(a: Meas, b: Meas): Boolean =
+    def gt(x: Sym, y: Sym): Boolean = (x, y) match
+      case (Sym.Const(m), Sym.Const(n)) => m > n
+      case _ => false
+    gt(a.sizeLo, b.size) || gt(b.sizeLo, a.size)
+
+  /** THE PRECONDITION FOR CLAIMING THE MUST-PAIRED COUNT on a symmetric merge: neither operand can be
+   *  empty (the `isEmpty` fast paths return without descending) and the two cannot be the same object
+   *  (the `a eq b` fast path does the same).  Only the three symmetric merges use it — `restriction`
+   *  and `raffination` also short-circuit on `ε ∈ right`, and `composition` on `{ε}` on either side, so
+   *  their must side needs those cases discharged too and is left unclaimed. */
+  protected def mustDescend(a: Meas, b: Meas): Boolean =
+    a.provablyNonEmpty && b.provablyNonEmpty && provablyDifferent(a, b)
+
+  /** RESTRICTION AND RAFFINATION have one whole-skip path the symmetric merges do not: `ε ∈ right`.
+   *  `restrictionR` returns `Identity(LEFT)` and `raffinationR` returns `Empty` on `prefixes.terminal`,
+   *  both without descending, because ε prefixes everything.  `Meas.epsAbsent` is the shape's MUST fact
+   *  that discharges it. */
+  protected def mustDescendPrefixed(x: Meas, p: Meas): Boolean = mustDescend(x, p) && p.epsAbsent
+
+  /** COMPOSITION's whole-skip paths are `{ε}` on either side (`a·{ε} == a`, `{ε}·b == b`) and an empty
+   *  operand.  It has no `a eq b` test, so no distinctness is needed — only that neither side can BE
+   *  `{ε}`, which either `epsAbsent` or a proven size of at least two settles. */
+  protected def mustDescendComposed(a: Meas, b: Meas): Boolean =
+    def notEpsOnly(m: Meas): Boolean = m.epsAbsent || (m.sizeLo match
+      case Sym.Const(n) => n >= 2L
+      case _ => false)
+    a.provablyNonEmpty && b.provablyNonEmpty && notEpsOnly(a) && notEpsOnly(b)
+
+  /** the stronger of two sound LOWER bounds */
+  private def stronger(x: Sym, y: Sym): Sym = if Sym.dominates(x, y) then x else y
+
+  /** THE FORCED ALGEBRA ENTRY of a binary operation.  `evalI` is eager and always calls the operation,
+   *  so for it this is one visit unconditionally.  `execT` is not: `GraphExec.scala` guards
+   *  `Intersection`/`Subtraction`/`Restriction`/`Raffination`/`Composition`/`Wrap`/`Unwrap` with
+   *  `if a.isEmpty then ITrie.empty` — on the LEFT operand only — and guards `Union` not at all.  So on
+   *  the graph backend the entry is forced exactly when the left operand cannot be empty, which is a
+   *  fact the shape domain supplies, and always for a union. */
+  protected def forcedEntry(a: Meas, leftGuarded: Boolean): Sym = entryVisit
+
+  /** THE FORCED ENTRY OF A UNARY OPERATION.  `execT`'s guards are per-operator and reading
+   *  `GraphExec.scala` is the only way to know which: `Wrap` and `Unwrap` are guarded on their SOURCE
+   *  (`if a.isEmpty then ITrie.empty`), while `TailsUnion`, `TailsIntersection` and `Range` call the
+   *  `ITrie` operation with NO guard at all — so for those three the entry is forced on `execT` exactly
+   *  as it is on `evalI`.  `guarded = false` says so. */
+  protected def forcedUnary(src: Meas, guarded: Boolean): Sym = entryVisit
+
   protected def priced(rel: Rel, a: Meas, b: Meas,
-                       coarseTouch: => Sym, coarseAlloc: => Sym): CostInterval =
+                       coarseTouch: => Sym, coarseAlloc: => Sym,
+                       mustDescend: Boolean = false,
+                       leftGuarded: Boolean = true): CostInterval =
     rel.frontier match
-      case None => up(mk(work = opEntry, nodes = coarseAlloc, touch = coarseTouch))
+      case None =>
+        CostInterval(Cost.of(work = opEntry, touch = forcedEntry(a, leftGuarded)),
+                     mk(work = opEntry, nodes = coarseAlloc, touch = coarseTouch))
       case Some(f) =>
         val fs = f.syms(nd(a), nd(b), coarseTouch)
         // an interned node is still built at the root even when the CASE is an identity, unless the
@@ -1067,7 +1126,27 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
         // must-rebuild count, and it was tried as one: the corpus calibration refuted it on eight programs
         // (`trie alloc actual=8 in [14, 16]`), because a merge can return a whole subtrie by pointer at a
         // level the frontier counts as rebuilt.  A lower endpoint has to be sound before it can be useful.
-        CostInterval(Cost.of(work = opEntry),
+        //
+        // THE `touch` LOWER ENDPOINT, HOWEVER, IS REAL, and its absence was the single cause of every
+        // WIDTH failure in `SpatialCostCheck`'s per-operator table (62 of 62, all of them `width`).  Two
+        // parts, both derived and neither measured:
+        //
+        //  1. ONE VISIT IS UNCONDITIONAL.  `unionR`/`intersectionR`/`subtractionR`/`restrictionR`/
+        //     `raffinationR`/`compositionR` each emit their `TrieNodeVisit` as the FIRST statement, before
+        //     `a eq b`, before the empty tests, before everything (IntTrie.scala).  No data distribution
+        //     and no fast path can avoid it.
+        //  2. THE MUST-PAIRED COUNT, when the caller certifies that the whole-skip fast paths cannot
+        //     fire (`mustDescend`).  `FrontierSummary.descents.lo` is the number of prefixes present in
+        //     BOTH operands; the merge enters the algebra once per such key, and the entry hook again
+        //     precedes every test inside.  It is claimed ONLY under `mustDescend` because the frontier
+        //     reasons about SETS: it cannot see that two operands are the same OBJECT, and `a eq b`
+        //     returns at the top having descended nothing.
+        val entry = forcedEntry(a, leftGuarded)
+        val touchLo =
+          if fs.fallback then entry
+          else if mustDescend && entry != Sym.zero then stronger(Sym.one, fs.descentsLo)
+          else entry
+        CostInterval(Cost.of(work = opEntry, touch = touchLo),
                      Cost.of(work = opEntry, alloc = rebuiltHi, touch = touchHi))
 
   protected def mk(work: Sym = Sym.zero, nodes: Sym = Sym.zero, touch: Sym = Sym.zero): Cost =
@@ -1079,19 +1158,38 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  [[opEntry]] is 0 because its single per-node `TrieDispatch` is already charged by [[dispatch]].
    *  With the hard-coded 1 the trie model's lower endpoint EXCEEDED its own upper endpoint on every
    *  program with a set operation — the corpus calibration caught it as 213 inverted intervals. */
-  protected def up(hi: Cost): CostInterval = CostInterval(Cost.of(work = opEntry), hi)
+  /** IS THE ALGEBRA ENTRY FORCED?  `evalI` is eager: `ITrie.union(evalI(a), evalI(b))` calls the
+   *  operation unconditionally, and every operation emits its `TrieNodeVisit` as its first statement,
+   *  before `a eq b` and before the empty tests.  So for `evalI` one visit per algebra node cannot be
+   *  avoided by any data distribution, and that is the lower endpoint the WIDTH requirement needs.
+   *
+   *  `execT` is NOT eager in this respect: it guards every space slot with `if a.isEmpty then empty` and
+   *  never calls the operation, so nothing is forced there — [[GraphCost]] overrides this to zero.  The
+   *  corpus calibration is what settled the difference: with the entry claimed for both, `execT` came in
+   *  BELOW the lower endpoint on six programs (`graph Touch actual=4 in [7, 23]`). */
+  protected def entryVisit: Sym = Sym.one
+
+  protected def up(hi: Cost): CostInterval =
+    CostInterval(Cost.of(work = opEntry, touch = entryVisit), hi)
+  /** the same with NO forced visit — for the operators whose `ITrie` entry can be skipped entirely */
+  protected def upNoVisit(hi: Cost): CostInterval = CostInterval(Cost.of(work = opEntry), hi)
   /** an `ITrie` op whose FIRST operand is provably empty returns `ITrie.empty` immediately */
-  protected def emptyFast: CostInterval = CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
+  protected def emptyFast: CostInterval =
+    CostInterval(Cost.of(work = opEntry, touch = entryVisit), Cost.of(work = opEntry, touch = Sym.one))
   /** a pointer-identity short circuit */
-  protected def sharedFast: CostInterval = CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
+  protected def sharedFast: CostInterval =
+    CostInterval(Cost.of(work = opEntry, touch = entryVisit), Cost.of(work = opEntry, touch = Sym.one))
   override def empty: CostInterval = CostInterval.exact(Cost.of(work = opEntry))
   /** `pathItemsI` dispatches on EVERY Path subterm, `Deref` included, and counts
    *  [[EffortEvent.TriePathDispatch]] for each */
   override def pathTerm(nodes: Sym, slots: Sym): CostInterval = CostInterval.exact(Cost.of(work = nodes))
 
   def literal(m: Meas): CostInterval = phase match
-    // iLiteral / iLiteralStr are memo caches: a warm Literal is a map lookup, NOT |v| insertions
-    case ExecutionPhase.Warm => CostInterval.exact(mk(work = opEntry, touch = Sym.one))
+    // iLiteral / iLiteralStr are memo caches: a warm Literal is a map lookup, NOT |v| insertions — and
+    // a lookup emits NO `TrieNodeVisit` at all (`iLiteral` never enters the algebra), so the lower
+    // endpoint here is ZERO.  It read `exact(touch = 1)`, which was an unsound lower endpoint hidden by
+    // the blanket `withoutTouchLower`; removing that blanket is what exposed it.
+    case ExecutionPhase.Warm => CostInterval(mk(work = opEntry), mk(work = opEntry, touch = Sym.one))
     // cold: `fromSpaceValue` folds `union(t, singletonP(p))` over the paths — |p| fresh nodes for the
     // singleton and at most |p|+1 more for the merge spine, i.e. at most 3 nd(m) in total
     case ExecutionPhase.Cold =>
@@ -1105,7 +1203,8 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
   def union(a: Meas, b: Meas, rel: Rel): CostInterval =
     if rel.same then sharedFast
     else if a.provablyEmpty || b.provablyEmpty then emptyFast          // `if a.isEmpty then b`
-    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)))
+    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)), mustDescend(a, b),
+                leftGuarded = false)
   def inter(a: Meas, b: Meas, rel: Rel): CostInterval =
     if rel.same then sharedFast
     else if a.provablyEmpty || b.provablyEmpty then emptyFast
@@ -1116,14 +1215,14 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
     else if rel.disjoint && !rel.derived then
       CostInterval(Cost.of(work = opEntry),
                    Cost.of(work = opEntry, alloc = Sym.one, touch = Sym.one + merge2(a.heads, b.heads)))
-    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)))
+    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)), mustDescend(a, b))
   def subtract(a: Meas, b: Meas, rel: Rel): CostInterval =
     if rel.same then sharedFast                                        // `a eq b` ⇒ empty
     else if a.provablyEmpty || b.provablyEmpty then emptyFast
     else if rel.disjoint && !rel.derived then
       CostInterval(Cost.of(work = opEntry),
                    Cost.of(work = opEntry, alloc = Sym.one, touch = Sym.one + merge2(a.heads, b.heads)))
-    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)))
+    else priced(rel, a, b, merge2(nd(a), nd(b)), tighter(nd(a), nd(b)), mustDescend(a, b))
   /** RESTRICTION IS THE CENTRAL CASE review.md item 2 opens with.  The frontier is `Q(X,P)` pruned at
    *  terminal right prefixes, so restriction by `{ε}` is constant with zero allocation and restriction
    *  by one present prefix of length `d` is `Θ(d)` with a `d`-node spine, INDEPENDENT of the millions of
@@ -1131,7 +1230,7 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  fallback only. */
   def restrict(x: Meas, y: Meas, rel: Rel): CostInterval =
     if x.provablyEmpty || y.provablyEmpty then emptyFast
-    else priced(rel, x, y, merge2(nd(x), nd(y)), tighter(nd(x), nd(y)))
+    else priced(rel, x, y, merge2(nd(x), nd(y)), tighter(nd(x), nd(y)), mustDescendPrefixed(x, y))
   def raffine(x: Meas, y: Meas, rel: Rel): CostInterval =
     // `ITrie.raffination` is now the FUSED one-pass algorithm (review.md item 4, second bullet): one
     // traversal of the pruned frontier, not a restriction followed by a subtraction.  With a frontier
@@ -1139,7 +1238,8 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
     if x.provablyEmpty then emptyFast
     else priced(rel, x, y,
                 Sym.c(2) + tPer * (Sym.c(3) * nd(x) + nd(y)),
-                nd(x) + tighter(nd(x), nd(y)))
+                nd(x) + tighter(nd(x), nd(y)),
+                mustDescendPrefixed(x, y))
   def compose(a: Meas, b: Meas, rel: Rel): CostInterval =
     // one recursive entry (and one fresh node) per node of `a`, then — at every NON-LEAF TERMINAL of `a`
     // — a `union(mapped, b)`; a LEAF terminal grafts `b` by pointer and costs nothing, which is why
@@ -1148,27 +1248,49 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
     if a.provablyEmpty || b.provablyEmpty then emptyFast
     else priced(rel, a, b,
                 nd(a) + tPer * (nd(a) * a.len + a.size * (a.len + Sym.one) * nd(b)),
-                nd(a) + a.size * nd(b))
+                nd(a) + a.size * nd(b),
+                mustDescendComposed(a, b))
   def wrap(src: Meas, plen: Sym): CostInterval =
     // NOT exact: `ITrie.wrap` returns `empty` and allocates NOTHING when the source turns out empty at
-    // run time, which the shape domain need not have proved
+    // run time, which the shape domain need not have proved.  But when it HAS proved the source
+    // non-empty, the fold runs and allocates exactly one node per prefix item — the FIRST must-allocate
+    // count in this model, and an exact one, because `wrap` has no other allocation and no fast path
+    // between the emptiness test and the fold.  `plen` must be a VALUE and not a bound for that: a
+    // `Deref` whose declared length is an upper bound would over-claim.
     if src.provablyEmpty then emptyFast
-    else up(mk(work = opEntry, nodes = plen, touch = Sym.one))
+    else
+      val mustAlloc = if src.provablyNonEmpty && exactLen(plen) then plen else Sym.zero
+      CostInterval(Cost.of(work = opEntry, alloc = mustAlloc, touch = forcedUnary(src, guarded = true)),
+                   mk(work = opEntry, nodes = plen, touch = Sym.one))
   def unwrap(src: Meas, plen: Sym): CostInterval =
     if src.provablyEmpty then emptyFast                                // focus, no rebuild
-    else CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one + plen))
+    // NOT `exact`: `ITrie.unwrap` stops at the first ABSENT item (`children.get(h)` is `None` ⇒
+    // `empty`), so a missing prefix costs ONE visit and not `1 + |p|`.  The old `exact` claimed the
+    // full spine as a lower endpoint too — unsound, and hidden by the blanket `withoutTouchLower`.
+    else CostInterval(Cost.of(work = opEntry, touch = forcedUnary(src, guarded = true)),
+                      Cost.of(work = opEntry, touch = Sym.one + plen))
   /** `ITrie.tailsUnion` is now `joinAll` — ONE simultaneous n-ary pass (review.md item 4, third
    *  bullet), so the `log k` merge depth of the balanced pairwise fold is gone, and ZERO or ONE head is
    *  an identity that returns the child subtrie by pointer without touching it. */
   def tailsUnion(src: Meas): CostInterval =
     if atMostOneHead(src) then CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
-    else up(mk(work = opEntry, nodes = nd(src), touch = Sym.one + tPer * nd(src)))
+    else CostInterval(Cost.of(work = opEntry, touch = tailsForced(src)),
+                      mk(work = opEntry, nodes = nd(src), touch = Sym.one + tPer * nd(src)))
   /** `ITrie.tailsIntersection` is now `meetAll`, whose work is controlled by the SMALLEST branch and
    *  which abandons a key on the first input that lacks it (review.md item 4, fourth bullet).  The
    *  zero/one-head identities are explicit and cost one visit. */
   def tailsInter(src: Meas): CostInterval =
     if atMostOneHead(src) then CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
-    else up(mk(work = opEntry, nodes = nd(src), touch = Sym.one + tPer * src.heads * nd(src)))
+    // THE `heads` FACTOR IS GONE, and it was not a measurement that removed it.  `ITrie.meetAll`'s
+    // children step is now `IntTrieOps.meetAllTries`, a simultaneous descent whose frontier lies inside
+    // the SMALLEST child: a key survives only if every child has it.  Write `h = heads` and let the
+    // children hold `n_1 .. n_h` nodes with `nd(src) = 1 + Σ n_i`; then `n_min ≤ (nd(src) - 1)/h`
+    // because the minimum is at most the mean, and each entered node costs `O(h)` (one step per live
+    // operand).  So the product is `n_min · h ≤ nd(src) - 1` and the `h` cancels — the same bound the
+    // n-ary JOIN carries.  The previous `tPer · heads · nd(src)` priced the per-key probe loop that
+    // `meetAllTries` replaced, and kept charging for it after the loop was gone.
+    else CostInterval(Cost.of(work = opEntry, touch = tailsForced(src)),
+                      mk(work = opEntry, nodes = nd(src), touch = Sym.one + tPer * nd(src)))
   /** RANGE (review.md item 4, first bullet).  The ORDER-STATISTIC SLICE changed two of the three terms:
    *  the child-key order is memoised per node and the window test reads a CACHED terminal count, so a
    *  partial window rebuilds only the two cut frontiers plus genuinely partial nodes — `(w + 2)·(len+1)`
@@ -1183,7 +1305,7 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
   def range(x: Meas, window: Sym, identity: Boolean): CostInterval =
     val w = tighter(window, x.size)
     val countWalk = nd(x)
-    if identity then CostInterval(Cost.of(work = opEntry),
+    if identity then CostInterval(Cost.of(work = opEntry, touch = entryVisit),
                                   Cost.of(work = opEntry, touch = Sym.one + countWalk))
     else
       // every visited node is on a cut frontier or inside the window: at most `w + 2` per level
@@ -1192,8 +1314,13 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
             // the count walk, the visited nodes, and the per-cut-node canonical order (memoised)
             touch = Sym.one + countWalk + tPer * cut +
                     Sym.c(2) * (x.len + Sym.one) * x.heads * Sym.log(x.heads)))
+  /** THE HEAD CHILDREN ARE THE GROUPS: `evalI`'s `Iteration` iterates `t.children` and emits NO
+   *  `TrieNodeVisit` for the split at all.  `heads` is a model of the iterator's per-child work and is
+   *  sound as an UPPER endpoint; as a lower endpoint it claimed visits that never happen (the corpus
+   *  calibration refuted it the moment the blanket `withoutTouchLower` stopped hiding it:
+   *  `Touch actual=25 in [27, 209]` on a two-group loop, overshooting by exactly `heads`). */
   def group(src: Meas): CostInterval =
-    CostInterval.exact(Cost.of(work = opEntry, touch = src.heads))      // the head children ARE the groups
+    CostInterval(Cost.of(work = opEntry), Cost.of(work = opEntry, touch = src.heads))
   /** FOLD's accumulation: an ORDERED LEFT FOLD of unions (review.md item 4, third bullet says split
    *  this from `Iteration`'s n-ary join, and it is now split).  The `groups²` factor is real for a left
    *  fold, but only when the outputs genuinely overlap: an ABSORBED or DISJOINT step keeps the
@@ -1206,7 +1333,7 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  present in exactly one group is placed BY POINTER, so `k` disjoint groups allocate one node in
    *  total — the case the pairwise fold cannot express and the quadratic bound above cannot see. */
   override def collectJoin(groups: Sym, body: Meas): CostInterval =
-    CostInterval(Cost.zero,
+    CostInterval(Cost.of(touch = entryVisit),
                  mk(work = groups * opEntry, nodes = Sym.one + groups * nd(body),
                     touch = Sym.one + tPer * groups * nd(body)))
   def foldStep(groups: Sym, updNodes: Sym, updLen: Sym): CostInterval =
@@ -1218,7 +1345,11 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  visits are counted as `EqualityFrontierVisit` (an `Explain` event) and therefore do NOT belong in
    *  the calibrated `touch` component. */
   def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval =
-    priced(rel, acc, body, merge2(nd(acc), nd(body)), tighter(nd(acc), nd(body)))
+    // NO FORCED VISIT PER ROUND: the round that DETECTS convergence runs `equalT` and then stops
+    // without the accumulating `union`, so `R` rounds perform at most `R - 1` merges and a per-round
+    // lower endpoint of one visit over-claims on every fixpoint.
+    val p = priced(rel, acc, body, merge2(nd(acc), nd(body)), tighter(nd(acc), nd(body)))
+    CostInterval(p.lo.copy(touch = Amount.zero), p.hi)
   /** THE FRAME LAW, on the trie executables: `Σ K_d` loop-body entries and one `joinAll` per frame.
    *  The per-frame constant of 4 covers what one ENTRY into a level really dispatches — the `Iteration`
    *  node itself, its `Mention(rest)` source and its group split — because the nest is
@@ -1231,6 +1362,23 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
                          alloc = frames + depth + leaves * nd(leaf),
                          rounds = frames,
                          touch = entries + tPer * (frames + depth + leaves * nd(leaf))))
+
+  /** TWO VISITS ARE FORCED on a multi-head source: the `tailsUnion`/`tailsIntersection` entry, and then
+   *  the `joinAll`/`meetAll` entry — both hooks precede every test in their operation, including the
+   *  `liveDistinct` dedup that can collapse the operand list back to one.  Only two, for that reason. */
+  protected def tailsForced(src: Meas): Sym =
+    val entry = forcedUnary(src, guarded = false)
+    if entry == Sym.zero then Sym.zero
+    else src.headsLo match
+      case Sym.Const(n) if n >= 2L => Sym.c(2)
+      case _ => entry
+
+  /** is `plen` a VALUE rather than an upper bound?  A constant path length is; a `Deref`'s declared
+   *  `lengthHint` is not, and claiming it as a must-allocate count would predict more allocation than
+   *  the run performs. */
+  protected def exactLen(plen: Sym): Boolean = plen match
+    case Sym.Const(_) => true
+    case _ => false
 
   /** a source with at most one head: the `tails*` identities fire and nothing below is touched */
   protected def atMostOneHead(m: Meas): Boolean = m.heads match
@@ -1277,6 +1425,17 @@ final class NaiveTrieCostModel(p: ExecutionPhase) extends TrieAlgebraCost(p):
  *     `internConstStr` caches, so a cold graph pays a decode the interpreters do not. */
 final class GraphCost(p: ExecutionPhase) extends TrieAlgebraCost(p):
   val backend = Backend.Graph
+  /** `execT` guards its space slots with `if a.isEmpty then empty`, so no visit is forced UNCONDITIONALLY
+   *  on this executable — see [[TrieAlgebraCost.entryVisit]]. */
+  override protected def entryVisit: Sym = Sym.zero
+  /** but the guard reads the LEFT operand only, and `Union` carries none at all, so the entry IS forced
+   *  whenever the shape domain proves the left operand non-empty (`GraphExec.scala`) */
+  override protected def forcedEntry(a: Meas, leftGuarded: Boolean): Sym =
+    if !leftGuarded || a.provablyNonEmpty then Sym.one else Sym.zero
+  /** `Wrap`/`Unwrap` are guarded on the source; `TailsUnion`/`TailsIntersection`/`Range` are not guarded
+   *  at all (`GraphExec.scala`), so their entry is forced on `execT` unconditionally. */
+  override protected def forcedUnary(src: Meas, guarded: Boolean): Sym =
+    if !guarded || src.provablyNonEmpty then Sym.one else Sym.zero
   /** `execT` emits one [[EffortEvent.TrieOpEntry]] per `case "space"` slot, on top of the
    *  [[EffortEvent.GraphNodeDispatch]] that [[dispatch]] charges. */
   protected def opEntry: Sym = Sym.one
@@ -1295,7 +1454,8 @@ final class GraphCost(p: ExecutionPhase) extends TrieAlgebraCost(p):
   /** An `Iteration`/`Fixpoint` node is a `Right(subgraph)` entry, NOT a `case "space"` slot, so it
    *  dispatches but emits no `TrieOpEntry`.  Grouping itself is free: the source trie's children ARE
    *  the groups. */
-  override def group(src: Meas): CostInterval = CostInterval.exact(Cost.of(touch = src.heads))
+  override def group(src: Meas): CostInterval =
+    CostInterval(Cost.zero, Cost.of(touch = src.heads))
   /** ONE frame per loop node, reused across every child — the reason a deep n-queens nest is
    *  affordable at all.  The per-child prologue dispatches are charged by [[collect]], which the
    *  traversal already scales by the group count. */
@@ -1822,9 +1982,17 @@ object SpatialCost:
     if form == CostForm.Definitional then
       st.note("THIS ESTIMATE DESCRIBES THE DEFINITIONAL TERM, not `Routine.optimized`'s body and not " +
               "an SC residual — it is not a prediction about what runs")
-    // the root materialisation, if the executable has one (only `execZ` does), and the one structural
-    // widening: no positive LOWER bound on library-internal node visits is claimed (file header)
-    Report(model.name, model.backend, model.phase, c.withoutTouchLower, m, st.notes.toVector,
+    // ---- THE `touch` LOWER ENDPOINT POLICY ------------------------------------------------------
+    // CLAIM A LOWER ENDPOINT ONLY WHERE THERE IS AN ORACLE TO REFUTE IT.  This used to be an
+    // unconditional `withoutTouchLower`, justified by "the fast paths can eliminate essentially every
+    // internal visit" — true of the RECURSIVE visits and false of the ENTRY: every `ITrie` operation
+    // emits its `TrieNodeVisit` before any test.  Zeroing it cost the WIDTH requirement its entire
+    // discriminating power on this component (62 of 62 per-operator failures were `width`) AND hid two
+    // unsound lower endpoints (a warm `Literal` and a missing-prefix `Unwrap`), both now fixed.
+    // For a model whose `touch` has NO counted oracle — `ReferenceCost` over `Set[PathValue]` — a lower
+    // endpoint would be an unfalsifiable claim, so that one keeps the zero.
+    val reported = if model.touchNoOracle.isDefined then c.withoutTouchLower else c
+    Report(model.name, model.backend, model.phase, reported, m, st.notes.toVector,
            st.census(regions, exact, trunc), form)
 
   /** Every executable's warm interval over the SAME facts — the per-backend cost map review.md
@@ -1896,7 +2064,10 @@ object SpatialCost:
     if env.shapeFacts then
       out = out.copy(heads = tighter(out.heads, symSize(t.headCount.hi)),
                      headsLo = out.headsLo lub symLo(t.headCount.lo),
-                     headKeys = closedHeadKeys(t.shape).orElse(out.headKeys))
+                     headKeys = closedHeadKeys(t.shape).orElse(out.headKeys),
+                     // `ε ∉ this space` — a MUST fact, and the one the prefixed operators need to
+                     // discharge their whole-skip fast paths (`prefixes.terminal` prefixes everything)
+                     epsAbsent = out.epsAbsent || t.shape.eps == Presence.No)
       // THE EXACT TRIE-NODE IDENTITY, when the shape's prefix profile supplies one (whispers §1).
       // Both candidates are sound uppers of the same quantity, so `tighter` preserves soundness.
       SpatialFacts.trieNodes(t) match

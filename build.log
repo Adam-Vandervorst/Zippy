@@ -4174,3 +4174,213 @@ per-key entries), which is what the gate asserts, is:
   meetAll of 3 wide operands   AFTER  2,2,2,2,2           maxslope 0.00
   meetAll BEFORE (probe loop)  65,129,257,513,1025        maxslope 1.00   -> 512x at n=1024
 The claim "meetAll ... against 129..2049" above is wrong; the correct BEFORE row is 65..1025.
+
+================================================================================================
+SESSION 2026-08-08 (cont) — THE `touch` LOWER ENDPOINT: 62 -> 58 WIDTH FAILURES, AND THREE LATENT
+UNSOUND LOWER ENDPOINTS THE OLD POLICY WAS HIDING
+================================================================================================
+Steer: "Address the analysis side now."  Every one of the 62 per-operator product-requirement
+failures in SpatialCostCheck was a WIDTH failure, and all 62 had one cause: `SpatialCost.analyze`
+ended with an unconditional `c.withoutTouchLower`, so `touch` was [0, hi] and its width was
+`upper + 1` BY CONSTRUCTION.
+
+THE FILE HEADER'S JUSTIFICATION FOR THAT WAS WRONG.  It said the fast paths "can eliminate
+essentially every internal visit".  True of the RECURSIVE visits; false of the ENTRY.  `unionR`,
+`intersectionR`, `subtractionR`, `restrictionR`, `raffinationR`, `compositionR`, `joinAll`, `meetAll`,
+`wrap`, `unwrap`, `tailsUnion`, `tailsIntersection`, `range` and `singleton` each emit their
+`TrieNodeVisit` as their FIRST statement -- before `a eq b`, before the `isEmpty` tests, before
+everything.  `evalI` is eager (`ITrie.union(evalI(a), evalI(b))` always calls the operation), so one
+visit per algebra node cannot be avoided by any data distribution.
+
+WHAT LANDED
+  * policy: claim a lower endpoint only where there is an ORACLE to refute it.  `withoutTouchLower`
+    now applies only to a model whose `touch` has none -- `ReferenceCost` over Set[PathValue].
+  * `TrieAlgebraCost.entryVisit`: one forced visit per algebra node for `evalI`/`execZ`; ZERO for
+    `GraphCost`, because `execT` guards every space slot with `if a.isEmpty then empty` and never
+    enters the algebra.  The corpus calibration is what established that distinction (see below).
+  * `FrontierSyms.descentsLo`: the frontier's MUST-PAIRED count, previously dropped at the Sym
+    boundary.  Claimed only under `mustDescend` -- both operands provably non-empty AND provably
+    different sets (one's proven minimum size exceeds the other's maximum, so `a eq b` is impossible).
+    Only the three SYMMETRIC merges use it: restriction/raffination also short-circuit on `eps in
+    right` and composition on `{eps}` on either side, and `Meas` carries neither eps-presence nor a
+    LOWER length bound, so their must side stays unclaimed and is recorded as such in OP-1.
+
+THREE LATENT UNSOUND LOWER ENDPOINTS, ALL EXPOSED THE MOMENT THE BLANKET STOPPED HIDING THEM, all
+found by the corpus containment gate and not by inspection:
+  1. a warm `Literal` claimed `exact(touch = 1)`; `iLiteral` is a memo-cache lookup that never enters
+     the algebra, so the actual is ZERO.
+  2. `Unwrap` claimed `exact(touch = 1 + |p|)`; `ITrie.unwrap` stops at the first ABSENT item, so a
+     missing prefix costs ONE visit.
+  3. `group` claimed `exact(touch = heads)`; `evalI`'s Iteration iterates `t.children` and emits
+     NOTHING for the split -- the head children ARE the groups.  Witness: `Touch actual=25 in
+     [27, 209]` on a two-group loop, overshooting by exactly `heads`.
+  Plus `fixStep`, where a per-round forced visit over-claims by one per fixpoint: the round that
+  DETECTS convergence runs `equalT` and stops without the accumulating `union`.
+
+MEASURED
+  * calibration containment WITH the new lower endpoints: 100.00% (0 of 3000 corpus points outside
+    the interval) and 100.00% (0 of 59 cornerstone points).  Three intermediate states on the way
+    there, each one a refutation that located a defect: 40 out, then 6 out (all `graph`, which is what
+    identified execT's short circuits), then 0.
+  * SpatialCostCheck per-operator width failures: 62 -> 58.  Every trie `Touch` width exactly halved
+    (restriction/raffination 254 -> 127, composition 138 -> 69, iteration 226 -> 113, tails-union
+    221 -> 110.5, tails-inter 1754 -> 877, range-part 273 -> 136.5, fixpoint 56868 -> 28434), and
+    `union`, `intersection`, `subtraction` and `range-full` went INSIDE the budget tier outright --
+    they left OP-1 by the ledger's own necessity rule.
+  * cornerstones: `aunt` trie Touch width 12.99 and `temperature` 24.25 (both inside the budget tier,
+    both removed from CS-10); `aunt` zipper 13.11 (removed from CS-11).  On those three the missing
+    lower endpoint WAS the whole gap, exactly as the previous revision of CS-10 predicted.  `gol`
+    (70.06) and `datalog-sn` (1198) remain and their residue is the UPPER endpoint -- LIM-4's Patricia
+    constant and CS-5's fixpoint round bound -- not the lower one.
+
+WHAT IS STILL OPEN, NAMED: the 58 remaining failures.  OP-1's eight surviving operators need their
+own fast paths discharged (an eps-presence and a lower length bound on `Meas`); OP-2/OP-3 need a
+must-ALLOCATE count, which the corpus has already refuted once from `rebuilt.lo` and therefore needs a
+different derivation; OP-4/OP-5 need a must-ROUND count; and `tails-inter` (877) and `fixpoint`
+(28434) are upper-endpoint problems, not lower-endpoint ones.
+================================================================================================
+GATES: SpatialCostCheck, SpatialEventsCheck, SpatialScaleCheck and SpatialPipelineCheck all pass with
+the change (58 named product-requirement failures, 0 unnamed and 0 stale).  One caveat recorded rather
+than dismissed: SpatialPipelineCheck's hook-latency gate FAILED at 159.2 ms (budget 150) when the four
+suites were run back to back in one sequence, and PASSED at 105.3 ms with a total ratio of 1.092x when
+re-run alone.  It is a wall-clock measurement and the machine was compiling throughout; the change adds
+one field read and one constant comparison per binary node.
+================================================================================================
+
+--- CONTINUATION: the prefixed and composed operators
+`Meas.epsAbsent` (the shape's ε-presence, which the domain always had and the measure did not carry)
+discharges restriction's and raffination's extra whole-skip path (`ε ∈ right` prefixes everything, so
+all of `x` is accepted or dropped by pointer).  With it, both claim the must-paired count and both left
+OP-1: per-operator width failures 58 -> 56.  Composition's two `{ε}` paths are discharged the same way
+(`epsAbsent` or a proven size >= 2) but it stays at 69, because the GRAFT frontier derives no must side.
+Two more ledger entries lost a subject to the same fix: CS-10/CS-11 (aunt, temperature) earlier, and now
+LIM-6's `inter/shared-subtrie` ladder (width 7.91).  Containment stayed 100.00% on 3000 corpus points
+and 100.00% on 59 cornerstone points at every step.  SpatialCostCheck, SpatialEventsCheck and
+SpatialScaleCheck all green: every remaining failure is named, none stale.
+STILL OPEN, and now with the reason rather than the symptom:
+  * composition (69), iteration (113), tails-union (110.5), range-part (136.5) — no must-count derived
+    for a graft frontier, a loop, an n-ary join or a partial window.
+  * tails-inter (877) and fixpoint (28434) — UPPER-endpoint problems.  `tails-inter` still charges a
+    `heads` factor the n-ary meet no longer pays: the meet's frontier is bounded by the SMALLEST child,
+    and min <= mean gives `nd(src)/heads`, so the `heads` factor cancels.  That is the next tightening
+    and it is justified by the implementation, not by a measurement.
+  * OP-2/OP-3 need a must-ALLOCATE count (refuted once from `rebuilt.lo`); OP-4/OP-5 a must-ROUND count.
+================================================================================================
+
+--- CONTINUATION: the `tails` upper endpoints
+`tails-inter` was still priced as the PER-KEY PROBE LOOP that `IntTrieOps.meetAllTries` replaced:
+`tPer · heads · nd(src)`.  The n-ary meet's frontier lies inside the SMALLEST child (a key survives only
+if every child has it), and with `nd(src) = 1 + Σ n_i` over `h` children the minimum is at most the mean,
+so `n_min ≤ (nd(src)-1)/h`; each entered node costs `O(h)`, one step per live operand, so the product is
+`n_min · h ≤ nd(src)-1` and the `h` CANCELS.  Same bound the n-ary join carries.  Derived from the
+algorithm, not fitted to a measurement.
+  tails-inter trie Touch width 877 -> 73.67  (12x)
+  tails-union trie Touch width 221 -> 73.67  (3x, from the multi-head lower endpoint of 2)
+The lower endpoint on a multi-head source is TWO — the `tails*` entry plus the `joinAll`/`meetAll` entry,
+both hooks preceding every test including the `liveDistinct` dedup that can collapse the operand list
+back to one.  It cannot be three without proving the source's two children are distinct OBJECTS, which
+needs the per-head sub-shapes the shape domain has and `Meas` does not carry.
+Both channels are now within 15% of the budget tier (73.67 against 64) instead of 13.7x and 3.5x over.
+The per-operator failure count is unchanged at 56 because neither crossed the threshold; the ledger
+records the numbers so the next 15% is one named step.
+GATES: containment 100.00% (3000 corpus) and 100.00% (59 cornerstone); SpatialEventsCheck,
+SpatialScaleCheck and SpatialCostCheck all green, every remaining failure named and none stale.
+================================================================================================
+
+--- CONTINUATION: `execT`'s guard reads the LEFT operand only
+`GraphCost.entryVisit` was a flat zero on the reasoning that `execT` guards every space slot with
+`if a.isEmpty then ITrie.empty`.  Reading `GraphExec.scala` instead of paraphrasing it: the guard reads
+`inputs(0)` — the LEFT operand — and `Union` carries NO guard at all.  So the algebra entry IS forced on
+`execT` whenever the shape domain proves the left operand non-empty, and always for a union.
+`forcedEntry(a, leftGuarded)` replaces the flat constant; `union` passes `leftGuarded = false`.
+  per-operator width failures 56 -> 51; OP-1g lost union, intersection, subtraction, restriction and
+  raffination (12 subjects -> 7), and LIM-6g lost `inter/shared-subtrie` (width 7.91).
+  containment unchanged at 100.00% (3000 corpus) and 100.00% (59 cornerstone).
+The seven left in OP-1g are the ones whose entry `execT` genuinely can skip, plus the UNARY operators,
+where the guard is on the source and `up`/`tails*`/`range` do not consult it — which is exactly why graph
+`tails-*` still read 221 where trie reads 73.67.  That is the next step and it is the same one line.
+GATES: SpatialCostCheck, SpatialScaleCheck, SpatialEventsCheck all green; every remaining failure named,
+none stale.
+================================================================================================
+
+--- CONTINUATION: TailsUnion, TailsIntersection, wrap, unwrap
+Asked for as the next body of work, and the guards had to be READ rather than assumed again:
+`GraphExec.scala` guards `Wrap` and `Unwrap` on their SOURCE (`if a.isEmpty then ITrie.empty`) but calls
+`TailsUnion`, `TailsIntersection` and `Range` with NO guard at all.  So on `execT` those three force
+their algebra entry exactly as `evalI` does, and only `Wrap`/`Unwrap` are conditional on the source
+being provably non-empty.  `forcedUnary(src, guarded)` expresses the distinction.
+  graph tails-union / tails-inter Touch width 221 -> 73.67 — level with the trie backend.
+  wrap: `ITrie.wrap` allocates exactly one node per prefix item once the source is known non-empty, and
+  has no fast path between the emptiness test and the fold, so this is THE FIRST MUST-ALLOCATE COUNT in
+  the model, and an exact one.  Guarded by `exactLen(plen)`: a `Deref` whose declared length is an upper
+  bound would over-claim.  `operator wrap zipper Work` left OP-3.
+  unwrap: keeps the lower endpoint at the forced entry only.  `ITrie.unwrap` stops at the first ABSENT
+  item, so a missing prefix costs ONE visit and not `1 + |p|`; the full spine is an upper bound only.
+  containment unchanged: 100.00% (3000 corpus) and 100.00% (59 cornerstone), the new must-allocate
+  included.
+The four `tails` Touch channels now all read 73.67 = 221/3 and are the closest failures in the table.
+Crossing 64 needs the lower endpoint at 3 (which needs the source's two children proved distinct
+OBJECTS, i.e. the per-head sub-shapes) or `nodesHi` — the exact `trieNodes` identity — reaching this
+transfer instead of the `1 + size·len` envelope.  Their `Alloc` (74) needs a must-allocate count for an
+n-ary join, which identity propagation makes genuinely zero: the join may return an operand.
+================================================================================================
+
+--- CONTINUATION: the two tails remedies, investigated; one BLOCKED, reported not shipped
+Asked for (a) the `nodesHi` route to the tails Touch width and (b) the Alloc upper endpoint.
+
+(a) `nodesHi` ALREADY REACHES THE TRANSFER.  The traversal's `TailsUnion`/`TailsIntersection` cases pass
+    the SOURCE's measure straight to `model.tailsUnion(ms)` / `tailsInter(ms)`, and that measure came from
+    the source's own `refineHere`, which sets `nodesHi` from `SpatialFacts.trieNodes`.  So there is no
+    plumbing gap to close: the 73 in `1 + 3·nd = 220` is either the exact profile or a TRUNCATED one
+    (`trieNodes` falls back to `1 + size·len` when `p.truncated`).  Which of the two it is decides whether
+    this route has any headroom at all, and that needs a probe of `trieNodes` on the operator table's
+    source — not an edit.
+
+(b) THE ALLOC REMEDY IS EXACT AND SOUND, AND IT ALSO FIXES TOUCH: price the tails from the RESULT's node
+    envelope, not the source's.  `tailsUnion(src)` is the union of src's children; each child contributes
+    its own root and in the union all `heads` roots merge into ONE, so
+        result nodes <= Σ n_i - (heads - 1) = nd(src) - heads
+    using `headsLo` (a LOWER bound on the head count; subtracting an upper bound would be unsound).
+    `alloc` is exactly the result nodes — the join builds nothing else — so both `alloc` and the `tPer`
+    term of `touch` shrink by that amount.  On the operator table's source (nd 73, ~24 heads) that is
+    touch 220 -> ~148 (width 49.7) and alloc 73 -> ~49 (width 50): BOTH under the 64 budget.
+
+BLOCKED: `Sym` has no subtraction — the algebra is over non-negative quantities and there is no monus —
+so `nd(src) - headsLo` cannot be expressed. The change needs either a saturating `Sym.monus` (and a
+`dominates` rule for it, which is the real work: subtraction breaks the monotonicity the syntactic
+dominance test relies on) or the transfers to take the result measure the traversal already computes
+(`refineHere(Meas(ms.size, ms.len, ms.size))`) instead of the source's, which is the cheaper route and
+does not touch `Sym` at all.
+NOT SHIPPED. Both diagnoses are recorded rather than half-applied; every gate is green as of the previous
+entry and no unvalidated edit was left in the tree.
+================================================================================================
+
+--- WORKFLOW POST-MORTEM: two worktree agents on a base that did not exist
+Ran a 2-agent workflow (wf_9cd73d15-a5a) racing the two tails remedies in isolated worktrees.  Route 1
+finished; route 2 ran ~2h10m and was stopped.  THE CAUSE WAS NOT TIMEOUTS.
+1. `isolation: worktree` branched BOTH worktrees from master (8cd36b9), which does not even contain
+   SpatialCost.scala.  Route 1 detected it and `git reset --hard 344f694` onto branch b's tip -- but this
+   session's four rounds of work are UNCOMMITTED, and worktree isolation cannot see uncommitted work.  So
+   both agents measured a baseline of 62 requirement failures (the pre-session state) while the brief said
+   51, and route 2 kept iterating trying to reconcile numbers that could never match.
+2. ONE shared bloop server: 19.5h old, 9.4GB RSS, serving the main tree and both worktrees -- three
+   project graphs in one 6GB heap.
+3. The Bash 10-minute ceiling kills the CLIENT, not the server.  An overrunning `scala-cli test` leaves
+   bloop executing; the agent retries; the new request queues behind the orphan.  That is the stacking.
+AVOIDANCE: commit (or do not isolate) before spawning worktree agents; pin the base commit and have the
+agent `git log -1` and ABORT in the first minute on a mismatch; make the agent report the BASELINE numbers
+before editing anything, so a base mismatch surfaces at minute one; give each agent its own compiler
+(`--server=false` or a per-worktree daemon), never N worktrees on one server; and background anything over
+~2 minutes instead of a foreground call that gets killed mid-flight.
+SALVAGED, AND IT ANSWERS THE QUESTION THE RACE WAS FOR.  Route 1 implemented monus as a FUNCTION in
+`object Sym`, not an enum case, leaving `dominates` untouched -- the conservative option -- with
+containment 100.00% on 3000 corpus and 59 cornerstone points.  Its numbers pin the real blocker: alloc
+74 -> 66 (upper 73 -> 65) and touch 221 -> 197 / 1754 -> 1562, i.e. 8 off alloc and 24 = 3x8 off touch, so
+`headsLo` FOLDED TO 8 on that operand.  Applied to the current tree that is alloc width 66 and touch width
+65.7 -- BOTH STILL ABOVE 64, by about 3%.
+So the root-merge argument does not close the gap and the blocker was never `Sym` subtraction: `headsLo` is
+a MUST-count of 8 where the envelope needs ~24.  The next step is tightening `headsLo`, or getting the
+RESULT's `nodesHi` onto the transfer -- not the algebra.  Route 1's patch is real and self-consistent
+against 344f694 (95 lines in SpatialCost.scala, 32 in SpatialCostCheck.scala) and is reusable; route 2's
+diff rewrote 148 lines of a ledger that differs from this tree's and is not mergeable as-is.
+================================================================================================

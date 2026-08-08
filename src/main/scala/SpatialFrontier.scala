@@ -181,7 +181,14 @@ object DepthFrontier:
  *  but the REBUILD bound is still the min-gated `tighter(N(L), N(R))` rather than the sum, because
  *  that combination is licensed structurally (a rebuilt node is a paired node, hence a node of both
  *  operands) and not by measurement. */
-final case class FrontierSyms(descents: Sym, rebuilt: Sym, patricia: Sym, fallback: Boolean)
+/** `descentsLo` is the MUST side of the frontier: the number of paired prefixes the algebra cannot
+ *  avoid entering.  It is carried separately because a cost transfer needs the lower endpoint to
+ *  produce an interval a caller can act on, and dropping it made every `touch` width `upper + 1` by
+ *  construction.  See `TrieAlgebraCost.priced` for the one precondition under which it may be
+ *  CLAIMED — the frontier itself cannot know whether the two operands are the same OBJECT, and
+ *  `a eq b` skips the whole descent. */
+final case class FrontierSyms(descents: Sym, descentsLo: Sym, rebuilt: Sym, patricia: Sym,
+                              fallback: Boolean)
 
 /** THE BINARY SUMMARY review.md item 2 asks for.
  *
@@ -218,8 +225,9 @@ final case class FrontierSummary(op: FrontierOp,
 
   def syms(nodesLeft: Sym, nodesRight: Sym, coarse: => Sym): FrontierSyms =
     def num(i: Ivl): Sym = if i.hi >= Ivl.INF then Sym.Inf else Sym.c(i.hi)
-    if !isFallback then FrontierSyms(num(descents), num(rebuilt), num(patricia), fallback = false)
-    else FrontierSyms(coarse, Sym.tighter(nodesLeft, nodesRight),
+    if !isFallback then
+      FrontierSyms(num(descents), Sym.c(descents.lo), num(rebuilt), num(patricia), fallback = false)
+    else FrontierSyms(coarse, Sym.zero, Sym.tighter(nodesLeft, nodesRight),
                       Sym.tighter(Sym.c(2) * (nodesLeft + nodesRight), coarse), fallback = true)
 
   def show: String =
