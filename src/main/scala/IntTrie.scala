@@ -372,24 +372,46 @@ object ITrie:
    *  a repeated operand object is free — and under iteration/fixpoint the same tail-trie is handed in
    *  many times.  Linear identity scan while the operand list is short, an `IdentityHashMap` past
    *  that, so dedup is O(k) rather than O(k²) on a wide loop. */
+  /** does `ts` hold an EMPTY operand?  `meetAll`'s pre-scan, counted operand by operand: it
+   *  short-circuits on the first empty input (which annihilates the meet), so what it costs is how far
+   *  it got and not `k`. */
+  private def anyEmptyOperand(ts: IterableOnce[ITrie]): Boolean =
+    var n = 0
+    var found = false
+    val it = ts.iterator
+    while it.hasNext && !found do { found = it.next().isEmpty; n += 1 }
+    effortN(EffortEvent.NaryOperandProbe, n.toLong)
+    found
+
   private def liveDistinct(ts: IterableOnce[ITrie], dropEmpty: Boolean): mutable.ArrayBuffer[ITrie] =
-    val buf = mutable.ArrayBuffer.empty[ITrie]
+    // SIZED, not `empty`: `ArrayBuffer.empty` allocates a 16-slot array, and almost every call here has
+    // two or three operands — with the scratch storage now counted (EffortEvent.NaryScratchSlot) that
+    // constant was the single largest `alloc` term of a small `joinAll`
+    val buf = new mutable.ArrayBuffer[ITrie](4)
     var seen: java.util.IdentityHashMap[ITrie, ITrie] = null
+    var pr = 0                                         // operand probes, emitted once at the end
     val it = ts.iterator
     while it.hasNext do
       val t = it.next()
       if !dropEmpty || t.nonEmpty then
         var dup = false
-        if seen != null then dup = seen.put(t, t) != null
+        if seen != null then { pr += 1; dup = seen.put(t, t) != null }
         else
           var i = 0
           while i < buf.length && !dup do { if buf(i) eq t then dup = true; i += 1 }
+          pr += i
         if dup then effort(EffortEvent.ReusedSubtrie)
         else
           buf += t
           if seen == null && buf.length > 24 then
             seen = new java.util.IdentityHashMap[ITrie, ITrie]()
+            effortN(EffortEvent.NaryScratchSlot, 2L * (buf.length + 1))
             buf.foreach(x => seen.put(x, x))
+            pr += buf.length
+    effortN(EffortEvent.NaryOperandProbe, pr.toLong)
+    // THE BUFFER'S OWN STORAGE: 4 slots at construction and, once it has doubled to hold `k` elements,
+    // fewer than `4k` slots over the whole doubling series
+    effortN(EffortEvent.NaryScratchSlot, math.max(4L, 4L * buf.length))
     buf
 
   /** join-all: the union of MANY tries in ONE simultaneous pass (review.md item 4, third bullet).
@@ -420,11 +442,14 @@ object ITrie:
       var term = false
       var i = 0
       while i < live.length do { if live(i).terminal then term = true; i += 1 }
+      effortN(EffortEvent.NaryOperandProbe, live.length.toLong)      // the terminal-flag scan
       val ch =
         if Tuning.patriciaOps then
           val maps = new Array[IntMap[ITrie]](live.length)
+          effortN(EffortEvent.NaryScratchSlot, live.length.toLong)
           i = 0
           while i < live.length do { maps(i) = live(i).children; i += 1 }
+          effortN(EffortEvent.NaryOperandProbe, live.length.toLong)
           IntTrieOps.joinAllTries(maps)
         else
           val groups = mutable.LongMap.empty[mutable.ArrayBuffer[ITrie]]
@@ -444,6 +469,7 @@ object ITrie:
       while i < live.length && (res eq null) do
         if (ch eq live(i).children) && live(i).terminal == term then res = live(i)
         i += 1
+      effortN(EffortEvent.NaryOperandProbe, i.toLong)                // the result-identity search
       if res ne null then { effort(EffortEvent.SubtrieAcceptedByPointer); res } else node(term, ch)
 
   /** meet-all: the intersection of MANY tries (review.md item 4, fourth bullet).
@@ -467,18 +493,23 @@ object ITrie:
   def meetAll(ts: scala.collection.Seq[ITrie]): ITrie =
     effort(EffortEvent.TrieNodeVisit)
     if ts.isEmpty then empty
-    else if ts.exists(_.isEmpty) then { effort(EffortEvent.SubtrieRejectedByPointer); empty }
+    else if anyEmptyOperand(ts) then { effort(EffortEvent.SubtrieRejectedByPointer); empty }
     else
       val live = liveDistinct(ts, dropEmpty = false)
       if live.length == 1 then { effort(EffortEvent.SubtrieAcceptedByPointer); live(0) }
       else if live.length == 2 then intersection(live(0), live(1))
       else
-        val term = live.forall(_.terminal)
+        var ti = 0
+        while ti < live.length && live(ti).terminal do ti += 1
+        val term = ti == live.length
+        effortN(EffortEvent.NaryOperandProbe, math.min(ti + 1, live.length).toLong)
         val ch =
           if Tuning.patriciaOps then
             val maps = new Array[IntMap[ITrie]](live.length)
+            effortN(EffortEvent.NaryScratchSlot, live.length.toLong)
             var i = 0
             while i < live.length do { maps(i) = live(i).children; i += 1 }
+            effortN(EffortEvent.NaryOperandProbe, live.length.toLong)
             IntTrieOps.meetAllTries(maps)
           else
             // the per-key probe loop: iterate the smallest fan, abandon a key on the first input that
@@ -515,6 +546,7 @@ object ITrie:
           while i < live.length && (res eq null) do
             if (ch eq live(i).children) && live(i).terminal == term then res = live(i)
             i += 1
+          effortN(EffortEvent.NaryOperandProbe, i.toLong)             // the result-identity search
           if res ne null then { effort(EffortEvent.SubtrieAcceptedByPointer); res } else node(term, ch)
 
   // ---- prefix operations --------------------------------------------------------------------------

@@ -96,6 +96,68 @@ class SpatialEventsCheck extends FunSuite:
             gaps.headOption.flatMap(_.touchNoOracle).getOrElse(""))
   }
 
+  /** the gaps this suite EXPECTS `OracleGap.declared` to contain, exact in both directions.  A new gap
+   *  must be declared before it can appear, and a closed one must be removed. */
+  val expectedGaps: Set[String] = Set("REF-SET", "INTMAP-SPINE", "RANGE-SORT", "INTERN-ITEM",
+                                      "ZIPPER-ROUNDS")
+
+  test("ORACLE COVERAGE: every (executable, component) is COUNTED or a DECLARED gap, and no gap is a hole") {
+    // review.md's fifth product requirement, and the reason it is a requirement: "an oracle-coverage
+    // assertion that every backend loop and allocation category is either counted or deliberately outside
+    // the advertised unit ... today only the touch gap is asserted while the four gaps in
+    // SpatialEvents.scala are prose, not assertions."  A paragraph cannot fail.  This does.
+    println("EVENTS: declared oracle gaps —")
+    for g <- OracleGap.declared do
+      println("EVENTS:   " + g.show)
+      println("EVENTS:     where: " + g.where)
+      println("EVENTS:     bound: " + g.bound.take(220))
+      println("EVENTS:     owner: " + g.owner)
+    // (a) the list is exact in both directions, so a gap cannot appear or vanish silently
+    assertEquals(OracleGap.declared.map(_.id).toSet, expectedGaps,
+                 s"the declared oracle-gap set changed: ${OracleGap.declared.map(_.id).sorted}")
+    assertEquals(OracleGap.declared.map(_.id).distinct.length, OracleGap.declared.length, "duplicate gap id")
+    // (b) every entry is well formed: a real executable, a calibrated component, and a STATED bound.
+    //     "The gap is bounded, not open-ended" is only a claim if the bounding function is written down.
+    for g <- OracleGap.declared do
+      assert(g.execs.nonEmpty && g.execs.subsetOf(EffortEvent.executables.toSet), g.show)
+      assert(g.comps.nonEmpty && g.comps.subsetOf(EffortEvent.calibratedComponents.toSet), g.show)
+      assert(g.bound.length > 40, s"${g.id} declares a gap with no stated bound: ${g.bound}")
+      assert(g.owner.nonEmpty && g.where.nonEmpty, g.show)
+    // (c) THE COVERAGE MATRIX.  Every (executable, calibrated component) pair must be reached by an
+    //     emitting event or by a declared gap.  This is the assertion that found ZIPPER-ROUNDS.
+    var uncovered = Vector.empty[String]
+    var byEvent = 0; var byGap = Vector.empty[String]
+    for x <- EffortEvent.executables; c <- EffortEvent.calibratedComponents do
+      val emitters = EffortEvent.ofComponent(c).filter(_.emitter.split(',').map(_.trim).contains(x))
+      val gaps = OracleGap.forExec(x, c)
+      if emitters.nonEmpty then byEvent += 1
+      else if gaps.nonEmpty then byGap :+= s"$x/$c via ${gaps.map(_.id).mkString(",")}"
+      else uncovered :+= s"$x/$c"
+    println(s"EVENTS: coverage matrix — $byEvent of ${EffortEvent.executables.length * 4} " +
+            s"(executable, component) pairs are COUNTED by an emitter; ${byGap.length} are covered by a " +
+            s"declared gap: ${byGap.mkString("; ")}")
+    assertEquals(uncovered, Vector.empty[String],
+                 "an (executable, component) pair with NO emitting event and NO declared oracle gap — " +
+                 "the advertised unit claims a number nothing measures: " + uncovered.mkString(", "))
+    // (d) NO DECLARED GAP MAY BE A HOLE.  `Unbounded` means real executed work that no event counts and
+    //     no named factor of a counted quantity bounds — neither counted NOR deliberately outside the
+    //     advertised unit, which is exactly what the requirement forbids.
+    val holes = OracleGap.declared.filter(_.status == GapStatus.Unbounded)
+    assertEquals(holes.map(_.id), Vector.empty[String],
+                 "declared oracle gap(s) that are UNBOUNDED — a gap with no bounding factor is a hole in " +
+                 "the advertised unit, not an exclusion from it:\n  " +
+                 holes.map(g => s"${g.id}: ${g.where} [owner ${g.owner}]").mkString("\n  "))
+    // (e) and the n-ary operand/scratch category is COUNTED rather than declared, asserted positively so
+    //     it cannot be dropped from the event vocabulary and from the gap list at the same time.
+    for (e, c) <- Vector(EffortEvent.NaryOperandProbe -> EffortComponent.Work,
+                         EffortEvent.NaryScratchSlot -> EffortComponent.Alloc) do
+      assertEquals(e.component, c, s"$e must stay in $c or the n-ary category loses its oracle")
+      assert(e.emitter.split(',').map(_.trim).toSet == Set("evalI", "execT", "execZ"),
+             s"$e must be emitted by every trie-shaped executable: ${e.emitter}")
+      assert(!OracleGap.declared.exists(_.id == "NARY-SCRATCH"),
+             "the n-ary operand/scratch category is counted; it must not also be declared as a gap")
+  }
+
   test("the sink counts, nests, and is off again afterwards") {
     assert(!EffortSink.isCounting, "no region may be open before a test arms one")
     val (v, ev) = EffortSink.count(eval(lit(p("a"), p("b"))))
@@ -274,6 +336,35 @@ class SpatialEventsCheck extends FunSuite:
            s"the 2(m+n) Patricia envelope is violated: ${u(EffortEvent.PatriciaVisit)} > 32 — ${u.show}")
     println(s"EVENTS: evalI union of two 8-path literals: ${u.show}")
 
+    // THE N-ARY OPERAND LOOPS, hand-computed exactly (review.md's first P0).  `ITrie.liveDistinct`
+    // compares each operand against the DISTINCT ones buffered before it and its buffer starts at 4 slots,
+    // so the counts below are arithmetic, not observations:
+    //
+    //   joinAll(x, y)     x != y      probes 0 + 1 = 1;   buffer max(4, 4*2) = 8 slots
+    //   joinAll(x, x, x)              probes 0 + 1 + 1 = 2; buffer max(4, 4*1) = 4 slots
+    //   meetAll(x, empty)             the empty PRE-SCAN stops on the second operand: 2 probes, 0 slots
+    //
+    // and below three DISTINCT operands there is no descent at all — `joinAll` delegates to the pairwise
+    // union — so these are the whole n-ary event bill for each call.
+    val nx = ITrie.fromSpaceValue(SpaceValue(Set(p("n", "x"))))
+    val ny = ITrie.fromSpaceValue(SpaceValue(Set(p("n", "y"))))
+    val n2 = EffortSink.events(ITrie.joinAll(Vector(nx, ny)))
+    assertEquals(n2(EffortEvent.NaryOperandProbe), 1L, s"one identity comparison for two operands: ${n2.show}")
+    assertEquals(n2(EffortEvent.NaryScratchSlot), 8L, s"the dedup buffer's slots: ${n2.show}")
+    val ndup = EffortSink.count(ITrie.joinAll(Vector(nx, nx, nx)))
+    assert(ndup._1 eq nx, "three copies of one operand join to that operand, by pointer")
+    assertEquals(ndup._2(EffortEvent.NaryOperandProbe), 2L,
+                 s"two duplicates, each found on the first comparison: ${ndup._2.show}")
+    assertEquals(ndup._2(EffortEvent.NaryScratchSlot), 4L, s"one distinct operand buffered: ${ndup._2.show}")
+    assertEquals(ndup._2(EffortEvent.FreshTrieNode), 0L,
+                 s"a pointer answer materialises nothing: ${ndup._2.show}")
+    val nempty = EffortSink.events(ITrie.meetAll(Vector(nx, ITrie.empty)))
+    assertEquals(nempty(EffortEvent.NaryOperandProbe), 2L,
+                 s"the empty pre-scan stops at the empty operand: ${nempty.show}")
+    assertEquals(nempty(EffortEvent.NaryScratchSlot), 0L,
+                 s"an annihilated meet buffers nothing: ${nempty.show}")
+
+
     // a Singleton allocates EXACTLY one node per path item (`epsilon` is a shared val)
     val (_, s2) = EffortSink.count(evalI(Space.Singleton(Path.Constant(p("a", "b")))))
     assertEquals(s2(EffortEvent.TrieDispatch), 1L)
@@ -406,23 +497,41 @@ class SpatialEventsCheck extends FunSuite:
     println("EVENTS: FIX 2 — 0 counted comparisons for Range(x,0,0) at |x| = 8, 64, 256; >0 for Range(x,0,3)")
   }
 
-  test("FIX 3: the trie Range DOES sort, and its full window is not free either") {
+  test("FIX 3: the trie Range DOES sort, and its full window is free only when the count is CACHED") {
     // ground truth from IntTrie.scala:160-176 — the full-window slice returns the SAME object ...
     val t = ITrie.fromSpaceValue(SpaceValue((0 until 64).map(i => p("k" + i)).toSet))
     assert(ITrie.range(t, 0, 0) eq t, "a full window returns its input unchanged")
-    // ... but `val size = t.size` runs FIRST, so the work is still proportional to the trie, and a
-    // partial window sorts every visited node's child keys by their un-interned item.
-    val ident = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.trieWarm)
-    val part = SpatialCost.analyze(Space.Range(S"s0", 0, 3), Backends.trieWarm)
-    assert(ident.cost.touch.bigO > BigO.const,
-           s"the identity case still walks every node to compute t.size: ${ident.show}")
-    assert(part.cost.touch.bigO.logs >= 1, s"the per-node key sort must appear: ${part.show}")
-    // the OLD model's claim, now refuted: the trie is NOT cheaper than the reference here
-    val refIdent = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.referenceWarm)
-    assert(refIdent.cost.bigO < ident.cost.bigO,
-           s"eval's sliceRange returns `s` in O(1); ITrie.range walks the trie:\n${refIdent.show}\n${ident.show}")
-    println(s"EVENTS: FIX 3 — trie Range(x,0,0) touch = ${ident.cost.touch.show}; " +
-            s"Range(x,0,3) touch = ${part.cost.touch.show}")
+    // ... but `val size = t.size` runs FIRST, so on a trie whose per-node terminal counts are NOT yet
+    // memoised the work is proportional to the trie.  THAT IS A PROPERTY OF THE OPERAND, NOT OF THE
+    // OPERATOR, and `Meas.countKnown` is the channel that says which: this test pins both directions, and
+    // the COLD direction is the one that must never be assumed away.
+    val identCold = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.trieCold)
+    val partCold = SpatialCost.analyze(Space.Range(S"s0", 0, 3), Backends.trieCold)
+    assert(identCold.cost.touch.bigO > BigO.const,
+           s"a COLD full window still walks every node to compute t.size: ${identCold.show}")
+    assert(partCold.cost.touch.bigO.logs >= 1, s"the per-node key sort must appear: ${partCold.show}")
+    // the OLD model's claim, still true on a COLD object: the trie is NOT cheaper than the reference
+    val refIdent = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.referenceCold)
+    assert(refIdent.cost.bigO < identCold.cost.bigO,
+           s"eval's sliceRange returns `s` in O(1); a cold ITrie.range walks the trie:\n" +
+           s"${refIdent.show}\n${identCold.show}")
+    // A FRESHLY BUILT SUBEXPRESSION IS COLD EVEN IN A WARM RUN — its nodes were allocated by this run —
+    // so the walk is still charged there.  This is the half that stops the channel from degenerating into
+    // "a warm Range is free".
+    val fresh = SpatialCost.analyze(Space.Range(Space.Union(S"s0", S"s1"), 0, 0), Backends.trieWarm)
+    assert(fresh.cost.touch.bigO > BigO.const,
+           s"a warm Range over a FRESHLY BUILT union must still pay the count walk: ${fresh.show}")
+    // ... and the WARM query on a FREE INPUT mention is the one that is O(1): this same executable already
+    // ran on this object, so every count it forces was forced and memoised then.
+    val identWarm = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.trieWarm)
+    assertEquals(identWarm.cost.touch.bigO, BigO.const,
+                 s"a warm full window on a declared input reads a cached count: ${identWarm.show}")
+    // the per-node key sort is NOT dropped by the cache state (see `TrieAlgebraCost.range`'s scaladoc)
+    val partWarm = SpatialCost.analyze(Space.Range(S"s0", 0, 3), Backends.trieWarm)
+    assert(partWarm.cost.touch.bigO.logs >= 1, s"the per-node key sort must survive: ${partWarm.show}")
+    println(s"EVENTS: FIX 3 — trie Range(x,0,0) touch cold = ${identCold.cost.touch.show}, " +
+            s"warm/declared = ${identWarm.cost.touch.show}, warm/freshly-built = ${fresh.cost.touch.show}; " +
+            s"Range(x,0,3) touch = ${partCold.cost.touch.show}")
   }
 
   test("FIX 4: execT and execZ are priced separately, and really do differ") {
@@ -633,9 +742,17 @@ class SpatialEventsCheck extends FunSuite:
         case Some(tier) =>
           val errs = sub.map(_.slack)
           val widths = sub.map(r => (r.upper + 1.0) / (r.lower + 1.0))
+          // THE LOWER ENDPOINT AGAINST THE TRUTH, sampled only where the execution DID something.
+          // review.md's second product requirement: "no zero lower endpoint when a nonempty execution
+          // must allocate or touch".  The counted run is the evidence that the work was mandatory — a
+          // test oracle, never an input to a bound.
+          val lowErrs = sub.filter(_.actual > 0L).map(r => (r.actual.toDouble + 1.0) / (r.lower + 1.0))
           // a p95 over fewer than five points is the maximum with extra steps, so it is not emitted
           Vector(GateRow(scope, subject, b, comp, "error", errs.max, tier),
-                 GateRow(scope, subject, b, comp, "width", widths.max, tier)) ++
+                 GateRow(scope, subject, b, comp, "width", widths.max, tier),
+                 GateRow(scope, subject, b, comp, "magnitude", sub.map(_.upper).max, tier)) ++
+          (if lowErrs.isEmpty then Vector.empty
+           else Vector(GateRow(scope, subject, b, comp, "lower-error", lowErrs.max, tier))) ++
           (if sub.length < 5 then Vector.empty
            else Vector(GateRow(scope, subject, b, comp, "error-p95", Calibration.p95(errs), tier),
                        GateRow(scope, subject, b, comp, "width-p95", Calibration.p95(widths), tier)))
@@ -643,8 +760,9 @@ class SpatialEventsCheck extends FunSuite:
 
   /** print the containment/slack table, gate SOUNDNESS unconditionally, and gate TIGHTNESS against the
    *  product requirements when `gateRows` is non-empty */
-  def publish(title: String, rows: Vector[Calibration], skipped: Int, cases: Int,
-              gateRows: Vector[GateRow], ungatedNote: String = ""): Unit =
+  def publish(title: String, scope: String, rows: Vector[Calibration], skipped: Int, cases: Int,
+              gateRows: Vector[GateRow], ungatedNote: String = "",
+              hard: Vector[String] = Vector.empty): Unit =
     println("=" * 116)
     println(s"CALIBRATION — $title  ($cases cases, ${rows.length} points, $skipped predictions skipped as symbolic)")
     println("=" * 116)
@@ -667,52 +785,43 @@ class SpatialEventsCheck extends FunSuite:
     println(f"CALIBRATION: overall containment ${100.0 * rows.count(_.contains) / math.max(1, rows.length)}%.2f%% " +
             f"(${bad.length} of ${rows.length} points outside the interval)")
     for b <- bad.take(8) do println(s"CALIBRATION:   OUT ${b.show}")
-    // SOUNDNESS IS THE FIRST GATE: an upper bound below the counted truth is a bug, not imprecision.
-    assertEquals(bad.length, 0, s"$title: ${bad.length} counted values fell outside the predicted interval")
+    // SOUNDNESS IS THE FIRST GATE: an upper bound below the counted truth is a bug, not imprecision.  It
+    // is reported THROUGH the gate — at the top of the report, prefixed UNSOUND, and matched by no ledger
+    // entry — rather than asserted here, for the same reason as in `SpatialScaleCheck`: an assertion at
+    // this point throws before the requirement table is printed, and a reader of a red build then sees the
+    // containment failure and nothing else.  It is still a failure and it is still first.
+    val soundness =
+      if bad.isEmpty then Vector.empty[String]
+      else Vector(s"UNSOUND (soundness is never excused): ${bad.length} of ${rows.length} counted values " +
+                  s"fell outside the predicted interval — " +
+                  bad.take(8).map(b => s"${b.label}/${b.component} actual=${b.actual} in " +
+                                       f"[${b.lower}%.0f, ${b.upper}%.0f]").mkString("; ") +
+                  (if bad.length > 8 then s" ... and ${bad.length - 8} more" else ""))
+    // THE WORKLOAD CLASS, DECLARED AND PRINTED even when this class is not ratio-gated — review.md asks
+    // for a declared maximum ratio "per component AND WORKLOAD CLASS", so a class that opts out has to say
+    // so in the table rather than by the absence of a gate call.
+    ProductRequirement.workloadOf(scope) match
+      case Some(w) =>
+        println(s"CALIBRATION: WORKLOAD CLASS `$scope` — " +
+                (if w.gated then "RATIOS GATED" else "RATIOS NOT GATED") + ": " + w.why)
+      case None =>
+        fail(s"scope `$scope` publishes ${rows.length} calibration points under no declared workload " +
+             "class (ProductRequirement.workloads)")
     if ungatedNote.nonEmpty then
       println(s"CALIBRATION: TIGHTNESS NOT GATED ON THIS FORM — $ungatedNote")
-    if gateRows.nonEmpty then publishGate(title, gateRows, keys.length)
+    val all = soundness ++ hard
+    if gateRows.nonEmpty || all.nonEmpty then publishGate(title, scope, gateRows, keys.length, all)
 
-  /** the same ledger machinery `SpatialScaleCheck` uses, over `corpus`/`cornerstone` scopes */
-  def publishGate(title: String, rows: Vector[GateRow], channels: Int): Unit =
-    val scope = rows.head.scope
-    println("-" * 116)
-    println(s"PRODUCT REQUIREMENTS — $title  ($channels channels, ${rows.length} requirement checks)")
-    var failures = Vector.empty[String]
-    val met = rows.count(_.ok)
-    for r <- rows.filterNot(_.ok).sortBy(_.key) do
-      r.limitation match
-        case Some(l) =>
-          println("REQUIREMENT: " + r.show + s"  <== NOT MET — named limitation ${l.id}")
-          if r.measured > l.cap(r.what) + 1e-9 then
-            failures :+= s"${r.key}: ${GateRow.fmt(r.measured)} REGRESSED past named limitation " +
-                         s"${l.id}'s recorded ${GateRow.fmt(l.cap(r.what))}"
-        case None =>
-          println("REQUIREMENT: " + r.show + "  <== FAILS THE PRODUCT REQUIREMENT, UNNAMED")
-          failures :+= s"${r.key}: measured ${GateRow.fmt(r.measured)} exceeds the ${r.tier.name} " +
-                       s"requirement ${GateRow.fmt(r.permitted)}"
-    for l <- ProductRequirement.limitations if l.scope == scope do
-      val mine = rows.filter(r => l.matches(r.scope, r.subject, r.backend, r.comp, r.what))
-      if mine.isEmpty then
-        failures :+= s"${l.id}: declared over ${l.subjects.mkString(",")} but NO requirement check " +
-                     "produced a matching row — the channel stopped being measured"
-      for s <- l.subjects do
-        val hers = mine.filter(_.subject == s)
-        if hers.nonEmpty && hers.forall(_.ok) then
-          failures :+= s"${l.id}: subject `$s` NO LONGER FAILS " +
-                       s"(${hers.map(r => s"${r.what}=${GateRow.fmt(r.measured)}").mkString(", ")}) — " +
-                       "remove it from the limitation; the ledger may not keep a fixed channel excused"
-    val used = ProductRequirement.limitations.filter(l =>
-      l.scope == scope && rows.exists(r => l.matches(r.scope, r.subject, r.backend, r.comp, r.what) && !r.ok))
-    println(s"PRODUCT REQUIREMENTS — $met of ${rows.length} checks MET; ${rows.length - met} not met, " +
-            s"covered by ${used.length} named limitations")
-    for l <- used do
-      println("LIMITATION: " + l.show)
-      println("LIMITATION:   subjects: " + l.subjects.mkString(", "))
-      println("LIMITATION:   " + l.reason)
-    assertEquals(failures, Vector.empty[String],
-                 s"$title: ${failures.length} product-requirement failure(s) with no named limitation " +
-                 s"(or a stale one):\n  " + failures.mkString("\n  "))
+  /** [[ProductGate]] is the one gate policy for all three suites; this is the assertion for the
+   *  `corpus`/`cornerstone` scopes.  It used to be a second copy of the "a named limitation converts this
+   *  failure into a pass" logic — see the class comment on `ProductGate`. */
+  def publishGate(title: String, scope: String, rows: Vector[GateRow], channels: Int,
+                  hard: Vector[String]): Unit =
+    val fs = ProductGate.report(title, scope, rows, channels, hard)
+    assert(fs.isEmpty,
+           s"$title: ${fs.length} product-requirement FAILURE(S) — every one is printed above:\n  " +
+           fs.take(30).mkString("\n  ") +
+           (if fs.length > 30 then s"\n  ... and ${fs.length - 30} more" else ""))
 
   test("CALIBRATION: predicted intervals vs counted events over the fuzzer corpus") {
     val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
@@ -776,7 +885,7 @@ class SpatialEventsCheck extends FunSuite:
     // and it is the property a random corpus is the right instrument for.  The tightness product
     // requirements are gated where they describe what runs: on the OPTIMIZED cornerstones below, and
     // per operator on the geometric ladders in `SpatialScaleCheck`.
-    publish("fuzzer corpus, warm phase, DEFINITIONAL form", rows, skipped, cases, Vector.empty,
+    publish("fuzzer corpus, warm phase, DEFINITIONAL form", "corpus", rows, skipped, cases, Vector.empty,
             ungatedNote =
               "these are DEFINITIONAL random terms, not the optimized bodies anything ships, and a " +
               "definitional-form tightness number is the wrong question (the user's third steer). This " +
@@ -791,27 +900,41 @@ class SpatialEventsCheck extends FunSuite:
    *  failed results ... Make 'zero infinite estimates on closed, terminating, non-grounded programs' a
    *  test invariant rather than maintaining an allow-list of expected failures."
    *
-   *  IT IS NOW EMPTY, and the assertion below is EXACT IN BOTH DIRECTIONS, so it cannot drift: an
-   *  unexpected infinity fails, and so does an entry here that has become finite.  The two former
-   *  entries (`puzzle15`, `datalog-sn`) are bounded as of this run.  Note what that does and does not
-   *  buy: `puzzle15`'s bound is finite and USELESS (a 10^200 polynomial), and the product-requirement
-   *  gate below is what says so — replacing an infinity with an astronomical finite number is not
-   *  progress unless something measures it. */
+   *  IT IS EMPTY AND IT STAYS EMPTY: an unexpected infinity fails, and so does an entry here that has
+   *  become finite.  The two former entries (`puzzle15`, `datalog-sn`) are bounded as of this run.
+   *
+   *  AND "INFINITE" NOW INCLUDES "ASTRONOMICAL", which is the other half of the same review paragraph:
+   *  "Replacing infinity with `8e55` is not meaningful progress ... [it] should fail the gate just as an
+   *  infinite bound does."  An endpoint at or above `ProductRequirement.Astronomical` (10^12 — see the
+   *  derivation there) is therefore reported and gated exactly as `inf` is, under the `magnitude`
+   *  statistic, and `puzzle15`'s `[0, 8.3e55]` fails BOTH.  It is a failed result, not a qualification on
+   *  a successful one. */
   val infiniteEstimates: Map[String, String] = Map.empty
 
   /** PREDICTIONS THAT ARE STILL SYMBOLIC ON A CLOSED CORNERSTONE, and therefore have no number at all.
    *
-   *  A free variable in the answer is the same failure as `[0, inf]` dressed differently: the estimate
-   *  cannot be compared to anything, so the row is SKIPPED rather than gated.  The set is asserted EXACT
-   *  in both directions for the same reason as [[infiniteEstimates]] — a backend that becomes numeric
-   *  must be removed from here, and one that stops being numeric must fail. */
-  val symbolicEstimates: Map[String, String] = Map(
-    "datalog-sn/reference" ->
-      ("`|sn_tc()|` — the reference model's cost is parametric in the size of the recursive call's " +
-       "RESULT, which is the least fixpoint of the body's size transformer.  See CS-5: there is no " +
-       "interprocedural size summary, so the variable is never eliminated."),
-    "datalog-sn/zipper" ->
-      "`len(sn_tc())`, `|sn_tc()|` — as `datalog-sn/reference`, plus the path-length channel.")
+   *  ==WHAT CHANGED==
+   *  These rows used to be SKIPPED: no number, so nothing to compare, so no gate row — and, as review.md
+   *  points out, no place in the advertised containment statistic either.  "For a closed benchmark, a
+   *  remaining symbolic cardinality must be a hard failure, not a skipped numeric point excluded from the
+   *  advertised '100% containment'."  So each one now emits a FAILING `numeric` requirement row per
+   *  component it should have covered (`Tier.budget("numeric") = 0` on every tier, the reference
+   *  evaluator's included: `NotGated` exempts its CONSTANTS from a threshold, not its answer from
+   *  existing), and the containment table is published with an explicit COVERAGE line saying how many of
+   *  the possible points produced a number and which ones did not.
+   *
+   *  The map stays as EVIDENCE — the root cause per entry — and it is still checked in both directions: a
+   *  backend that becomes numeric must be removed from here (stale evidence fails), and one that stops
+   *  being numeric fails without an entry. */
+  /*  EMPTY, and that is the result: `datalog-sn/reference` (`|sn_tc()|`) and `datalog-sn/zipper`
+   *  (`len(sn_tc())`, `|sn_tc()|`) were the only two entries, and both became NUMERIC when
+   *  `SpatialCost`'s recursion arm stopped emitting a free variable for the recursive occurrence's size.
+   *  What eliminates it is the SPATIAL LEAST FIXPOINT of the routine's parameter tuple
+   *  (`SpatialCost.paramFixpoint`): `T₀ = α(arguments)`, `T_{i+1} = T_i ⊔ F#(T_i)`, iterated with
+   *  `SpatialRecursion`'s join/widen to a post-fixed point.  On `sn_tc` it converges in ONE round to
+   *  `|acc| ∈ [0, 6]`, `len(acc) ∈ [2, 2]`, which is the accumulator's cardinality and path length — so
+   *  the recursive occurrence gets a measure and every component of every backend gets a number. */
+  val symbolicEstimates: Map[String, String] = Map.empty
 
   test("CALIBRATION: predicted intervals vs counted events on the OPTIMIZED cornerstones") {
     // The six cornerstone programs, with their inputs DECLARED (their exact spatial input types) and
@@ -852,8 +975,14 @@ class SpatialEventsCheck extends FunSuite:
     var gate = Vector.empty[GateRow]
     var skipped = 0
     var sawInfinite = Set.empty[String]
+    var sawAstronomical = Vector.empty[String]
     var sawSymbolic = Set.empty[String]
     var folded = Vector.empty[String]
+    // THE COVERAGE ACCOUNTING review.md asks for: how many (cornerstone, backend, component) points
+    // COULD have produced a number, and which ones did not.  Without it "100% containment" is a rate over
+    // an unstated denominator, and a prediction with no number silently improves it.
+    var possible = 0
+    var noNumber = Vector.empty[String]
     for c <- cases do
       // ---- THE FORM THAT RUNS ------------------------------------------------------------------
       val t0 = System.nanoTime()
@@ -882,38 +1011,75 @@ class SpatialEventsCheck extends FunSuite:
       for (model, ev) <- toCheck do
         val rep = priced(model.backend)
         assertEquals(rep.form, CostForm.Optimized, s"${c.label}: the gated report must describe the optimized form")
+        // the components this (case, backend) OWES a number for — the reference evaluator's `touch` has
+        // no oracle at all and is the one declared exclusion
+        val owed = EffortEvent.calibratedComponents
+          .filterNot(cc => cc == EffortComponent.Touch && model.touchNoOracle.isDefined)
+        possible += owed.length
+        val ends = Vector(rep.cost.work, rep.cost.alloc, rep.cost.rounds, rep.cost.touch)
         // "infinite" means EITHER an explicit `Amount.Unbounded` OR a `Bounded` whose symbol saturated
-        val unb = Vector(rep.cost.work, rep.cost.alloc, rep.cost.rounds, rep.cost.touch)
-          .filter(a => a.isUnbounded || a.at(Map.empty).isInfinite)
+        val unb = ends.filter(a => a.isUnbounded || a.at(Map.empty).isInfinite)
         if unb.nonEmpty then
           sawInfinite += c.label
           println(s"CALIBRATION:   INFINITE ${c.label}/${rep.backend.slug} ${unb.head.show}")
+        // AND AN ASTRONOMICAL ENDPOINT IS THE SAME FAILED RESULT WITH A NUMBER IN IT
+        val astro = ends.filter(a => !a.isUnbounded &&
+                                     a.at(Map.empty) >= ProductRequirement.Astronomical)
+        for a <- astro do
+          sawAstronomical :+= s"${c.label}/${rep.backend.slug}: ${GateRow.fmt(a.at(Map.empty))}"
+          println(f"CALIBRATION:   ASTRONOMICAL ${c.label}/${rep.backend.slug} " +
+                  f"${GateRow.fmt(a.at(Map.empty))} >= ${GateRow.fmt(ProductRequirement.Astronomical)} " +
+                  "— a bound that describes no executable computation")
         calibrate(c.label, model, rep, ev) match
           case Some(cs) =>
             mine ++= cs
             for x <- cs do println(s"CALIBRATION:   ${x.show}")
           case None =>
             skipped += 1
-            sawSymbolic += s"${c.label}/${rep.backend.slug}"
-            println(s"CALIBRATION:   ${c.label}/${rep.backend.slug} SKIPPED (prediction still symbolic: " +
-                    s"${(freeVars(rep.cost) ++ freeVars(rep.lower)).mkString(", ")})")
+            val key = s"${c.label}/${rep.backend.slug}"
+            sawSymbolic += key
+            val fv = (freeVars(rep.cost) ++ freeVars(rep.lower)).toVector.sorted
+            println(s"CALIBRATION:   $key HAS NO NUMBER (prediction still symbolic in ${fv.mkString(", ")})" +
+                    " — FAILED, not skipped")
+            // A FREE VARIABLE IN THE ANSWER IS NOT AN ANSWER.  One failing `numeric` row per component
+            // the pair owed, which is exactly the coverage it removed from the containment statistic.
+            for cc <- owed do
+              noNumber :+= s"$key/$cc (symbolic in ${fv.mkString(",")})"
+              ProductRequirement.tierOf(rep.backend.slug, cc).foreach { t =>
+                gate :+= GateRow("cornerstone", c.label, rep.backend.slug, cc, "numeric",
+                                 Double.PositiveInfinity, t) }
       rows ++= mine
       gate ++= gateOf("cornerstone", c.label, mine)
       // ---- THE DEFINITIONAL FORM, printed as a labelled CONTRAST and never gated ----------------
       for (model, ev) <- toCheck do
         val dr = SpatialCost.analyze(c.prog, c.env, model, CostForm.Definitional)
         calibrate(c.label + "-def", model, dr, ev).foreach(defRows ++= _)
-    // THE INFINITY INVARIANT, exact in both directions (review.md item 5)
-    assertEquals(sawInfinite, infiniteEstimates.keySet,
-                 s"the set of cornerstones with an INFINITE prediction on the OPTIMIZED form changed; " +
-                 s"declared ${infiniteEstimates.keySet.toVector.sorted}, observed ${sawInfinite.toVector.sorted}")
-    // THE SYMBOLIC INVARIANT, exact in both directions
-    assertEquals(sawSymbolic, symbolicEstimates.keySet,
-                 s"the set of (cornerstone, backend) pairs whose OPTIMIZED-form prediction is still " +
-                 s"SYMBOLIC changed; declared ${symbolicEstimates.keySet.toVector.sorted}, observed " +
-                 s"${sawSymbolic.toVector.sorted}")
-    for (k, why) <- symbolicEstimates.toVector.sortBy(_._1) do
-      println(s"CALIBRATION: SYMBOLIC, NO NUMBER TO GATE — $k: $why")
+    // ---- THE "NO ANSWER" INVARIANTS.  They are collected rather than asserted here so that the
+    //      containment table below is PRINTED first — soundness is reported before tightness, and a gate
+    //      that throws half way through a table hides the numbers a reader needs.
+    var hard = Vector.empty[String]
+    if sawInfinite != infiniteEstimates.keySet then
+      hard :+= s"the set of cornerstones with an INFINITE prediction on the OPTIMIZED form changed; " +
+               s"declared ${infiniteEstimates.keySet.toVector.sorted}, observed ${sawInfinite.toVector.sorted}"
+    // AN ASTRONOMICAL BOUND FAILS EXACTLY AS AN INFINITE ONE DOES (review.md)
+    if sawAstronomical.nonEmpty then
+      hard :+= s"${sawAstronomical.length} predicted endpoint(s) at or above " +
+               s"${GateRow.fmt(ProductRequirement.Astronomical)} on a closed, terminating, non-grounded " +
+               s"cornerstone — a finite bound that describes no executable computation is the same failed " +
+               s"result as `inf`: ${sawAstronomical.distinct.mkString("; ")}"
+    // THE SYMBOLIC INVARIANT.  Observed pairs FAIL (as `numeric` rows above); an entry that is no longer
+    // observed is stale evidence and fails here.
+    for k <- symbolicEstimates.keySet.toVector.sorted if !sawSymbolic.contains(k) do
+      hard :+= s"`$k` is listed in `symbolicEstimates` but its prediction is NUMERIC now — remove the " +
+               "entry; stale evidence is a failure"
+    for k <- sawSymbolic.toVector.sorted do
+      println(s"CALIBRATION: NO NUMBER — $k: " +
+              symbolicEstimates.getOrElse(k, "(NO EVIDENCE ENTRY: an undiagnosed symbolic prediction)"))
+    // ---- COVERAGE OF THE CONTAINMENT STATISTIC, stated rather than implied --------------------------
+    println(f"CALIBRATION: COVERAGE — ${rows.length} of $possible possible (cornerstone, backend, " +
+            f"component) points produced a NUMBER (${100.0 * rows.length / math.max(1, possible)}%.2f%%); " +
+            f"${noNumber.length} did not, and every one of them is a FAILING `numeric` requirement below")
+    for m <- noNumber do println(s"CALIBRATION:   NO NUMBER $m")
     println(s"CALIBRATION: ${folded.length} cornerstone(s) were COMPILE-TIME EVALUATED by the ordinary " +
             s"rule list and have no run-time cost left to gate: ${if folded.isEmpty then "(none)" else folded.mkString(", ")}")
     // the definitional contrast: same programs, same counters, the form that is NOT what runs
@@ -921,7 +1087,8 @@ class SpatialEventsCheck extends FunSuite:
     for (b, comp) <- defRows.map(r => (r.label.split('/').last, r.component)).distinct.sortBy((b, c) => (b, c.ordinal)) do
       val sub = defRows.filter(r => r.label.endsWith("/" + b) && r.component == comp)
       println("CALIBRATION: DEFINITIONAL (not gated) " + Calibration.summarize(s"$b $comp", sub).show)
-    publish("cornerstones, warm phase, OPTIMIZED form", rows, skipped, cases.length, gate)
+    publish("cornerstones, warm phase, OPTIMIZED form", "cornerstone", rows, skipped, cases.length,
+            gate, hard = hard)
   }
 
   // ==============================================================================================

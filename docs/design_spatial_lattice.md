@@ -65,7 +65,7 @@ is deliberately separated from the SMT rows:
 | `γ(a op# b) ⊇ γ(a) op γ(b)` at abstract operands | `SpatialLawCheck` (900/operator, incl. open head sets) + `SpatialSoundnessHunt` HUNT 7 (246 300 checks) | proved |
 | the whole analysis on adversarial terms | `SpatialSoundnessHunt` HUNT 1–6, delta-debugged witnesses | proved |
 | `specialize(s, facts) ≡ s` under the facts | `SpatialLawCheck` conditional-rewrite tests + corpus | proved |
-| `cost#` bounds a backend's real cost | `SpatialEventsCheck` calibration against **counted executor events** — 4 backends × 4 components, 3000 points on the definitional corpus + 59 points on the **optimized** cornerstones, **100% containment** on both. Tightness is gated only on the optimized form, against **product requirements** (interval width, multiplicative error, asymptotic slope) stratified by (backend, component), never against a self-derived threshold. | proved; **and the bound is loose** — 85/118 cornerstone and 711/840 ladder requirement checks are met, and the 33 + 129 that are not are named, capped entries in `ProductRequirement.exclusions`. See §7a and §8 |
+| `cost#` bounds a backend's real cost | `SpatialEventsCheck` calibration against **counted executor events** — 4 backends × 4 components, 3000 points on the definitional corpus + 59 points on the **optimized** cornerstones, **100% containment** on both. Tightness is gated only on the optimized form, against **product requirements** (interval width, multiplicative error, asymptotic slope) stratified by (backend, component), never against a self-derived threshold. | proved; **and the bound is loose** — every channel that misses its tier is a *named, capped* entry in `ProductRequirement.limitations`, asserted in **both** directions: a listed subject that stops failing must be deleted from its entry or the suite goes red, which is what stops the ledger from rotting into an allow-list. **No pass/fail tally is quoted here.** Nothing generates this document from the suites, so a copied tally rots: the two this cell used to carry — one for the ladder scope, one for the cornerstone scope — were each wrong within a round of being written, and they named `ProductRequirement.exclusions`, which no longer exists under that name. `SpatialScaleCheck` prints the current per-requirement decisions and the whole ledger; that output is the authority. See §7a and §8 |
 
 **Termination is not addressed here either.** The `Shape` widening (`widenShape`) and the `Fixpoint`
 iteration bound are structural arguments plus an explicit iteration cap, exactly as §7 says for the
@@ -296,14 +296,28 @@ result.
   tightness number is the wrong question. On the **optimized cornerstones**, which is what ships, the
   medians are 1.01× (trie `Work`), 1.00× (`Rounds`), 18.0× (trie `Alloc`) and 28.8× (trie `Touch`); the
   worst finite non-`puzzle15` figures are 6.01× (`datalog-sn` trie `Work`) and 432.6× (`datalog-sn` trie
-  `Touch`), and `puzzle15`'s `Alloc`/`Touch` are 6.2e52× / 9.1e52×. `touch` is the worst component
-  because it bounds a worst-case Patricia descent that pointer identity, empty operands and prefix
-  mismatches routinely cut to nothing, **and because no lower endpoint is derived for it at all**
-  (`Cost.withoutTouchLower` is unconditional, so every `touch` interval is `[0, upper]` and its width is
-  `upper + 1` by construction). **`Cost.touch` is not a runtime predictor at cornerstone scale.** Each
-  remaining failure is a *named* entry in `ProductRequirement.exclusions` with an error cap, a width cap,
-  an owning file and a stated fix; the ledger is asserted in both directions, so an entry that stops
-  failing must be deleted or the suite goes red.
+  `Touch`), and `puzzle15`'s `Alloc`/`Touch` are 6.2e52× / 9.1e52×. Every ratio in this bullet is
+  transcribed by hand from `SpatialEventsCheck`'s printed rows, not generated — §8's provenance note
+  applies here too. `touch` is the worst component because it bounds a worst-case Patricia descent
+  that pointer identity, empty operands and prefix
+  mismatches routinely cut to nothing. **The blanket lower-bound erasure is gone**, and an earlier
+  revision of this bullet describing it as unconditional was wrong: `analyze` now applies
+  `CostInterval.withoutTouchLower` **only** when the model declares `touchNoOracle`, which is the reference
+  evaluator and nothing else — claiming a lower endpoint where no counted event can refute it would be
+  unfalsifiable, so that one model keeps `[0, upper]`. The three gated models do derive a `touch` lower
+  endpoint, from two facts: `evalI`'s algebra entry is *forced* (the `TrieNodeVisit` hook precedes every
+  fast-path test, so one visit per algebra node is unavoidable), and the frontier's must-paired count is
+  added wherever the whole-skip paths are discharged. That is recorded in the ledger rather than asserted
+  here: `aunt` and `temperature` left `CS-10`/`CS-11` and `inter/shared-subtrie` left `LIM-6`/`LIM-6g`
+  when the endpoint landed, and on those the missing lower endpoint *was* the whole width gap. Where the
+  width is still `upper + 1` — `LIM-6`'s four remaining families — the must-count is genuinely zero for a
+  structural reason (a subset union and a key-disjoint union are decided at the root; a fixed selective
+  consumer forces only its own frontier), so the remedy there is the **upper** endpoint, not the lower.
+  **`Cost.touch` is still not a runtime predictor at cornerstone scale.** Each remaining failure is a
+  *named* entry in `ProductRequirement.limitations` with an error cap, a width cap, an owning file and a
+  stated fix; the ledger is asserted in both directions, so an entry that stops failing must be deleted or
+  the suite goes red. A limitation entry records a **failed requirement**; it does not turn one into a
+  passing test.
 - **No cornerstone prediction is unbounded any more; two are finite-but-useless, which is a different
   failure.** `SpatialPipelineCheck`'s "ITEM 5 INVARIANT" asserts **0 infinite estimates over 24
   (cornerstone, backend) pairs**, and it is an invariant, not an allow-list. `puzzle15` is now accurate to
@@ -353,6 +367,13 @@ Every number below describes **`Routine.optimized`'s body** on the optimal backe
 definitional term (that is the wrong question) and never the reference evaluator (`eval` over
 `Set[PathValue]` is allowed to be slow and its `touch` has no counted oracle). Every row is measured,
 by the named suite, and each carries its evidence class:
+
+**Nothing here is generated.** These figures are transcribed by hand from the named suite's printed
+output, so where a suite and this document disagree the **suite is right** and this document is stale.
+Aggregate pass/fail tallies are therefore deliberately absent — they moved every round and were the one
+thing a reader could not check without rerunning anyway (see §0a's `cost#` row). Individual per-family
+figures are kept, because each is anchored to a `LIM-*`/`CS-*` entry that carries the same number under
+its own no-regression cap, and that entry is executable.
 
 | class | what it means |
 | --- | --- |

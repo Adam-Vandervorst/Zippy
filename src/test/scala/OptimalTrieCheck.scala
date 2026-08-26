@@ -427,19 +427,29 @@ class OptimalTrieCheck extends FunSuite:
       val parts = fanout(k, s"rF.$k")
       () => ITrie.joinAll(parts))
     show("joinAll of k disjoint tries", now)
-    assertFlat("joinAll of k disjoint tries", now, "alloc", _.alloc)
+    // MATERIALISATION is the claim, and it is the FRESH NODES.  `alloc` also counts the per-call scratch
+    // slots of the operand handling now (EffortEvent.NaryScratchSlot, review.md's fifth oracle gap), and
+    // that storage is `Θ(k)` per call BY CONSTRUCTION — gating the total flat would be gating the scratch
+    // out of existence, which is the opposite of counting it.
+    assertFlat("joinAll of k disjoint tries", now, "fresh nodes", _.ev(EffortEvent.FreshTrieNode))
     // touch is LINEAR in k here and must be: every operand has to be looked at once.  That is the
-    // optimum, not a degeneracy, so it is reported rather than gated flat.
+    // optimum, not a degeneracy, so it is reported rather than gated flat.  The scratch is linear for the
+    // same reason and is reported the same way.
     println(f"SLOPE   joinAll touch slope (linear in k IS optimal) = ${maxSlope(now.map(_.touch))}%.2f")
+    println(f"SLOPE   joinAll scratch-slot slope (linear in k, transient) = " +
+            f"${maxSlope(now.map(_.ev(EffortEvent.NaryScratchSlot)))}%.2f over " +
+            now.map(_.ev(EffortEvent.NaryScratchSlot)).mkString(","))
 
     val before = ladder(ks, k =>
       val parts = fanout(k, s"rG.$k")
       () => legacyJoinAll(parts))
     show("joinAll BEFORE (balanced pairwise)", before)
-    assert(maxSlope(before.map(_.alloc)) > 0.7,
-           s"the BEFORE joinAll should allocate linearly in k; measured ${before.map(_.alloc).mkString(",")}")
-    assert(now.last.alloc < before.last.alloc,
-           s"n-ary joinAll must allocate strictly less than the pairwise fold: ${now.last.alloc} vs ${before.last.alloc}")
+    assert(maxSlope(before.map(_.ev(EffortEvent.FreshTrieNode))) > 0.7,
+           s"the BEFORE joinAll should materialise linearly in k; measured " +
+           s"${before.map(_.ev(EffortEvent.FreshTrieNode)).mkString(",")}")
+    assert(now.last.ev(EffortEvent.FreshTrieNode) < before.last.ev(EffortEvent.FreshTrieNode),
+           s"n-ary joinAll must materialise strictly fewer nodes than the pairwise fold: " +
+           s"${now.last.ev(EffortEvent.FreshTrieNode)} vs ${before.last.ev(EffortEvent.FreshTrieNode)}")
   }
 
   test("ASYMPTOTIC GATE: meetAll follows the smallest frontier at EVERY level — before/after") {
@@ -497,7 +507,8 @@ class OptimalTrieCheck extends FunSuite:
    *  single-key entry is counted as `PatriciaEntry`, which belongs to the `Explain` component — so a
    *  gate on `touch` reads the probe loop as flat at 1.  The sum below is what both implementations
    *  actually perform, and it is the number the growth class is about. */
-  def steps(r: Rung): Long = r.touch + r.ev(EffortEvent.PatriciaEntry)
+  def stepsOf(e: Events): Long = e.touch + e(EffortEvent.PatriciaEntry)
+  def steps(r: Rung): Long = stepsOf(r.ev)
 
   def assertSubLinear(name: String, now: Vector[Rung], before: Vector[Rung], f: Rung => Long): Unit =
     val ns = now.map(f)
@@ -683,19 +694,274 @@ class OptimalTrieCheck extends FunSuite:
         assertEquals(ps(ITrie.joinAll(os)), os.map(ps).reduce(_ ++ _), s"joinAll/$name at n=$n")
   }
 
+  // ----------------------------------------------------------------------------------------------
+  // THE ARITY LADDER (review.md's first P0).
+  //
+  // Every n-ary gate above holds the ARITY FIXED (`wideOperands(3, n, …)`, the four-operand sweep) and
+  // grows the operands, so nothing above measures the per-call operand handling itself — and that is
+  // where the quadratic was.  `joinAllTries`/`meetAllTries` identity-deduplicated the live operands
+  // with a nested scan at EVERY recursive call: `k(k-1)/2` comparisons at the root and `Θ(k²)` again
+  // below it, behind a scaladoc that said a level costs `O(k)`.  `collectLive` now switches to an
+  // `IdentityHashMap` past 24 distinct operands (`ITrie.liveDistinct`'s strategy and threshold), so the
+  // per-call cost is expected `O(k)` with the constant stated.
+  //
+  // Two operand shapes, both DISTINCT AT THE ROOT AND BELOW IT — no duplicate collapses `k` early and
+  // no `eq` short circuit fires anywhere:
+  //
+  //   shared-key   all `k` operands carry the SAME `n` root keys with a per-operand child under each,
+  //                so every operand is live and distinct at every one of the ~`2n` Patricia calls the
+  //                descent makes: maximum dedup pressure, `k` wide, `2n` times.
+  //   blocks       operand `j` owns key block `j`.  The descent SEPARATES them, so each recursive call
+  //                sees a subset and a single-operand branch is returned by pointer.
+  //
+  // Statistics: the suite's `steps` (descents + per-key entries) and ELAPSED wall time.  `steps` alone
+  // CANNOT see the dedup — no identity comparison emits any of the three events it sums, which is
+  // exactly review.md's complaint about the "actual steps" oracle — so wall time is what discriminates
+  // `Θ(k²)` from `O(k)` here, and the class of each row is asserted in BOTH directions so the label is
+  // the measured one and not a safe over-approximation.
+  // ----------------------------------------------------------------------------------------------
+
+  val arities = Vector(4, 8, 16, 32, 64)
+
+  /** `k` operands over the SAME `n` root keys, each with its OWN child object under every key */
+  def sharedKeyOperands(k: Int, n: Int, tag: String): Vector[ITrie] =
+    (0 until k).toVector.map { j =>
+      val child = sing(s"$tag.v$j")
+      ITrie(false, IntMap.from((0 until n).map(i => pool(i) -> child)))
+    }
+
+  /** `k` operands over DISJOINT blocks of `n` consecutive keys each */
+  def blockOperands(k: Int, n: Int, tag: String): Vector[ITrie] =
+    (0 until k).toVector.map { j =>
+      val child = sing(s"$tag.v$j")
+      ITrie(false, IntMap.from((0 until n).map(i => pool(j * n + i) -> child)))
+    }
+
+  private var timingSink: Int = 0
+
+  /** the FASTEST of `samples` batches of `reps` runs, in nanoseconds per run.  The MINIMUM, not the
+   *  median: interference (GC, a safepoint, another core) can only ADD time, so the smallest batch is
+   *  the least contaminated estimate of the work itself.  Wall time is a secondary statistic everywhere
+   *  else in this suite; here it is the only one that can see work the event vocabulary does not name. */
+  def nanosPerRun(reps: Int, samples: Int, f: () => Any): Long =
+    var best = Long.MaxValue
+    var t = 0
+    while t < samples do
+      val t0 = System.nanoTime()
+      var i = 0
+      while i < reps do { timingSink ^= System.identityHashCode(f()); i += 1 }
+      val d = System.nanoTime() - t0
+      if d < best then best = d
+      t += 1
+    best / reps
+
+  final case class ARung(k: Int, ev: Events, nanos: Long)
+
+  def arityLadder(build: Int => () => Any, reps: Int): Vector[ARung] =
+    val runs = arities.map(build)
+    val evs = runs.map(r => ev(r()))
+    // warm EVERY rung before timing ANY of them: measured cold, the first rung reads slower than the
+    // last and the ladder reports a negative slope
+    for _ <- 0 until 3; r <- runs do
+      var i = 0
+      while i < reps do { timingSink ^= System.identityHashCode(r()); i += 1 }
+    val ns = runs.map(r => nanosPerRun(reps, 7, r))
+    arities.indices.toVector.map(i => ARung(arities(i), evs(i), ns(i)))
+
+  def probesOf(r: ARung): Long = r.ev(EffortEvent.NaryOperandProbe)
+  def slotsOf(r: ARung): Long = r.ev(EffortEvent.NaryScratchSlot)
+
+  def showArity(name: String, rs: Vector[ARung]): Unit =
+    def row(label: String, xs: Vector[Long]): String =
+      f"    $label%-9s ${xs.mkString(",")}%-46s maxslope=${maxSlope(xs)}%5.2f"
+    println(f"ARITY $name%-52s k=${rs.map(_.k).mkString(",")}")
+    println(row("steps", rs.map(r => stepsOf(r.ev))))
+    println(row("touch", rs.map(_.ev.touch)))
+    println(row("alloc", rs.map(_.ev.alloc)))
+    println(row("probes", rs.map(probesOf)))
+    println(row("slots", rs.map(slotsOf)))
+    println(row("nanos", rs.map(_.nanos)))
+    val unit = rs.map(r => math.min(r.k, 24).toDouble * r.k)
+    println(f"    per-min(k,24)k " +
+            rs.indices.map(i => f"${probesOf(rs(i)) / unit(i)}%.2f").mkString(","))
+
+  /** THE DETERMINISTIC ARITY GATE — the one the elapsed ladder can only approximate.
+   *
+   *  `collectLive` scans linearly while the distinct count is at most `IntTrieOps.dedupScanMax` (24) and
+   *  switches to an `IdentityHashMap` past it, so the per-call dedup costs `min(k, 24)·k` identity
+   *  comparisons: `O(k)` with the constant STATED, and — this is the whole point — not `Θ(k²)` once `k`
+   *  exceeds the threshold.  A ladder that spans the threshold sees both regimes, so the gate asserts the
+   *  SHAPE rather than one class:
+   *
+   *   1. the counted [[EffortEvent.NaryOperandProbe]] total per unit of `min(k, 24)·k` stays inside a
+   *      constant band across the whole ladder — the probes really are proportional to that shape and not
+   *      to something steeper;
+   *   2. ABOVE the threshold the growth is at most LINEAR.  This is the discriminator: the unconditional
+   *      nested scan this replaced is `Θ(k²)` at every arity and shows ~2.00 here.
+   *
+   *  No over-approximation in either direction (standing constraint 4): the band is asserted both ways. */
+  def assertProbeShape(name: String, rs: Vector[ARung], band: Double): Unit =
+    val xs = rs.map(probesOf)
+    val per = rs.indices.map(i => xs(i).toDouble / (math.min(rs(i).k, 24).toDouble * rs(i).k)).toVector
+    assert(per.forall(_ > 0.0), s"$name: no operand probes were counted at all — ${xs.mkString(",")}")
+    assert(per.max / per.min <= band,
+           f"$name: probes are NOT proportional to min(k,24)*k — per-unit " +
+           f"${per.map(r => f"$r%.2f").mkString(",")} spans ${per.max / per.min}%.1fx " +
+           f"(counts ${xs.mkString(",")})")
+    val above = rs.indices.filter(i => rs(i).k >= 24).map(i => xs(i)).toVector
+    assert(above.length >= 2, s"$name: the ladder must cross the dedup threshold")
+    assert(maxSlope(above) <= 1.15,
+           s"$name: ABOVE the dedup threshold the probe count must be at most linear in k; measured " +
+           s"slopes ${slopes(above).map(d => f"$d%.2f").mkString(",")} over ${above.mkString(",")} " +
+           "(the unconditional nested scan shows ~2.00)")
+
+  /** assert a measured class EXACTLY: at most linear excludes the quadratic, and — for a row labelled
+   *  linear — a floor on the end-to-end ratio excludes calling a linear row constant.  `arities` spans
+   *  16x, so a strictly linear row grows ~16x and a constant one ~1x. */
+  def assertArityClass(name: String, xs: Vector[Long], expect: String): Unit =
+    val ms = maxSlope(xs)
+    val ratio = (xs.last + 1).toDouble / (xs.head + 1).toDouble
+    expect match
+      case "constant" =>
+        assert(ms <= flatTol,
+               s"$name: expected CONSTANT in the arity; measured slopes " +
+               s"${slopes(xs).map(d => f"$d%.2f").mkString(",")} over ${xs.mkString(",")}")
+      case _ =>
+        assert(ms <= 1.15,
+               s"$name: expected at most LINEAR in the arity; measured slopes " +
+               s"${slopes(xs).map(d => f"$d%.2f").mkString(",")} over ${xs.mkString(",")} " +
+               "(a per-call quadratic shows ~2.00)")
+        assert(ratio >= 4.0,
+               f"$name: labelled linear but grew only $ratio%.1fx over 16x arity (${xs.mkString(",")}) — " +
+               "the honest label is sub-linear")
+
+  /** THE ELAPSED CEILING.  A per-doubling slope on wall time is too noisy to ASSERT — these runs are
+   *  dominated by the scratch arrays every recursive call allocates, so GC placement moves individual
+   *  rungs by 2-3x — so the gate is the END-TO-END ratio, where the arithmetic leaves a wide margin:
+   *  `arities` spans 16x, so linear work grows 16x, `k log k` about 25x, and the `Θ(k²)` per-call dedup
+   *  this replaced grows 256x.  `48` is 3x the linear figure and 5x under the quadratic one.  The
+   *  per-doubling slopes are PRINTED, and the deterministic version of this gate is the counted-probe
+   *  one below. */
+  def assertElapsedNotQuadratic(name: String, xs: Vector[Long]): Unit =
+    val ratio = xs.last.toDouble / math.max(1L, xs.head).toDouble
+    assert(ratio <= 48.0,
+           f"$name: elapsed work grew $ratio%.1fx over 16x arity (${xs.mkString(",")} ns/run); " +
+           "linear is 16x, k log k about 25x, and the per-call quadratic dedup this replaced 256x")
+
+  test("ARITY GATE: the n-ary JOIN over operands that stay distinct at every level is O(k) per call") {
+    val n = 64
+    val rs = arityLadder(k => { val os = sharedKeyOperands(k, n, s"ak.j$k"); () => ITrie.joinAll(os) }, 30)
+    showArity(s"joinAll of k operands sharing $n keys", rs)
+    assertArityClass("joinAll/shared-key steps", rs.map(r => stepsOf(r.ev)), "linear")
+    assertProbeShape("joinAll/shared-key probes", rs, 6.0)
+    assertElapsedNotQuadratic("joinAll/shared-key", rs.map(_.nanos))
+    for k <- arities do
+      val os = sharedKeyOperands(k, 8, s"akc.j$k")
+      assertEquals(ps(ITrie.joinAll(os)), os.map(ps).reduce(_ ++ _), s"joinAll of $k shared-key operands")
+  }
+
+  test("ARITY GATE: the n-ary MEET over operands that stay distinct at every level is O(k) per call") {
+    val n = 64
+    val rs = arityLadder(k => { val os = sharedKeyOperands(k, n, s"ak.m$k"); () => ITrie.meetAll(os) }, 30)
+    showArity(s"meetAll of k operands sharing $n keys", rs)
+    // MEASURED CONSTANT, and this row is the cleanest statement of review.md's oracle complaint: under
+    // every one of the `n` shared keys the `k` children are pairwise key-disjoint, so `meetAllTries`
+    // rejects them at the ROOT of the children merge — one event, whatever `k` is — while the operand
+    // scan that reaches that verdict is linear in `k` and emits nothing.  So `steps` is flat at 256 for
+    // k = 4 .. 64, and only the elapsed row (and the counted probes below) grow.  Labelled constant
+    // because that is what is measured, not linear because that is what the work is.
+    assertArityClass("meetAll/shared-key steps", rs.map(r => stepsOf(r.ev)), "constant")
+    // ... and the probes, which DO see it, are the deterministic gate on the same run
+    assertProbeShape("meetAll/shared-key probes", rs, 6.0)
+    assertElapsedNotQuadratic("meetAll/shared-key", rs.map(_.nanos))
+    for k <- arities do
+      val os = sharedKeyOperands(k, 8, s"akc.m$k")
+      assertEquals(ps(ITrie.meetAll(os)), os.map(ps).reduce(_ intersect _), s"meetAll of $k shared-key operands")
+  }
+
+  test("ARITY GATE: the n-ary JOIN of k key-disjoint operands attaches each by pointer") {
+    val n = 32
+    val rs = arityLadder(k => { val os = blockOperands(k, n, s"ak.b$k"); () => ITrie.joinAll(os) }, 60)
+    showArity(s"joinAll of k operands over disjoint $n-key blocks", rs)
+    // linear in k and INDEPENDENT of n: each block is attached whole, so the count is the Patricia
+    // tree over the k blocks (about 2k nodes) and not the k*n keys
+    assertArityClass("joinAll/blocks steps", rs.map(r => stepsOf(r.ev)), "linear")
+    assertProbeShape("joinAll/blocks probes", rs, 6.0)
+    assertElapsedNotQuadratic("joinAll/blocks", rs.map(_.nanos))
+    val top = rs.last
+    assert(stepsOf(top.ev) < 8L * arities.last,
+           s"joinAll of ${arities.last} disjoint blocks of $n keys must cost O(k), not O(k*n); " +
+           s"measured ${stepsOf(top.ev)} steps")
+    // MATERIALISATION, not transient scratch: `alloc` now also counts the per-call scratch slots
+    // (EffortEvent.NaryScratchSlot), which are `Θ(k)` per call by construction and are what the review
+    // asked to have counted.  The claim here is about NODES.
+    assert(top.ev(EffortEvent.FreshTrieNode) < 4L * arities.last,
+           s"joinAll of disjoint blocks materialises the joining spine only; measured " +
+           s"${top.ev(EffortEvent.FreshTrieNode)} fresh nodes")
+    for k <- arities do
+      val os = blockOperands(k, 8, s"akc.b$k")
+      assertEquals(ps(ITrie.joinAll(os)), os.map(ps).reduce(_ ++ _), s"joinAll of $k disjoint blocks")
+  }
+
+  test("ARITY GATE: the n-ary MEET of k key-disjoint operands is decided by ONE operand scan") {
+    val n = 32
+    val rs = arityLadder(k => { val os = blockOperands(k, n, s"ak.d$k"); () => ITrie.meetAll(os) }, 400)
+    showArity(s"meetAll of k operands over disjoint $n-key blocks", rs)
+    // two operands land on OPPOSITE sides of the top branching bit at the root, so the meet is empty
+    // after one scan: the DESCENT is constant in k while the scan itself is linear in k.  Labelled by
+    // what is measured on each row, not by one class for both.
+    assertArityClass("meetAll/blocks steps", rs.map(r => stepsOf(r.ev)), "constant")
+    // THE SCAN IS WHAT THE VERDICT COSTS, and it is counted: probes grow with k where steps do not.  This
+    // pair of rows is the whole of review.md's oracle complaint in two numbers.
+    assertProbeShape("meetAll/blocks probes", rs, 6.0)
+    assertElapsedNotQuadratic("meetAll/blocks", rs.map(_.nanos))
+    for k <- arities do
+      val os = blockOperands(k, 8, s"akc.d$k")
+      assertEquals(ps(ITrie.meetAll(os)), Set.empty[PathValue], s"meetAll of $k disjoint blocks is empty")
+  }
+
   test("the n-ary operations return an OPERAND BY POINTER when the answer is one") {
     // b absorbs a; a is contained in b.  Both n-ary steps used to end in an unconditional fresh node,
     // so a whole-subspace accept was impossible in them however cheap the merge was.
-    val a = ITrie.fromPaths((0 until 512).map(i => PathValue(List(s"sC.i$i"))))
-    val b = ITrie.union(a, sing("sC.extra"))
-    val (j, jev) = EffortSink.count(ITrie.joinAll(Vector(a, b, a, b, a)))
-    assert(j eq b, "the join of operands absorbed by b IS b, by pointer")
-    assertEquals(jev.alloc, 0L, s"an absorbed join allocates nothing; measured ${jev.alloc}")
-    val (m, mev) = EffortSink.count(ITrie.meetAll(Vector(b, a, b, a)))
-    assert(m eq a, "the meet of operands all containing a IS a, by pointer")
-    assertEquals(mev.alloc, 0L, s"a contained meet allocates nothing; measured ${mev.alloc}")
-    assertEquals(ps(j), ps(b))
-    assertEquals(ps(m), ps(a))
+    //
+    // WHAT "ALLOCATES NOTHING" MEANS NOW.  `EffortComponent.Alloc` also counts the per-call scratch slots
+    // of the n-ary operand handling ([[EffortEvent.NaryScratchSlot]]) — the fifth oracle gap review.md
+    // names, and it is `Θ(k)` per call BY CONSTRUCTION, so the total can no longer be 0.  The contract
+    // this test exists for is MATERIALISATION and TRAVERSAL: not one fresh node is built, and the counts
+    // do not grow with the size of the accepted subspace, which is the whole asymptotic claim.  Asserting
+    // `alloc == 0` would now be asserting that the scratch is uncounted.
+    def sizes(n: Int) =
+      val a = ITrie.fromPaths((0 until n).map(i => PathValue(List(s"sC.$n.i$i"))))
+      val b = ITrie.union(a, sing(s"sC.$n.extra"))
+      val (j, jev) = EffortSink.count(ITrie.joinAll(Vector(a, b, a, b, a)))
+      assert(j eq b, "the join of operands absorbed by b IS b, by pointer")
+      assertEquals(jev(EffortEvent.FreshTrieNode), 0L,
+                   s"an absorbed join materialises no node; measured ${jev.show}")
+      val (m, mev) = EffortSink.count(ITrie.meetAll(Vector(b, a, b, a)))
+      assert(m eq a, "the meet of operands all containing a IS a, by pointer")
+      assertEquals(mev(EffortEvent.FreshTrieNode), 0L,
+                   s"a contained meet materialises no node; measured ${mev.show}")
+      assertEquals(ps(j), ps(b))
+      assertEquals(ps(m), ps(a))
+      (jev, mev)
+    val (j512, m512) = sizes(512)
+    val (j2048, m2048) = sizes(2048)
+    // FOUR-FOLD MORE ACCEPTED SUBSPACE, THE SAME COUNTS — including the scratch, which depends on the
+    // ARITY (5 and 4 operands here) and not on what those operands hold
+    assertEquals(j512.alloc, j2048.alloc, s"the join's scratch grew with |a|: ${j512.show} / ${j2048.show}")
+    assertEquals(m512.alloc, m2048.alloc, s"the meet's scratch grew with |a|: ${m512.show} / ${m2048.show}")
+    assertEquals(j512(EffortEvent.NaryOperandProbe), j2048(EffortEvent.NaryOperandProbe),
+                 s"the join's operand probes grew with |a|: ${j512.show} / ${j2048.show}")
+    assertEquals(m512(EffortEvent.NaryOperandProbe), m2048(EffortEvent.NaryOperandProbe),
+                 s"the meet's operand probes grew with |a|: ${m512.show} / ${m2048.show}")
+    // `touch` is NOT claimed constant here and never was: with two distinct operands the n-ary step
+    // delegates to the pairwise Patricia descent, which walks the shared spine — `O(depth)`, so 4x the
+    // paths costs a few more visits.  A quarter of the operand size is what the pointer accept buys, and
+    // that is the ratio asserted, not equality.
+    assert(j2048.touch <= 2L * j512.touch, s"the join's descent is not depth-bounded: ${j2048.show}")
+    assert(m2048.touch <= 2L * m512.touch, s"the meet's descent is not depth-bounded: ${m2048.show}")
+    println(s"EVENTS: absorbed join of 5 operands (2 distinct) — ${j512.show}")
+    println(s"EVENTS: contained meet of 4 operands (2 distinct) — ${m512.show}")
   }
 
   test("ASYMPTOTIC GATE: tails-intersection of a one-head space is O(1)") {

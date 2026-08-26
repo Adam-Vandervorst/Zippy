@@ -23,6 +23,18 @@ import scala.collection.immutable.SortedMap
  *    (d) OTHER-TAIL SUMMARY.  `otherTail = Some(ot)` ⇒ for EVERY `h ∈ U(V)`, `groups(V)(h) ∈ γ(ot)`
  *        (per-head, NOT the union — see the note below);  `None` means ⊤.
  *
+ *  ==WHAT (c)/(d) COST, AND WHERE THE MISSING CHANNEL WOULD GO  (review.md P1, first row)==
+ *  (c)/(d) ANONYMISE the untracked heads: past [[Shape.MaxHeads]] the width spill keeps a COUNT and a
+ *  per-head tail summary and throws the KEYS away.  Two spilled shapes are then never provably
+ *  head-disjoint, whatever their keys, so a key-disjoint union's paired-prefix frontier collapses to
+ *  `min(K_d, K_d) = n` and `SpatialFrontier` predicts `Θ(n)` fresh nodes where the Patricia merge
+ *  attaches whole branches and allocates 2.  RAISING `MaxHeads` only moves that crossover.
+ *
+ *  The two queries the frontier needs are already isolated here — [[Shape.possibleHeads]] ("the head
+ *  set, when the carrier can enumerate it") and [[Shape.mayHaveHead]] ("could `h` be a head?") — and
+ *  today both answer from a CLOSED head set only.  A key certificate is what would make them answer
+ *  past the spill; `SpatialScaleCheck`'s LIM-5 records the two ways to carry one and what each costs.
+ *
  *  [[Shape.contains]] IS this predicate, and it is the only implementation of it in the tree:
  *  `SpatialGamma.gammaShape` and `SpatialType.accepts` both forward here (review.md 6 — there used to
  *  be three copies).  The PER-HEAD reading of (d) is the
@@ -144,7 +156,20 @@ final case class Shape(eps: Presence,
 
   /** is the head set exactly `heads.keys`? — the property that licenses exactness */
   def headsClosed: Boolean = others.hi == 0
-  /** no information at all — the fixed point of every widening, and the recursion stopper */
+
+  /** THE COMPLETE HEAD SET, when the carrier can enumerate it — THE query every relational
+   *  disjointness argument goes through.  `None` means it cannot, which today is every shape whose
+   *  head set is open: the width spill keeps the untracked COUNT and drops the untracked KEYS
+   *  (`SpatialScaleCheck`'s LIM-5).  Everything above this line would work unchanged against a
+   *  certificate that answered past the spill; nothing else needs to learn about one. */
+  def possibleHeads: Option[Set[PathItem]] =
+    if others.hi == 0 then Some(heads.iterator.filter(_._2.possiblyNonEmpty).map(_._1).toSet) else None
+  /** no information at all — the fixed point of every widening, and the recursion stopper.
+   *
+   *  ANY NEW CHANNEL HAS TO JOIN THIS TEST.  A prototype key certificate that did not was caught by
+   *  the randomized order matrix in one pass: `{ε?, +[0,inf] more of 2 named}` looked like ⊤ to
+   *  `leqStrong`'s `if b.isTop then 0` short circuit, so the order accepted a left-hand side with
+   *  thirteen heads while γ — which enforced the certificate — rejected its values. */
   def isTop: Boolean = eps == Presence.May && heads.isEmpty && others == Ivl.unknown && otherTail.isEmpty
 
   /** the number of DISTINCT heads: the group count of an `Iteration` over this space.  The lower
@@ -224,12 +249,18 @@ final case class Shape(eps: Presence,
         else hi = Ivl.add(hi, Ivl.mul(others.hi, otherTail.getOrElse(Shape.top).prefixesAt(d - 1).hi))
       Ivl(lo, if hi < lo then lo else hi)
 
+  /** may `h` be a head of this space? — `false` is a PROOF of absence.  An untracked head of an OPEN
+   *  shape could be `h` and the carrier cannot say otherwise (see [[possibleHeads]]). */
+  def mayHaveHead(h: PathItem): Boolean = heads.get(h) match
+    case Some(c) => c.possiblyNonEmpty
+    case None => others.hi > 0
+
   /** may this space contain a path starting with `items`? — `false` is a PROOF of absence */
   def mayHavePrefix(items: List[PathItem]): Boolean = items match
     case Nil => possiblyNonEmpty
     case h :: t => heads.get(h) match
       case Some(c) => c.mayHavePrefix(t)
-      case None => !headsClosed          // an untracked head could be `h`
+      case None => mayHaveHead(h)          // an untracked head could be `h`
   /** is `h` DEFINITELY a head of this space? */
   def mustHaveHead(h: PathItem): Boolean = heads.get(h).exists(_.definitelyNonEmpty)
 
@@ -237,7 +268,7 @@ final case class Shape(eps: Presence,
    *  summary, WEAKENED: channel (d) is a may-only summary of a set we cannot name, so reading a must
    *  claim out of it would be exactly the ⊤-meets-must leak this domain kept hitting. */
   def under(h: PathItem): Shape =
-    heads.getOrElse(h, if headsClosed then Shape.empty else Shape.weaken(otherTail.getOrElse(Shape.top)))
+    heads.getOrElse(h, if mayHaveHead(h) then Shape.weaken(otherTail.getOrElse(Shape.top)) else Shape.empty)
 
   def show: String =
     if definitelyEmpty then "∅"
@@ -299,7 +330,8 @@ object Shape:
    *  deepest level's musts intact, which is a leak, not an imprecision). */
   def weaken(s: Shape): Shape =
     if s.definitelyEmpty then s
-    else Shape(s.eps.weak, SortedMap.from(s.heads.view.mapValues(weaken)), Ivl(0, s.others.hi), s.otherTail.map(weaken))
+    else Shape(s.eps.weak, SortedMap.from(s.heads.view.mapValues(weaken)), Ivl(0, s.others.hi),
+               s.otherTail.map(weaken))
 
   /** open every COUNT channel.  Head-set membership and closedness are union-closed facts, but "at
    *  most k untracked heads" is not, so this is what survives aggregating an unknown number of sets
@@ -344,6 +376,9 @@ object Shape:
       val tail = spill.foldLeft(base)((a, kv) => unionTransfer(a, weaken(kv._2)))
       val cnt = Ivl(Ivl.add(others.lo, spill.count((_, t) => t.definitelyNonEmpty).toLong),
                     Ivl.add(others.hi, spill.size.toLong))
+      // THE SPILL IS WHERE THE KEYS ARE LOST, and `SpatialScaleCheck`'s LIM-5 is the measurement of what
+      // that costs: the count and the per-head summary survive, the head NAMES do not, so nothing above
+      // `MaxHeads` can be shown head-disjoint again.
       Shape(eps, SortedMap.from(keep), cnt,
             if tail.isTop then None else Some(weaken(capDepth(tail, MaxDepth - 1))))
 

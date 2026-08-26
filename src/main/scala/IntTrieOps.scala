@@ -1,6 +1,6 @@
 package scala.collection.immutable
 
-import morkl.{ITrie, EffortEvent, effort}
+import morkl.{ITrie, EffortEvent, effort, effortN}
 
 /** Native merges of the `IntMap[ITrie]` children maps that back [[morkl.ITrie]].  This object lives
  *  in `scala.collection.immutable` so it can see IntMap's package-private Patricia structure
@@ -40,7 +40,15 @@ import morkl.{ITrie, EffortEvent, effort}
  *  [[morkl.EffortEvent.SubtrieRejectedByPointer]] count the whole-subspace decisions — a cost model
  *  cannot express "an entire left subspace was accepted by pointer" unless the oracle counts it.
  *  The hook is one static load and a not-taken branch while the sink is disarmed (`morkl.effort` is
- *  `inline`), and that cost is measured in `SpatialEventsCheck`, not asserted. */
+ *  `inline`), and that cost is measured in `SpatialEventsCheck`, not asserted.
+ *
+ *  AND THE N-ARY OPERAND LOOPS ARE COUNTED TOO.  The `Patricia*` events above count the DESCENT; they
+ *  say nothing about the `O(k)` loops [[joinAllTries]]/[[meetAllTries]] run over their live operands at
+ *  every recursive call — the dedup, the branching-bit scan, the split, the result-identity search.
+ *  Those emit [[morkl.EffortEvent.NaryOperandProbe]] (`Work`) and their scratch arrays emit
+ *  [[morkl.EffortEvent.NaryScratchSlot]] (`Alloc`).  Counting them is what turned a `Θ(k²)` dedup from an
+ *  invisible degeneracy into a measured number (review.md's first P0), and `OptimalTrieCheck`'s ARITY
+ *  LADDER is the gate that reads them. */
 object IntTrieOps:
   import IntMapUtils.{hasMatch, zero, shorter, join}
 
@@ -52,6 +60,68 @@ object IntTrieOps:
   private inline def took(): Unit = effort(EffortEvent.SubtrieAcceptedByPointer)
   /** a whole map / branch was discarded without being descended */
   private inline def dropped(): Unit = effort(EffortEvent.SubtrieRejectedByPointer)
+  /** `n` operands examined by the per-call operand handling of an n-ary op (review.md's first P0: this
+   *  work emits none of the three events the "actual steps" oracle summed, so it was invisible) */
+  private inline def probes(n: Int): Unit = effortN(EffortEvent.NaryOperandProbe, n.toLong)
+  /** `n` reference SLOTS of scratch storage allocated by an n-ary op */
+  private inline def scratch(n: Int): Unit = effortN(EffortEvent.NaryScratchSlot, n.toLong)
+
+  // ---- n-ary operand collection: EXPECTED O(k) PER CALL ----------------------------------------
+
+  /** THE DEDUP THRESHOLD.  A linear identity scan while the distinct count is at most this, a
+   *  `java.util.IdentityHashMap` past it — the same strategy and the same threshold as
+   *  `ITrie.liveDistinct` (IntTrie.scala).
+   *
+   *  WHY IT IS NEEDED HERE TOO (review.md's first P0).  `ITrie.joinAll`/`meetAll` do dedup their
+   *  operand LIST before handing the children maps down, so the ROOT array is already distinct — but
+   *  the arrays the descent builds are not: two DISTINCT operands may hold the SAME child object under
+   *  the branching bit, which is the common case under iteration and fixpoint (an unchanged branch of
+   *  an iterate is the same object).  So there is no operand-uniqueness invariant to inherit below the
+   *  root and the descent must re-dedup; what it must not do is re-dedup QUADRATICALLY.  The previous
+   *  revision scanned the whole accumulated prefix unconditionally: `k(k-1)/2` identity comparisons at
+   *  the root, and `Θ(k²)` again at every recursive call, while the scaladoc claimed `O(k)` a level. */
+  private final val dedupScanMax = 24
+
+  /** Fill `live` with the DISTINCT (by pointer) non-`null`, non-`Nil` entries of `ms` and return how
+   *  many there are; return `-1` at the first `IntMap.Nil` when `stopOnNil` (a `Nil` operand
+   *  annihilates a meet, and the caller must not descend).
+   *
+   *  Cost: at most `dedupScanMax` identity comparisons per operand while the distinct count is under
+   *  the threshold, one expected-`O(1)` `IdentityHashMap` probe per operand above it — expected `O(k)`
+   *  for the whole call, with the constant stated rather than hidden.  Union and intersection are
+   *  idempotent, so dropping a repeated operand object changes nothing about WHAT is computed; it is
+   *  the reason the same tail trie handed in `k` times costs one pass. */
+  private def collectLive(ms: Array[IntMap[ITrie]], n: Int, live: Array[IntMap[ITrie]],
+                          stopOnNil: Boolean): Int =
+    var k = 0
+    var i = 0
+    var pr = 0                                        // operand probes, emitted once at the end
+    var seen: java.util.IdentityHashMap[IntMap[ITrie], IntMap[ITrie]] = null
+    var annihilated = false
+    while i < n && !annihilated do
+      val m = ms(i)
+      if m eq null then ()
+      else if m eq IntMap.Nil then { if stopOnNil then annihilated = true }
+      else
+        var dup = false
+        if seen ne null then { pr += 1; dup = seen.put(m, m) ne null }
+        else
+          var j = 0
+          while j < k && !dup do { if live(j) eq m then dup = true; j += 1 }
+          pr += j
+        if dup then took()
+        else
+          live(k) = m
+          k += 1
+          if (seen eq null) && k > dedupScanMax then
+            seen = new java.util.IdentityHashMap[IntMap[ITrie], IntMap[ITrie]](2 * k)
+            scratch(2 * (k + 1))                      // the map's interleaved key/value table
+            var j = 0
+            while j < k do { seen.put(live(j), live(j)); j += 1 }
+            pr += k
+      i += 1
+    probes(pr)
+    if annihilated then -1 else k
 
   // ---- pointer-preserving reconstruction -------------------------------------------------------
 
@@ -166,21 +236,21 @@ object IntTrieOps:
    *     operand's own sides, that operand's map object is the answer, so `ITrie.joinAll` can conclude
    *     `Identity` and hand back a whole subspace with zero allocation.
    *
-   *  Operands are identity-deduplicated as they are collected: union is idempotent and the same tail
-   *  trie is handed in repeatedly under iteration and fixpoint. */
-  def joinAllTries(ms: Array[IntMap[ITrie]]): IntMap[ITrie] =
+   *  Operands are identity-deduplicated as they are collected — union is idempotent and the same tail
+   *  trie is handed in repeatedly under iteration and fixpoint — by [[collectLive]], in expected
+   *  `O(k)`, so a LEVEL really costs `O(k)` as claimed and not `Θ(k²)`. */
+  def joinAllTries(ms: Array[IntMap[ITrie]]): IntMap[ITrie] = joinAllTries(ms, ms.length)
+
+  /** the same over the FIRST `n` entries of `ms`.  The recursion uses this rather than
+   *  `java.util.Arrays.copyOf`: the split arrays are already exactly what the child call needs to read,
+   *  and copying them cost two extra scratch arrays PER RECURSIVE CALL — `Θ(k)` slots each, the
+   *  unbounded-in-arity allocation `EffortComponent.Alloc` had no event for. */
+  def joinAllTries(ms: Array[IntMap[ITrie]], n: Int): IntMap[ITrie] =
     enter()
-    val live = new Array[IntMap[ITrie]](ms.length)
-    var k = 0
+    val live = new Array[IntMap[ITrie]](n)
+    scratch(n)
+    val k = collectLive(ms, n, live, stopOnNil = false)
     var i = 0
-    while i < ms.length do
-      val m = ms(i)
-      if (m ne null) && !(m eq IntMap.Nil) then
-        var dup = false
-        var j = 0
-        while j < k && !dup do { if live(j) eq m then dup = true; j += 1 }
-        if dup then took() else { live(k) = m; k += 1 }
-      i += 1
     if k == 0 then IntMap.Nil
     else if k == 1 then { took(); live(0) }
     else if k == 2 then unionTries(live(0), live(1))
@@ -189,20 +259,25 @@ object IntTrieOps:
       var acc = 0
       i = 0
       while i < k do { acc |= (repKey(live(i)) ^ rep) | maskOf(live(i)); i += 1 }
+      probes(k)                                        // the branching-bit scan
       val br = java.lang.Integer.highestOneBit(acc)
       if br == 0 then
         // every live operand is a Tip on the SAME key: one n-ary join of the values
         val vs = new Array[ITrie](k)
+        scratch(k)
         i = 0
         while i < k do { vs(i) = (live(i): @unchecked) match { case IntMap.Tip(_, v) => v }; i += 1 }
+        probes(k)
         val u = ITrie.joinAll(ArraySeq.unsafeWrapArray(vs))
         var res: IntMap[ITrie] = null
         i = 0
         while i < k && (res eq null) do { if u eq vs(i) then res = live(i); i += 1 }
+        probes(i)                                      // however far the identity search got
         if res ne null then res else IntMap.Tip(rep, u)
       else
         val ls = new Array[IntMap[ITrie]](k)
         val rs = new Array[IntMap[ITrie]](k)
+        scratch(2 * k)
         var nl = 0
         var nr = 0
         i = 0
@@ -213,8 +288,9 @@ object IntTrieOps:
             case t =>
               if (repKey(t) & br) == 0 then { ls(nl) = t; nl += 1 } else { rs(nr) = t; nr += 1 }
           i += 1
-        val l = joinAllTries(java.util.Arrays.copyOf(ls, nl))
-        val r = joinAllTries(java.util.Arrays.copyOf(rs, nr))
+        probes(k)                                      // the split
+        val l = joinAllTries(ls, nl)
+        val r = joinAllTries(rs, nr)
         var res: IntMap[ITrie] = null
         i = 0
         while i < k && (res eq null) do
@@ -222,6 +298,7 @@ object IntTrieOps:
             case IntMap.Bin(_, mm, l0, r0) if mm == br && (l eq l0) && (r eq r0) => res = live(i)
             case _ => ()
           i += 1
+        probes(i)
         if res ne null then res
         else if l eq IntMap.Nil then r
         else if r eq IntMap.Nil then l
@@ -289,24 +366,20 @@ object IntTrieOps:
    *   - two operands on OPPOSITE sides means disjoint key regions and the whole meet is empty;
    *   - `k == 2` delegates to [[intersectTries]], the proven pairwise descent;
    *   - reconstruction is pointer-preserving, so a meet that returns one operand unchanged lets
-   *     `ITrie.meetAll` conclude `Identity` and hand back a whole subspace with zero allocation. */
-  def meetAllTries(ms: Array[IntMap[ITrie]]): IntMap[ITrie] =
+   *     `ITrie.meetAll` conclude `Identity` and hand back a whole subspace with zero allocation;
+   *   - operands are identity-deduplicated by [[collectLive]] in expected `O(k)` per call (a repeated
+   *     operand object is free: intersection is idempotent), so a LEVEL costs `O(k)`, not `Θ(k²)`. */
+  def meetAllTries(ms: Array[IntMap[ITrie]]): IntMap[ITrie] = meetAllTries(ms, ms.length)
+
+  /** the same over the FIRST `n` entries of `ms` — see the two-argument `joinAllTries` above for why the
+   *  recursion passes a length instead of copying. */
+  def meetAllTries(ms: Array[IntMap[ITrie]], n: Int): IntMap[ITrie] =
     enter()
-    val live = new Array[IntMap[ITrie]](ms.length)
-    var k = 0
+    val live = new Array[IntMap[ITrie]](n)
+    scratch(n)
+    val k = collectLive(ms, n, live, stopOnNil = true)   // expected O(k), see collectLive
     var i = 0
-    var nil = false
-    while i < ms.length && !nil do
-      val m = ms(i)
-      if (m eq null) then ()
-      else if m eq IntMap.Nil then nil = true
-      else
-        var dup = false
-        var j = 0
-        while j < k && !dup do { if live(j) eq m then dup = true; j += 1 }
-        if dup then took() else { live(k) = m; k += 1 }
-      i += 1
-    if nil then { dropped(); IntMap.Nil }
+    if k < 0 then { dropped(); IntMap.Nil }
     else if k == 0 then IntMap.Nil
     else if k == 1 then { took(); live(0) }
     else if k == 2 then intersectTries(live(0), live(1))
@@ -315,22 +388,27 @@ object IntTrieOps:
       var acc = 0
       i = 0
       while i < k do { acc |= (repKey(live(i)) ^ rep) | maskOf(live(i)); i += 1 }
+      probes(k)                                        // the branching-bit scan
       val br = java.lang.Integer.highestOneBit(acc)
       if br == 0 then
         // every live operand is a Tip on the SAME key: one n-ary meet of the values
         val vs = new Array[ITrie](k)
+        scratch(k)
         i = 0
         while i < k do { vs(i) = (live(i): @unchecked) match { case IntMap.Tip(_, v) => v }; i += 1 }
+        probes(k)
         val r = ITrie.meetAll(ArraySeq.unsafeWrapArray(vs))
         if r.isEmpty then IntMap.Nil
         else
           var res: IntMap[ITrie] = null
           i = 0
           while i < k && (res eq null) do { if r eq vs(i) then res = live(i); i += 1 }
+          probes(i)
           if res ne null then res else IntMap.Tip(rep, r)
       else
         val ls = new Array[IntMap[ITrie]](k)
         val rs = new Array[IntMap[ITrie]](k)
+        scratch(2 * k)
         var nl = 0
         var nr = 0
         var forcedL = false
@@ -344,12 +422,13 @@ object IntTrieOps:
               if (repKey(t) & br) == 0 then { ls(nl) = t; nl += 1; forcedL = true }
               else { rs(nr) = t; nr += 1; forcedR = true }
           i += 1
+        probes(k)                                      // the split
         if forcedL && forcedR then { dropped(); dropped(); IntMap.Nil }   // disjoint key regions
-        else if forcedL then { dropped(); meetAllTries(java.util.Arrays.copyOf(ls, nl)) }
-        else if forcedR then { dropped(); meetAllTries(java.util.Arrays.copyOf(rs, nr)) }
+        else if forcedL then { dropped(); meetAllTries(ls, nl) }
+        else if forcedR then { dropped(); meetAllTries(rs, nr) }
         else
-          val l = meetAllTries(java.util.Arrays.copyOf(ls, nl))
-          val r = meetAllTries(java.util.Arrays.copyOf(rs, nr))
+          val l = meetAllTries(ls, nl)
+          val r = meetAllTries(rs, nr)
           var res: IntMap[ITrie] = null
           i = 0
           while i < k && (res eq null) do
@@ -357,6 +436,7 @@ object IntTrieOps:
               case IntMap.Bin(_, mm, l0, r0) if mm == br && (l eq l0) && (r eq r0) => res = live(i)
               case _ => ()
             i += 1
+          probes(i)
           if res ne null then res
           else if l eq IntMap.Nil then r
           else if r eq IntMap.Nil then l

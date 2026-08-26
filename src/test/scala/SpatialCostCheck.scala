@@ -274,9 +274,21 @@ class SpatialCostCheck extends FunSuite:
     // a flat set union favours the hash set: a trie merge walks nodes, not paths
     assertEquals(cheaper(Space.Union(S"s0", S"s1")), "set")
     assertEquals(cheaper(Space.TailsUnion(S"s0")), "set")
-    // and the reference backend now WINS a full-window Range, because `sliceRange` returns its input
-    // while `ITrie.range` still walks every node to compute `t.size` (review.md 2, bullets 2 and 3)
-    assertEquals(cheaper(Space.Range(S"s0", 0, 0)), "set")
+    // A FULL-WINDOW RANGE IS NOW A TIE, and the change of answer is the point.  `SpatialCost.compare`
+    // prices the WARM phase on a free input mention, and `Meas.countKnown` says such a value is
+    // `CountKnown`: `ITrie.range` reads an already-populated per-node terminal count and returns its
+    // input, exactly as `sliceRange` does, so neither executable is asymptotically cheaper.  The trie only
+    // loses this operator when the count is genuinely cold — a `Cold` phase or a freshly built
+    // subexpression — which is what the cache-state channel exists to distinguish and what the assertion
+    // below pins.  (Before the channel existed the trie was charged the walk unconditionally, which is the
+    // stale claim `LIM-3`/`LIM-3g`/`LIM-3z` recorded and which is now retired.)
+    assertEquals(cheaper(Space.Range(S"s0", 0, 0)), "tie")
+    // the SAME term on a COLD run: the count walk is real there, so the reference backend wins
+    def cheaperCold(s: Space): String =
+      val (a, b) = (SpatialCost.analyze(s, SpatialCost.Env(), Backends.referenceCold),
+                    SpatialCost.analyze(s, SpatialCost.Env(), Backends.trieCold))
+      if a.cost.bigO < b.cost.bigO then "set" else if b.cost.bigO < a.cost.bigO then "trie" else "tie"
+    assertEquals(cheaperCold(Space.Range(S"s0", 0, 0)), "set")
   }
 
   // ==============================================================================================
@@ -639,6 +651,9 @@ class SpatialCostCheck extends FunSuite:
             val w = (hi + 1.0) / (lo + 1.0)
             ProductRequirement.tierOf(bk.slug, comp).foreach { t =>
               rows :+= GateRow("operator", name, bk.slug, comp, "width", w, t)
+              // THE ABSOLUTE CEILING, on a closed one-operator program with exactly declared inputs: a
+              // finite endpoint above `Astronomical` is the same failed result as `inf`.
+              rows :+= GateRow("operator", name, bk.slug, comp, "magnitude", hi, t)
             }
             comp -> w
         }
@@ -655,35 +670,16 @@ class SpatialCostCheck extends FunSuite:
     publishOperatorGate(rows)
   }
 
-  /** the same ledger machinery the other two suites use, over the `operator` scope */
-  def publishOperatorGate(rows: Vector[GateRow]): Unit =
-    var failures = Vector.empty[String]
-    val met = rows.count(_.ok)
-    for r <- rows.filterNot(_.ok).sortBy(_.key) do
-      r.limitation match
-        case Some(l) =>
-          println("REQUIREMENT: " + r.show + s"  <== NOT MET — named limitation ${l.id}")
-          if r.measured > l.cap(r.what) + 1e-9 then
-            failures :+= s"${r.key}: ${GateRow.fmt(r.measured)} REGRESSED past ${l.id}'s recorded " +
-                         GateRow.fmt(l.cap(r.what))
-        case None =>
-          println("REQUIREMENT: " + r.show + "  <== FAILS THE PRODUCT REQUIREMENT, UNNAMED")
-          failures :+= s"${r.key}: measured ${GateRow.fmt(r.measured)} exceeds the ${r.tier.name} " +
-                       s"requirement ${GateRow.fmt(r.permitted)}"
-    for l <- ProductRequirement.limitations if l.scope == "operator" do
-      val mine = rows.filter(x => l.matches(x.scope, x.subject, x.backend, x.comp, x.what))
-      if mine.isEmpty then
-        failures :+= s"${l.id}: declared over ${l.subjects.mkString(",")} but no requirement check " +
-                     "produced a matching row"
-      for s <- l.subjects do
-        val hers = mine.filter(_.subject == s)
-        if hers.nonEmpty && hers.forall(_.ok) then
-          failures :+= s"${l.id}: subject `$s` NO LONGER FAILS — remove it from the limitation"
-    println(s"PRODUCT REQUIREMENTS — width per operator: $met of ${rows.length} MET, " +
-            s"${rows.length - met} not met")
-    assertEquals(failures, Vector.empty[String],
-                 s"width-per-operator: ${failures.length} failure(s) with no named limitation (or a " +
-                 s"stale one):\n  " + failures.mkString("\n  "))
+  /** [[ProductGate]] is the one gate policy for all three suites; this is the `operator` scope's
+   *  assertion.  It used to be a third copy of the same "a named limitation converts this failure into a
+   *  pass" logic — see the class comment on `ProductGate`. */
+  def publishOperatorGate(rows: Vector[GateRow], extra: Vector[String] = Vector.empty): Unit =
+    val fs = ProductGate.report("interval width per operator, on the OPTIMIZED form", "operator",
+                                rows, rows.map(r => s"${r.backend}/${r.comp}").distinct.length, extra)
+    assert(fs.isEmpty,
+           s"width per operator: ${fs.length} product-requirement FAILURE(S) — every one is printed " +
+           s"above:\n  " + fs.take(30).mkString("\n  ") +
+           (if fs.length > 30 then s"\n  ... and ${fs.length - 30} more" else ""))
 
   def freeVars(c: Cost): Set[String] =
     Vector(c.work, c.alloc, c.rounds, c.touch)

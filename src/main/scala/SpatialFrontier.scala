@@ -247,6 +247,12 @@ final case class FrontierConfig(facts: SpatialFacts.Config = SpatialConfig.defau
                                 maxFrames: Int = 512,
                                 /** depths the walk descends (the profile reaches further on its own) */
                                 maxWalkDepth: Int = 64,
+                                /** heads the walk may ENUMERATE when both sides' head sets are
+                                 *  enumerable (`Shape.possibleHeads`).  A WORK bound and not a precision
+                                 *  one — the comparison is `O(|keys|)` over keys already in memory — so
+                                 *  it is set far above `shapeWidth`: whatever makes a head set
+                                 *  enumerable, the relational answer must not expire at a cap. */
+                                maxKeys: Int = 1 << 17,
                                 /** price the INTERNED `ITrie` algebra instead of the case-returning
                                  *  `Trie` one.  `ITrie` has no `Identity` result to propagate, so it
                                  *  REBUILDS ITS WHOLE FRONTIER where `Trie` reuses the argument
@@ -395,15 +401,31 @@ object SpatialFrontier:
               case Some(yc) if yc.possiblyNonEmpty =>
                 val lo = if childLo > 0 && xc.definitelyNonEmpty && yc.definitelyNonEmpty then childLo else 0L
                 next += Frame(xc, yc, lo, f.hi)
+              // PROVABLY ABSENT — a closed head set, or channel (e) not naming `k` among the untracked
+              // candidates.  The whole subtrie is attached/kept/rejected by pointer and never visited.
               case _ =>
-                if f.y.headsClosed then reuse = Ivl.add(reuse, f.lo)     // provably absent: rejected whole
+                if !f.y.mayHaveHead(k) then reuse = Ivl.add(reuse, f.lo)
                 else next += Frame(xc, f.y.under(k), 0L, f.hi)
           for (k, yc) <- yLive if !f.x.heads.contains(k) do
-            if f.x.headsClosed then reuse = Ivl.add(reuse, f.lo)
+            if !f.x.mayHaveHead(k) then reuse = Ivl.add(reuse, f.lo)
             else next += Frame(f.x.under(k), yc, 0L, f.hi)
-          // untracked on BOTH sides: one summary frame with the paired multiplicity
+          // ==== UNTRACKED ON BOTH SIDES: ONE SUMMARY FRAME, AND THE COUNT IS ALL THERE IS ==========
+          // `min(x.others.hi, y.others.hi)` is a COUNT-ONLY pairing: two anonymous head sets of sizes 52
+          // and 52 might share all 52 or none, and past `Shape.MaxHeads` the carrier cannot tell (the
+          // spill keeps the count and drops the names — SpatialShape's channel (c)/(d) note).  This is
+          // exactly where review.md's first P1 row is lost: a key-disjoint union's `|Q_{d+1}|` is 0 and
+          // this says `min(K_d, K_d) = n`.  With an enumerable head set on both sides the multiplicity
+          // would be the size of the ACTUAL intersection — `SpatialFrontierCheck`'s key-disjoint sweep
+          // measures the crossover and LIM-5 records what carrying one costs.
           if !f.x.headsClosed && !f.y.headsClosed then
-            val m = Ivl.mul(f.hi, f.x.others.hi min f.y.others.hi)
+            val counted = (f.x.possibleHeads, f.y.possibleHeads) match
+              case (Some(xh), Some(yh)) if xh.size.min(yh.size) <= cfg.maxKeys =>
+                val tracked = f.x.heads.keySet ++ f.y.heads.keySet
+                val shared = if xh.size <= yh.size then xh.count(k => yh.contains(k) && !tracked.contains(k))
+                             else yh.count(k => xh.contains(k) && !tracked.contains(k))
+                shared.toLong min (f.x.others.hi min f.y.others.hi)
+              case _ => f.x.others.hi min f.y.others.hi
+            val m = Ivl.mul(f.hi, counted)
             if m > 0 then next += Frame(Shape.weaken(f.x.otherTail.getOrElse(Shape.top)),
                                         Shape.weaken(f.y.otherTail.getOrElse(Shape.top)), 0L, m)
       // merge equal pairs so an open shape does not explode the frame set
@@ -494,12 +516,14 @@ object SpatialFrontier:
     l.common.nonEmpty && r.exact.exists(_.exists(q => l.common.startsWith(q.items)))
 
   /** HEAD DISJOINTNESS from the two shapes: every head one side may have, the other provably lacks.
-   *  This is the root-level disjoint-reject, and it needs closed head sets on both sides. */
+   *  This is the root-level disjoint-reject, and it needs ENUMERABLE head sets on both sides —
+   *  `Shape.possibleHeads`, which today means CLOSED on both sides.  The width spill is what takes that
+   *  away (LIM-5): the proof needs the head NAMES and the spill keeps only their count. */
   private def headDisjoint(a: Shape, b: Shape): Boolean =
-    a.headsClosed && b.headsClosed && a.eps != Presence.Must && b.eps != Presence.Must && {
-      val ah = a.heads.iterator.filter(_._2.possiblyNonEmpty).map(_._1).toSet
-      val bh = b.heads.iterator.filter(_._2.possiblyNonEmpty).map(_._1).toSet
-      (ah intersect bh).isEmpty
+    a.eps != Presence.Must && b.eps != Presence.Must && {
+      (a.possibleHeads, b.possibleHeads) match
+        case (Some(ah), Some(bh)) => !ah.exists(bh.contains)
+        case _ => false
     }
 
   // ================================================================================================
@@ -631,20 +655,38 @@ object SpatialFrontier:
     val aTot = depth.activeTotal
     val tTot = meet(depth.acceptTotal, Ivl(0L, r.size.hi))   // an accept consumes a distinct right path
 
-    // ---- J: the Patricia frontier -------------------------------------------------------------
-    // Bound 1 (always): a simultaneous descent visits at most the nodes of both Patricia trees, and a
-    //   tree over k keys has at most 2k-1 nodes  ->  2 (fanL + fanR).
-    // Bound 2 (gated): only the GATING side's keys are ever searched for, and between two of its
-    //   nodes the descent can take at most `PatriciaBits` single-side steps  ->
-    //   2 * PatriciaBits * (gatingFan + |A|).  This is the bound that is INDEPENDENT of the other
-    //   operand's fan-out, and it is what makes restriction by a length-d prefix Θ(d).
+    // ---- J: the Patricia frontier, ONE DEPTH AT A TIME ------------------------------------------
+    // Two sound bounds on the `PatriciaVisit`s the child-map merges at ONE level perform:
+    //
+    //   both(d)  = 2 (fanL(d) + fanR(d))     a simultaneous descent visits at most the nodes of both
+    //                                        Patricia trees, and a tree over k keys has ≤ 2k-1 nodes;
+    //   gated(d) = |A_d| + 2·PatriciaBits·gateFan(d)
+    //                                        only the GATING side's keys are ever searched for, and for
+    //                                        each of that side's ≤ 2·gateFan(d) nodes the other side
+    //                                        descends a chain of at most `PatriciaBits` single-side
+    //                                        steps (big-endian Patricia over `Int` keys), plus one
+    //                                        entry per active node.  INDEPENDENT of the other operand's
+    //                                        fan-out — the bound that makes restriction by a length-`d`
+    //                                        prefix Θ(d).
+    //
+    // THE MIN IS TAKEN PER DEPTH, AND THAT IS THE WHOLE POINT.  Taken on the two SUMS (which is what
+    // this did) it prices EVERY level at the size-only rate until the TOTAL growing fan passes ~33x the
+    // TOTAL gating fan, so one deep level with a large fan-out dragged the flat levels above it up too:
+    // `restrict/prefix-cylinder` charged 792 Patricia visits for a descent that performs 13, growing
+    // with the operand it never enters.  A depth-`d` bound may not be met against a depth-`e` one;
+    // summing the per-depth minima may.  Measured on `SpatialScaleCheck`'s ladder: that family's
+    // predicted `touch` went from 311..1591 (error 122x) to 96 at EVERY rung from 64 to 16384 (6.93x).
+    val jPer = Vector.tabulate(dMax + 1) { d =>
+      val both = Ivl.mul(2L, Ivl.add(fanL(d).hi, fanR(d).hi))
+      val gateFan = op.gate match
+        case FrontierGate.RightGated => fanR(d).hi
+        case FrontierGate.Symmetric => fanL(d).hi min fanR(d).hi
+      val gated = Ivl.add(active(d).hi,
+                          Ivl.mul(Ivl.mul(2L, FrontierConfig.PatriciaBits), gateFan))
+      both min gated
+    }
     val fanLTot = sumI(fanL); val fanRTot = sumI(fanR)
-    val bothBound = Ivl.mul(2L, Ivl.add(fanLTot.hi, fanRTot.hi))
-    val gateFan = op.gate match
-      case FrontierGate.RightGated => fanRTot.hi
-      case FrontierGate.Symmetric => fanLTot.hi min fanRTot.hi
-    val gatedBound = Ivl.mul(Ivl.mul(2L, FrontierConfig.PatriciaBits), Ivl.add(gateFan, aTot.hi))
-    val jHi = if truncated then Ivl.INF else bothBound min gatedBound
+    val jHi = if truncated then Ivl.INF else jPer.foldLeft(0L)(Ivl.add)
     val patricia = Ivl(0L, jHi)
 
     val identity = FrontierCase.isIdentity(cases)

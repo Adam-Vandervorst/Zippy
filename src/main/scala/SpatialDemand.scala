@@ -82,8 +82,26 @@ import scala.collection.mutable.ArrayBuffer
 
 /** What a [[ZipperDemandEvent]] measures.  Deliberately NOT one of `EffortComponent`'s four: those
  *  are calibrated against `SpatialCost`, and folding a new growing quantity into `Work` would move
- *  every existing zipper containment/tightness number at once.  When `SpatialEvents.scala` is next
- *  open these map onto it as `MapEntries -> Work`, `VirtualAlloc -> Alloc`, `Accepted -> Explain`. */
+ *  every existing zipper containment/tightness number at once.
+ *
+ *  ==THIS IS A SEPARATE UNIT, AND A PRICE MAY NOT MIX THE TWO==
+ *  An earlier revision of this comment said these "map onto `SpatialEvents.scala` as
+ *  `MapEntries -> Work`, `VirtualAlloc -> Alloc`, `Accepted -> Explain`" when that file was next open.
+ *  Read as a licence to ADD them to a calibrated component before that happened, it cost the analysis
+ *  its whole `Work`/`Alloc` result: `ZipperCost.demandPrice` charged
+ *  `cursorReads + cursorMapEntries + materializeEntries` as `Work` and `forcedVirtual + virtualAlloc` as
+ *  `Alloc`, so the price carried quantities `EffortComponent.Work`/`Alloc` do not count — and carried
+ *  them at a DIFFERENT GROWTH CLASS.  On a key-disjoint union the counted `Work` is 17 flat over a
+ *  64 -> 1024 ladder while `cursorMapEntries` is `2n`; on `(A ∪ B) ∩ C` with a fixed `C` the counted
+ *  `Alloc` is 10 flat while `virtualAlloc` grows with `A`.  The demand price therefore never came out
+ *  below the eager per-operator sum and `Cost.meetHi` kept the eager number — recorded as LIM-1/LIM-2.
+ *
+ *  So: [[ZipperCounts.cursorReads]]-equivalents ([[DemandSummary.cursorReads]]) and
+ *  [[DemandSummary.forcedVirtual]] are quotable in `Work`/`Alloc` because `ZipperCursorRead`,
+ *  `ZipperMaterializeNode` and `FreshNode` ARE counted `EffortEvent`s.  Everything in THIS enum is
+ *  quotable only in its own unit, and is reported alongside the calibrated answer rather than inside it.
+ *  Merging the two vocabularies is a change to `SpatialEvents.scala` and to every zipper gate that reads
+ *  it — not something a cost formula may do unilaterally. */
 enum ZipperDemandComponent:
   /** child-map entries an `IntMap` operation inside a cursor actually walks */
   case MapEntries
@@ -333,7 +351,16 @@ enum ZIR:
  *  `acceptedLit` is a diagnostic — an accept is good news, so its sound direction is the other one.
  *  `truncated` withdraws even the upper-bound claim: the walk hit a case split it could not represent.
  *  `fallbacks` counts the `evalI` boundaries in the term; the work BEYOND those boundaries is the trie
- *  model's to price and is deliberately not folded in here. */
+ *  model's to price and is deliberately not folded in here.
+ *
+ *  ==WHICH FIELDS A CALIBRATED PRICE MAY QUOTE==
+ *  `cursorReads` and `forcedVirtual` only.  They ARE `EffortEvent`s — `ZipperCursorRead`, and
+ *  `ZipperMaterializeNode`/`FreshNode` respectively — so `ZipperCost.demandPrice` quotes them as `Work`
+ *  and `Alloc` and `SpatialEventsCheck` can refute the result.  `cursorMapEntries`,
+ *  `materializeEntries` and `virtualAlloc` are in the [[ZipperDemandComponent]] unit, which those
+ *  components do not count; they are reported next to the calibrated answer and gated exactly against
+ *  their own oracle in `SpatialDemandCheck`.  Adding them to `Work`/`Alloc` put a `Θ(n)` uncounted
+ *  quantity inside a `Θ(1)` counted one and cost the whole-region price the meet (LIM-1/LIM-2). */
 final case class DemandSummary(forcedVirtual: Long, acceptedLit: Long,
                                cursorReads: Long, cursorMapEntries: Long, materializeEntries: Long,
                                virtualAlloc: Long,

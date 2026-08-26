@@ -1059,7 +1059,7 @@ class SpatialPipelineCheck extends FunSuite:
     go(s)
     found
 
-  test("ITEM 5 INVARIANT: no infinite estimate on a closed, terminating, non-grounded cornerstone") {
+  test("ITEM 5 INVARIANT: no infinite OR ASTRONOMICAL estimate on a closed terminating cornerstone") {
     // THE INVARIANT REPLACES THE ALLOW-LIST.  `SpatialEventsCheck.unboundedCornerstones` names two
     // expected failures (`datalog-sn` and `puzzle15`) and asserts the observed set EQUALS them; review.md
     // item 5 says that is the wrong shape of test — `[0, inf]` on a closed terminating non-grounded
@@ -1067,8 +1067,17 @@ class SpatialPipelineCheck extends FunSuite:
     // and gated.  Both former failures now come out finite, for the two reasons the review names: the
     // rest-chain FRAME LAW (`Σ K_d`, not `Π K_d`) for `puzzle15`, and the interprocedural
     // LEAST-FIXPOINT UNIVERSE SUMMARY for `datalog-sn`.
+    // AND "INFINITE" INCLUDES "ASTRONOMICAL", which is the other half of the same review paragraph:
+    // "Replacing infinity with `8e55` is not meaningful progress.  A bound that cannot distinguish the
+    // real execution from tens of orders of magnitude more work is unusable for optimization, backend
+    // selection, or capacity planning and SHOULD FAIL THE GATE JUST AS AN INFINITE BOUND DOES."  The
+    // ceiling and its derivation are `ProductRequirement.Astronomical` (10^12 — 16 TB of allocation, or
+    // ~17 minutes of primitive steps); it is a statement about machines, not about this repository, and it
+    // is not read off any measurement here.
     println("\n[item5] the infinity ledger, ON THE OPTIMIZED BODY (Routine.optimized)")
+    val ceiling = ProductRequirement.Astronomical
     var infinite = Vector.empty[String]
+    var astronomical = Vector.empty[String]
     var rows = 0
     for (name, r, ann) <- cornerstones do
       given PartialFunction[RoutinePtr, Routine] = ann.routines
@@ -1080,15 +1089,29 @@ class SpatialPipelineCheck extends FunSuite:
         val rep = reports(b)
         rows += 1
         if !rep.finite then infinite = infinite :+ s"$name/${b.slug}: ${rep.infiniteComponents.mkString(" ")}"
+        else
+          val big = Vector("work" -> rep.cost.work, "alloc" -> rep.cost.alloc,
+                           "rounds" -> rep.cost.rounds, "touch" -> rep.cost.touch)
+            .map((k, a) => k -> a.at(Map.empty)).filter((_, v) => v >= ceiling)
+          if big.nonEmpty then
+            astronomical = astronomical :+
+              s"$name/${b.slug}: ${big.map((k, v) => f"$k=$v%.3e").mkString(" ")}"
       val worst = Backend.values.toVector.filterNot(b => reports(b).finite).map(_.slug)
       println(f"  $name%-12s ${if worst.isEmpty then "ALL FINITE" else "INFINITE on " + worst.mkString(",")}%-28s " +
               f"${ms}%7.0f ms   ${reports(Backend.Trie).census.show}")
       println(f"      trie   UPPER ${reports(Backend.Trie).cost.show}")
       println(f"      zipper UPPER ${reports(Backend.Zipper).cost.show}")
-    println(s"  => $rows (cornerstone, backend) estimates; ${infinite.size} infinite")
-    for x <- infinite do println(s"  !! $x")
+    println(s"  => $rows (cornerstone, backend) estimates; ${infinite.size} infinite, " +
+            f"${astronomical.size} finite but at or above the $ceiling%.0e ceiling")
+    for x <- infinite do println(s"  !! INFINITE     $x")
+    for x <- astronomical do println(s"  !! ASTRONOMICAL $x")
     assert(infinite.isEmpty,
            s"infinite estimates on closed, terminating, non-grounded cornerstones: ${infinite.mkString("; ")}")
+    assert(astronomical.isEmpty,
+           f"estimates at or above the $ceiling%.0e ceiling on closed, terminating, non-grounded " +
+           "cornerstones — a finite bound that describes no executable computation is the same failed " +
+           s"result as `inf`, and review.md requires it to fail the same way:\n    " +
+           astronomical.mkString("\n    "))
   }
 
   test("ITEM 5: the two former allow-list entries, with the law that bounds each") {
@@ -1099,12 +1122,17 @@ class SpatialPipelineCheck extends FunSuite:
       given PartialFunction[RoutinePtr, Routine] = ann.routines
       val rep = SpatialPipeline.costOfOptimized(r, ann)(Backend.Trie)
       println(s"\n[item5/$name] rounds = ${rep.cost.rounds.show}   work = ${rep.cost.work.show}")
-      val why = rep.assumptions.filter(a => a.contains("FRAME LAW") || a.contains("UNIVERSE SUMMARY"))
+      // `SPATIAL LEAST FIXPOINT` replaced `UNIVERSE SUMMARY` as datalog's stated law: the depth is now
+      // bounded by the post-fixpoint TYPE of `sn_tc`'s parameter tuple (`SpatialCost.paramFixpoint`),
+      // not by an all-strings path universe.  Both spellings are accepted so the assertion names the
+      // property — a stated law — rather than one particular derivation.
+      val why = rep.assumptions.filter(a =>
+        a.contains("FRAME LAW") || a.contains("UNIVERSE SUMMARY") || a.contains("SPATIAL LEAST FIXPOINT"))
       for w <- why do println(s"  ! ${w.take(700)}")
       assert(rep.finite, s"$name is still infinite: ${rep.infiniteComponents.mkString(" ")}")
       assert(why.nonEmpty,
-             s"$name came out finite but named neither the frame law nor the universe summary; " +
-             s"the reason must be stated: ${rep.assumptions.mkString(" | ").take(400)}")
+             s"$name came out finite but named neither the frame law, the spatial least fixpoint, nor the " +
+             s"universe summary; the reason must be stated: ${rep.assumptions.mkString(" | ").take(400)}")
   }
 
   test("ITEM 2 + 3 CENSUS: how much of each cornerstone is frontier/demand driven vs marked ceiling") {

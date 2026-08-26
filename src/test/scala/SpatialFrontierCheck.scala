@@ -62,15 +62,27 @@ class SpatialFrontierCheck extends FunSuite:
   // 1.  THE HAND-DERIVED GROUND TRUTH — the review's Q / A / T / J, on real tries
   // ================================================================================================
 
-  final case class Truth(q: Long, a: Long, t: Long, gateFan: Long, bothFan: Long, cases: Set[FrontierCase]):
+  /** The derived frontier, PER DEPTH.  The depth index is load-bearing: `J` is a sum of PER-LEVEL
+   *  child-map merges and each level has its own two ceilings, so the truth has to be depth-indexed for
+   *  the same reason the model is (a depth-`d` bound may not be met against a depth-`e` one). */
+  final case class Truth(qPer: Vector[Long], aPer: Vector[Long], tPer: Vector[Long],
+                         gatePer: Vector[Long], bothPer: Vector[Long], cases: Set[FrontierCase]):
+    def q: Long = qPer.sum
+    def a: Long = aPer.sum
+    def t: Long = tPer.sum
+    def gateFan: Long = gatePer.sum
+    def bothFan: Long = bothPer.sum
     /** the fresh nodes the CASE-RETURNING algebra allocates: none at all when the result is an
      *  operand (`Trie.unionR` &c. return `Identity` and the parent reuses the argument object) */
     def rebuilt(op: FrontierOp): Long =
       if FrontierCase.isIdentity(cases) then 0L else if op.prunes then a else q
-    /** the counted descents: `Θ(|Q| + J)`, with `J` the gated Patricia frontier.  The operation is
-     *  entered once even when an operand is empty, hence the `max 1`. */
+    /** the counted descents: `Θ(|Q| + J)`, with `J` summed over the levels.  At ONE level the merge
+     *  visits at most the nodes of both child-map Patricia trees (`2(fanL + fanR)`) and at most one
+     *  bounded search per gating key (`|A_d| + 2·PatriciaBits·gateFan(d)`), whichever is smaller.  The
+     *  operation is entered once even when an operand is empty, hence the `max 1`. */
     def work(op: FrontierOp): Long =
-      val j = math.min(2 * bothFan, 2 * FrontierConfig.PatriciaBits * (gateFan + a))
+      val j = bothPer.indices.map(d =>
+        math.min(2 * bothPer(d), aPer(d) + 2 * FrontierConfig.PatriciaBits * gatePer(d))).sum
       math.max(1L, q + j)
 
   /** `shared` models the executors' `a eq b` short circuit: the algebra answers at the root without
@@ -78,22 +90,31 @@ class SpatialFrontierCheck extends FunSuite:
   def truth(op: FrontierOp, x: Trie, y: Trie, xs: Set[PathValue], ys: Set[PathValue],
             shared: Boolean = false): Truth =
     val cs = trueCases(op, xs, ys)
-    if shared && op != FrontierOp.Composition then Truth(1, 0, 0, 0, 0, cs)
+    val z = Vector(0L)
+    if shared && op != FrontierOp.Composition then Truth(Vector(1L), z, z, z, z, cs)
     else
-      var q = 0L; var a = 0L; var t = 0L; var gateFan = 0L; var bothFan = 0L
-      def go(l: Trie, r: Trie): Unit =
-        q += 1
-        if op.prunes && r.terminal then t += 1
+      val q = scala.collection.mutable.ArrayBuffer.empty[Long]
+      val a = scala.collection.mutable.ArrayBuffer.empty[Long]
+      val t = scala.collection.mutable.ArrayBuffer.empty[Long]
+      val gate = scala.collection.mutable.ArrayBuffer.empty[Long]
+      val both = scala.collection.mutable.ArrayBuffer.empty[Long]
+      def at(d: Int): Unit =
+        while q.length <= d do { q += 0L; a += 0L; t += 0L; gate += 0L; both += 0L }
+      def go(l: Trie, r: Trie, d: Int): Unit =
+        at(d)
+        q(d) += 1
+        if op.prunes && r.terminal then t(d) += 1
         else
-          a += 1
+          a(d) += 1
           val kl = l.children.keySet; val kr = r.children.keySet
-          bothFan += kl.size + kr.size
-          gateFan += (op.gate match
+          both(d) += kl.size + kr.size
+          gate(d) += (op.gate match
             case FrontierGate.RightGated => kr.size.toLong
             case FrontierGate.Symmetric => kl.size.toLong min kr.size.toLong)
-          for k <- kl.intersect(kr) do go(l.children(k), r.children(k))
-      if x.nonEmpty && y.nonEmpty then go(x, y)
-      Truth(q, a, t, gateFan, bothFan, cs)
+          for k <- kl.intersect(kr) do go(l.children(k), r.children(k), d + 1)
+      if x.nonEmpty && y.nonEmpty then go(x, y, 0)
+      if q.isEmpty then Truth(z, z, z, z, z, cs)
+      else Truth(q.toVector, a.toVector, t.toVector, gate.toVector, both.toVector, cs)
 
   /** COMPOSITION has a different frontier and therefore a different derived count: `compositionR`
    *  enters every node of the LEFT and builds one fresh node per left node THAT HAS CHILDREN (a leaf
@@ -194,6 +215,68 @@ class SpatialFrontierCheck extends FunSuite:
       Row(x.paths.size.toLong, s.descents.hi, t.work(FrontierOp.Restriction))
     }.toVector
     gate(Scale("restriction by {ε} — descents", rows), expected = 0.0)
+  }
+
+  test("KEY-DISJOINT union: rebuilt is EXACT below Shape.MaxHeads, and the spill is where it breaks") {
+    // review.md's P1 first row, MEASURED AS A SWEEP ACROSS THE WIDTH CAP.  A union of two key-disjoint
+    // operands under a shared prefix allocates TWO `ITrie` nodes at every scale — the root and the
+    // shared-prefix node — because the Patricia merge attaches every branch whole.  The DERIVED
+    // frontier (`truth`, which reads the real tries) says so at every n: `|Q| = 2`.
+    //
+    // The model matches it EXACTLY while both head sets are closed, and loses it at
+    // `Shape.MaxHeads`: above the cap the spill keeps the untracked COUNT and drops the head NAMES, so
+    // `Shape.possibleHeads` gives `None`, key-disjointness stops being provable, and `paired(2)` falls
+    // back to the count-only pairing `min(K_2, K_2) = n`.  That crossover is LIM-5's root cause and
+    // this is the measurement of it — asserted below the cap, PRINTED above it, so a fix shows up here
+    // as the flat row it should be.
+    val ns = Vector(4, 8, 12, 13, 16, 24, 64, 256, 1024)
+    var shown = Vector.empty[String]
+    for n <- ns do
+      val l = sv((0 until n).map(i => pv("g", s"x${2 * i}")))
+      val r = sv((0 until n).map(i => pv("g", s"x${2 * i + 1}")))
+      val (s, t) = point(FrontierOp.Union, l, r)
+      shown :+= f"n=$n%-6d rebuilt=${s.rebuilt.show}%-14s |Q|=${s.depth.pairedTotal.show}%-14s " +
+                f"derived |Q|=${t.q}  src=${s.source.show}"
+      assertEquals(t.q, 2L, s"n=$n: the DERIVED paired frontier is the root and `g` only")
+      assert(inIvl(s.depth.pairedTotal, t.q),
+             s"n=$n: |Q| ${s.depth.pairedTotal.show} must bracket the derived ${t.q}: ${s.show}")
+      assert(!s.isFallback, s"n=$n: this must be a derived frontier, not a ceiling: ${s.show}")
+      assert(s.descents.hi < Ivl.INF, s"n=$n: descents must stay finite: ${s.show}")
+      if n <= Shape.MaxHeads then
+        assertEquals(s.rebuilt.hi, 2L,
+                     s"n=$n: with both head sets CLOSED the rebuild count is exact: ${s.show}")
+      else
+        assert(s.rebuilt.hi >= 2L, s"n=$n: sound in the only direction that matters: ${s.show}")
+    println(s"  KEY-DISJOINT union across the width cap (Shape.MaxHeads = ${Shape.MaxHeads}) — " +
+            "exact below it, count-only pairing above it (LIM-5):")
+    for l <- shown do println("    " + l)
+  }
+
+  test("head-disjointness needs ENUMERABLE head sets, and the width spill is the boundary") {
+    // the same fact as the ROOT-level reject.  Below the cap both sides are closed, the head sets are
+    // enumerable and the intersection is PROVED empty with zero allocation; above it the spill leaves
+    // two anonymous counts that could share every key, so no such proof exists.  Both halves are
+    // asserted: the second is what LIM-5 has to fix, and asserting it keeps the boundary honest.
+    for n <- Vector(4, 6, 12, 13, 64, 512) do
+      val l = sv((0 until n).map(i => pv(s"a$i")))
+      val r = sv((0 until n).map(i => pv(s"b$i")))
+      val s = SpatialFrontier.binary(FrontierOp.Intersection, ty(l), ty(r))
+      val closed = n <= Shape.MaxHeads
+      assertEquals(ty(l).shape.possibleHeads.isDefined, closed,
+                   s"n=$n: the head set is enumerable iff it is closed: ${ty(l).shape.show}")
+      if closed then
+        assertEquals(s.cases, Set(FrontierCase.Empty),
+                     s"n=$n: head-disjoint intersection is PROVED empty: ${s.show}")
+        assert(s.rootOnly, s"n=$n: nothing below the root is paired: ${s.show}")
+        assertEquals(s.rebuilt.hi, 0L, s"n=$n: and nothing is allocated: ${s.show}")
+      else
+        assert(s.rebuilt.hi >= 1L,
+               s"n=$n: past the spill the model can only be sound, not exact: ${s.show}")
+      // and the proof is not vacuous: the SAME key set is never disjoint from itself
+      val same = SpatialFrontier.binary(FrontierOp.Intersection, ty(l), ty(l))
+      assertNotEquals(same.cases, Set(FrontierCase.Empty),
+                      s"n=$n: x ∩ x must not be PROVED empty: ${same.show}")
+      assert(same.depth.pairedTotal.hi >= n, s"n=$n: x ∩ x pairs every key: ${same.show}")
   }
 
   test("restriction by ONE present COVERING prefix: Θ(d) descents, zero allocation") {

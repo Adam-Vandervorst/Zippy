@@ -33,6 +33,15 @@ package morkl
  *  All FOUR backends therefore have counted runs, and `touch` — previously an oracle-free component —
  *  is a CALIBRATED component on the three trie-shaped backends.
  *
+ *  THE N-ARY OPERAND LOOPS AND THEIR SCRATCH STORAGE ARE COUNTED TOO (review.md's first P0).  A fifth
+ *  gap used to sit alongside the four below and was worse than any of them, because it was the only one
+ *  UNBOUNDED IN ARITY: nothing in `IntTrieOps.joinAllTries`/`meetAllTries` or `ITrie.liveDistinct`
+ *  emitted any event for the `O(k)` operand loops each recursive call performs, nor for the `Θ(k)`
+ *  scratch slots each one allocates.  So the "actual steps" oracle could not see a `Θ(k²)` operand dedup
+ *  — and did not: the passing "linear in arity" gate measured a subset of events that the dedup never
+ *  touched.  [[EffortEvent.NaryOperandProbe]] (`Work`) and [[EffortEvent.NaryScratchSlot]] (`Alloc`) now
+ *  count both, `SpatialCost` prices both, and `OptimalTrieCheck`'s ARITY LADDER gates both.
+ *
  *  FOUR GAPS REMAIN, all named and all bounded:
  *
  *   1. `scala.collection.immutable.Set`/`Map` internals behind the REFERENCE evaluator (`eval` over
@@ -79,7 +88,14 @@ package morkl
 enum EffortComponent:
   /** elementary steps the executor itself performs: node dispatches, cursor reads, item comparisons */
   case Work
-  /** materialisation: a fresh path, a fresh `ITrie` node, a fresh executor frame */
+  /** ALLOCATION: a fresh path, a fresh `ITrie` node, a fresh executor frame — and, since the fifth
+   *  oracle gap was closed, the TRANSIENT SCRATCH of the n-ary operand handling
+   *  ([[EffortEvent.NaryScratchSlot]]), which is `Θ(k)` reference slots per recursive call and dies
+   *  immediately.  It is counted here rather than nowhere BECAUSE it is unbounded in arity: on the arity
+   *  ladder in `OptimalTrieCheck` it is the dominant term of the measured wall time, two orders of
+   *  magnitude above the nodes the same operation materialises.  So this component is "what the operation
+   *  allocates", and a claim about MATERIALISATION must be made against
+   *  [[EffortEvent.FreshTrieNode]]/[[EffortEvent.FreshNode]]/[[EffortEvent.FreshPath]] specifically. */
   case Alloc
   /** dynamic frames: loop-body entries, fixpoint rounds, routine calls */
   case Rounds
@@ -112,6 +128,22 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
   /** one PathItem-vs-PathItem comparison: a `pathValueOrdering` step (the `Range` sort) or one item
    *  of a prefix test (`Restriction`, `Unwrap`) */
   case PathItemComparison extends EffortEvent(EffortComponent.Work, "eval")
+  /** ONE OPERAND EXAMINED by the per-call operand handling of an n-ary join/meet — the loops
+   *  `IntTrieOps.joinAllTries`/`meetAllTries` and `ITrie.liveDistinct` run over their `k` live operands
+   *  before and after the Patricia work:
+   *
+   *   - one identity comparison of the dedup's linear scan, or one `IdentityHashMap` probe past its
+   *     threshold (`IntTrieOps.collectLive`, `ITrie.liveDistinct`);
+   *   - one operand read by the branching-bit scan that computes `br`;
+   *   - one operand placed on a side of `br` by the split, or one `Tip` value read;
+   *   - one operand tested by the result-identity search that decides whether the merge IS an operand.
+   *
+   *  WHY IT EXISTS (review.md's first P0).  None of that work emits [[TrieNodeVisit]],
+   *  [[PatriciaVisit]] or [[PatriciaEntry]], so the "actual steps" oracle could not see it at all — and
+   *  what it could not see was a `Θ(k²)` dedup behind a scaladoc that claimed `O(k)`.  Counting it makes
+   *  the per-call operand cost a MEASURED quantity: `OptimalTrieCheck`'s arity ladder reads this event,
+   *  and `SpatialCost`'s `tailsUnion`/`tailsInter`/`collectJoin` price it. */
+  case NaryOperandProbe extends EffortEvent(EffortComponent.Work, "evalI,execT,execZ")
 
   // ---- trie / cursor reads ---------------------------------------------------------------------
   /** one entry into an `ITrie` algebra operation FROM AN EXECUTOR SLOT.  `execT` emits it per space
@@ -142,6 +174,23 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
   case FreshNode extends EffortEvent(EffortComponent.Alloc, "execZ")
   /** one `Array[Any | Null]` executor frame allocated by `execT` */
   case GraphFrameAllocation extends EffortEvent(EffortComponent.Alloc, "execT")
+  /** ONE REFERENCE SLOT of SCRATCH STORAGE allocated by an n-ary join/meet.  THE UNIT IS SLOTS, not
+   *  bytes and not objects — the same choice as [[FreshTrieNode]] (which counts nodes) applied to the
+   *  only allocation in the algebra whose size is not a node count:
+   *
+   *   - `new Array[…](n)` in `IntTrieOps.joinAllTries`/`meetAllTries` (the `live` operand array and the
+   *     `ls`/`rs` split arrays) contributes `n` slots;
+   *   - the `IdentityHashMap` the dedup switches to past 24 distinct operands contributes `2(k+1)`
+   *     slots, its interleaved key/value table;
+   *   - `ITrie.liveDistinct`'s `ArrayBuffer` contributes `2k` slots — the total over its doublings from
+   *     empty to `k`, not the final capacity.
+   *
+   *  WHY IT EXISTS (review.md's first P0, last paragraph).  This storage was absent from `Alloc`
+   *  entirely — a fifth oracle gap on top of the four this file declares, and the only one UNBOUNDED IN
+   *  ARITY: a `k`-operand join allocates `Θ(k)` slots at every recursive call, which on the arity ladder
+   *  in `OptimalTrieCheck` is the dominant term of the measured wall time.  Counting it is what lets a
+   *  cost model be held to it. */
+  case NaryScratchSlot extends EffortEvent(EffortComponent.Alloc, "evalI,execT,execZ")
 
   // ---- dynamic frames --------------------------------------------------------------------------
   /** one iteration/fold head-group body entry */
@@ -196,6 +245,101 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
   case ReusedSubtrie extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
   /** `transpileZ` gave up on fusion and materialised a subterm through `evalI` */
   case ZipperFallbackToEvalI extends EffortEvent(EffortComponent.Explain, "execZ")
+
+/** HOW A DECLARED ORACLE GAP RELATES TO THE ADVERTISED UNIT.  Every gap must be one of these three, and
+ *  only the first two are acceptable: "either counted or DELIBERATELY OUTSIDE the advertised unit". */
+enum GapStatus:
+  /** the uncounted work is bounded by a named function of a COUNTED quantity, so the advertised unit
+   *  still bounds the real work up to the stated factor.  `bound` states the function. */
+  case BoundedByCountedUnit
+  /** the component has NO oracle for this executable and the MODEL says so (`CostModel.touchNoOracle`),
+   *  so no number is published for it at all */
+  case OutsideAdvertisedUnit
+  /** NEITHER: real executed work that no event counts and no named factor bounds.  A hole.  The
+   *  oracle-coverage assertion in `SpatialEventsCheck` FAILS on every one of these — that is the point of
+   *  declaring them, and a declared hole is not an excused one. */
+  case Unbounded
+
+/** ==============================================================================================
+ *  ONE DECLARED GAP between the counted oracle and the work an executor actually performs.
+ *
+ *  ==WHY THIS EXISTS AS DATA==
+ *  The gaps were PROSE, in the file comment above.  review.md's fifth product requirement is "an
+ *  ORACLE-COVERAGE ASSERTION that every backend loop and allocation category is either counted or
+ *  deliberately outside the advertised unit", and it notes that only the `touch` gap was ever asserted
+ *  (`the declared touch-oracle gap is exactly one backend`) while the rest were paragraphs.  A paragraph
+ *  cannot fail.  These entries can: `SpatialEventsCheck`'s coverage test checks the list against the event
+ *  vocabulary in both directions, requires every (executable, component) pair to be covered by an emitter
+ *  or by an entry here, and FAILS on any entry whose status is [[GapStatus.Unbounded]].
+ *
+ *  `bound` is the load-bearing field.  "The gap is bounded, not open-ended" is only a claim if the
+ *  bounding function is written down next to it. */
+final case class OracleGap(id: String, category: String, execs: Set[String],
+                           comps: Set[EffortComponent], where: String,
+                           status: GapStatus, bound: String, owner: String):
+  def show: String =
+    f"$id%-14s $category%-30s ${execs.toVector.sorted.mkString(",")}%-22s " +
+    f"${comps.toVector.sortBy(_.ordinal).mkString("/")}%-18s $status"
+
+object OracleGap:
+  import EffortComponent.*
+  import GapStatus.*
+
+  /** THE DECLARED GAPS — the four this file's header names, plus ONE the coverage matrix found the first
+   *  time it was asserted rather than described (`execZ` emits no dynamic-frame event of its own).
+   *
+   *  NOT HERE, DELIBERATELY: the n-ary operand loops and their scratch storage.  That was the fifth gap
+   *  and the only one unbounded in arity; it is now COUNTED, by
+   *  [[EffortEvent.NaryOperandProbe]] (`Work`) and [[EffortEvent.NaryScratchSlot]] (`Alloc`).  The
+   *  coverage test asserts that positively — see `the oracle covers every (executable, component) …` —
+   *  so this list cannot quietly lose a category by having it deleted from both places. */
+  val declared: Vector[OracleGap] = Vector(
+
+    OracleGap("REF-SET", "Set/Map internals behind `eval`", Set("eval"), Set(Touch),
+      "scala.collection.immutable.Set[PathValue] — hash probes, bucket copies", OutsideAdvertisedUnit,
+      "no bound is published because no number is: `ReferenceCost.touchNoOracle` declares the component " +
+      "absent, `SpatialEventsCheck` asserts that exactly one backend declares it, and a separate test " +
+      "measures 0 counted trie events over all 200 corpus programs and all 6 cornerstones — so the " +
+      "exclusion is total and verified rather than partial and convenient.  Synthesising an `actual` from " +
+      "operand sizes would make the numbers look better and mean nothing",
+      "not planned: the standard library carries no hooks"),
+
+    OracleGap("INTMAP-SPINE", "Patricia node allocation in the stdlib",
+      Set("evalI", "execT", "execZ"), Set(Alloc),
+      "IntMap.updated / updateWith / `- k` / IntMapUtils.join", BoundedByCountedUnit,
+      "<= 2 x (child edges) <= 2 x the counted `FreshTrieNode` total of the same operation: every IntMap " +
+      "node lives on the child map of exactly one ITrie node and a Patricia tree over k keys has at most " +
+      "2k-1 nodes.  The same 2k-1 fact is what makes `TrieAlgebraCost.tPer`'s touch bound sound",
+      "SpatialCost.scala if the factor is ever to be priced instead of declared"),
+
+    OracleGap("RANGE-SORT", "child-key sort inside ITrie.range", Set("evalI", "execT", "execZ"), Set(Work),
+      "IntTrie.scala — `sortBy` on the un-interned item", BoundedByCountedUnit,
+      "<= log(fan) comparisons per node the window actually CUTS, memoised per node; the models keep the " +
+      "log factor anyway, so it shows up as slack on `Range` and never as an unsound bound.  A full " +
+      "window sorts nothing at all",
+      "SpatialCost.scala (`CostModel.range`)"),
+
+    OracleGap("INTERN-ITEM", "Interner.intern per path ITEM", Set("evalI", "execT", "execZ"), Set(Work),
+      "IntTrie.scala — internPath / uninternPath", BoundedByCountedUnit,
+      "<= len(p) ConcurrentHashMap probes per counted `TriePathDispatch`, and `len` is a channel the cost " +
+      "model already carries (`Lower.LenBounds`) — a factor the model can name.  `Alloc` and `Touch` are " +
+      "unaffected: a hit allocates nothing and performs no descent",
+      "IntTrie.scala — one hook inside `Interner.intern`, which moves every hand-computed count in " +
+      "SpatialEventsCheck and every calibrated Work bound at once"),
+
+    OracleGap("ZIPPER-ROUNDS", "execZ emits no dynamic-frame event of its own",
+      Set("execZ"), Set(Rounds),
+      "Zipper.scala — `transpileZ` fuses local algebra and hands control flow to `evalI`",
+      BoundedByCountedUnit,
+      "= EXACTLY evalI's own `LoopBodyEntry`/`FixpointRound`/`CallEntry`, which are emitted INSIDE the " +
+      "same counted region: every `execZ` round happens in the fallback, and " +
+      "`ZipperFallbackToEvalI` marks each handoff, so the counted round total for `execZ` is complete " +
+      "even though no event names `execZ` as its emitter.  This entry exists because the coverage matrix " +
+      "found the hole in the emitter table, which is what the assertion is for",
+      "none needed; if execZ ever executes a loop itself the assertion will demand an event"))
+
+  def forExec(x: String, c: EffortComponent): Vector[OracleGap] =
+    declared.filter(g => g.execs.contains(x) && g.comps.contains(c))
 
 object EffortEvent:
   /** the executables a hook may name — the closure test in `SpatialEventsCheck` checks against this */
