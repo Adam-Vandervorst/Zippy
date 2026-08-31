@@ -327,7 +327,7 @@ object Trie:
    *
    *  THE GRAFT FRONTIER IS a's NODES, NOT ITS TERMINALS.  The previous claim here — "each graft
    *  reuses the SAME b, so O(#terminals of a) new nodes" — was wrong, and wrong in the direction that
-   *  flatters the algorithm (review.md item 4, fifth bullet).  Sharing `b` is real: the same object is
+   *  flatters the algorithm.  Sharing `b` is real: the same object is
    *  attached at every graft, so nothing proportional to `N(b)` is ever copied.  But the recursion
    *  rebuilds the SPINE above every graft, so a single depth-`d` path — which has exactly ONE
    *  terminal — allocates `d` fresh nodes.  The correct account is `Theta(N(a))` fresh nodes (every

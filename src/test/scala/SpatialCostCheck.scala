@@ -4,7 +4,7 @@ import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
-/** THE COST ALGEBRA — review.md finding 3.
+/** THE COST ALGEBRA.
  *
  *  What these tests establish, and what they do not:
  *
@@ -142,7 +142,7 @@ class SpatialCostCheck extends FunSuite:
   private def rounds(r: SpatialCost.Report): Sym = r.cost.rounds.symOpt.getOrElse(Sym.Inf)
   private def touch(r: SpatialCost.Report): Sym = r.cost.touch.symOpt.getOrElse(Sym.Inf)
 
-  // NOTE ON COMPONENT MEANINGS (changed by the calibration work, review.md finding 2, then item 1).
+  // NOTE ON COMPONENT MEANINGS (changed by the calibration work).
   //   ALL FOUR components are now DEFINED BY COUNTED EVENTS, so a claim about any of them is a claim
   //   about `Events.work`/`.alloc`/`.rounds`/`.touch` that `SpatialEventsCheck` measures and GATES.
   //   A `Set` union is ONE AstDispatch and ZERO PathValue allocations, however large its operands: the
@@ -177,11 +177,23 @@ class SpatialCostCheck extends FunSuite:
     // an Unwrap descends |p| levels and hands back the SHARED subtrie: no allocation at all
     assertEquals(trieO(Space.Unwrap(S"s0", "a")).alloc, Amount.Bounded(Sym.zero))
     assertEquals(trieO(Space.Wrap(S"s0", "a.b")).alloc, Amount.Bounded(Sym.c(2)), "a 2-node spine over a shared child")
-    // ATTRIBUTION FIX (review.md 2, third bullet): the old model claimed the trie `Range` needs "NO
-    // SORT".  `ITrie.range` sorts every visited node's child keys by their UN-INTERNED item, so the
-    // log factor is real and must appear.  It also computes the recursive `t.size` first.
-    assert(trieO(Space.Range(S"s0", 0, 3)).touch.bigO.logs >= 1,
-           s"ITrie.range sorts child keys per visited node: ${trieO(Space.Range(S"s0", 0, 3)).show}")
+    // ATTRIBUTION, TWICE CORRECTED.  The first model claimed the trie `Range` needs "NO SORT"; the
+    // second charged `heads·log(heads)` per visited node to `touch`.  Both were wrong about the same
+    // fact: `IntTrie.ordered`'s sort is real work but it emits NO counted event, and `touch` is
+    // DEFINED as `TrieNodeVisit + PatriciaVisit`.  Work with no oracle cannot sit in a calibrated
+    // component — it is declared on the report instead.  What is left is the order-statistic slice,
+    // whose cost is a SUM (`window + depth`), never the product the predecessor charged.
+    val rng3 = trieO(Space.Range(S"s0", 0, 3))
+    assertEquals(rng3.touch.bigO.logs, 0,
+                 s"an uncounted sort must not sit inside `touch`: ${rng3.show}")
+    assert(rng3.touch.bigO.degree <= 1,
+           s"the order-statistic slice is linear in window + depth, not a product: ${rng3.show}")
+    assert(rng3.alloc.bigO.degree <= 1,
+           s"only the two cut chains are rebuilt, so `alloc` is linear in depth: ${rng3.show}")
+    // the reported ASSUMPTION is what makes the omission honest rather than silent
+    val rngRep = SpatialCost.analyze(Space.Range(S"s0", 0, 3), TrieCost)
+    assert(rngRep.assumptions.exists(_.contains("IntTrie.ordered")),
+           s"the uncounted sort must be DECLARED: ${rngRep.assumptions.mkString(" | ")}")
     // restriction descends the prefix trie once instead of scanning pairs: the win is in COMPARISONS
     // (`work`), which is exactly the component `Effort.startsWith` counts for the reference evaluator
     assert(trieO(Space.Restriction(S"s0", S"s1")).work.bigO <
@@ -366,11 +378,27 @@ class SpatialCostCheck extends FunSuite:
 
     // UNKNOWN SEED: the size is not available, so the round count must be tied to the fixpoint's own
     // result size rather than invented — that is where `|fix:r|` belongs.
+    // ...UNLESS THE STEP IS IDEMPOTENT, and this one is: `Union(r, {b})` with `r` not free in `{b}`
+    // gives `F(F(x)) = F(x)`, so the loop runs ONE round to add `{b}` and one to observe that nothing
+    // changed — `[1, 2]` whatever `|fix:r|` is.  Tying the bound to the result size here was not
+    // "honest about the unknown", it was 37x wider than the truth on the operator table.
     val openMono = Space.Fixpoint(S"s0", r, Space.Union(Space.Mention(r), lit(p("b"))))
     val ro = SpatialCost.analyze(openMono, SetCost)
-    assert(ro.assumptions.exists(_.contains("monotone accumulator, so rounds")), ro.show)
-    assert(Sym.vars(rounds(ro)).contains("|fix:r|"),
-           s"rounds must be tied to the result size when the seed is unknown: ${rounds(ro).show}")
+    assert(ro.assumptions.exists(_.contains("IDEMPOTENT")), ro.show)
+    assertEquals(ro.bracket(EffortComponent.Rounds, Map.empty), (1.0, 2.0),
+                 s"an idempotent step runs at most twice, whatever the cardinalities: ${ro.show}")
+    // and the RESULT SIZE still is tied to the fixpoint's own unknown — the round bound being a
+    // constant does not make the value known
+    assert(Sym.vars(ro.meas.size).contains("|fix:r|"), s"the result size stays symbolic: ${ro.meas.show}")
+
+    // THE NON-IDEMPOTENT MONOTONE CASE is where `|fix:r|` belongs: the step reads the accumulator, so
+    // each round can add and the bound really is the result size.
+    val openGrow = Space.Fixpoint(S"s0", r,
+                                  Space.Union(Space.Mention(r), Space.TailsUnion(Space.Mention(r))))
+    val rg = SpatialCost.analyze(openGrow, SetCost)
+    assert(rg.assumptions.exists(_.contains("monotone accumulator, so rounds")), rg.show)
+    assert(Sym.vars(rounds(rg)).contains("|fix:r|"),
+           s"rounds must be tied to the result size when the step reads the accumulator: ${rounds(rg).show}")
 
     val nonmono = Space.Fixpoint(lit(p("a", "b", "c")), r, Space.TailsUnion(Space.Mention(r)))
     val rn = SpatialCost.analyze(nonmono, SetCost)
@@ -504,7 +532,7 @@ class SpatialCostCheck extends FunSuite:
   // 5. GROUND-TRUTH TREND (eval used only as an oracle, never by the analysis)
   // ==============================================================================================
 
-  // DEMOTED (review.md finding 2): this is a SECONDARY trend metric.  It runs against `touch`, the
+  // DEMOTED: this is a SECONDARY trend metric.  It runs against `touch`, the
   // un-oracled element-cost component, because wall-clock time is dominated by `Set`/`ITrie`
   // internals that no event counts.  The PRIMARY evidence is now the containment/slack table in
   // `SpatialEventsCheck`, which compares predicted intervals against counted events per component.
@@ -547,12 +575,7 @@ class SpatialCostCheck extends FunSuite:
   // ==============================================================================================
 
   test("corpus: every program gets a report from both backends, and every cost is monotone") {
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assume(f.exists, "corpus not found")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
-    }.take(300)
+    val recs = Corpus.load(300)
     var bounded = 0; var unbounded = 0; var differing = 0
     val hist = collection.mutable.Map.empty[String, Int]
     var infExample: Option[String] = None
@@ -591,7 +614,7 @@ class SpatialCostCheck extends FunSuite:
   }
 
   // ==============================================================================================
-  // 7. THE INTERVAL-WIDTH PRODUCT REQUIREMENT, PER OPERATOR AND BACKEND  (review.md item 7)
+  // 7. THE INTERVAL-WIDTH PRODUCT REQUIREMENT, PER OPERATOR AND BACKEND
   // ==============================================================================================
 
   /** WIDTH is the one product requirement that needs no execution: it is a property of the ANSWER, not
@@ -625,7 +648,23 @@ class SpatialCostCheck extends FunSuite:
       "tails-inter"  -> Space.TailsIntersection(A),
       "range-full"   -> Space.Range(A, 0, 0),
       "range-part"   -> Space.Range(A, 0, 4),
-      "iteration"    -> Space.Iteration(A, h, SpaceMention("t"), Space.Mention(SpaceMention("t"))),
+      // THE LOOP HAS TO SURVIVE `optimized`, OR THIS ROW IS MISLABELLED.  It used to be
+      // `Iteration(A, h, t, Mention(t))` — the minimal loop — and that term is semantically
+      // `TailsUnion(A)`: `Lower.Iter_Tails` rewrites it, so with that rule in `OrdinaryRules` the row
+      // would price a `TailsUnion` under the name `iteration` and duplicate the row four lines up.
+      //
+      // A BODY THAT IS A FUNCTION OF THE TAIL-SET ALONE IS THE GENERAL FORM OF THAT MISTAKE, not a
+      // special case of it: `⋃_h f(T_h) = f(⋃_h T_h)` for every `f` that distributes over union, which
+      // is every operator here in its left argument — so `Subtraction(rest, B)`, `Restriction(rest, B)`
+      // and `TailsUnion(rest)` are all collapsible in principle and a future rule could collapse them
+      // in fact.  The body below binds BOTH names and TAGS its output with the group head, so
+      // `⋃_h h·(T_h ∖ b)` genuinely needs the grouping, and it is the shape every cornerstone loop
+      // actually has (`aunt`, `gol/nextStep`, `nqueens.place` all bind the head and re-tag by it).
+      // It also keeps the per-group result LARGE, so the n-ary accumulate `collectJoin` is still
+      // exercised on eight substantial operands — which is the cost structure this row exists to show.
+      "iteration"    -> Space.Iteration(A, h, SpaceMention("t"),
+                                        Space.Wrap(Space.Subtraction(Space.Mention(SpaceMention("t")), B),
+                                                   Path.Deref(h))),
       "fixpoint"     -> Space.Fixpoint(A, SpaceMention("r"),
                                        Space.Union(Space.Mention(SpaceMention("r")), B)))
     var rows = Vector.empty[GateRow]
@@ -660,7 +699,7 @@ class SpatialCostCheck extends FunSuite:
         if freeVars(rep.cost).nonEmpty then symbolic :+= s"$name/${bk.slug}"
         println(f"WIDTH: $name%-13s ${bk.slug}%-10s " +
                 cells.map((c, w) => f"$c%-6s ${if w.isInfinite then "inf" else f"$w%10.2f"}%10s").mkString("  "))
-    // review.md item 5, as an invariant on a CLOSED one-operator program with declared exact inputs:
+    // The review as an invariant on a CLOSED one-operator program with declared exact inputs:
     // an infinite endpoint here would be an analysis bug, not semantic uncertainty
     assertEquals(infinite, Vector.empty[String],
                  "an INFINITE endpoint on a closed one-operator program with exactly declared inputs:\n  " +

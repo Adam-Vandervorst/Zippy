@@ -8,7 +8,7 @@ import morkl.{ITrie, EffortEvent, effort, effortN}
  *  operations be single simultaneous descents over both tries — no per-key `get` + `updated`
  *  round-trips, and whole shared sub-tries skipped by pointer identity.
  *
- *  ==POINTER PRESERVATION IS THE CONTRACT (review.md items 1 and 2)==
+ *  ==POINTER PRESERVATION IS THE CONTRACT==
  *
  *  Every merge here returns **the argument map object itself** whenever the merged map is the same
  *  map — not merely an equal one.  That is the whole mechanism behind the case-returning algebra in
@@ -29,7 +29,7 @@ import morkl.{ITrie, EffortEvent, effort, effortN}
  *  Each op still short-circuits on `eq` (identical sub-tries merge to themselves) — the common case
  *  under iteration/fixpoint, where most of one operand's structure is shared with the other.
  *
- *  INSTRUMENTED (review.md items 1 and 2).  Each recursive entry counts one
+ *  INSTRUMENTED.  Each recursive entry counts one
  *  [[morkl.EffortEvent.PatriciaVisit]], which — together with `ITrie`'s own
  *  [[morkl.EffortEvent.TrieNodeVisit]] — is the ORACLE for `SpatialCost`'s `touch` component.  The
  *  bound the cost models rely on is the Patricia one: a Patricia tree over `k` keys has at most
@@ -47,7 +47,7 @@ import morkl.{ITrie, EffortEvent, effort, effortN}
  *  every recursive call — the dedup, the branching-bit scan, the split, the result-identity search.
  *  Those emit [[morkl.EffortEvent.NaryOperandProbe]] (`Work`) and their scratch arrays emit
  *  [[morkl.EffortEvent.NaryScratchSlot]] (`Alloc`).  Counting them is what turned a `Θ(k²)` dedup from an
- *  invisible degeneracy into a measured number (review.md's first P0), and `OptimalTrieCheck`'s ARITY
+ *  invisible degeneracy into a measured number (the first P0), and `OptimalTrieCheck`'s ARITY
  *  LADDER is the gate that reads them. */
 object IntTrieOps:
   import IntMapUtils.{hasMatch, zero, shorter, join}
@@ -60,7 +60,7 @@ object IntTrieOps:
   private inline def took(): Unit = effort(EffortEvent.SubtrieAcceptedByPointer)
   /** a whole map / branch was discarded without being descended */
   private inline def dropped(): Unit = effort(EffortEvent.SubtrieRejectedByPointer)
-  /** `n` operands examined by the per-call operand handling of an n-ary op (review.md's first P0: this
+  /** `n` operands examined by the per-call operand handling of an n-ary op (the first P0: this
    *  work emits none of the three events the "actual steps" oracle summed, so it was invisible) */
   private inline def probes(n: Int): Unit = effortN(EffortEvent.NaryOperandProbe, n.toLong)
   /** `n` reference SLOTS of scratch storage allocated by an n-ary op */
@@ -72,7 +72,7 @@ object IntTrieOps:
    *  `java.util.IdentityHashMap` past it — the same strategy and the same threshold as
    *  `ITrie.liveDistinct` (IntTrie.scala).
    *
-   *  WHY IT IS NEEDED HERE TOO (review.md's first P0).  `ITrie.joinAll`/`meetAll` do dedup their
+   *  WHY IT IS NEEDED HERE TOO (the first P0).  `ITrie.joinAll`/`meetAll` do dedup their
    *  operand LIST before handing the children maps down, so the ROOT array is already distinct — but
    *  the arrays the descent builds are not: two DISTINCT operands may hold the SAME child object under
    *  the branching bit, which is the common case under iteration and fixpoint (an unchanged branch of
@@ -521,7 +521,7 @@ object IntTrieOps:
           else if p1 == p2 then binD(a, p1, m1, l1, r1, diffTries(l1, l2), diffTries(r1, r2))
           else { took(); a }
 
-  // ---- raffination: the FUSED `x ∖ (x <| y)` (review.md item 4, second bullet) ------------------
+  // ---- raffination: the FUSED `x ∖ (x <| y)` ------------------
   //      Structurally difference, but the per-key combiner is `ITrie.raffination` rather than
   //      `ITrie.subtraction`, so `x` is walked ONCE.  Called only when `y` is not terminal (an
   //      `ε ∈ y` annihilates all of `x`, decided in ITrie.raffinationR before descent).

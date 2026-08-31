@@ -4,7 +4,10 @@ import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
-/** Tests for the soundness/robustness hardening called for in critique_on_b.md. */
+/** SOUNDNESS/ROBUSTNESS HARDENING, one test per hazard: B1 capture-avoiding substitution,
+ *  B2 reserved-prefix rejection, B3 acyclic inline index, B4 bounded simplification loops,
+ *  B5 the headedness guard.  Each is a shape that `docs/traps.md` names as a silent-wrong-answer
+ *  family; the tests are the regressions that keep them named. */
 class SCHardening extends FunSuite:
   import Space.*
   import Matching.*

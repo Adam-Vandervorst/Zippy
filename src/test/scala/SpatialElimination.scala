@@ -104,12 +104,7 @@ class SpatialElimination extends FunSuite:
   }
 
   test("corpus: unconditional elimination never changes meaning") {
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assume(f.exists, "corpus not found")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
-    }
+    val recs = Corpus.load()
     val rng = new java.util.Random(909)
     val A = SpaceFuzzer.alphabet
     def randPath(): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))

@@ -234,7 +234,7 @@ case class Routine(name: RoutinePtr, refs: Vector[PathRef], mentions: Vector[Spa
       override def apply(f: RoutinePtr): Routine = ctx(f)
       override def isDefinedAt(f: RoutinePtr): Boolean = f != name && ctx.isDefinedAt(f)
 
-  /** THE ORDINARY OPTIMIZER, with the spatial tier in front of it (review.md finding 3).
+  /** THE ORDINARY OPTIMIZER, with the spatial tier in front of it.
    *
    *  `SpatialHook.rewrite` runs one decorated spatial analysis of `body` with NO input annotation and
    *  consumes only what that licenses unconditionally — an occurrence proved `∅` becomes `Space.Empty`,
@@ -300,7 +300,7 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
       res
     case Space.Mention(p) => sc.resolve(p).paths
     case Space.Singleton(p) => effort(EffortEvent.FreshPath); Set(PathValue(recp(p)))
-    // NOTE (review.md 2): the stored set is RETURNED — a warm `Literal` allocates nothing, whatever
+    // NOTE: the stored set is RETURNED — a warm `Literal` allocates nothing, whatever
     // it cost to build.  `ReferenceCost.literal` prices the two phases separately for this reason.
     case Space.Literal(SpaceValue(ps)) => ps
     case Space.Union(x, y) => recs(x) union recs(y)
@@ -1211,6 +1211,9 @@ def callees(s: Space): Set[RoutinePtr] = collect(s)({ case Space.Call(rp, _, _) 
  *  is passed through unchanged, and the union's left arm is exactly that one changing mention `m_c`
  *  (an identity base).  This is the datalog shape — covering single-mention `transitive` and
  *  multi-parameter `reachable` (edges/mask pass through, reach saturates). */
+/** obligation: terminating/asfixpoint_sound.smt2 (O2) — the `eval` Call rule with the
+ *  stabilised-argument cut and the `Fixpoint` loop compute the same value, and the cut test IS the
+ *  loop's stop test. */
 def asFixpoint(r: Routine): Option[Routine] = r.body match
   case Space.Union(base, Space.Call(rp, argRefs, argMentions))
       if rp == r.name && argRefs.length == r.refs.length && argMentions.length == r.mentions.length
@@ -1232,6 +1235,14 @@ def asFixpoint(r: Routine): Option[Routine] = r.body match
  *  Raffination subtrahend, Range, Fold, residual, or grounded node) — so the ascending Kleene chain
  *  from ∅ reaches a least fixpoint.  Arg-changing mutual recursion fails the passthrough test and
  *  stays residual (defunctionalizing it is out of scope). */
+/** obligation: terminating/mutual_tagged_bekic.smt2 (O4), tagged_projection.smt2 (O3a),
+ *  tagged_order.smt2 (O3a').
+ *
+ *  ==WHAT IS AND IS NOT PRESERVED==  The LEAST-FIXPOINT denotation is preserved: `Unwrap(fix, tag_i)`
+ *  is the componentwise least solution, and Gaussian elimination loses nothing.  The OPERATIONAL
+ *  `eval` semantics is NOT preserved: the original mutual recursion can DIVERGE where the lowered
+ *  `Fixpoint` converges (`GraphExecTest`).  That is a deliberate, tested improvement, but this pass
+ *  may not be described as meaning-preserving with respect to what `eval` does to the source. */
 def lowerMutualPassthrough(scc: Vector[RoutinePtr], lowered: Map[RoutinePtr, Routine]): Option[Map[RoutinePtr, Routine]] =
   if scc.size < 2 then return None
   val sccSet = scc.toSet
@@ -1253,8 +1264,21 @@ def lowerMutualPassthrough(scc: Vector[RoutinePtr], lowered: Map[RoutinePtr, Rou
     case Space.Wrap(a, _) => mono(a)
     case Space.Unwrap(a, _) => mono(a)
     case Space.TailsUnion(a) => mono(a)
-    case Space.TailsIntersection(a) => mono(a)
-    case Space.Iteration(src, _, _, b) => mono(src) && mono(b)
+    // TWO ARMS HERE WERE MACHINE-REFUTED (terminating/mono_soundness.smt2, O3d-X1/X2), and both
+    // are now the CONSERVATIVE test — the SCC call is forbidden in the position rather than assumed
+    // monotone there:
+    //  X1  `TailsIntersection` IS NOT MONOTONE.  `eval` groups by head and INTERSECTS the tail-sets,
+    //      so adding a path with a NEW head adds a participant and can only SHRINK the result:
+    //      `{0·7} ⊆ {0·7, 1·8}` but `TI({0·7}) = {7} ⊄ TI({0·7,1·8}) = ∅`.
+    //  X2  `Iteration` IS MONOTONE IN ITS SOURCE only if the body is monotone in the TAIL-SET it
+    //      binds.  A bigger source ENLARGES an existing head group as well as adding groups, and a
+    //      rest-antitone body then produces LESS: with body `{ε} ∖ ⋁(nbs <| {9})`,
+    //      `{0·7} ⊆ {0·7, 0·9}` but `iter({0·7}) = {ε} ⊄ iter({0·7,0·9}) = ∅`.
+    // Neither refutation changes any program in the corpus or the cornerstones — no body puts an SCC
+    // call in either position — so this is a missing guard being closed, not a wrong output being
+    // fixed.  `AgnosticPipeline.monotoneInMention` gets both right and is the model for the tests.
+    case Space.TailsIntersection(a) => !refersScc(a)
+    case Space.Iteration(src, _, _, b) => !refersScc(src) && mono(b)
     case Space.Fixpoint(i, _, b) => mono(i) && mono(b)
     case Space.Subtraction(a, b) => mono(a) && !refersScc(b)   // b (subtrahend) is anti-monotone
     case Space.Raffination(a, b) => mono(a) && !refersScc(b)
@@ -1276,6 +1300,9 @@ def lowerMutualPassthrough(scc: Vector[RoutinePtr], lowered: Map[RoutinePtr, Rou
  *  `⋃ₖ BASE(Tᵏ(arg))`, exactly the recursion's meaning under the iterate-and-accumulate Fixpoint
  *  semantics.  Gated by structural monotonicity of BASE and T in the changing mention.  None ⇒ shape
  *  not handled (multiple/zero changing mentions, ref-change, wrapped self-call, non-monotone). */
+/** obligation: terminating/tagged_projection.smt2 (O3a, O3c).  The monotonicity gate is
+ *  terminating/mono_soundness.smt2 (O3d) — TWO of its arms were machine-REFUTED and `monoIn` is now
+ *  conservative there. */
 def asFixpointGeneral(self: RoutinePtr, refs: Vector[PathRef], mentions: Vector[SpaceMention], body: Space): Option[Space] =
   def unionTerms(s: Space): List[Space] = s match
     case Space.Union(a, b) => unionTerms(a) ++ unionTerms(b)
@@ -1289,8 +1316,10 @@ def asFixpointGeneral(self: RoutinePtr, refs: Vector[PathRef], mentions: Vector[
     case Space.Wrap(a, _) => monoIn(a, m)
     case Space.Unwrap(a, _) => monoIn(a, m)
     case Space.TailsUnion(a) => monoIn(a, m)
-    case Space.TailsIntersection(a) => monoIn(a, m)
-    case Space.Iteration(src, _, _, b) => monoIn(src, m) && monoIn(b, m)
+    // the mention form of the two refuted arms — see `mono` above and
+    // terminating/mono_soundness.smt2 (O3d-X1/X2)
+    case Space.TailsIntersection(a) => !uses(a, m)
+    case Space.Iteration(src, _, _, b) => !uses(src, m) && monoIn(b, m)
     case Space.Fixpoint(i, _, b) => monoIn(i, m) && monoIn(b, m)
     case Space.Subtraction(a, b) => monoIn(a, m) && !uses(b, m)
     case Space.Raffination(a, b) => monoIn(a, m) && !uses(b, m)
@@ -1318,6 +1347,8 @@ def asFixpointGeneral(self: RoutinePtr, refs: Vector[PathRef], mentions: Vector[
 /** Lower a 2-routine arg-changing mutual SCC by Gaussian elimination: unfold one routine into the
  *  other (one-shot, requires the unfolded routine to not self-call) to obtain a single self-recursion,
  *  then lower that with [[asFixpointGeneral]].  None ⇒ shape not handled (left an honest residual). */
+/** obligation: terminating/mutual_tagged_bekic.smt2 (O5).  The operational non-claim on
+ *  `lowerMutualPassthrough` applies here verbatim. */
 def lowerMutualByElimination(scc: Vector[RoutinePtr], lowered: Map[RoutinePtr, Routine]): Option[Map[RoutinePtr, Routine]] =
   if scc.size != 2 then None
   else
@@ -1344,6 +1375,8 @@ def lowerMutualSCC(scc: Vector[RoutinePtr], lowered: Map[RoutinePtr, Routine]): 
  *  routine — into `main`'s body and into each surviving recursive routine's body — leaving genuinely
  *  un-lowerable recursion as HONEST residual `Call`s.  Returns the lowered top body together with the
  *  residual routines it still calls, so the result is self-contained and directly evaluable. */
+/** obligation: terminating/REGISTRY.tsv O6a (inline/beta soundness — OPEN) and O6b (inliner
+ *  termination — PROPERTY, carried by the acyclicity check below). */
 def lowerCalls(main: Routine, ctx: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
           budget: Deadline = Deadline.never): (Space, Map[RoutinePtr, Routine]) =
   val seen = scala.collection.mutable.Map.empty[RoutinePtr, Routine]
@@ -1528,6 +1561,20 @@ def collect[S, P](s: Space)(spre: PartialFunction[Space, S] = PartialFunction.em
     case Space.Union(x, y) => Space.Union(recs(x), recs(y))
     case Space.Intersection(x, y) => Space.Intersection(recs(x), recs(y))
     case Space.Subtraction(x, y) => Space.Subtraction(recs(x), recs(y))
+    // RAFFINATION WAS MISSING HERE, and it fell into `case x => x` — so the ENTIRE SUBTREE under a
+    // `\|` was invisible to this traversal.  `collect` is what every loop-invariance test is written
+    // in (`Lower.IterUnion_Indep`, `IterComposition_Indep`, `cleanSpace` and therefore
+    // `IterCompRight_Hoist`, `TransposeSemijoin`, …), so a body that USED a binder under a
+    // raffination looked invariant and was hoisted OUT of its own binder, leaving a dangling
+    // `Deref`: `evalI` then died with `key not found: PathRef(h…)`.
+    //
+    // IT WAS INVISIBLE FOR AS LONG AS THE FUZZER COULD NOT DRAW A RAFFINATION.  The moment the
+    // generator gained the operator (plan item 6) the corpus gate found it in 10 of 1000 programs on
+    // the first run.  This is `docs/traps.md` §7 exactly: "audit every generic term traversal for
+    // consistent full-subterm recursion".  The `case x => x` catch-all is what let a missing arm be
+    // a silent wrong answer instead of a `MatchError`, and it stays only because `Space` also has
+    // leaf cases; the regression test is `MORKLTest`'s traversal-totality check.
+    case Space.Raffination(x, y) => Space.Raffination(recs(x), recs(y))
     case Space.Restriction(x_e, prefixes_e) => Space.Restriction(recs(x_e), recs(prefixes_e))
     case Space.Composition(x, y) => Space.Composition(recs(x), recs(y))
     case Space.Wrap(src_e, p_e) =>  Space.Wrap(recs(src_e), recp(p_e))
@@ -1965,6 +2012,40 @@ object Lower:
       Space.Union(Space.Iteration(src, symbol, rest, lhs), hoisted)
   })
 
+  /** THE WHOLE-BODY-INVARIANT DROP — the degenerate case of [[IterUnion_Indep]], and it was missing.
+   *
+   *  `iter(src, sym, rest, body)` with `body` invariant in BOTH binders is the union of one and the
+   *  same set over the head groups, so it is `body` when `src` runs at least one group and `∅` when
+   *  it runs none: `iter(src, body) = headed(src) · body`, bare when `provablyHeaded(src)`.  Exactly
+   *  the [[IterUnion_Indep]] law with the varying branch absent.
+   *
+   *  ==WHY IT MATTERS, MEASURED==
+   *  Without it, ELIMINATING A PROVABLY-EMPTY UNION BRANCH INSIDE A LOOP MADE THE PROGRAM SLOWER.
+   *  `Iteration(src, h, t, Union(inv, dead))` was hoisted by `IterUnion_Indep` into
+   *  `headed(src) · inv` — the invariant branch computed ONCE.  The spatial tier then learned to
+   *  prove `dead` empty, the union collapsed to `Iteration(src, h, t, inv)`, and with no union left
+   *  the hoist rule no longer matched: the loop came back and `inv` was recomputed per head.  On the
+   *  corpus that was a 2.54x predicted-work regression on the worst program, caused by a rewrite that
+   *  is locally an improvement.  `docs/design_plan.md` §5.1 lists this rule as a "subsumed special
+   *  case"; it was never actually written.
+   *
+   *  ==TERMINATION==
+   *  Refused on a body that is provably `⊆ {ε}`, which is exactly [[headedGuard]]'s own shape: the
+   *  guard IS an `Iteration` with an invariant body, so the rule would rewrite its own output
+   *  forever.  The test must be [[provablyEpsSubset]] and not `body == Singleton(Path.ZERO)` — the
+   *  first draft used the syntactic form and hung, because another rule in the same `all_forever`
+   *  round normalises `Singleton(ε)` to `Literal({ε})` and the refusal then stopped matching.
+   *  The refusal costs nothing: hoisting an ε-only body out of a loop buys nothing, since the guard
+   *  it would be replaced by is that same loop. */
+  val IterInvariant_Drop = subs(_: Space)(PartialFunction.empty, {
+    case Space.Iteration(src, symbol, rest, body)
+      if !provablyEpsSubset(body) && {
+        val (soc, poc) = collect(body)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
+        soc.isEmpty && poc.isEmpty
+      } =>
+      if provablyHeaded(src) then body else Space.Composition(headedGuard(src), body)
+  })
+
   /** Hoist a loop-INVARIANT composition factor out of an iteration.  Sound WITHOUT any guard:
    *  composition distributes over the union of iterates (⋃_h (g·s_h) = g·⋃_h s_h), and with zero
    *  iterates both sides are ∅. */
@@ -2069,7 +2150,51 @@ object Lower:
     => src
   })
 
-  /** the body is exactly the rest-mention: the iteration unions the tail-sets over all heads = TailsUnion(src). */
+  /** THE BODY IS EXACTLY THE REST-MENTION: the iteration unions the tail-sets over all heads, which is
+   *  `TailsUnion(src)` — the same set, by the same case analysis on both sides.
+   *
+   *  `eval`'s `Iteration` groups `src`'s paths by head, DROPPING the headless `ε` path, binds `rest` to
+   *  each group's tail set and unions the bodies; with the body the bare `rest` mention that union is
+   *  `{ tail : h·tail ∈ src }`.  `eval`'s `TailsUnion` is `recs(src).collect { case PathValue(_::r) =>
+   *  PathValue(r) }`, which drops the headless path for the same reason and yields the same set.  On the
+   *  trie side `ITrie.tailsUnion(s)` is `joinAll(s.children.values)` and `s.children` likewise ignores
+   *  `s.terminal`.  Certified as `iter-tails` in the law registry
+   *  (`proofs/laws/law_tailsu_set.smt2` + `proofs/keyfolds.smt2`).
+   *
+   *  IT IS IN [[OrdinaryRules]] AND WAS NOT.  It was reachable only from the supercompiler, so
+   *  `Routine.optimized` — which is what an executor is actually handed — kept the loop: a binder, a
+   *  head-group split and an n-ary accumulate, where every backend has a direct `tailsUnion` entry
+   *  point.  Nothing in the source said why, and nothing was relying on the loop surviving.  The one
+   *  thing that WAS relying on it is `SpatialCostCheck`'s per-operator width table, whose `iteration`
+   *  row was exactly this term: with the rule in place that row would silently have become a second
+   *  `tails-union` row, so the row moved to a loop that cannot be collapsed at the same time.  See the
+   *  comment there.
+   *
+   *  ==IT IS NOT A WIN ON EVERY EXECUTABLE, AND THE ONE PLACE IT LOSES IS WORTH KNOWING==
+   *  Measured (interleaved A/B, best of 7 batches, 4096 paths, sweeping the source's head count `k`;
+   *  the harness is in the round-5 `build.log` entry):
+   *
+   *    k        2      4      8     16     32     64    128
+   *    eval  5.27x  5.75x  5.24x  5.02x  5.75x  6.13x  6.00x
+   *    evalI 4.97x  1.38x  1.43x  2.38x  1.08x  1.02x  1.02x
+   *    execZ 0.77x  0.75x  1.06x  1.49x  0.13x  0.74x  1.13x
+   *    execT 1.73x  1.33x  0.95x  1.05x  0.91x  0.32x  0.35x
+   *
+   *  `eval` and `evalI` win everywhere.  `execT` LOSES BY 3x ON A WIDE SOURCE, and the counted events
+   *  say exactly why: at `k = 64` the loop costs `work 195 / alloc 113` and the `TailsUnion` costs
+   *  `work 34473 / alloc 25522`, ALL of the difference being `NaryOperandProbe` (34469) and
+   *  `NaryScratchSlot` (25504).  `GraphExec.scala`'s `case "Iteration"` accumulates with a PAIRWISE
+   *  `ITrie.union` left fold and never enters `ITrie.joinAll`; `ITrie.tailsUnion` IS `joinAll`, whose
+   *  `collectLive` and per-recursive-call `live`/`ls`/`rs` arrays are `Θ(k)` at every node of the
+   *  Patricia recursion.  So the regression is a property of `joinAll` at high arity over
+   *  key-OVERLAPPING operands, not of this rewrite: the same `TailsUnion(a)` term is 3x slower on
+   *  `execT` than the loop it replaced.  `evalI`'s own `Iteration` uses `joinAll` too, which is why
+   *  that backend is a wash rather than a loss.
+   *
+   *  The rule is kept because every real source in this repository is narrow (the cornerstones' head
+   *  counts are single digits, where the row reads 0.95x-1.73x), because it is a 5-6x win on the
+   *  reference evaluator at every width, and because the term is strictly smaller.  The crossover is a
+   *  DEFECT IN `ITrie.joinAll` and is recorded as such rather than worked around here. */
   val Iter_Tails = subs(_: Space)(PartialFunction.empty, {
     case Space.Iteration(src, _, rest, Space.Mention(sm)) if sm == rest => Space.TailsUnion(src)
   })
@@ -2511,11 +2636,13 @@ object Lower:
   val OrdinaryRules: List[Space => Space] = List(
     Lower.ConstantOps, Lower.SizeEmpty, Lower.IterateSingleton_Deref, Lower.LiteralSpaceOps,
     Lower.SingletonConst_Literal, Lower.ConcatSingleton_Iter, Lower.IterUnion_Indep,
+    Lower.IterInvariant_Drop,
     Lower.IterComposition_Indep, Lower.EpsGuard_Wrap, Lower.IterWitness_TransposeSemiJoin,
     Lower.IterWitness_HeadNarrow, Lower.UnwrapPush, Lower.WrapMerge, Lower.RestrictionPush,
     Lower.CompWrapAssoc, Lower.CompAssocRight, Lower.CompLitWraps, Lower.Unwrap_Merge,
     Lower.SingletonConstPrefix_Wrap, Lower.RaffinationPush, Lower.RaffRestrictAlgebra,
     Lower.RestrictRaffWrapBoth, Lower.IterSetOpMerge, Lower.Wrap_Iter, Lower.Iter_Ident,
+    Lower.Iter_Tails,
     Lower.Concat_Path, Lower.IterateLiteral_Union, Lower.UnwrapConcat_Unwraps,
     Lower.SingletonComposition_Wrap, Lower.SingletonSpaceOp_PathOp, Lower.SingletonRestriction_Unwrap)
 end Lower

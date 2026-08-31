@@ -136,7 +136,8 @@ sequenced after the read-only algebra (this file) is certified.
 | `Iteration` | `Iter` + `Body`/`App` | (evaluator-level; not duplicated) | `evalI` Iteration |
 | — (cursor) | `Root`/`Descend`/`Ascend`/`FocusOf` | `ZLit`/`Mat` | `SpaceZipper` |
 
-Items are interned `i64` everywhere (the old String-item model is archived: `../attic-formal.egg`).
+Items are interned `i64` everywhere; the old String-item model is gone from the tree (`Interner`
+in `MORKL.scala` is the one place items become `i64`).
 
 ## The automated equivalence pipeline (`pipeline/`, `../proofs/pipeline/`)
 

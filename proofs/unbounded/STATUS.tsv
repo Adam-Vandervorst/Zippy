@@ -1,0 +1,64 @@
+card_incl_excl	Theorem	ok	PROVED
+card_meet	Theorem	ok	PROVED
+card_partition	Theorem	ok	PROVED
+card_subadd	Theorem	ok	PROVED
+card_wrap	Theorem	ok	PROVED
+composition_assoc	Theorem	ok	PROVED
+composition_distrib	Theorem	ok	PROVED
+composition_head	Theorem	ok	PROVED
+composition_head_split	Theorem	ok	PROVED
+composition_head_sup	Theorem	ok	PROVED
+composition_unit	Theorem	ok	PROVED
+fixpoint	Theorem	ok	PROVED
+fixpoint_unfold	Theorem	ok	PROVED
+grp_union	Theorem	ok	PROVED
+iteration	Theorem	ok	PROVED
+iteration_split	Theorem	ok	PROVED
+iteration_split_sub	Theorem	ok	PROVED
+iteration_split_sup	Theorem	ok	PROVED
+iteration_tailsunion	Theorem	ok	PROVED
+kleene_acc_is_cur_base	Theorem	ok	PROVED
+kleene_acc_is_cur_step	Theorem	ok	PROVED
+kleene_below_base	Theorem	ok	PROVED
+kleene_below_step	Theorem	ok	PROVED
+kleene_conv	Theorem	ok	PROVED
+kleene_grows_base	Theorem	ok	PROVED
+kleene_grows_step	Theorem	ok	PROVED
+lattice_distrib	Theorem	ok	PROVED
+lattice_inter	Theorem	ok	PROVED
+lattice_order	Theorem	ok	PROVED
+lattice_union	Theorem	ok	PROVED
+length_compose	Theorem	ok	PROVED
+length_setops	Theorem	ok	PROVED
+length_tails	Theorem	ok	PROVED
+length_wrap	Theorem	ok	PROVED
+mon_cancel	Timeout	ok	OPEN (expected; see header attempt log)
+mon_cancel_base	Theorem	ok	PROVED
+mon_cancel_step	Theorem	ok	PROVED
+mono_compose	Theorem	ok	PROVED
+mono_concat	Theorem	ok	PROVED
+mono_control	Theorem	ok	PROVED
+mono_prefix	Theorem	ok	PROVED
+mono_setops	Theorem	ok	PROVED
+mono_tails	Theorem	ok	PROVED
+prefix_disjoint	Theorem	ok	PROVED
+raffination	Theorem	ok	PROVED
+restriction	Theorem	ok	PROVED
+set_partitions	Theorem	ok	PROVED
+subtraction	Theorem	ok	PROVED
+tails_intersection	Theorem	ok	PROVED
+tails_union	Theorem	ok	PROVED
+tails_union_wrap	Theorem	ok	PROVED
+unwrap_hom	Theorem	ok	PROVED
+wrap_as_comp	Theorem	ok	PROVED
+wrap_nest	Theorem	ok	PROVED
+wrap_restriction	Theorem	ok	PROVED
+wrap_roundtrip	Theorem	ok	PROVED
+negative/not_card_additive	Timeout	-	NOT-PROVED (expected)
+negative/not_iter_split	Timeout	-	NOT-PROVED (expected)
+negative/not_restr_identity	Timeout	-	NOT-PROVED (expected)
+negative/not_ti_eq_tu	Timeout	-	NOT-PROVED (expected)
+negative/not_ti_monotone	Timeout	-	NOT-PROVED (expected)
+negative/not_tu_cap_equality	Timeout	-	NOT-PROVED (expected)
+negative/not_unwrap_nest_reversed	Timeout	-	NOT-PROVED (expected)
+negative/not_wrap_nest_reversed	Timeout	-	NOT-PROVED (expected)

@@ -81,12 +81,7 @@ class SizeZ3Check extends FunSuite:
 
   test("corpus (1000 programs, open + closed): dominance + soundness + improvement stats") {
     assume(SizeZ3.available, "z3 not on PATH")
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assert(f.exists, "corpus not found — run the corpus test first")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
-    }
+    val recs = Corpus.load()
     val rng = new java.util.Random(777)
     val A = SpaceFuzzer.alphabet
     def randPath(): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))

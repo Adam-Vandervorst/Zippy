@@ -5,10 +5,10 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==================================================================================================
- *  THE LAW CHANNEL'S OWN GATES  (review.md 2).
+ *  THE LAW CHANNEL'S OWN GATES.
  *
  *  `SpatialAcceptance` 6a–6d show four laws tightening real Zippy routines.  This suite gates the
- *  CHANNEL itself, on the four properties review.md 2 asks for and on the ones that make it safe to
+ *  CHANNEL itself, on the four properties the review asks for and on the ones that make it safe to
  *  hand a stranger's law to a production analysis:
  *
  *  {{{
@@ -22,14 +22,14 @@ import scala.language.implicitConversions
  *  8  the ORDER of the laws does not change the answer          (on a BASELINE-SENSITIVE law set)
  *  9  meeting a TRUE law never loses soundness                  (differential against `eval`)
  *  10 the library laws' PREMISES are checked, not assumed       (each declines where it must)
- *  12 an UNDISCHARGED law licenses NOTHING                      (review.md 9, the reviewer's own attack)
+ *  12 an UNDISCHARGED law licenses NOTHING                      (the review the reviewer's own attack)
  *  }}}
  *
- *  ==8 AND 12 ARE THE TWO review.md 9 ADDED, AND BOTH USED TO BE VACUOUS==
+ *  ==8 AND 12 ARE THE TWO the review ADDED, AND BOTH USED TO BE VACUOUS==
  *  Gate 8 previously permuted laws whose `bound` ignores `site.inferred`, so every permutation met the
  *  same bounds and the gate could not fail however the engine folded them.  It now permutes a law set in
  *  which one law's bound is ENABLED by another's — the shape `SpatialLaws.finiteSolutionCount` has — which
- *  is the case a left fold gets wrong.  Gate 12 runs the exact attack review.md 9 describes: an
+ *  is the case a left fold gets wrong.  Gate 12 runs the exact attack the review describes: an
  *  always-applicable ASSUMED law claiming a live `Mention` is empty, through `optimizeGuarded` and through
  *  `SpatialCheck`, with `eval` as ground truth on the residual.
  *
@@ -151,7 +151,7 @@ class SpatialLawsCheck extends FunSuite:
       always("under-k", SpatialType(Shape.wrap(List("k"), Shape.top), SpaceType.unknown)),
       always("exactly-two-a", SpatialType.of(spv(pv("a"), pv("a", "b")))),
       // …and the most adversarial bound of all, on UNDISCHARGED evidence: the production policy must
-      // refuse it outright, so it can neither widen nor narrow (review.md 9)
+      // refuse it outright, so it can neither widen nor narrow
       always("assumed-empty", SpatialType.empty, LawEvidence.Assumed("an axiom nobody discharged")),
     )
     val rng = new java.util.Random(20260807L)
@@ -277,7 +277,7 @@ class SpatialLawsCheck extends FunSuite:
       assertEquals(root.head.evidence.tag, tag)
       assertEquals(root.head.evidence.discharged, discharged)
       assertEquals(root.head.at, NodeId(Vector.empty))
-      // ---- THE EVIDENCE POLICY, ENFORCED (review.md 9) ---------------------------------------------
+      // ---- THE EVIDENCE POLICY, ENFORCED ---------------------------------------------
       // The three fixtures contribute the SAME bound and differ only in their justification, so this is
       // the policy and nothing else: the discharged two tighten, the ASSUMED one is REFUSED and the
       // answer stays the transfers'.
@@ -379,7 +379,7 @@ class SpatialLawsCheck extends FunSuite:
     // ---- (a) THE FIXTURE IS NON-VACUOUS: one law is ENABLED by another --------------------------
     // `cnt` reads `site.inferred` and declines unless the ∀-path length is pinned; `pin` pins it.  Under
     // a left fold, `[pin, cnt]` produces a count bound and `[cnt, pin]` does not — which is precisely why
-    // "meet is commutative" was never the order-independence argument (review.md 9).
+    // "meet is commutative" was never the order-independence argument.
     val M3 = SpaceMention("m3")
     val env3 = SpatialTyping.Env(spaces =
       Map(M3 -> SpatialType(Shape.top, SpaceType.bounded(LenBounds(1, 2), 4))))
@@ -567,8 +567,14 @@ class SpatialLawsCheck extends FunSuite:
     // (3) the RESIDUAL
     val gBare = SpatialPipeline.optimizeGuarded(r, bare)
     val gLaw = SpatialPipeline.optimizeGuarded(r, with_)
-    assert(gLaw.applied.exists(_.isInstanceOf[Rewrite.ConstantFold]),
-           s"the law must license a per-node fold: ${gLaw.applied.map(_.show)}")
+    // WHICH per-node rewrite the law licenses moved when the relational frontier became a rewrite
+    // consumer: the law pins a value, and the frontier then decides the enclosing ring node outright
+    // (`Union = L`) instead of the folder replacing the pinned operand by a `Literal`.  Either is the
+    // law being consumed at a node; what must not happen is neither.
+    assert(gLaw.applied.exists {
+             case _: Rewrite.ConstantFold | _: Rewrite.FrontierIdentity | _: Rewrite.EliminateEmpty => true
+             case _ => false },
+           s"the law must license a per-node rewrite: ${gLaw.applied.map(_.show)}")
     assert(SpatialPipeline.nodeCount(gLaw.residual.body) < SpatialPipeline.nodeCount(gBare.residual.body),
            s"${SpatialPipeline.nodeCount(gBare.residual.body)} -> ${SpatialPipeline.nodeCount(gLaw.residual.body)}")
     // (4) the residual's COST, on all four backends
@@ -584,10 +590,16 @@ class SpatialLawsCheck extends FunSuite:
       val v = SpaceValue((0 until rng.nextInt(2)).map(_ => pv(Vector("q", "z")(rng.nextInt(2)))).toSet)
       if SpatialTyping.accepts(v, ann.spaces(M)) then
         val ctx = SpaceContextMap(Map(M -> v))
-        // the LAW is a premise: it claims the union denotes exactly {q}.  Where the premise holds the
-        // residual must agree with the original; the test only feeds inputs where it does.
+        // THE LAW IS A PREMISE, AND `always` PUTS IT AT EVERY NODE — including the bare `Mention(M)`.
+        // So the premise is "`M` denotes {q}" (whence the union does too), not merely "the union
+        // denotes {q}": an input with `M = ∅` satisfies the ROOT reading and violates the one the law
+        // actually makes at the leaf.  The residual is licensed by the law as stated, so the
+        // differential must feed only inputs under which the law is true WHERE IT APPLIES.  (This
+        // matters now that the consumer moved: the old residual `Literal({q})` happened to agree with
+        // `eval` on `M = ∅` as well, which made the weaker filter look sufficient.)
         val truth = eval(body)(using sc = ctx)
-        if truth == spv(pv("q")) then
+        if v == spv(pv("q")) then
+          assertEquals(truth, spv(pv("q")), "the premise really does hold on this input")
           assertEquals(eval(gLaw.residual.body)(using sc = ctx), truth,
                        s"the law-licensed residual disagrees on ${v.pretty}")
           conforming += 1
@@ -598,10 +610,10 @@ class SpatialLawsCheck extends FunSuite:
   }
 
   // ================================================================================================
-  // 12.  AN UNDISCHARGED LAW LICENSES NOTHING          (review.md 9, the reviewer's own attack)
+  // 12.  AN UNDISCHARGED LAW LICENSES NOTHING          (the review the reviewer's own attack)
   // ================================================================================================
   test("12. an ASSUMED law claiming a live Mention is empty licenses NO rewrite and NO certificate") {
-    // THE ATTACK, verbatim from review.md 9: an always-applicable ASSUMED law claims a live `Mention`
+    // THE ATTACK, verbatim from the review: an always-applicable ASSUMED law claims a live `Mention`
     // denotes ∅.  Before, the meet accepted it ("a law cannot widen"), `optimizeGuarded` erased the term,
     // and `SpatialCheck` certified the residual without naming the law.  Every step of that chain is
     // gated below, and `eval` is the ground truth on the residual.
@@ -671,7 +683,7 @@ class SpatialLawsCheck extends FunSuite:
     val honest = lie.copy(evidence = LawEvidence.ExecutableChecked("all inputs, exhaustively"))
     val (met, metApps) = SpatialLaws.refine(Vector(honest), site)
     assert(met.isProvablyEmpty && metApps.map(_.outcome) == Vector(LawOutcome.Tightened))
-    println(s"[12] the review.md 9 attack: bound REFUSED at ${apps.size} occurrence(s); residual agrees " +
+    println(s"[12] the the review attack: bound REFUSED at ${apps.size} occurrence(s); residual agrees " +
             s"with `eval` on $agreed inputs; no ConstantFold; checker ${rep.check.show.linesIterator.next()
               .take(40)}; TrustAll DOES meet it (so the refusal is load-bearing) and the certificate " +
             "still refuses")

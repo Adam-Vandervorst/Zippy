@@ -8,7 +8,7 @@ package morkl
  *  heads and prefixes but is capped in depth and width, so beyond the cap the histogram is the only
  *  thing still saying anything.
  *
- *  ==WHAT "REDUCED" MEANS HERE, EXACTLY  (review.md 5)==
+ *  ==WHAT "REDUCED" MEANS HERE, EXACTLY==
  *  [[SpatialType.reduce]] is a TERMINATING BIDIRECTIONAL REDUCER with eight named rules — four that
  *  let the shape constrain the histogram and four the other way — iterated to a fixed point under an
  *  explicit round cap ([[SpatialConfig.reduceRounds]]).  It is applied at EVERY node of
@@ -22,7 +22,7 @@ package morkl
  *  the empty space is `INF >= 3`, which would "prove" three extractable items from nothing.  Each
  *  proposition encodes the conjunction its meaning requires, once.
  *
- *  ==ONE OWNER (review.md 6)==
+ *  ==ONE OWNER==
  *  This file owns the PRODUCT's lattice operations, each delegating componentwise and never
  *  restating a component's law:
  *
@@ -54,7 +54,7 @@ final case class SpatialType(shape: Shape, lens: SpaceType, uninhabited: Boolean
   /** the DISTINCT-head count — the group count of an iteration, invisible to the histogram */
   def headCount: Ivl =
     if uninhabited then Ivl.zero else Ivl(shape.headCount.lo, shape.headCount.hi min size.hi)
-  /** `E_d` — how many paths have AT LEAST `d` items, read off the histogram (whispers.md §1).  The
+  /** `E_d` — how many paths have AT LEAST `d` items, read off the histogram.  The
    *  spill bucket contributes its whole lower bound only when EVERY length it may cover reaches `d`,
    *  nothing when none does, and only its upper bound in between; adding `rest.lo` whenever
    *  `restLens.hi >= d` would be unsound, since the required paths may all sit in the shorter part. */
@@ -70,7 +70,7 @@ final case class SpatialType(shape: Shape, lens: SpaceType, uninhabited: Boolean
       Ivl(lo, if hi < lo then lo else hi)
   /** `K_d` — how many distinct length-`d` prefixes the SHAPE permits, met with `E_d` (every
    *  qualifying path lies in exactly one fibre, so `K_d ≤ E_d`, and `E_d > 0` forces `K_d > 0`).
-   *  whispers.md §1 `require`s consistency here and throws on a hand-built inconsistent product; this
+   *  The design note `require`s consistency here and throws on a hand-built inconsistent product; this
    *  returns the reduced interval and leaves the contradiction to [[SpatialType.reduce]], which has an
    *  explicit bottom to collapse to. */
   def prefixesAt(d: Int): Ivl =
@@ -141,7 +141,7 @@ object SpatialType:
                 if t.lens.rest.hi == 0 then Ivl.zero else Ivl(t.lens.rest.lo, Ivl.INF), t.lens.restLens))
 
   // ================================================================================================
-  // THE REDUCER  (review.md 5: "in both directions after every transfer" — made true)
+  // THE REDUCER  (the requirement: "in both directions after every transfer" — made true)
   // ================================================================================================
 
   /** THE BIDIRECTIONAL REDUCER.  Eight rules; `S*` let the shape constrain the histogram, `H*` the
@@ -267,7 +267,7 @@ object SpatialType:
         else s.eps
       if below.hi == 0 then                                       // H1/H3: no heads are possible
         if s.heads.exists((_, c) => c.definitelyNonEmpty) || s.others.lo >= 1 then None
-        else Some(Shape(eps, scala.collection.immutable.SortedMap.empty, Ivl.zero, None))
+        else Some(Shape(eps, scala.collection.immutable.SortedMap.empty, Ivl.zero, None, Some(Set.empty)))
       else
         var dead = false
         val kids = Vector.newBuilder[(PathItem, Shape)]
@@ -296,9 +296,16 @@ object SpatialType:
             if emptyTail && s.others.lo >= 1 then None
             else
               val hi = if emptyTail then 0L else othersHi
+              // THE UNTRACKED-HEAD CERTIFICATE (channel (e)) MUST BE THREADED THROUGH HERE, or the
+              // whole channel is INERT: `SpatialType.reduce` runs `constrainShape` on every decorated
+              // node, so a certificate this function drops never reaches the cost model.  (A prototype
+              // that carried the keys in `Shape.mk` but not here measured `SpatialType.of(v)` with the
+              // 52 spilled keys and `reduce(SpatialType.of(v))` with `None`.)  The H1/H2/H3 constraints
+              // only shrink COUNTS; they never introduce a head, so the incoming bound still holds.
               Some(Shape(eps, scala.collection.immutable.SortedMap.from(kept.filter(_._2.possiblyNonEmpty)),
                          if hi == 0 then Ivl.zero else Ivl(s.others.lo, hi),
-                         if hi == 0 then None else ot))
+                         if hi == 0 then None else ot,
+                         if hi == 0 then Some(Set.empty) else s.otherKeys))
 
   /** H4.  The space is known NON-EMPTY (from the histogram); if the shape leaves exactly one place a
    *  path could be, that place is forced — a MUST claim the count domain paid for.  `None` =
@@ -358,7 +365,7 @@ object Fact:
 
   /** the same, plus the answer to a PREFIX QUERY for each probe.
    *
-   *  `PrefixAbsent` used to be a public case that `from` never emitted (review.md 6): the shape can
+   *  `PrefixAbsent` used to be a public case that `from` never emitted: the shape can
    *  prove an unbounded family of prefixes absent (every item outside a closed head set), so there is
    *  no finite "all of them" to enumerate — the fact only exists relative to prefixes somebody asks
    *  about.  [[SpatialAnalysis]] asks about the CONSTANT PATHS THE TERM ITSELF MENTIONS, which is
@@ -682,13 +689,13 @@ object SpatialTyping:
 
   /** THE PREFIX QUERY.  `true` PROVES that no path of any space admitted by `t` starts with
    *  `prefix` — a closed head set, or a tracked head whose subtree does not continue that way.  This
-   *  is what makes `Fact.PrefixAbsent` a fact somebody can obtain (review.md 6). */
+   *  is what makes `Fact.PrefixAbsent` a fact somebody can obtain. */
   def prefixAbsent(t: SpatialType, prefix: List[PathItem]): Boolean =
     t.uninhabited || t.isProvablyEmpty || !t.shape.mayHavePrefix(prefix)
 
   /** A specialisation carries its PRECONDITION as data.  `eliminateIn` used to hand back a bare
    *  `Routine` with the same name, so nothing stopped a caller installing a conditionally-valid
-   *  body as a general replacement (review.md 5).  A `SpecializedRoutine` cannot be mistaken for
+   *  body as a general replacement.  A `SpecializedRoutine` cannot be mistaken for
    *  one: the environment it assumed is attached, and [[accepts]] decides an actual input against
    *  it, which is what a guarded dispatcher needs. */
   final case class SpecializedRoutine(precondition: Map[SpaceMention, SpatialType],
@@ -696,7 +703,7 @@ object SpatialTyping:
     /** may this specialisation be used for these actual arguments?  Decided with the EXACT predicate
      *  [[accepts]], not the weaker [[withinEnvelope]]: a dispatcher that admits an argument outside
      *  the precondition installs a conditionally-valid body on an input that violates the condition,
-     *  which is the failure review.md 5 is about. */
+     *  which is the failure the review is about. */
     def applicableTo(args: Map[SpaceMention, SpaceValue]): Boolean =
       precondition.forall((m, t) => args.get(m).exists(v => SpatialTyping.accepts(v, t)))
 
@@ -708,7 +715,7 @@ object SpatialTyping:
    *  and is exhibited by `SpatialLawCheck`: this predicate ADMITS VALUES OUTSIDE γ, so a dispatcher
    *  built on it can select a conditionally-valid body for an input the condition excludes.
    *  [[accepts]] is the version without the gap, and it is what every gate and every dispatcher
-   *  uses.  (Renamed from `satisfies` — review.md 1: the attractive everyday verb must not name the
+   *  uses.  (Renamed from `satisfies`: the attractive everyday verb must not name the
    *  unsafe operation.) */
   def withinEnvelope(v: SpaceValue, t: SpatialType): Boolean =
     if t.uninhabited then false
@@ -721,15 +728,15 @@ object SpatialTyping:
         byLen.keys.forall(l => { val b = t.len; !b.isEmpty && b.lo <= l && l <= b.hi }) &&
         Shape.contains(t.shape, v)
 
-  // `satisfies` is GONE, not deprecated: review.md 1 calls the attractive everyday verb on the unsafe
+  // `satisfies` is GONE, not deprecated: the review calls the attractive everyday verb on the unsafe
   // operation an API trap, and a deprecated alias leaves the trap reachable.  Use `accepts` for γ,
   // `withinEnvelope` when the weak envelope is genuinely what is wanted (only the gap measurement in
   // `SpatialLawCheck` wants it).
 
-  /** FULL γ-MEMBERSHIP on the reduced product — THE canonical name (review.md 1).  Delegates to the
+  /** FULL γ-MEMBERSHIP on the reduced product — THE canonical name.  Delegates to the
    *  single implementation, [[SpatialType.accepts]]; the local copy this file used to carry (a second
    *  spelling of `Shape.contains` plus a second spelling of the histogram invariant) is gone. */
   def accepts(v: SpaceValue, t: SpatialType): Boolean = SpatialType.accepts(t, v)
-  /** the previous name of [[accepts]], kept as an alias to save churn (review.md 1 allows it) */
+  /** the previous name of [[accepts]], kept as an alias to save churn (the review allows it) */
   def gammaMember(v: SpaceValue, t: SpatialType): Boolean = accepts(v, t)
 end SpatialTyping

@@ -24,6 +24,9 @@
 #   threeway_*                — ZIPPER observation = SET-OF-PATHS = EAGER TRIE, per operator
 #   laws/law_*                — the optimiser's source-law certificates (see laws/REGISTRY.tsv)
 cd "$(dirname "$0")"
+. ../scripts/toolpath.sh                       # $Z3 / $VAMPIRE -> PATH -> conventional locations
+Z3_BIN=$(resolve_tool z3)           || { echo "$(tool_missing z3)" >&2; exit 1; }
+VAMPIRE_BIN=$(resolve_tool vampire) || { echo "$(tool_missing vampire)" >&2; exit 1; }
 EXPECTED_OPEN=" refine_cli refine_cls "
 pass=0; fail=0; open_exp=0; cm=0
 : > STATUS.tsv
@@ -31,8 +34,8 @@ run_family() {
   dir="$1"; shift
   for f in "$@"; do
     path="$dir$f.smt2"
-    z3r=$(z3 -T:120 "$path" 2>&1 | tail -1)
-    vr=$(/Applications/vampire --input_syntax smtlib2 -t 120s "$path" 2>&1 | grep -q "Refutation found" && echo proved || echo -)
+    z3r=$("$Z3_BIN" -T:120 "$path" 2>&1 | tail -1)
+    vr=$("$VAMPIRE_BIN" --input_syntax smtlib2 -t 120s "$path" 2>&1 | grep -q "Refutation found" && echo proved || echo -)
     if [ "$z3r" = "sat" ]; then
       st="COUNTERMODEL"; cm=$((cm+1))
     elif [ "$z3r" = "unsat" ] || [ "$vr" = "proved" ]; then
@@ -69,6 +72,25 @@ fi
 # both provers are tried.  Verdicts still land in STATUS.tsv, so a regression is visible.
 if [ -d spatial ]; then
   run_family "spatial/" $(ls spatial/*.smt2 2>/dev/null | sed 's|spatial/||;s|\.smt2$||')
+fi
+# pipeline/ — the per-program equivalence artifacts written by EquivPipelineTest.  Marker files
+# (TRIVIAL / LAW-JUSTIFIED / IDENTICAL-STRUCTURE / SINGLE-SIDE / PROVER-BUDGET-EXCEEDED) carry no
+# goal and are recorded as their own verdict kinds rather than being invisible; the test writes its
+# own proofs/pipeline/STATUS.tsv with the per-prover timings, so this only folds them into the
+# repo-wide table.  A marker is NOT a pass and is not counted as one.
+if [ -d pipeline ]; then
+  MARKERS="TRIVIAL-NO-OBLIGATION\|LAW-JUSTIFIED-NO-RESIDUAL\|IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION\|SINGLE-SIDE-OBSERVATION\|PROVER-BUDGET-EXCEEDED"
+  for path in pipeline/*.smt2; do
+    [ -e "$path" ] || continue
+    f=$(basename "$path" .smt2)
+    if grep -q "$MARKERS" "$path"; then
+      st=$(grep -o "$MARKERS" "$path" | head -1)
+      printf "%s\t%s\t%s\t%s\n" "pipeline/$f" "-" "-" "$st" >> STATUS.tsv
+      printf "%-32s z3: %-8s vampire: %-8s => %s\n" "pipeline/$f" "-" "-" "$st"
+    else
+      run_family "pipeline/" "$f"
+    fi
+  done
 fi
 echo "-----"
 echo "certified: $pass  expected-open: $open_exp  countermodels: $cm  unexpected-open: $fail"

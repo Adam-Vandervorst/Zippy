@@ -3,7 +3,7 @@ package morkl
 import munit.FunSuite
 
 /** RELATIONAL FRONTIER COST — the differential and ASYMPTOTIC gate for `SpatialFrontier.scala`
- *  (review.md item 2).
+ *.
  *
  *  ==WHAT THE GROUND TRUTH IS==
  *  The review DEFINES the parameter, so this suite computes it rather than measuring it.  [[truth]]
@@ -119,7 +119,7 @@ class SpatialFrontierCheck extends FunSuite:
   /** COMPOSITION has a different frontier and therefore a different derived count: `compositionR`
    *  enters every node of the LEFT and builds one fresh node per left node THAT HAS CHILDREN (a leaf
    *  terminal returns `b` by pointer — `Identity(RIGHT)` — and allocates nothing), then merges at each
-   *  terminal.  This is review.md item 4's correction: one terminal, but a `d`-node spine. */
+   *  terminal.  This is the correction: one terminal, but a `d`-node spine. */
   def compTruth(a: Trie): (Long, Long) =
     var internal = 0L; var terminals = 0L
     def go(n: Trie): Unit =
@@ -217,19 +217,24 @@ class SpatialFrontierCheck extends FunSuite:
     gate(Scale("restriction by {ε} — descents", rows), expected = 0.0)
   }
 
-  test("KEY-DISJOINT union: rebuilt is EXACT below Shape.MaxHeads, and the spill is where it breaks") {
-    // review.md's P1 first row, MEASURED AS A SWEEP ACROSS THE WIDTH CAP.  A union of two key-disjoint
+  test("CONTINUITY ACROSS THE WIDTH CAP: a key-disjoint union is EXACT on BOTH sides of Shape.MaxHeads") {
+    // the P1 first row, MEASURED AS A SWEEP ACROSS THE WIDTH CAP.  A union of two key-disjoint
     // operands under a shared prefix allocates TWO `ITrie` nodes at every scale — the root and the
     // shared-prefix node — because the Patricia merge attaches every branch whole.  The DERIVED
     // frontier (`truth`, which reads the real tries) says so at every n: `|Q| = 2`.
     //
-    // The model matches it EXACTLY while both head sets are closed, and loses it at
-    // `Shape.MaxHeads`: above the cap the spill keeps the untracked COUNT and drops the head NAMES, so
-    // `Shape.possibleHeads` gives `None`, key-disjointness stops being provable, and `paired(2)` falls
-    // back to the count-only pairing `min(K_2, K_2) = n`.  That crossover is LIM-5's root cause and
-    // this is the measurement of it — asserted below the cap, PRINTED above it, so a fix shows up here
-    // as the flat row it should be.
-    val ns = Vector(4, 8, 12, 13, 16, 24, 64, 256, 1024)
+    // THE MODEL USED TO MATCH IT ONLY WHILE BOTH HEAD SETS WERE CLOSED and to lose it at
+    // `Shape.MaxHeads`: the width spill kept the untracked COUNT and dropped the head NAMES, so
+    // `Shape.possibleHeads` answered `None`, key-disjointness stopped being provable, and `paired(2)`
+    // fell back to the count-only pairing `min(K_2, K_2) = n`.  Measured, that was
+    // `rebuilt = [2,2]` for n ≤ 12 and `[2, n+2]` for n ≥ 13 — the SAME program family, one more key,
+    // and a prediction that changes GROWTH CLASS (`Sym.bigO` from 1 to n) at a fixed cutoff.
+    //
+    // The untracked-head certificate (`Shape.otherKeys`, channel (e)) is what removes the cliff, and
+    // THIS TEST IS THE GATE ON IT: the assertion is now unconditional, so a regression that drops the
+    // certificate anywhere on the path — `Shape.mk`, `capDepth`, `widen`, `SpatialAnalysis.capWidth`
+    // or `SpatialTypeSystem.constrainShape` — turns this row red instead of merely printing wider.
+    val ns = Vector(4, 8, 12, 13, 16, 24, 64, 256, 1024, 4096)
     var shown = Vector.empty[String]
     for n <- ns do
       val l = sv((0 until n).map(i => pv("g", s"x${2 * i}")))
@@ -242,36 +247,85 @@ class SpatialFrontierCheck extends FunSuite:
              s"n=$n: |Q| ${s.depth.pairedTotal.show} must bracket the derived ${t.q}: ${s.show}")
       assert(!s.isFallback, s"n=$n: this must be a derived frontier, not a ceiling: ${s.show}")
       assert(s.descents.hi < Ivl.INF, s"n=$n: descents must stay finite: ${s.show}")
-      if n <= Shape.MaxHeads then
-        assertEquals(s.rebuilt.hi, 2L,
-                     s"n=$n: with both head sets CLOSED the rebuild count is exact: ${s.show}")
-      else
-        assert(s.rebuilt.hi >= 2L, s"n=$n: sound in the only direction that matters: ${s.show}")
-    println(s"  KEY-DISJOINT union across the width cap (Shape.MaxHeads = ${Shape.MaxHeads}) — " +
-            "exact below it, count-only pairing above it (LIM-5):")
+      assertEquals(s.rebuilt.hi, 2L,
+                   s"n=$n: the rebuild count must NOT move at the width cap " +
+                   s"(Shape.MaxHeads = ${Shape.MaxHeads}): ${s.show}")
+      assertEquals(s.depth.pairedTotal.hi, 2L,
+                   s"n=$n: |Q| must NOT move at the width cap: ${s.show}")
+    println(s"  KEY-DISJOINT union across the width cap (Shape.MaxHeads = ${Shape.MaxHeads}, " +
+            s"Shape.MaxSpillKeys = ${Shape.MaxSpillKeys}) — FLAT:")
     for l <- shown do println("    " + l)
   }
 
-  test("head-disjointness needs ENUMERABLE head sets, and the width spill is the boundary") {
-    // the same fact as the ROOT-level reject.  Below the cap both sides are closed, the head sets are
-    // enumerable and the intersection is PROVED empty with zero allocation; above it the spill leaves
-    // two anonymous counts that could share every key, so no such proof exists.  Both halves are
-    // asserted: the second is what LIM-5 has to fix, and asserting it keeps the boundary honest.
+  test("CONTINUITY ACROSS THE DEPTH CAP: exact to MaxDepth+1, and LINEAR IN d past it") {
+    // `Shape.capDepth` is the OTHER half of the spill and it lost the names the same way: the
+    // collapsed level's tracked keys became an anonymous count.  Four key-disjoint keys under a
+    // shared prefix of length d-1 measured `rebuilt = [d,d]` for d ≤ MaxDepth and then `[5,9]`,
+    // `[5,10]`, `[5,14]` for d = 5, 6, 7.
+    //
+    // TWO DIFFERENT CAUSES SAT ON TOP OF EACH OTHER THERE, and only one of them was a defect:
+    //  * d = MaxDepth + 1 — the divergent keys land exactly ON the collapsed level, so the names
+    //    were available and were thrown away.  The certificate recovers them and the row is now
+    //    EXACT.  That is the discontinuity, and it is gone.
+    //  * d > MaxDepth + 1 — the divergent keys land BELOW the collapsed level.  Both sides' shapes
+    //    truncate to the same shared prefix head, so no certificate can help: the domain genuinely
+    //    cannot see where they diverge.  That is the DEPTH BUDGET, an honest precision limit, and
+    //    the prediction stays sound and LINEAR in d (a bounded factor over the truth `d`) rather
+    //    than becoming a product.  The assertion below says exactly that and no more.
+    var shown = Vector.empty[String]
+    for d <- 1 to Shape.MaxDepth + 3 do
+      val pre = (1 until d).map(i => s"p$i").toList
+      val l = sv((0 until 4).map(i => PathValue(pre :+ s"a$i")))
+      val r = sv((0 until 4).map(i => PathValue(pre :+ s"b$i")))
+      val s = SpatialFrontier.binary(FrontierOp.Union, ty(l), ty(r))
+      shown :+= f"depth=$d%-3d rebuilt=${s.rebuilt.show}%-14s |Q|=${s.depth.pairedTotal.show}%-14s src=${s.source.show}"
+      if d <= Shape.MaxDepth + 1 then
+        assertEquals(s.rebuilt.hi, d.toLong,
+                     s"depth=$d: the rebuild count must be EXACT up to Shape.MaxDepth + 1 " +
+                     s"(= ${Shape.MaxDepth + 1}) — the collapsed level's names are available: ${s.show}")
+      else
+        assert(s.rebuilt.hi >= d.toLong, s"depth=$d: unsound, below the truth $d: ${s.show}")
+        assert(s.rebuilt.hi <= 3L * d,
+               s"depth=$d: past the depth budget the bound must stay LINEAR in d (<= 3d), not " +
+               s"become a product: ${s.show}")
+    println(s"  KEY-DISJOINT union across the depth cap (Shape.MaxDepth = ${Shape.MaxDepth}) — " +
+            s"exact to d = ${Shape.MaxDepth + 1}, linear past it:")
+    for l <- shown do println("    " + l)
+  }
+
+  test("the prediction's ORDER CLASS is invariant under the config's own width cap") {
+    // A cap is a PRECISION knob, not a growth-class knob.  `SpatialConfig.cheap` narrows
+    // `shapeWidth` to 6 through `SpatialAnalysis.capWidth`, which spills tracked heads by hand — so
+    // it is a second place the certificate can be dropped, and dropping it there would make the
+    // cheap config predict a different growth class from the default on the SAME program.
+    for n <- Vector(8, 13, 40) do
+      val l = sv((0 until n).map(i => pv("g", s"x${2 * i}")))
+      val narrowed = SpatialAnalysis.narrow(ty(l).shape, SpatialConfig.cheap)
+      assert(narrowed.possibleHeads.isDefined,
+             s"n=$n: the config's own width spill dropped the untracked-head certificate: ${narrowed.show}")
+      assertEquals(narrowed.possibleHeads.get, Set("g"),
+                   s"n=$n: and it must still name exactly the real head: ${narrowed.show}")
+  }
+
+  test("head-disjointness needs ENUMERABLE head sets, and the certificate keeps them past the spill") {
+    // the same fact as the ROOT-level reject.  The head sets here are WIDE — n keys, one path each —
+    // so past `Shape.MaxHeads` the tracked map holds only 12 of them and the rest are untracked.
+    // What used to happen: two anonymous counts that could share every key, so no disjointness proof
+    // existed and the intersection was `Bespoke` with a positive rebuild.  What happens now: the
+    // untracked-head certificate names them, `possibleHeads` answers at every n, and the intersection
+    // stays PROVED empty with zero allocation.
     for n <- Vector(4, 6, 12, 13, 64, 512) do
       val l = sv((0 until n).map(i => pv(s"a$i")))
       val r = sv((0 until n).map(i => pv(s"b$i")))
       val s = SpatialFrontier.binary(FrontierOp.Intersection, ty(l), ty(r))
-      val closed = n <= Shape.MaxHeads
-      assertEquals(ty(l).shape.possibleHeads.isDefined, closed,
-                   s"n=$n: the head set is enumerable iff it is closed: ${ty(l).shape.show}")
-      if closed then
-        assertEquals(s.cases, Set(FrontierCase.Empty),
-                     s"n=$n: head-disjoint intersection is PROVED empty: ${s.show}")
-        assert(s.rootOnly, s"n=$n: nothing below the root is paired: ${s.show}")
-        assertEquals(s.rebuilt.hi, 0L, s"n=$n: and nothing is allocated: ${s.show}")
-      else
-        assert(s.rebuilt.hi >= 1L,
-               s"n=$n: past the spill the model can only be sound, not exact: ${s.show}")
+      assert(ty(l).shape.possibleHeads.isDefined,
+             s"n=$n: the head set must stay enumerable past the width cap: ${ty(l).shape.show}")
+      assertEquals(ty(l).shape.possibleHeads.get, (0 until n).map(i => s"a$i").toSet,
+                   s"n=$n: and it must name EXACTLY the real heads: ${ty(l).shape.show}")
+      assertEquals(s.cases, Set(FrontierCase.Empty),
+                   s"n=$n: head-disjoint intersection is PROVED empty at every n: ${s.show}")
+      assert(s.rootOnly, s"n=$n: nothing below the root is paired: ${s.show}")
+      assertEquals(s.rebuilt.hi, 0L, s"n=$n: and nothing is allocated: ${s.show}")
       // and the proof is not vacuous: the SAME key set is never disjoint from itself
       val same = SpatialFrontier.binary(FrontierOp.Intersection, ty(l), ty(l))
       assertNotEquals(same.cases, Set(FrontierCase.Empty),
@@ -281,7 +335,7 @@ class SpatialFrontierCheck extends FunSuite:
 
   test("restriction by ONE present COVERING prefix: Θ(d) descents, zero allocation") {
     // every x-path extends the prefix, so `Trie.restrictionR` propagates Identity(LEFT) to the root
-    // and allocates nothing (review.md item 2, last sentence of the restriction paragraph).  n doubles:
+    // and allocates nothing (the review of the restriction paragraph).  n doubles:
     // the selected subtree below the matched prefix grows exponentially.
     val prefix = List("p0", "p1", "p2", "p3")
     val d = prefix.length.toLong
@@ -494,7 +548,7 @@ class SpatialFrontierCheck extends FunSuite:
       val s = SpatialFrontier.binary(FrontierOp.Composition, ty(a), ty(b))
       assert(s.notes.exists(_.contains("LEAF")),
              s"the single terminal of a one-path left operand is a leaf: ${s.show}")
-      // review.md item 4: ONE terminal, but the d-node spine IS rebuilt
+      // The review: ONE terminal, but the d-node spine IS rebuilt
       assert(s.rebuilt.hi >= 5L && s.rebuilt.hi <= 12L,
              s"expected the 6-node spine and no per-graft merge, got ${s.rebuilt.show}")
       Row(b.paths.size.toLong, s.descents.hi, compWork(tr(a)))

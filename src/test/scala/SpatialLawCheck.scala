@@ -4,7 +4,7 @@ import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
-/** SEMANTIC LAWS OF THE SPATIAL DOMAIN — the executable half of review.md 6.
+/** SEMANTIC LAWS OF THE SPATIAL DOMAIN — the executable half of the review.
  *
  *  Four families, each a different failure mode:
  *
@@ -242,7 +242,7 @@ class SpatialLawCheck extends FunSuite:
       .exists(v => gammaSpace(a, v) && !gammaSpace(b, v))
 
   /** do the two histograms PARTITION the lengths differently — one tracking a class the other only
-   *  covers with its spill bucket?  This is review.md 4's named suspect. */
+   *  covers with its spill bucket?  This is the named suspect. */
   private def partitionsDiffer(x: SpaceType, y: SpaceType): Boolean =
     (x.rest.hi > 0 || y.rest.hi > 0) && x.byLen.keySet != y.byLen.keySet
 
@@ -308,7 +308,7 @@ class SpatialLawCheck extends FunSuite:
     val rng = new java.util.Random(1003)
     val pool = abstractPool(rng, 1200)
     var sound = 0; var leqTrue = 0; var contTrue = 0; var incomplete = 0
-    // THE CAUSE HISTOGRAM (review.md 4, second half).  Every false negative is attributed, and a
+    // THE CAUSE HISTOGRAM.  Every false negative is attributed, and a
     // pair may carry several labels — the totals below are therefore label counts, not pair counts;
     // the pair counts are the `fault:` rows.
     val cause = scala.collection.mutable.LinkedHashMap.empty[String, Int]
@@ -392,12 +392,12 @@ class SpatialLawCheck extends FunSuite:
   }
 
   // =============================================================================================
-  // 1b. THE HISTOGRAM ORDER, DECIDED EXACTLY — where review.md 4's named suspect actually lives
+  // 1b. THE HISTOGRAM ORDER, DECIDED EXACTLY — where the named suspect actually lives
   // =============================================================================================
   //
   // `U` is every space value over {a,b} with paths of ≤2 items.  For a SPILL-CARRYING histogram that
   // is useless in both directions: `U` has only two paths per length and no path longer than two, so
-  // it can neither confirm nor refute containment for the population review.md 4 blames — and the
+  // it can neither confirm nor refute containment for the population the review blames — and the
   // cause histogram above shows the consequence (73% of the "false negatives" on `U` are pairs where
   // `U` cannot express any member of γ(a) at all).
   //
@@ -686,7 +686,7 @@ class SpatialLawCheck extends FunSuite:
   }
 
   // =============================================================================================
-  // 1c. THE SHAPE ORDER, DECIDED — the other four channels review.md 4 names
+  // 1c. THE SHAPE ORDER, DECIDED — the other four channels the review names
   // =============================================================================================
   //
   // `Shape.leqStrong`'s completeness has never been measured: the existing SHAPE ORDER test checks
@@ -822,7 +822,7 @@ class SpatialLawCheck extends FunSuite:
   }
 
   test("the code's `within` is NOT γ-containment (upper envelope only)") {
-    // review.md: `within` compares upper envelopes and ignores every lower bound
+    // The review: `within` compares upper envelopes and ignores every lower bound
     val a = SpaceType.closed(1L -> Ivl(0, 3))
     val b = SpaceType.closed(1L -> Ivl(2, 5))
     assert(a.within(b), "precondition: within holds on the envelopes")
@@ -864,7 +864,7 @@ class SpatialLawCheck extends FunSuite:
     // of the lengths PRESENT in the value, so it accepts values that violate a positive class lower
     // bound.  Certified as a ground statement in proofs/spatial-semantic/gsem_satisfies_weaker.smt2.
     //
-    // WHAT CHANGED (review.md 1): no dispatcher is built on this predicate any more.
+    // WHAT CHANGED: no dispatcher is built on this predicate any more.
     // `SpecializedRoutine.applicableTo`, `BoundedRecursion.applicableTo` and
     // `SpatialPipeline.GuardedRoutine.applicableTo` all decide with full γ (`SpatialTyping.accepts`),
     // so the gap measured here is no longer reachable from a guarded specialisation.  The assertion
@@ -1185,12 +1185,7 @@ class SpatialLawCheck extends FunSuite:
   }
 
   test("conditional rewrite on the corpus: annotated specialisation agrees on conforming inputs") {
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assume(f.exists, "corpus not found")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
-    }
+    val recs = Corpus.load()
     val rng = new java.util.Random(5050)
     val sNames = (0 until 3).map(i => SpaceMention("s" + i)).toVector
     val pNames = (0 until 3).map(j => PathRef("p" + j)).toVector

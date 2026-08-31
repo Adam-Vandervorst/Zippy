@@ -1,0 +1,71 @@
+# terminating/REGISTRY.tsv — THE TOTAL MAP of the recursion-lowering surface to its obligations.
+#
+# Columns:  id  kind  file  code-site  statement
+#   kind = FILE       a machine-checked obligation file; terminating/run.sh runs it and
+#                     terminating/STATUS.tsv carries its per-prover verdict.
+#          SCHEMATIC  a FILE whose theorem is an induction SCHEMA over the Space grammar or over the
+#                     component arity: the file pins the base, the step, and the instances the
+#                     compiler actually emits, and the general arity/depth follows by that step.
+#          PROPERTY   a syntactic or executable property, discharged by a Scala test rather than by
+#                     a prover, because an SMT model of it would be a re-implementation.
+#          CITED      already discharged by an obligation OUTSIDE terminating/; the row exists so
+#                     the code site is not left looking uncovered.
+#          NEGATIVE-RESULT  a kept, annotated FAILED attempt.  Not run by run.sh.
+#          OPEN       stated here, NOT discharged.  The reason is in the named file's header.
+#
+# "TOTAL over the recursion-lowering surface" means: every function that creates, consumes, or
+# rewrites a Space.Fixpoint or a recursive Space.Call has at least one row.  The eleven such sites
+# are MORKL.scala {1214 asFixpoint, 1235 lowerMutualPassthrough, 1279 asFixpointGeneral,
+# 1321 lowerMutualByElimination, 1347 lowerCalls, 333 eval-Fixpoint, 652 exec-Fixpoint,
+# 523/728 transpile/untranspile}, EquivPipeline.scala {91 expand-Fixpoint, 410 unrollControl},
+# SpatialRecursion.scala {BoundedRecursion}, Zipper.scala {302 fallback}, and
+# Supercompiler.scala {309/473/728 fold/msg/drive}.  Line numbers are as of this change set.
+#
+# A row whose kind is OPEN or PROPERTY is NOT a proved obligation.  Read STATUS.tsv for what a
+# prover actually said; read the file header for what was attempted and what compensating coverage
+# exists.  Never turn an OPEN row into a FILE row by weakening its statement.
+#
+id	kind	file	code-site	statement
+T1	FILE	terminating/bounded_growth_decrease.{p,smt2}	(shared measure lemma)	subset(R,S) & subset(S,U) & S!=R => card(U\S) < card(U\R): strict growth in a finite universe strictly shrinks the complement.
+T2	FILE	terminating/datalog_a_terminates.{p,smt2}	terminating/datalog_a.txt	The inflationary step R |-> R u f(R) is inflationary and, until stationary, strictly shrinks card(top\R), for UNINTERPRETED f.
+T3	FILE	terminating/datalog_b_naive_terminates.{p,smt2}	terminating/datalog_b.txt (gtc/gpt/grsg)	Same measure argument, staged over the three concrete naive datalog bodies (15 goals).
+T4	FILE	terminating/datalog_b_seminaive_{lemmas,terminates}.{p,smt2}	terminating/datalog_b.txt (pt_sn); EquivPipelineTest.scala:543-551	mu(A,D) = 2*card(top\A) + [D != {}] is >= 0 and strictly decreases on every state-changing semi-naive step, for an UNINTERPRETED delta operator.
+T5	FILE	terminating/least_fixpoint_unique.{p,smt2}	(shared lattice lemma)	Two least solutions of X = a u F(X) in a join-semilattice coincide.
+T6	FILE	terminating/no_infinite_descent.smt2	(shared well-foundedness)	No total N->N function is everywhere strictly decreasing: the bridge from measure-decrease to termination.
+T7	FILE	terminating/reachable_{decrease,value}.{p,smt2}	terminating/total_functions.egg	The masked frontier step stays in the mask, is inflationary on masked arguments, and strictly shrinks card(mask\R); plus the value facts by an explicit nat-induction schema.
+T8	FILE	terminating/scc_decrease.{p,smt2}	terminating/total_functions.egg	All three SCC-split branches strictly shrink card(nodes).
+T9	FILE	terminating/transitive_equiv.{p,smt2}	terminating/intro.egg	The doubling recursion denotes one-hop transitive closure, for EVERY graph.  The only pre-existing equivalence certificate touching recursion.
+T10	NEGATIVE-RESULT	terminating/transitive_chc.smt2	(none)	A failed CHC/Spacer attempt at T9, kept and annotated: Horn-SAT without minimality answers "sat" for a true AND for a deliberately false claim, so the verdict is uninformative.  NOT run by run.sh (its "sat" is by design).
+O1	FILE	terminating/fixpoint_is_lfp.smt2	MORKL.scala:333 (eval), :652 (exec/execT), EquivPipeline.scala:91 (expand)	Under monotone F and I subset= F(I): the Kleene chain ascends, the accumulator A_k equals C_k, a stationary A_n is lfp_{>=I} F, and every non-stationary step strictly shrinks card(top\C_k).
+O2	FILE	terminating/asfixpoint_sound.smt2	MORKL.scala:1214 asFixpoint	The Call rule with the stabilised-argument cut and the Fixpoint loop compute the SAME value (Ev(0) = A_n) and stop on the SAME test.  Needs no monotonicity.
+O3a	SCHEMATIC	terminating/tagged_projection.smt2	MORKL.scala:1265, :1309-1310 (tag construction)	Round trip, zero cross-talk for different head items, and the n-ary tagged-union projection (base + step + the arities 2 and 3 the compiler emits).
+O3a'	FILE	terminating/tagged_order.smt2	MORKL.scala:1235 lowerMutualPassthrough, :1279 asFixpointGeneral	The tagged order agrees with the componentwise order: Wrap(A,t1) u Wrap(B,t2) subset= Wrap(A',t1) u Wrap(B',t2) iff A subset= A' and B subset= B'.
+O3c	FILE	terminating/tagged_projection.smt2 (last goal)	MORKL.scala:1279-1319 asFixpointGeneral	The two-tagged step is a function of the #arg# projection alone, so the executor's whole-state stop test firing one round late adds nothing to #out#.
+O3d	FILE	terminating/mono_soundness.smt2	MORKL.scala:1284-1307 monoIn	Arm-by-arm soundness of the syntactic monotonicity gate.  Union/Intersection/Composition/Restriction/Wrap/Unwrap/TailsUnion/Subtraction-left and composition-of-arms are PROVED.
+O3d-X1	OPEN	terminating/mono_soundness.smt2 (CE1a-c)	MORKL.scala:1292 monoIn, :1256 mono	REFUTED: the TailsIntersection arm is UNSOUND.  A = {0.7} subset= B = {0.7,1.8} but TI(A) = {7} is not subset= TI(B) = {}.  The arm must be tightened; see the file header and the report's patch.
+O3d-X2	OPEN	terminating/mono_soundness.smt2 (CE2a-c)	MORKL.scala:1293 monoIn, :1257 mono	REFUTED: the Iteration arm is UNSOUND when the body is ANTITONE IN `rest`.  A = {0.7} subset= B = {0.7,0.9} but Iter(A) = {eps} is not subset= Iter(B) = {}.  The gate checks monotonicity in the recursive mention and silently assumes it in the loop variable.
+O4	FILE	terminating/mutual_tagged_bekic.smt2	MORKL.scala:1235-1270 lowerMutualPassthrough	The tagged encoding is faithful: fixpoints and pre-fixpoints correspond componentwise, so lfp(Psi) projects to the COMPONENTWISE LEAST solution of the mutual system.
+O4b	FILE	terminating/mono_soundness.smt2	MORKL.scala:1247-1270 mono	Same arms, same verdicts, as O3d/O3d-X1/O3d-X2: `mono` and `monoIn` accept the same constructor list.
+O5	FILE	terminating/mutual_tagged_bekic.smt2 (O5 section)	MORKL.scala:1321-1333 lowerMutualByElimination (the no-self-call check is :1327)	Gaussian elimination preserves the LEAST solution: with g not self-recursive, (E, B2(E,E)) is the least solution of the 2-system, where E is the least solution of the eliminated equation.
+O5-NC	PROPERTY	src/test/scala/GraphExecTest.scala:294-297	MORKL.scala:1321, :1235	NON-CLAIM, tested not proved: the lowering does NOT preserve the OPERATIONAL eval semantics — the original mutual recursion diverges where the lowered Fixpoint converges.  Belongs in both scaladocs.
+O6a	OPEN	(none)	MORKL.scala:1347-1391 lowerCalls, Lower.inline	Beta-soundness of acyclic inlining, [[Call r(a;s)]] = [[B[x:=a, m:=s]]] with capture-avoiding substitution under Iteration/Fold/Fixpoint binders.  NOT written: it needs a first-order model of the substitution function itself, and a model that agreed with `substPathRef`/`Lower.inline` by construction would prove nothing about them.  Compensating coverage: the capture-avoidance discipline is traps.md #7, exercised by the 1000-program differential corpus.
+O6b	PROPERTY	src/test/scala/GraphExecTest.scala:226-320	MORKL.scala:1360-1378 (isCyclic/reach/acyclic)	`all_forever(Lower.inline)` terminates because the Call graph restricted to `acyclic` is a DAG.  Executable property: the inliner is run to convergence on the corpus and on every cornerstone.
+O7	PROPERTY	src/test/scala/GraphExecTest.scala:226-320	MORKL.scala:523/728 (transpile/untranspile), :652-670 (one reused frame)	Fixpoint survives the op-graph round trip and exec/execT's loop computes eval's.  Differential only: eval == exec == execT on the corpus (traps.md #2).  The ONE REUSED FRAME invariant (`frame(0)=cur` allocated once) is not separately stated.
+O8	PROPERTY	src/test/scala/EquivPipelineTest.scala (materialize gate)	Zipper.scala:302	The zipper has no native Fixpoint; it falls back to evalI and materialises.  Instance-gated by assertEquals(materialize(zProg).toSpaceValue, reference).  Made moot if the zipper gains a real Fixpoint (plan item 1).
+O9a	CITED	terminating/fixpoint_is_lfp.smt2	EquivPipeline.scala:91-100 expand-Fixpoint	`expand`'s convergence unrolling is the SAME recurrence as eval's, so O1 covers it verbatim; nothing further is claimed about `expand`.
+O9b	FILE	terminating/asfixpoint_sound.smt2 (STOP goal)	EquivPipeline.scala:111-125 (stabilised-argument cut)	The cut test IS the loop's stop test; at a stationary index one more round adds nothing on either side.
+O9c	CITED	proofs/keyfold_iter.smt2, proofs/keyfolds.smt2	EquivPipeline.scala:82-90 expand-Iteration	Iteration = union over head groups = fold over exact keys, universally.  Already certified at the movement level; not re-proved here.
+O10a	FILE	terminating/unroll_vs_kleene.smt2	EquivPipeline.scala:410-423 AgnosticPipeline.unrollControl	A_k = U_k = C_k under monotone F AND I subset= F(I).  BOTH hypotheses machine-checked as necessary: two counterexamples, plus a decidable (_ BitVec 3) re-run of both as the anti-vacuity witness.
+O10a-GAP	CITED	terminating/unroll_vs_kleene.smt2 (header)	EquivPipeline.scala:423	WAS: unrollControl built the INFLATIONARY chain while every executor iterates the KLEENE chain, gated on neither hypothesis.  RESOLVED in this change set by plan item 1: the Fixpoint case no longer unrolls at all, the binder survives to the provers.  O10a remains the certificate that the change was necessary and the licence for previously generated -agnostic artifacts.
+O10b	OPEN	(none)	EquivPipeline.scala:334 (prose), EquivPipelineTest.scala:262-268	k-unrolling equivalence for ALL k plus omega-continuity implies lfp equivalence.  NOT written: the pipeline emits k=1 (smt) and k=2 (egg) only, so the antecedent "for all k" is not established by the artifacts and the lemma would have nothing to consume.  Recorded so the prose claim at EquivPipeline.scala:287 is visibly unbacked.
+O10c	OPEN	(none)	EquivPipeline.scala:434 (shared residual mention)	The shared free `Mention("residual_<r>_<d>")` is sound only if BOTH sides reach the residual at the same depth with the same argument.  NOT written: the missing piece is a Scala assertion that the two sides' residual mention SETS are equal, which is a test-side change outside this directory — see the report's patch section.
+O11a	FILE	terminating/bounded_recursion_residual.smt2	SpatialRecursion.scala:72-76 (BoundedRecursion)	mu(a_0) = L, mu natural, mu strictly dropping => depth L+1 is unreachable, so unrolling L+1 levels is enough.
+O11b	CITED	proofs/spatial/lat_postfixpoint.smt2	SpatialRecursion.scala:182-192 Summaries.certified	F#(T) subset= T and init subset= T => every Kleene iterate subset= T.  Already certified; this row is the citation the code site lacked.
+O11c	FILE	terminating/bounded_recursion_residual.smt2 (cut section)	SpatialRecursion.scala (BoundedRecursion cut)	With a SOUND summary and gamma(bottom) = {}, a bottom summary at the cut depth forces the concrete call to {}, so replacing it by `Empty` preserves the denotation.
+O11d	PROPERTY	src/test/scala/SpatialRecursionCheck.scala	SpatialRecursion.scala:80-82 (`#sr#` reserved prefix)	The per-level alpha-renaming is capture-avoiding.  Syntactic; an SMT model would re-implement the renamer and prove nothing about it.
+O12a	CITED	proofs/laws/*.smt2	Supercompiler.scala:728+ (drive)	Each `SC.sourceLaws` application preserves the denotation.  The law half is certified per law in proofs/laws/ (see proofs/laws/REGISTRY.tsv); the UNFOLD half is O6a and is OPEN.
+O12b	OPEN	(none)	Supercompiler.scala:309 (instance matching), :551 (Residual)	FOLD: if C_new = C_anc.sigma then residualising with the call rho(sigma) at the fold point gives a routine whose least fixpoint equals [[C_anc]].  NOT written: it needs the substitution model O6a lacks.
+O12c	PROPERTY	src/test/scala/SupercompilerTest.scala	Supercompiler.scala:473-520 (msg/gen)	`gen(a,b)` returns a skeleton and substitutions theta_a, theta_b with skeleton.theta_a = a and skeleton.theta_b = b.  Purely syntactic; a property test over the fuzzer corpus is the right evidence.
+O12d	OPEN	(none)	Supercompiler.scala:368-431 (homeomorphic embedding whistle)	The embedding is a well-quasi-order on the configuration signature, hence driving terminates.  ADMITTED, not proved: the standard proof is Kruskal's tree theorem, which is outside what z3/vampire will find.  Recorded as ADMITTED rather than omitted.
+O13	FILE	terminating/seminaive_correct.smt2	EquivPipelineTest.scala:543-551; terminating/datalog_b.txt (pt_sn)	Naive and semi-naive agree ROUND FOR ROUND (A_n = N_n) given an ADDITIVE, strict join operator; a stalled `all` empties the delta on the next round; and the common limit is the least solution above the seed.
+O13-SC	PROPERTY	(author of the semi-naive program)	EquivPipelineTest.scala:543-551	The additivity side condition J(X u Y) = J(X) u J(Y) is on the AUTHOR: there is no semi-naive TRANSFORMATION in this compiler, so no pass can be blamed or credited for it.  Discharged per operator by proofs/keyfold_iter.smt2, proofs/threeway_restriction_*, proofs/threeway_tailsunion_trie.smt2.

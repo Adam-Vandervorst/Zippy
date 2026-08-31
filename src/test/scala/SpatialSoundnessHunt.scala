@@ -105,7 +105,7 @@ class SpatialSoundnessHunt extends FunSuite:
    *
    *  `sub`, `raffination` and `tailsInter` CONSUME an operand's MUST channel — `sub` uses
    *  `b.eps.mustBe` to prove ε removed, `tailsInter` intersects only the children of must-present
-   *  heads.  That is legitimate and is the point of review.md finding 1, but it means those three are
+   *  heads.  That is legitimate and is the point of the review but it means those three are
    *  sound in the STRONG reading only: subtraction is antitone in its right operand, so an operand
    *  read may-only licenses a LARGER result than `sub#` returns.  They will therefore always appear
    *  in this table, and the three rows are a documented NON-law, not an open bug.
@@ -1285,11 +1285,7 @@ object Hunt:
   // the corpus, kept OPEN: free mentions stay mentions with (possibly inexact) declared types
   // -----------------------------------------------------------------------------------------------
   lazy val corpus: Vector[FuzzRec] =
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    if !f.exists then Vector.empty
-    else
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
+    if !Corpus.file.exists then Vector.empty else Corpus.load()
 
   def sweepCorpus(recs: Vector[FuzzRec], seed: Long, envsPer: Int): Result =
     val rng = new java.util.Random(seed)

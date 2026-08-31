@@ -22,12 +22,7 @@ class SizeBoundsCheck extends FunSuite:
     assert(b.loHeaded <= nHeaded, s"$name: headed count $nHeaded below ${b.loHeaded} for ${s.show}")
 
   test("soundness over the corpus: lo ≤ |eval| ≤ hi on closed programs (open bounds contain too)") {
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assert(f.exists, "corpus not found — run the corpus test first")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
-    }
+    val recs = Corpus.load()
     val rng = new java.util.Random(4242)
     val A = SpaceFuzzer.alphabet
     def randPath(): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))

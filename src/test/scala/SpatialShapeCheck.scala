@@ -96,7 +96,7 @@ class SpatialShapeCheck extends FunSuite:
   }
 
   // ---------------------------------------------------------------------------------------------
-  // the transfers review.md asked for, each with the observation that shows it is not ⊤
+  // the transfers the review asked for, each with the observation that shows it is not ⊤
   // ---------------------------------------------------------------------------------------------
   test("COMPOSITION grafts at the leaves (was ⊤)") {
     val x = lit(p("a"), p("b", "c"))
@@ -243,11 +243,11 @@ class SpatialShapeCheck extends FunSuite:
     assertEquals(bs.size, 0, bs.take(3).mkString("; "))
   }
 
-  /** review.md 7 measured `infer(...).size = [0,256]` against `sizeOf(...) = [0,4]` for a four-deep
+  /** the review measured `infer(...).size = [0,256]` against `sizeOf(...) = [0,4]` for a four-deep
    *  rest-chained iteration over four length-four paths — a public entry point 64x looser than
    *  another one on the same term.  The shape component closes that by construction: the group count
    *  is the DISTINCT-HEAD count, so a rest chain does not exponentiate. */
-  test("PRECISION: the nested rest-chained iteration (review.md 7)") {
+  test("PRECISION: the nested rest-chained iteration") {
     val src = lit(p("a", "b", "c", "d"), p("a", "b", "c", "e"), p("a", "b", "f", "g"), p("h", "i", "j", "k"))
     def chain(x: Space, d: Int): Space =
       if d == 0 then x
@@ -515,11 +515,7 @@ end OpMatrix
 object ShapeShrink:
   /** the fuzz corpus, or empty when the file is absent */
   lazy val corpus: Vector[FuzzRec] =
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    if !f.exists then Vector.empty
-    else
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
+    if !Corpus.file.exists then Vector.empty else Corpus.load()
 
   /** each corpus program instantiated CLOSED: the free mentions s0..s2 replaced by random literals
    *  and the free refs p0..p2 by random constant paths */

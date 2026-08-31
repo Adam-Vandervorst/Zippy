@@ -23,12 +23,7 @@ class ExecutorOverheadBench extends FunSuite:
 
   test("compiled executors are never slower than the interpreters (exec vs eval, execT vs evalI)".tag(SlowTag.Slow)) {
     val recs = locally {
-      val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser"); assert(f.exists)
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]]
-      catch case e: java.io.InvalidClassException =>
-        throw new AssertionError("corpus_1000.ser is STALE (serialized classes changed) — rerun morkl.ProgramExpressivity to regenerate it", e)
-      finally ois.close()
+      Corpus.load()
     }
     val M = sys.props.get("ovh.m").map(_.toInt).getOrElse(120)
     val rng = new java.util.Random(8675309)

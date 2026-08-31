@@ -38,12 +38,9 @@ object SizeZ3:
     case NoSolver
     case SolverFailed(detail: String)
 
-  /** is a usable z3 on PATH?  probed once. */
-  lazy val available: Boolean =
-    try
-      val p = new ProcessBuilder("z3", "-version").redirectErrorStream(true).start()
-      p.waitFor() == 0
-    catch case _: Throwable => false
+  /** is a usable z3 available?  Resolved once by [[Tools]] ($Z3, then PATH, then the conventional
+   *  locations) — never by an absolute path baked into this file. */
+  lazy val available: Boolean = Tools.z3.isAvailable
 
   def bounds(s: Space, timeoutSec: Int = 8): SizeBounds = boundsWithStatus(s, timeoutSec)._1
 
@@ -377,7 +374,8 @@ object SizeZ3:
     val f = java.io.File.createTempFile("sizebounds", ".smt2")
     try
       val w = new java.io.FileWriter(f); try w.write(smt) finally w.close()
-      val p = new ProcessBuilder("z3", s"-T:$timeoutSec", f.getPath).redirectErrorStream(true).start()
+      val p = new ProcessBuilder(Tools.z3.require(), s"-T:$timeoutSec", f.getPath)
+        .redirectErrorStream(true).start()
       val out = new String(p.getInputStream.readAllBytes())
       p.waitFor()
       out

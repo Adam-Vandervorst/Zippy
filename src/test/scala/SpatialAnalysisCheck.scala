@@ -3,7 +3,7 @@ package morkl
 import munit.FunSuite
 import scala.collection.immutable.SortedMap
 
-/** THE DECORATED ANALYSIS, THE REDUCER AND THE MEET — the gates for review.md 4, 5, 6 and the naming
+/** THE DECORATED ANALYSIS, THE REDUCER AND THE MEET — the gates for the review and the naming
  *  half of 1.
  *
  *  What is gated here, and how:
@@ -32,7 +32,7 @@ class SpatialAnalysisCheck extends FunSuite:
   def cp(items: String*): Path = Path.Constant(p(items*))
 
   // ================================================================================================
-  // 1.  ONE DECORATED ANALYSIS  (review.md 4)
+  // 1.  ONE DECORATED ANALYSIS
   // ================================================================================================
 
   test("positional identity: two structurally identical subterms are DIFFERENT nodes") {
@@ -148,7 +148,7 @@ class SpatialAnalysisCheck extends FunSuite:
   }
 
   // ================================================================================================
-  // 2.  MUTUAL REDUCTION  (review.md 5)
+  // 2.  MUTUAL REDUCTION
   // ================================================================================================
 
   test("S→H: the shape's total and length hull tighten the histogram") {
@@ -312,7 +312,7 @@ class SpatialAnalysisCheck extends FunSuite:
   }
 
   // ================================================================================================
-  // 4.  NAMING  (review.md 1) and the DEAD FACT  (review.md 6)
+  // 4.  NAMING and the DEAD FACT
   // ================================================================================================
 
   test("`accepts` is γ, `withinEnvelope` is the weaker check — and the weak one really is weaker") {

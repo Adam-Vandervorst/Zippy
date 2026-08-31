@@ -12,7 +12,7 @@ import scala.collection.immutable.IntMap
  *
  *  WHAT THEY COST.  The previous version of this comment claimed all three are "CONSTANT TIME IN THE
  *  SPACE SIZE ... they touch only the current node's branching".  The second half is the true claim and
- *  the first half does not follow from it — a node's branching is not a constant (review.md item 3):
+ *  the first half does not follow from it — a node's branching is not a constant:
  *
  *   - `descend(k)` IS cheap: one Patricia probe per zipper layer, and it allocates one virtual cursor
  *     per layer.  O(layers) probes, independent of the space below the focus.
@@ -26,7 +26,7 @@ import scala.collection.immutable.IntMap
  *     Θ(child-map entries at the focus) PER LAYER — bounded by the focus node's branching, never by the
  *     space size below it.  That last part is the property worth having, and it is what the comment
  *     should have said.  One [[EffortEvent.ZipperCursorRead]] is counted for a whole map operation, so
- *     SpatialDemand.scala carries the per-ENTRY oracle ([[ZipperDemandEvent]], review.md item 6).
+ *     SpatialDemand.scala carries the per-ENTRY oracle ([[ZipperDemandEvent]]).
  *
  *  Each space operation has a VIRTUAL zipper that composes its operands' cursors lazily, following the
  *  abstract trie spec — e.g. a Union's child-map is the IntMap union of its operands' child-maps, an
@@ -48,7 +48,7 @@ import scala.collection.immutable.IntMap
  *  prediction is correctly `[0,0]` against a counted 0 on every fused family, and it does NOT reach
  *  `Work`/`Alloc`, which are still the per-operator sum charged in proportion to each operand's
  *  `Meas.nodes` — so `(A ∪ B) ∩ C` with a fixed `C` is still priced as the full inner union (predicted
- *  slope 0.96-1.00 against a measured 0.00, worst error 2053x).  review.md item 3 is closed for one
+ *  slope 0.96-1.00 against a measured 0.00, worst error 2053x).  The review is closed for one
  *  component and open for two.
  *
  *  Control-flow / positional ops (Iteration, Fold, Fixpoint, Range, residuals, Call, grounded) are NOT
@@ -77,7 +77,7 @@ object SpaceZipper:
    *  [[EffortEvent.FreshNode]] per FORCED node (never per result node), one
    *  [[ZipperDemandEvent.AcceptedLitSubtrie]] per whole subtrie taken by pointer, and one
    *  [[ZipperDemandEvent.MaterializeEntry]] per child-map entry this loop iterates and rebuilds — the
-   *  iteration and the `IntMap.updated` chain that review.md item 6 says nothing counted. */
+   *  iteration and the `IntMap.updated` chain that the review says nothing counted. */
   def materialize(z: SpaceZipper): ITrie = z match
     case Lit(t) =>
       zdemand(ZipperDemandEvent.AcceptedLitSubtrie)           // whole subtrie by pointer, unvisited
@@ -123,9 +123,9 @@ object SpaceZipper:
    *  sub-branches short-circuit through `union`, so a re-occurring branch is accepted, not re-descended. */
   // Every cursor query below counts ONE ZipperCursorRead.  A fused expression therefore counts one
   // read PER LAYER per visited node, which is exactly the work `ZipperCost` has to predict — and the
-  // reason a Zipper cost cannot be the same formula as `execT`'s (review.md 2, fourth bullet).
+  // reason a Zipper cost cannot be the same formula as `execT`'s.
   //
-  // THAT ONE READ IS NOT THE WHOLE COST OF A `children` CALL (review.md item 6): the `IntMap` merge
+  // THAT ONE READ IS NOT THE WHOLE COST OF A `children` CALL: the `IntMap` merge
   // below walks the entries of BOTH operand child maps, and a key present in only one side is handed
   // through UNCHANGED — so the fused layer survives only on the PAIRED keys and an unshared branch of a
   // concrete operand is accepted by pointer.  The per-entry counts are in ZipperDemandEvent.
@@ -298,7 +298,10 @@ def transpileZ(s: Space)(using pc: PathContext, ic: Map[SpaceMention, ITrie], rc
     // the byte/bit-trie under the symbols, or an outer-pruned Iteration — not a different union combiner.)
     // control-flow / positional / opaque: not local trie ops — a routine "call" materializes via evalI.
     // COUNTED: this is the boundary at which execZ stops being a fused zipper and becomes evalI, so a
-    // Zipper cost report that does not expose it is mixing two different executables (review.md 2).
+    // Zipper cost report that does not expose it is mixing two different executables.
+    // obligation: terminating/REGISTRY.tsv O8 (PROPERTY) — the fallback is sound because it
+    // materialises through `evalI`, whose agreement with `eval` is the corpus differential, not an
+    // SMT theorem; the registry row names the test that carries it.
     case other => effort(EffortEvent.ZipperFallbackToEvalI); traversal(evalI(other))
 
 /** SpaceZipper executor: materialize the fused zipper version of the program. */

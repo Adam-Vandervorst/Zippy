@@ -13,25 +13,15 @@ class CorpusRuntimes extends FunSuite:
   val A = SpaceFuzzer.alphabet
   def randPath(rng: java.util.Random): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))
   def smallTrie(rng: java.util.Random): SpaceValue = SpaceValue((0 until (1 + rng.nextInt(6))).map(_ => randPath(rng)).toSet)
-  def nodes(s: Space): Int = 1 + (s match
-    case Space.Union(a, b) => nodes(a) + nodes(b); case Space.Intersection(a, b) => nodes(a) + nodes(b)
-    case Space.Subtraction(a, b) => nodes(a) + nodes(b); case Space.Restriction(a, b) => nodes(a) + nodes(b)
-    case Space.Composition(a, b) => nodes(a) + nodes(b); case Space.Wrap(a, _) => nodes(a); case Space.Unwrap(a, _) => nodes(a)
-    case Space.TailsUnion(a) => nodes(a); case Space.TailsIntersection(a) => nodes(a); case Space.Range(a, _, _) => nodes(a)
-    case Space.Iteration(a, _, _, b) => nodes(a) + nodes(b); case Space.Fixpoint(a, _, b) => nodes(a) + nodes(b)
-    case Space.Call(_, refs, ms) => refs.size + ms.map(nodes).sum; case _ => 0)
+  // ONE OWNER (SpatialPipeline.nodeCount): the copy this replaces was missing `Raffination`.
+  def nodes(s: Space): Int = SpatialPipeline.nodeCount(s)
   val noRc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
   def best(reps: Int)(body: => Unit): Double = { body; var b = Double.MaxValue; for _ <- 0 until reps do { val t = System.nanoTime(); body; val d = (System.nanoTime() - t) / 1e6; if d < b then b = d }; b }
 
   test("corpus runtimes + SC of the 5 slowest".tag(SlowTag.Slow)) {
     val M = sys.props.get("rt.m").map(_.toInt).getOrElse(1000)
     val recs = locally {
-      val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser"); assert(f.exists, "run the corpus test first")
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]]
-      catch case e: java.io.InvalidClassException =>
-        throw new AssertionError("corpus_1000.ser is STALE (serialized classes changed) — rerun morkl.ProgramExpressivity to regenerate it", e)
-      finally ois.close()
+      Corpus.load()
     }
     val rng = new java.util.Random(424242)
     final case class Env(sv: Array[SpaceValue], st: Array[Trie], si: Array[ITrie], pv: Array[PathValue], pi: Array[List[Int]])
@@ -47,7 +37,12 @@ class CorpusRuntimes extends FunSuite:
       while k < M do { evalI(r.prog)(using pcK(r.nPath, k), icK(r.nSpace, k), noRc); k += 1 }
       (i, r, (System.nanoTime() - t0) / 1e6, nodes(r.prog))
     }.toVector
-    val sb = new StringBuilder; sb.append("idx,nodes,nSpace,nPath,uniqueOut,evalI_ms_per1000\n")
+    val sb = new StringBuilder
+    // PROVENANCE FIRST.  A CSV of milliseconds with no machine, toolchain or configuration on it
+    // cannot be reproduced or compared with a later one; `#`-prefixed lines are a comment to every
+    // reader of this file (the plotting scripts skip them).
+    sb.append(s"# corpus_runtimes.csv — ${RunEnvironment.oneLine(Seq("rows" -> recs.size.toString, "envs-per-program" -> M.toString, "seed" -> "424242"))}\n")
+    sb.append("idx,nodes,nSpace,nPath,uniqueOut,evalI_ms_per1000\n")
     for (i, r, ms, nd) <- rows do sb.append(f"$i,$nd,${r.nSpace},${r.nPath},${r.uniqueOut},$ms%.3f\n")
     locally { val w = new java.io.FileWriter(new java.io.File(Loaders.repoRoot, "corpus_runtimes.csv")); try w.write(sb.toString) finally w.close() }
     val tot = rows.map(_._3).sum; val nd = rows.map(_._4.toDouble).sorted; val ms = rows.map(_._3).sorted

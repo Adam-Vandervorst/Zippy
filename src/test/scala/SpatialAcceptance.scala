@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==================================================================================================
- *  THE ACCEPTANCE SUITE — review.md's eight numbered "Requested real-program tests".
+ *  THE ACCEPTANCE SUITE — the eight numbered "Requested real-program tests".
  *
  *  The randomized γ gates elsewhere validate the SOUNDNESS OF THE CARRIER.  These validate that the
  *  subsystem answers the questions a Zippy user actually asks, on real programs, through the ONE entry
@@ -37,7 +37,7 @@ import scala.language.implicitConversions
  *                                             (6 nodes -> `Empty`) and a COST (work UNBOUNDED -> 1)
  *  7 optimization consumption          DONE   four sub-claims, each differentially verified
  *  8 effort calibration                SKIP   the event agent's `SpatialEventsCheck` owns it
- *  9 review.md's "definition of done"  DONE   one signature: REFUTED on the recursion, PROVED on
+ *  9 the "definition of done"  DONE   one signature: REFUTED on the recursion, PROVED on
  *                                             the residual, four backends agreeing with `eval`
  *  }}}
  *  ================================================================================================ */
@@ -109,7 +109,7 @@ class SpatialAcceptance extends FunSuite:
       noEval("profile")(ta.profile)
       noEval("cost")(SpatialCost.analyzeAll(t))
       noEval("candidates")(SpatialFacts.specializations(ta.result))
-      noEval("selectBackend")(SpatialPipeline.selectBackend(t, ann))
+      noEval("compareBackends")(SpatialPipeline.compareBackends(t, ann))
     println(s"\n[1] ${terms.size} sentinel-bearing terms analysed, optimized, lowered and priced " +
             "on four backends with ZERO counted executor events")
   }
@@ -335,7 +335,7 @@ class SpatialAcceptance extends FunSuite:
     )
 
   // ------------------------------------------------------------------------------------------------
-  //  THE PER-CORNERSTONE PRECISION BUDGET  (review.md 4)
+  //  THE PER-CORNERSTONE PRECISION BUDGET
   // ------------------------------------------------------------------------------------------------
   /** WHAT ONE CORNERSTONE MUST PROVE.  The gate this replaces accepted `a.result.shape.isTop` as a
    *  "useful" answer, so `datalog-sn` PASSED while returning no facts at all and a fully unbounded
@@ -355,7 +355,14 @@ class SpatialAcceptance extends FunSuite:
                              lenHull: Option[(Long, Long)],
                              spine: List[PathItem],
                              candidates: Vector[String],
-                             expectedTop: Vector[(String, String)])
+                             expectedTop: Vector[(String, String)],
+                             /** the recorded cardinality FLOOR, the mirror image of `maxSize`: a
+                              *  channel that used to be an honest ⊤ and became bounded is recorded
+                              *  here rather than deleted, so the bound is held to as a ratchet the
+                              *  same way the ceiling is. */
+                             minSize: Option[Long] = None,
+                             /** the recorded ceiling on the ROOT HEAD COUNT, same ratchet */
+                             maxHeads: Option[Long] = None)
 
   val precision: Vector[Precision] = Vector(
     Precision("aunt",
@@ -389,14 +396,20 @@ class SpatialAcceptance extends FunSuite:
         "size" -> ("`field` is undeclared here, so |nextStep(field)| has no bound.  Test 6b's " +
                   "SubsetOfImage law closes it to 9·|field| the moment a field type IS declared, and " +
                   "test 4 shows the declared-type route."))),
+    // `heads` USED TO BE AN EXPECTED-⊤ ENTRY here ("the outermost group set comes from the undeclared
+    // frontier").  It is bounded now, at 16, and the reason is the width spill's `otherKeys`
+    // certificate: the 16-level `iterN` nest writes tiles drawn from a KNOWN set, and past
+    // `Shape.MaxHeads` the spill used to throw those names away and reopen the count.  Keeping them
+    // keeps the head count finite, which is the whole point of channel (e).  `size` stays ⊤ — knowing
+    // WHICH tiles can head a board says nothing about how many boards there are.
     Precision("puzzle15",
-      required = Vector(Fact.MaximumPathLength(16)),
-      maxSize = None, lenHull = Some((16L, 16L)), spine = Nil, candidates = Vector.empty,
+      required = Vector(Fact.MaximumPathLength(16), Fact.MaximumHeadCount(16)),
+      maxSize = None, maxHeads = Some(16L), lenHull = Some((16L, 16L)), spine = Nil,
+      candidates = Vector.empty,
       expectedTop = Vector(
         "size" -> ("`frontier` is undeclared and the 16-level `iterN` nest unions one body per " +
                   "untracked head group, so `Shape.openCounts` opens the count channel: the analysis " +
                   "proves every result path is a 16-item board, and nothing about how many there are"),
-        "heads" -> "the outermost group set comes from the undeclared frontier",
         "spine" -> "the first item of a board is a tile, and every tile may be first")),
     Precision("temperature",
       required = Vector(Fact.HeadSetWithin(Set("0", "1")), Fact.MaximumHeadCount(2)),
@@ -407,14 +420,19 @@ class SpatialAcceptance extends FunSuite:
         "len.hi" -> "the restricted paths are `world`'s, whose length is unknown",
         "spine" -> ("the two windows are `0…`- and `1…`-rooted, so there is no COMMON first item — " +
                   "which is why the head SET fact above is the sharp answer and a spine is not"))),
+    // `size.lo` USED TO BE AN EXPECTED-⊤ ENTRY here ("the transfers never search, so they cannot prove
+    // the board has ANY solution").  It is not one any more: the transfers prove 8.  They still do not
+    // SEARCH — the floor comes from the product's own counting (the last two levels of the 4×4 term are
+    // unconstrained, so any surviving prefix carries a whole fan-out with it), which is why it is 8 and
+    // not the solution count 2.  Test 6c's `FiniteConstraintSolutions` law is therefore SUBSUMED at
+    // n = 4 and still load-bearing at n = 5 and n = 6, and 6c now pins both halves of that.
     Precision("nqueens",
-      required = Vector(Fact.MaximumCardinality(1650688L), Fact.MaximumPathLength(6),
-                        Fact.HeadSetWithin(Set("1", "2", "3", "4")), Fact.MaximumHeadCount(4)),
-      maxSize = Some(1650688L), lenHull = Some((6L, 6L)), spine = Nil, candidates = Vector.empty,
+      required = Vector(Fact.MaximumCardinality(1015808L), Fact.MaximumPathLength(6),
+                        Fact.HeadSetWithin(Set("1", "2", "3", "4")), Fact.MaximumHeadCount(4),
+                        Fact.DefinitelyNonEmpty, Fact.MinimumCardinality(8L)),
+      maxSize = Some(1015808L), minSize = Some(8L),
+      lenHull = Some((6L, 6L)), spine = Nil, candidates = Vector.empty,
       expectedTop = Vector(
-        "size.lo" -> ("the transfers cannot prove the board has ANY solution (they never search), so " +
-                  "the lower bound is 0.  Test 6c's FiniteConstraintSolutions law raises it to the " +
-                  "exact solution count."),
         "spine" -> "a solution may start on any row-1 column, so no item is common to every path")),
   )
 
@@ -467,7 +485,7 @@ class SpatialAcceptance extends FunSuite:
       assert(a.consistent, s"$name: an open analysis must never reduce to bottom")
       assert(a.decorated.nodes.nonEmpty, s"$name: nothing was decorated")
 
-      // ---- THE PRECISION BUDGET (review.md 4) — no blanket ⊤ ------------------------------------
+      // ---- THE PRECISION BUDGET — no blanket ⊤ ------------------------------------
       val p = precision.find(_.name == name).getOrElse(
         fail(s"$name has no precision entry: add one (with an expected-⊤ reason if it cannot be bounded)"))
       seen += name
@@ -481,6 +499,18 @@ class SpatialAcceptance extends FunSuite:
                s"recorded ceiling $k")
         if a.result.size.hi < k then
           println(f"    [5] $name%-12s cardinality IMPROVED to ${a.result.size.hi} (recorded $k) — update the table")
+      for k <- p.minSize do
+        assert(a.result.size.lo >= k,
+               s"$name: PRECISION REGRESSION — the cardinality FLOOR ${fs(a.result.size)} fell below " +
+               s"the recorded $k")
+        if a.result.size.lo > k then
+          println(f"    [5] $name%-12s cardinality FLOOR improved to ${a.result.size.lo} (recorded $k) — update the table")
+      for k <- p.maxHeads do
+        assert(a.result.headCount.hi != Ivl.INF && a.result.headCount.hi <= k,
+               s"$name: PRECISION REGRESSION — the head count ${a.result.headCount.show} is worse " +
+               s"than the recorded ceiling $k")
+        if a.result.headCount.hi < k then
+          println(f"    [5] $name%-12s head count IMPROVED to ${a.result.headCount.hi} (recorded $k) — update the table")
       for (lo, hi) <- p.lenHull do
         assert(!a.result.len.isEmpty && a.result.len.lo >= lo && a.result.len.hi <= hi,
                s"$name: PRECISION REGRESSION — length ${fl(a.result.len)} is worse than the recorded " +
@@ -507,7 +537,7 @@ class SpatialAcceptance extends FunSuite:
   }
 
   // ================================================================================================
-  //  5c.  THE INTERACTIVE LATENCY AND SCALING BUDGET  (review.md 4)
+  //  5c.  THE INTERACTIVE LATENCY AND SCALING BUDGET
   // ================================================================================================
   /** Warm wall-clock ceiling for one cornerstone's decorated analysis and for the routine-level
    *  analysis on top of it.  The measured worst case is `puzzle15` at ~1.3–1.5 s (295 decorated nodes,
@@ -637,7 +667,7 @@ class SpatialAcceptance extends FunSuite:
   }
 
   // ================================================================================================
-  //  6.  SEMANTIC LAWS AS PRODUCTION INPUTS  (review.md 2)
+  //  6.  SEMANTIC LAWS AS PRODUCTION INPUTS
   //
   //  Each of 6a–6d does the same four things, in this order:
   //    (1) ESTABLISH the law's bound on an exhaustive case space, in plain Scala;
@@ -896,6 +926,7 @@ class SpatialAcceptance extends FunSuite:
 
     // ---- (2)+(3) the count as a LAW on the ACTUAL n-queens PROGRAM -----------------------------
     println("[6c] the n-queens PROGRAM, per board:")
+    var tightened = 0; var subsumed = 0
     for n <- 4 to 6 do
       val board = NQueens.board(n)
       val program = board.program              // ONE term: a term-keyed law is keyed on THIS value
@@ -909,21 +940,39 @@ class SpatialAcceptance extends FunSuite:
       val (after, aAfter, _) = deltaOf(r, ann.withLaws(law))
       println(s"    n=$n, $sols solutions:")
       showDelta("no law", before); showDelta("with law", after)
-      // the transfers never search, so they cannot prove the board has ANY solution
-      assertEquals(before.size._1, 0L, s"n=$n: the transfers' lower bound must be 0")
-      assertEquals(after.size._1, sols, s"n=$n: the law must raise it to $sols: ${aAfter.result.show}")
       // A LAW MAY ONLY NARROW: the upper bound may come DOWN (the reducer gets a second chance once the
-      // lower bound is known) but never up.
+      // lower bound is known) but never up.  This holds in BOTH branches below.
       assert(after.size._2 <= before.size._2,
              s"n=$n: a law WIDENED the upper bound: ${before.size._2} -> ${after.size._2}")
+      assert(after.size._1 >= before.size._1,
+             s"n=$n: a law LOWERED the floor: ${before.size._1} -> ${after.size._1}")
       if after.size._2 < before.size._2 then
         println(s"      the law also tightened the UPPER bound ${before.size._2} -> ${after.size._2} " +
                 "(the reducer re-runs against the new lower bound)")
-      assert(after.facts.contains(Fact.MinimumCardinality(sols).show), after.facts.mkString(", "))
-      assert(after.facts.contains(Fact.DefinitelyNonEmpty.show), after.facts.mkString(", "))
-      assert(!before.facts.contains(Fact.DefinitelyNonEmpty.show), before.facts.mkString(", "))
       val app = aAfter.decorated.lawsAt(NodeId(Vector.empty))
-      assertEquals(app.map(_.outcome), Vector(LawOutcome.Tightened), app.map(_.show).toString)
+      // THE LAW IS A MINIMUM ON PATHS, AND THE TRANSFERS SOMETIMES BEAT IT.  `sols` counts SOLUTIONS;
+      // the program's value has one path per (solution × unconstrained tail), so the transfers'
+      // own counting can prove a floor ABOVE `sols` without ever searching — at n = 4 it proves 8
+      // against the law's 2.  Where that happens the law is SUBSUMED and records `Unchanged`; where it
+      // does not, the law is the only thing that gets the floor off zero.  Both are pinned, and the
+      // count at the end refuses a run in which one of the two never happened — a silent slide of
+      // every board into "subsumed" would make this test prove nothing about laws at all.
+      if before.size._1 >= sols then
+        subsumed += 1
+        assertEquals(after.size._1, before.size._1,
+                     s"n=$n: a subsumed law must move nothing: ${aAfter.result.show}")
+        assertEquals(app.map(_.outcome), Vector(LawOutcome.Unchanged), app.map(_.show).toString)
+        assert(after.facts.contains(Fact.MinimumCardinality(before.size._1).show), after.facts.mkString(", "))
+        assert(before.facts.contains(Fact.DefinitelyNonEmpty.show), before.facts.mkString(", "))
+        println(f"      the transfers' own floor ${before.size._1} already beats the law's $sols — SUBSUMED")
+      else
+        tightened += 1
+        assertEquals(before.size._1, 0L, s"n=$n: the transfers' lower bound must be 0")
+        assertEquals(after.size._1, sols, s"n=$n: the law must raise it to $sols: ${aAfter.result.show}")
+        assert(after.facts.contains(Fact.MinimumCardinality(sols).show), after.facts.mkString(", "))
+        assert(after.facts.contains(Fact.DefinitelyNonEmpty.show), after.facts.mkString(", "))
+        assert(!before.facts.contains(Fact.DefinitelyNonEmpty.show), before.facts.mkString(", "))
+        assertEquals(app.map(_.outcome), Vector(LawOutcome.Tightened), app.map(_.show).toString)
       // ---- (4) SOUNDNESS: the real value has at least that many paths, and is γ-admitted -------
       given SpaceContext = SpaceContextMap(Map.empty)
       given PathContext = PathContextMap(Map.empty)
@@ -936,6 +985,10 @@ class SpatialAcceptance extends FunSuite:
              s"(${truth.paths.size} paths)")
       println(f"      |eval| = ${truth.paths.size}%4d paths over $sols solutions; " +
               f"cardinality [${before.size._1}, ${before.size._2}] -> [${after.size._1}, ${after.size._2}]")
+    assert(tightened > 0, s"no board exercised the law at all ($subsumed subsumed)")
+    assert(subsumed > 0, s"no board exercised the subsumed branch ($tightened tightened) — the " +
+                         "transfers' own floor is what makes it, and losing it is a precision regression")
+    println(s"[6c] $tightened board(s) needed the law, $subsumed had it subsumed by the transfers' own floor")
     // the ZERO case: a law that proves a program empty.  The transfers already get 2- and 3-queens
     // (the constraint literals reduce to ∅ syntactically), so this records that they agree rather than
     // claiming a delta the law did not make.
@@ -1187,7 +1240,7 @@ class SpatialAcceptance extends FunSuite:
   }
 
   // ================================================================================================
-  //  9.  review.md's DEFINITION OF DONE — one annotated routine, one facility
+  //  9.  the DEFINITION OF DONE — one annotated routine, one facility
   // ================================================================================================
   test("9. definition of done: ONE signature drives the checker, the optimizer and the backends") {
     val M = SpaceMention("m"); val H = PathRef("h").known(1); val R = SpaceMention("r")
@@ -1240,11 +1293,11 @@ class SpatialAcceptance extends FunSuite:
     assert(resRep.check.isProved,
       s"the Call-free residual should now PROVE the contract the recursion could not: ${resRep.check.show}")
 
-    // (5) per-backend effort intervals over the same facts, and a deterministic choice
+    // (5) per-backend effort INTERVALS over the same facts.  No winner is named: choosing a backend
+    // automatically is a non-goal, and four incommensurable components cannot be summed into a score.
     val lowered = Backend.values.toVector.map(b => b -> SpatialPipeline.lower(g, b, ann)).toMap
-    val (best, scores) = SpatialPipeline.selectBackend(g.residual.body, ann, Map("N" -> 8.0))
-    println("[9] " + Backend.values.toVector.map(b =>
-      f"${b.slug}=${scores(b)}%.0f${if b == best then "*" else ""}").mkString("  "))
+    val cmp = SpatialPipeline.compareBackends(g.residual.body, ann, Map("N" -> 8.0))
+    println(cmp.show.linesIterator.map("[9] " + _).mkString("\n"))
     assertEquals(lowered.keySet, Backend.values.toSet)
     for (b, l) <- lowered do assert(l.callFree, s"${b.slug}: the lowered routine must be Call-free")
 

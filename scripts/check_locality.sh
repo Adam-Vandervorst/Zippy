@@ -11,7 +11,8 @@
 #     enforced by scripts/lint_zipper_egg.py (run from here too).
 set -e
 cd "$(dirname "$0")/.."
-EGG=~/.cargo/bin/egglog
+. scripts/toolpath.sh                          # $EGGLOG -> PATH -> conventional locations
+EGG=$(resolve_tool egglog) || { echo "$(tool_missing egglog)" >&2; exit 1; }
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 

@@ -4384,3 +4384,979 @@ RESULT's `nodesHi` onto the transfer -- not the algebra.  Route 1's patch is rea
 against 344f694 (95 lines in SpatialCost.scala, 32 in SpatialCostCheck.scala) and is reusable; route 2's
 diff rewrote 148 lines of a ledger that differs from this tree's and is not mergeable as-is.
 ================================================================================================
+
+================================================================================================
+## 2026-08-31 — plan.md resolution pass, round 1: environment, tool paths, the corpus gate, and a
+## soundness bug the widened fuzzer found
+
+TOOLCHAIN, FROM NOTHING.  This machine had no JVM, no sbt, no z3, no vampire and no egglog.  All of
+them are now installed under `.tools/` (gitignored) with `.tools/env.sh` putting them on PATH:
+Temurin JDK 21.0.12.1, sbt 2.0.8 + scala-cli 1.16.0 via coursier, z3 5.1.0, Vampire 5.1.0, and
+egglog 3.0.0 built from source at tag v3.0.0 (needed `apt-get install build-essential` first — there
+was no C linker either).  `egglog formal.egg` passes on that build, so the egg models are green
+against the current upstream, not only against whatever was installed when they were written.
+
+ITEM 4 — TOOL PATHS.  `/Applications/vampire` was hardcoded in `proofs/run.sh`,
+`proofs/spatial-semantic/run.sh`, `scripts/mine_laws.py` and `EquivPipelineTest`; `z3` and
+`~/.cargo/bin/egglog` were assumed in five more places.  There is now ONE policy in three twins —
+`src/main/scala/Tools.scala`, `scripts/toolpath.sh`, `scripts/toolpath.py` — reading `$Z3`,
+`$VAMPIRE`, `$EGGLOG`, then PATH, then a short conventional-location list, and every call site goes
+through it.  A missing tool is a NAMED error that says which variable to set, never a silent skip
+(`docs/traps.md` §3).  Verified end to end: `proofs/run.sh` and `terminating/run.sh` both run on
+this machine with no absolute path anywhere.  Four personal absolute paths
+(`/Users/michaelpolyntsov/...`) in the example loaders were replaced by `$ZIPPY_DATA`.
+
+THE TEST JVM NOW FORKS, AND THAT REVIVED SEVENTEEN DEAD GATES.  Every corpus-wide soundness gate was
+failing with
+
+    ClassCastException: cannot assign instance of scala.collection.generic.DefaultSerializationProxy
+    to field morkl.SpaceValue.paths of type scala.collection.immutable.Set
+
+Run in-process, sbt's LAYERED test classloader makes `ObjectInputStream.latestUserDefinedLoader`
+resolve `DefaultSerializationProxy` in a different layer from `morkl.SpaceValue`, so the proxy's
+`readResolve` never runs.  The identifying measurement: the SAME `corpus_1000.ser` reads cleanly
+from a plain `java` process started on sbt's own `Test/fullClasspath`.  So it was never an artifact
+problem.  `Test / fork := true` (plus `-Xmx24G -Xss16M -Dfile.encoding=UTF-8`, and a `.jvmopts` for
+the sbt JVM, whose 1 GB default was OOM-ing six more tests) fixes it, and the twenty hand-rolled
+copies of the corpus read are now one `Corpus.load()` that reports ABSENT / STALE / UNREADABLE with
+the regeneration command.  Full suite: 37 failures -> 17.
+
+ITEM 6 — THE FUZZER, AND WHAT IT IMMEDIATELY FOUND.  `Raffination` and `TailsIntersection` had ZERO
+occurrences in the 1000-program corpus; every one of the seven executors supports both.  Naive
+addition is degenerate — an independently drawn raffination subtrahend removes nothing, and a
+tails-intersection of an arbitrary source is almost always empty — so the generator draws a PROPER
+non-empty subset of the argument's heads for `\|`, and a shared-tail source (`heads x body`) for
+tails-intersection one draw in four.  The full-window `Range` (`hi == 0`, the identity window) was
+also undrawable and is now 1 in 6.  Regenerated corpus census: Raffination 1371, TailsIntersection
+1013, identity Range 91, from 0 / 0 / 0.  `ProgramExpressivity` now ASSERTS that census, because
+`FuzzRec`'s `serialVersionUID` does not change when the generator does, so nothing else would have
+noticed the corpus going stale.  Four hand-written `nodes` helpers that each missed a different set
+of constructors (and one of which IS the corpus accept filter) now call one owner,
+`SpatialPipeline.nodeCount`.
+
+AND THE BUG.  On the first run of the new corpus, 10 of 1000 programs produced a supercompiler
+residual with a DANGLING binder — `evalI` died with `key not found: PathRef(h418115)`.  Root cause,
+minimised to a 6-line term: `collect` (MORKL.scala) had no `Space.Raffination` arm and fell into its
+`case x => x` catch-all, so the entire subtree under a `\|` was INVISIBLE to it.  `collect` is the
+traversal EVERY loop-invariance test is written in (`IterUnion_Indep`, `IterComposition_Indep`,
+`cleanSpace` and through it `IterCompRight_Hoist`), so a body that used an iteration binder under a
+raffination looked loop-invariant and was hoisted out of its own binder.  `subs`, `freeMentions`,
+`freeRefs` and `SizeZ3.children` were all already total — `collect` alone was not.  This is
+`docs/traps.md` §7 verbatim, and it was undetectable for exactly as long as the fuzzer could not
+draw the operator: item 6 and this bug are the same finding.  Fixed, and `TraversalTotality` now
+puts a marker in every subterm position of every constructor and asserts each traversal sees it, so
+a future missing arm is a red test naming the constructor.  `CorpusLawValidation` back to 100000
+checks all agreeing.
+
+ITEM 8 — BACKEND SELECTION REMOVED.  `chooseBackend`/`selectBackend`/`BackendChoice` scored
+`work + alloc + rounds + touch` at one valuation and took an argmin.  Four separate defects: the sum
+adds four components with four different counted oracles and no common unit; only the UPPER endpoint
+was compared, so `[1,1000]` "beat" `[900,1001]`; there was no overlap test and no use of
+`Sym.dominates`; and it minimised across a DECLARED oracle gap (`ReferenceCost.touchNoOracle` forces
+that backend's `touch` lower endpoint to 0).  Replaced by `compareBackends`, which reports the
+per-component intervals and states DOMINANCE only when they are disjoint on every component —
+`INCOMPARABLE` is the normal, honest answer.  A regression test asserts the argmin API cannot come
+back.
+
+ITEM 7 — RANGE COST.  Three stale terms, all removed with the measurement that justifies it.
+(a) `IntTrie.ordered`'s per-node key sort emits NO counted event, and `touch` is DEFINED as
+`TrieNodeVisit + PatriciaVisit`; charging `2·(len+1)·heads·log(heads)` to it was unmeasurable slack
+and the dominant term in `range-part`'s width (144 of a predicted 199 against a counted 7).  It is
+now a DECLARED assumption on the report instead.  (b) `slice` is an ORDER-STATISTIC descent: at any
+node the window is one contiguous index block and the children are contiguous disjoint blocks, so at
+most TWO children are partial and the recursion is two root-to-leaf chains — `O(depth + window)`,
+a SUM, not the product `(w+2)(L+1)` charged for both `nodes` and (times `tPer`) `touch`.  (c) `slice`
+uses plain `IntMap` ops, not the instrumented `IntTrieOps`, so it emits no `PatriciaVisit` at all and
+the `tPer = 3` multiplier does not apply to this operator.  `ZipperCost.range` additionally charged a
+QUADRATIC `3·w·(w·L + L + 2)` left over from the path-by-path predecessor, and an unconditional
+materialisation walk — `Meas.concrete` (from the already-existing `liftsToLit`) now says when
+`materialize` hands back an existing trie.  `GraphCost` recovers its provable lower `touch` of 1:
+`GraphExec` has no empty guard for `Range`, which `forcedUnary` already knew and `entryVisit` threw
+away.
+
+ITEM 15 — THE WIDTH/DEPTH SPILL NO LONGER CHANGES THE ASYMPTOTIC PREDICTION.  `Shape` gained a FIFTH
+γ channel, `otherKeys: Option[Set[PathItem]]` — "every untracked head is named in `ks`", `None` = ⊤ —
+minted in `Shape.mk`'s spill and in `capDepth`'s, carried through `weaken`/`openCounts`/`widen`, and
+transferred per operator by the head-set image of the operation (union unions, the deleting operators
+keep the left operand's, composition grafts, meet intersects).  It is capped by its OWN budget,
+`Shape.MaxSpillKeys = 4096`, decoupled from `MaxHeads = 12` because the two bound different things:
+`MaxHeads` bounds tracked SUB-SHAPES, this bounds NAMES.  `isTop`, `leq` and `leqStrongMask` all join
+the new channel (a prototype that skipped `isTop` was caught by the order matrix, per the note in the
+carrier).  The plumbing that keeps it non-inert is `SpatialTypeSystem.constrainShape` and
+`SpatialAnalysis.capWidth`, the two places outside `mk` that rebuild a `Shape` by hand.
+
+MEASURED, key-disjoint union under a shared prefix:
+    n     = 4 8 12 | 13 16 24 64 256 1024 4096
+    before  [2,2]  | [2,15] [2,18] ... [2,4098]      (Θ(1) -> Θ(n) at MaxHeads + 1)
+    after   [2,2]  | [2,2]  [2,2]  ... [2,2]         FLAT, derived |Q| = 2 at every n
+and across the depth cap the d = MaxDepth+1 row went [5,9] -> [5,5] (exact).  Past MaxDepth+1 the
+divergent keys are BELOW the collapsed level, where no certificate can help — that is the depth
+budget, and the test now asserts the honest claim (exact to MaxDepth+1, linear in d past it) rather
+than a discontinuity.  `SpatialShapeCheck`, `SpatialLawCheck`, `SpatialAnalysisCheck` and the γ-gate
+stay green with the new channel enforced.
+================================================================================================
+
+================================================================================================
+## 2026-08-31 — plan.md resolution pass, round 2: the cost gate, the citation sweep, and the
+## benchmark artifacts
+
+ITEM 11 — THE COST GATE.  `SpatialCostCheck`'s WIDTH requirement went from 51 red rows to 41, every
+one of them now carrying an evidence entry (it was 44 of 51, with 7 UNDIAGNOSED).  Per scenario, and
+every number below is measured on the same 14-operator table with |a| = 64 over 8 heads and |b| = 16:
+
+  range-part   trie/graph Touch 100.00 / 200.00 -> 6.00 / 6.00      RESOLVED
+               zipper Work 99.00 -> 1.67, Alloc 110 -> 81, Touch 437 -> 85
+  range-full   zipper Work 99.00 -> 1.67, Alloc 74 -> 74            (Work RESOLVED)
+  fixpoint     Rounds 37.00 -> 1.50 on all three backends            RESOLVED
+               trie Work 37.00 -> 1.50, graph Work 128.25 -> 4.00, zipper 1.43   RESOLVED
+               Alloc 7447 -> 205, Touch 20367 -> 558.5               (still red; OP-1/OP-2's cause)
+  iteration    graph Work 2425 -> 25, graph Alloc 669.5 -> 37        (Alloc RESOLVED)
+               trie/zipper Work 437 / 401 -> 256 / 234, Touch 113    (still red)
+  tails-union  trie/graph Work 1609 -> 939, zipper Alloc 74 -> 74    (still red)
+  tails-inter  trie/graph Work 1609 -> 939, zipper Work 1806 -> 1136 (still red)
+
+FOUR CORRECTIONS, in order of how much they moved:
+
+(1) THE FIXPOINT ROUND BOUND WAS THREE SEPARATE BUGS, not a missing must-count.  `fixRounds` decided
+    monotonicity with a two-case syntactic match on `Union(rec, _)` / `Union(_, rec)`, so the same
+    accumulator RE-ASSOCIATED (`Union(Union(rec, a), b)`) was called non-monotone and fell straight
+    to a FREE VARIABLE; it bounded the rounds by `|result| + 1` rather than `|result| - |init| + 1`
+    (73 instead of 9); and it had no case for the shape that actually occurs — `Union(rec, E)` with
+    `rec` NOT FREE in `E` makes the step IDEMPOTENT, so the loop runs ONE round to add `E` and one to
+    observe that nothing changed, i.e. `[1, 2]` whatever the cardinalities are.  Now
+    `fixRoundsIvl` returns an INTERVAL, the union tower is AC-flattened, the free-mention test is the
+    binder-aware walk (a `Call`, a `GroundedSS` closure or a nested `Fixpoint` cannot hide an
+    occurrence from it), and `Sym.monus` is a FOLD rather than a `Sym` case — a subtraction node
+    would break the syntactic monotonicity `Sym.dominates` rests on.  Counted `FixpointRound` on the
+    table's fixpoint: 2, predicted [1, 2].
+
+(2) `execT` DOES NOT USE `joinAll` FOR A LOOP, AND THE MODEL SAID IT DID.  `GraphExec.scala`'s
+    `case "Iteration"` is `var acc = ITrie.empty; src.children.foreach { … acc = ITrie.union(acc, …) }`
+    — a PAIRWISE LEFT FOLD — while `GraphCost` inherited `TrieAlgebraCost.collectJoin`, which prices
+    `evalI`'s n-ary `joinAll` including its operand probes and scratch slots.  Corrected, and the
+    left fold is still LINEAR in the group count, not quadratic: `ITrie.union`'s descent follows only
+    the keys present in BOTH operands, so one merge visits at most `min(nd(acc), nd(b_i)) <= nd(body)`
+    however large the accumulator has grown.  Graph `Alloc` containment stayed 100% with median
+    6.89 -> 3.02 and p95 31 -> 20.75; graph `Work` p95 13.02 -> 8.78.
+
+(3) `naryProbes`' per-operand factor.  `min(k, 24) + 4` prices `collectLive`'s dedup as a FULL linear
+    scan for EVERY operand, even past the `dedupScanMax = 24` threshold where it is a hash probe.
+    Derived from the three loops in `IntTrieOps.joinAllTries` it is `dedup/k + 3` — 7 at k = 8
+    against the previous 12, and against a counted amortised 2.4.
+
+(4) Item 7's `Range` corrections (previous entry) closed `range-part` and `range-full` outright.
+
+AND THE MUST SIDE COULD NOT BE BOUGHT.  `alloc` and the operand-loop half of `work` still start at 0
+on every n-ary transfer, which is most of what is left.  TWO must-counts were derived and BOTH were
+refuted by the counted oracle within one run: `4 + 3*kLo` scratch slots plus `kLo` probes took trie
+`Alloc` containment 100% -> 98.5%, graph -> 94%, zipper -> 97.5%; the bare `ArrayBuffer(4)` that
+`liveDistinct` allocates on entry took zipper `Alloc` -> 98%.  The reason is that `kLo` bounds the
+HEADS while `liveDistinct` DEDUPS BY OBJECT IDENTITY — `{a.x, b.x}` builds ONE `{x}` trie and hangs
+it under both keys, an unchanged branch of a fixpoint iterate is literally the previous round's
+object, and `k` heads can collapse to ONE live operand, after which `joinAll` returns it by pointer
+with no split arrays, no terminal scan and a probe count of zero.  Closing this needs a LIVE-OPERAND
+count (how many head children are DISTINCT OBJECTS), which is per-head sub-shape information `Meas`
+does not carry — the n-ary analogue of `SpatialFrontier`'s binary paired/reuse split.  That is
+recorded as OP-6/OP-6g/OP-6z rather than guessed at, and OP-4/OP-5/OP-5g/OP-5z are RETIRED.
+The zipper's `TailsIntersection` also taught the same lesson from the other side: it does materialise
+and does call `ITrie.tailsIntersection`, but `merged` is a LAZY VAL, so a consumer that meets it with
+∅ never forces it — the must claim produced an INVERTED interval (`actual=10 in [18, 16]`), which is
+the unmistakable signature of charging for work that did not happen.
+Containment after all of it: 97.33% (80 of 3000 corpus points) and 100% (66 cornerstone points) —
+EXACTLY the numbers before this round, so nothing was tightened at soundness' expense.
+
+ITEMS 9 AND 13 — THE DANGLING CITATIONS.  369 citations of a `review.md` that was never in the tree,
+across 42 source, doc, proof and script files, plus 11 of a `whispers.md`, 5 of a `fallbacks.md`, a
+`critique_on_b.md`, an `attic-formal.egg`, a `locality-schedule.egg`, two broken markdown links and
+four personal absolute paths.  All gone; `scripts/check_references.py` is the new CI checker that
+resolves every markdown link and every file-shaped token in the tree, and it is down to the handful
+still being written by the in-flight work.  The sweep was mechanical (a regex pass over eight
+citation shapes) and VERIFIED LINE-BY-LINE — every changed line had to contain the word "review", and
+three drafts of the tidy-up rules were thrown away for failing that check: collapsing `()` rewrote
+`f.is_file()` to `f.is_file` and `(define-fun HA () Int …)` to `(define-fun HA  Int …)`; stripping
+space before punctuation destroyed every aligned trailing comment in the .smt2 corpus; and stripping
+"two spaces before a dot" ate the indentation of every `\n    .map(...)` continuation in the Scala
+sources.  A `\s` in the locator pattern also swallowed the next line — `\s` matches `\n`.
+
+ITEMS 5 AND 10 — THE BENCHMARK ARTIFACTS.  docs/BENCHMARKS.md was a 3,696-line append-only tape: five
+`FileWriter(f, append = true)` sites x ~28 runs of the same five sections, in which the current
+numbers were indistinguishable from numbers produced months earlier by different code on a different
+machine, and no row said which machine.  It is now 51 lines of prose plus five sections REGENERATED
+IN PLACE between stable markers, each stamped by `RunEnvironment` with cpu / cores / RAM / OS+kernel
+/ JVM vendor+version / the JVM's ACTUAL flags / max heap / Scala version / git commit + dirty flag /
+UTC timestamp / the `Tuning` ablation toggles, plus the per-benchmark timing policy, interner state
+and seed.  `corpus_runtimes.csv`, `prog_matrix.tsv` and `expressivity.csv` carry the same block as a
+`#` header, and the two that were being written to `/tmp` (and therefore copied into the repo by
+hand — which is how the committed `prog_matrix.tsv` came to have a `Transformation` column for a
+constructor the `Space` enum no longer has) now write to the repo root; the three plotting scripts
+read from there and skip the provenance line.
+================================================================================================
+
+================================================================================================
+## 2026-08-31 — plan.md resolution pass, round 3: the analysis becomes a rewrite consumer, and it
+## immediately finds a soundness bug in the frontier
+
+ITEM 14 — `rewriteNodes` READ TWO THINGS.  A census of the consumers was blunt: of the eleven `Fact`
+cases the analysis emits at every node, exactly ONE (`ExactHeadSet`) was read anywhere outside
+`SpatialTypeSystem`, and that read was inside a Trie-backend-only candidate.  `DefinitelyNonEmpty`,
+`MinimumCardinality`, `MaximumCardinality`, `AllPathsHaveAtLeast`, `MaximumPathLength`,
+`HeadSetWithin`, `MinimumHeadCount`, `MaximumHeadCount` and `PrefixAbsent` had NO consumer at all —
+`PrefixAbsent` was manufactured at every node and read nowhere — and neither did the whole relational
+layer: `SpatialFrontier` priced a node, never replaced it.  Five rewrites now consume them:
+
+  R1 frontierEdits  the relational frontier's SINGLETON case sets.  `{Empty}` / `{Left}` / `{Right}` /
+                    `{Left,Right}` are proofs, not estimates, and each replaces the node by `∅` or by
+                    one of its own operands.  Deliberately NOT `FrontierCase.isIdentity`, which is
+                    true of `{Empty, Left}` — "∅ or L" is a disjunction, not a rewrite.
+  R2 iterationEdits a source with `ExactHeadSet` of size 1 makes the loop a SUBSTITUTION
+                    (`body[sym := h][rest := TailsUnion(src)]`), gated on hygiene and on the result
+                    not being larger than the loop it replaces.
+  R3 iterationEdits `MaximumHeadCount(0)` on the source, or a provably-empty body, gives `∅`.
+  R4 prefixEdits    `PrefixAbsent(p)` makes `Unwrap(src, p)` `∅` — the fact's first consumer.
+  R5 windowEdits    a pinned cardinality (`MinimumCardinality(k)` = `MaximumCardinality(k)`) whose
+                    normalised window covers `[0, k)` makes `Range` the identity.
+
+AND R1 IMMEDIATELY REFUTED THE FRONTIER.  Turning a COST verdict into a SEMANTIC rewrite is a much
+stronger test of it, and the corpus differential found the hole on the first run:
+`Restriction(x, x)` with `x = {ε}` was rewritten to `∅` where `eval` gives `{ε}`.  Root cause,
+`SpatialFrontier.headDisjoint`: it proves the two HEAD SETS are disjoint and says nothing about ε,
+which has no head — and ε is exactly the member these operators treat specially.  Three arms leaned
+on it without an ε side-condition:
+
+  Intersection   `headDisjoint ⇒ {Empty}` is wrong when BOTH sides may hold ε (ε survives the meet)
+  Subtraction    `headDisjoint ⇒ {Left}`  is wrong when both may hold ε (ε is removed)
+  Restriction    `headDisjoint ⇒ {Empty}` is wrong when the RIGHT may hold ε — ε is a prefix of
+                 every path, so ALL of x survives however disjoint the heads
+  Raffination    the dual: `headDisjoint ⇒ {Left}` is wrong when the right may hold ε (all of x goes)
+
+Each arm now carries its own ε condition.  As a COST claim the same arms were predicting zero
+allocation where a node is allocated, so this is a soundness fix for the cost model too, not only
+for the new rewrite.
+
+AND A MISSING OPTIMISATION, FOUND THE SAME WAY.  With R1 live, `SpatialPipelineCheck`'s hook contract
+went red on a program where the hook made things WORSE by 2.54x predicted work.  Diagnosis:
+`Iteration(src, h, t, Union(inv, dead))` was being hoisted by `Lower.IterUnion_Indep` into
+`headed(src) · inv` — the invariant branch computed ONCE.  The spatial tier proved `dead` empty, the
+union collapsed, and with no union left the hoist rule no longer matched: the loop came back and
+`inv` was recomputed per head.  `docs/design_plan.md` §5.1 lists the missing rule as a "subsumed
+special case" — it had never been written.  `Lower.IterInvariant_Drop` is it:
+`iter(src, body) = headed(src) · body` for a body invariant in both binders, bare when
+`provablyHeaded(src)`.  It must refuse a body that is provably `⊆ {ε}`, which is `headedGuard`'s own
+shape; the first draft tested `body == Singleton(ε)` syntactically and HUNG, because another rule in
+the same `all_forever` round normalises that to `Literal({ε})` and the refusal stopped matching.
+Over 400 corpus programs the rule takes total predicted trie work from 4.36e6 to 3.78e6.
+
+AND THE HOOK'S CONTRACT WAS MEASURING THE WRONG THING.  It was "the hooked body must not have more
+NODES", and a guarded hoist legitimately trades ~12 nodes of guard for a branch that stops being
+recomputed per head — the old assertion called `docs/design_plan.md` §5.1's headline optimisation a
+regression.  The contract is now the PREDICTED COST, in two halves: the hook must lower the TOTAL
+predicted work over the corpus (it does: 3011427 -> 2757123, 8.4% better over 250 programs), and no
+single program may regress by more than 1.5x on any component (worst measured: 1.24x).  Both forms
+are priced on the same facts with the same backend.  Final: 6250 differential checks against `eval`,
+132 of 250 programs changed, nodes 10580 -> 9165.
+
+ITEM 2 — THE RECURSION CERTIFICATES (agent report, verified).  `terminating/` went from 11 files /
+44 goals proving that particular recurrences STOP, to 20 files / 157 goals that also say what
+`Space.Fixpoint` COMPUTES and what each lowering pass PRESERVES: `fixpoint_is_lfp` (the accumulator
+`A_n` IS `lfp_{⊇I}F` under monotonicity, and the executors return `A_n`, not `C_n`),
+`asfixpoint_sound`, `unroll_vs_kleene` (with two machine-checked counterexamples showing the
+monotonicity hypothesis is load-bearing), `seminaive_correct`, the tagged-state projection and
+Bekić decomposition for mutual SCC lowering, and the bounded-recursion residual cut.
+`terminating/REGISTRY.tsv` is a TOTAL map from the eleven lowering sites to their obligations, with
+OPEN and PROPERTY rows kept visible rather than omitted; `terminating/STATUS.tsv` carries both
+provers' verdicts.  `sh terminating/run.sh`: certified 20, expected-open 0, countermodels 0,
+unexpected-open 0, 4m13s — and it now runs VAMPIRE PER GOAL on the reconstructed incremental context,
+because vampire has no push/pop and would otherwise "prove" a staged file from one goal's refutation.
+
+The live failure it was asked to fix — `datalog_b_seminaive_lemmas` FAIL (unsat 2/4, bad 1) — was
+diagnosed rather than papered over: in INCREMENTAL (push/pop) mode z3 5.1.0 disables the macro
+finder, so `allp`/`deltap` stay uninterpreted and the extensionality instance is never built.  Fixed
+with three staging lemmas, each proved as its own goal first; `stalled_delta_empty` is unchanged in
+statement.  60 s timeout -> 0.193 s for all seven goals.
+
+AND IT REFUTED TWO ARMS OF THE MONOTONICITY GATE.  `mono` (MORKL.scala) and its mention form `monoIn`
+both claimed `TailsIntersection` and `Iteration` are monotone in their operands.  Neither is:
+  * `TailsIntersection` INTERSECTS the per-head tail sets, so a path with a NEW head adds a
+    participant and can only SHRINK the result — `{0·7} ⊆ {0·7,1·8}` but `{7} ⊄ ∅`;
+  * `Iteration` is monotone in its SOURCE only if the body is monotone in the TAIL-SET it binds, since
+    a bigger source ENLARGES an existing group as well as adding groups — with body `{ε} ∖ ⋁(nbs<|{9})`,
+    `{0·7} ⊆ {0·7,0·9}` but `{ε} ⊄ ∅`.
+Both arms are now the conservative test (the SCC call / the mention is forbidden in the position).
+No corpus or cornerstone program puts a recursive mention there, so this closes a missing guard
+rather than fixing a wrong output — and `AgnosticPipeline.monotoneInMention` already got both right,
+which is what makes the divergence a transcription bug rather than a disagreement.
+================================================================================================
+
+================================================================================================
+ROUND 4 — items 3, 12 and 16 land; the n-ary live-operand count; and what the width gate has left
+================================================================================================
+
+ITEM 12 — THE 18 INSTANCE OBLIGATIONS PROVED NOTHING (agent report, verified).  Each of the 18
+concrete-instance files under proofs/pipeline/ contained two `(define-fun m_i ((p Path)) Bool ...)`
+with BYTE-IDENTICAL bodies, so after macro expansion `(assert (not (and (= B B) ...)))` is
+`(assert (not true))` in disguise.  THREE independent proofs of the degeneracy: z3 answered `unsat`
+in 0.00-0.01 s on every one; z3 STILL answered `unsat` after the ENTIRE foPrelude was deleted, so
+nothing in the algebra was being used; and `m_1` for aunt was the three-path aunt-query RESULT, not
+a program.  Cause: three `AgnosticPipeline.fold(...)` wrappers at the instance emission sites —
+`expand` has already turned a cornerstone into ground local algebra, so `isGround` holds AT THE ROOT
+and each side collapses to one Literal.  The plan's second sentence is exactly right about why
+nothing caught it: `audit_pipeline_markers.py` applied `duplicate_big_lets` only `if f.suffix ==
+".egg"`, and the only .smt2 test was a grep for the literal string `(assert (not true))`.
+
+The folds are gone and the .smt2 detector is real (`vacuous_smt`: same-macro sides, byte-identical
+macro bodies, `(= X X)`, alpha-equality after depth-capped inlining, with INCONCLUSIVE rather than
+"clean" when the inline does not terminate).  RED-FIRST against `git archive HEAD proofs/pipeline`:
+exit 1 naming exactly 18 files.
+
+TWO ENCODER CHANGES MADE THE UN-FOLDED OBLIGATIONS TRACTABLE and the second is the surprise.
+(1) Structural sharing in `Smt.den` — one macro per distinct subterm across BOTH sides: puzzle15-
+zipper 339,895 -> 41,172 chars, aunt-zipper 38,775 -> 7,115.  It also makes vacuity DECIDABLE at the
+encoder, which is where the IDENTICAL-STRUCTURE marker comes from.  (2) Prelude pruning — `append` is
+reachable only from Composition and `isPrefix` only from Restriction/Raffination, so a file using
+neither carried six unused quantified axioms, one with a nested existential.  SHARING ALONE DID NOT
+HELP: aunt-zipper still timed out at 120 s in FIFTEEN z3 configurations (default, smt.mbqi,
+smt.macro_finder, both, ematching=false+mbqi) and under `vampire --mode casc -t 240s`, and a
+hand-written tester-form rewrite of the Wrap existentials did not help either.  Sharing PLUS pruning:
+z3 unsat in 66 ms.
+
+THE HEADLINE COUNT DROPS AND THAT IS THE POINT.  Marker audit before: REAL=40 TRIVIAL=29
+LAW-JUSTIFIED=5 BUDGET=6 IDENT=9, total 89, "OK".  After: REAL=20 TRIVIAL=31 LAW-JUSTIFIED=7
+BUDGET=11 IDENT=15 SINGLE-SIDE=6, total 90.  Of the 18 formerly-degenerate cells, 8-9 are now
+prover-discharged, 10 carry an IDENTICAL-STRUCTURE marker (the two sides really ARE the same term,
+decided by the shared encoder rather than asserted) and 1 is an explicit PROVER-BUDGET-EXCEEDED
+record with its attempt log.  The five `-lit` fallbacks that used to count REAL while proving only
+that the reference literal observes itself now carry SINGLE-SIDE-OBSERVATION.
+
+THE ACCEPTANCE TEST AS WRITTEN ("all 18 discharged by z3 AND vampire") IS NOT MET AND IS NOT
+REACHABLE WITH THIS ENCODING.  Vampire discharges 4 of the 9 real instance cells (both datalog-sn,
+both gol, all in <= 2.5 s); z3 discharges 8-9; no cell is discharged by vampire and not z3.  Nothing
+between 20 s and 120 s ever succeeds.  Shipped instead: both provers always run, both verdicts land
+in the file header and in proofs/pipeline/STATUS.tsv, and a cell neither discharges is
+PROVER-BUDGET-EXCEEDED and stops counting as REAL.  traps.md #3's "require BOTH provers" is kept
+LITERALLY on the -agnostic legs and relaxed to "run both, record both, require at least one" on the
+instance legs, matching proofs/run.sh's own policy.
+
+ITEM 3 — END-TO-END OBLIGATIONS.  A SEVENTH CORNERSTONE: puzzle3-full (puzzleFixpoint(2,2), the 2x2
+sliding puzzle's whole 12-state reachable space) is the only stone whose recursion is an unbounded
+Space.Fixpoint and it had no row at all.  Stage 1 z3 unsat 2349 ms, stage 2 z3 unsat 1768 ms, stage 3
+IDENTICAL-STRUCTURE.  Stage-3 agnostic stopped being trivial by construction — it compared the
+optimised graph against the term it was built FROM, a round trip, and now compares optimised against
+UNOPTIMISED, which immediately turned two cells into real obligations neither prover discharges at
+240 s (recorded OPEN, which is the point).  The goal is now the FORALL-path equivalence with the
+finite observation list demoted to a labelled fallback: forall is the stronger statement and measured
+CHEAPER wherever it discharges (aunt stage 1 0.02 s vs 0.09 s over 28 observations), and measured
+over the whole corpus the fallback never rescues anything.  proofs/run.sh folds pipeline/*.smt2 into
+the repo-wide table, recording markers as their own verdict kinds instead of leaving them invisible.
+
+AND A FIXPOINT SANITY GATE, because an over-strong fixpoint axiomatisation would make every enclosing
+obligation vacuously provable — the exact failure item 12 is about.  proofs/pipeline/fixpoint-gate/
+holds four files from the real emitter: a TRUE fixpoint equality is proved by BOTH provers (z3 unsat
+0.01 s, vampire "Refutation found") and three deliberately FALSE ones — different step, dropped init,
+wrong step — by NEITHER (z3 timeout at 120/120/60 s, vampire no refutation, and smt.mbqi finds no
+countermodel in 30 s either, the models being infinite path sets).
+
+PARK INDUCTION HAD TO BE MADE DEMAND-DRIVEN, and this is a measurement not a preference.  Stated as a
+bare three-premise egglog rule it NEVER FIRES: a premise `(= (Union i c) c)` can only match once the
+TERM `(Union i c)` exists in the e-graph and nothing builds it — the identity-step tour check failed
+outright.  Materialising it for every (f, c) pair is quadratic, so the candidate is DECLARED with
+`(FixCand f c)`, one demand rule builds the two premise terms, and Park fires only if the e-graph
+reduces both to c.  Each tour carries a `fail` check that Park does NOT fire at a non-post-fixpoint.
+formal.egg 0.28 -> 2.31 s, zipper-spec.egg 0.041 -> 0.031 s, all checks green,
+scripts/check_obligations.py problems: 0.
+
+ITEM 16 — A TIER-3 CORPUS, AND THE VACUITY PROBE THAT SAVED IT.  The repo had two tiers of
+size/length reasoning and BOTH ARE BOUNDED TO ONE TERM: tier-1 (`Lower.sizeBounds`) has no object
+language — the Union transfer function IS `hi = hi_a + hi_b`, written in Scala — and tier-2 is
+GROUND, one `(declare-const n<i> Int)` per hash-consed AST node with linear constraints per
+constructor OCCURRENCE (SizeConstraints.scala:196-202).  Neither has a variable ranging over "all
+spaces", so `forall A,B. |A u B| =< |A| + |B|` could not be written down anywhere in the tree.
+proofs/unbounded/ is 56 schematic first-order obligations over the whole operator table, quantified
+over ALL spaces, paths and bodies; 55 PROVED by vampire, 1 admitted OPEN (mon_cancel, left
+cancellation of append — vampire has no term algebra to induct over an opaque TFF sort; BOTH HALVES
+of the induction are machine-checked and only the principle is admitted).  21 min wall clock, slowest
+proved file length_compose at 39.3 s, median 0.3 s.
+
+THE PROBE EARNED ITS KEEP ON THE FIRST RUN.  The first signature was `$int`-valued and vampire
+answered `% SZS status ContradictoryAxioms` on a plainly consistent axiom set — reproduced 2 of 3
+runs, minimised to `_signature.p + _card.p` and to `_signature.p + _paths.p + _plen.p`, with the
+printed derivation using only vampire's own internally-introduced theory axioms and ending in a step
+that does not follow (`-tha off` turns it into a Timeout).  `card_lattice`, `card_partition` and
+`length_concat` had ALL reported PROVED from those inconsistent sets; those verdicts were void.
+Porting card/plen to a hand-axiomatised ordered commutative monoid (_nat.p) turned three of them OPEN
+and they were re-proved honestly.  The corpus is arithmetic-free as a result and run.sh probes every
+file: 56/56 clean, plus 8 negative controls (false near-misses that must not be provable) that all
+held.
+
+ITEM 11 CONTINUED — THE N-ARY LIVE-OPERAND COUNT, WHICH THE PREVIOUS ROUND NAMED AS THE NEXT STEP.
+`alloc` and the operand-loop half of `work` started at 0 on every n-ary transfer, which was most of
+the width residue, and two must-counts derived from `Meas.headsLo` had been refuted by the counted
+oracle.  The diagnosis was precise and it is what makes the fix different from a third guess: `kLo`
+bounds the HEADS, `IntTrie.liveDistinct` dedups by OBJECT IDENTITY, and `{a.x, b.x}` builds ONE `{x}`
+object under two keys.  `TailsFacts` (SpatialCost.scala), carried on `Meas.tails` and derived from
+the shape's per-head sub-shapes, supplies `distinctLo` (head children PROVABLY DIFFERENT in gamma, so
+provably distinct OBJECTS), `allHeaded` (meetAll's collectLive runs stopOnNil and abandons at the
+first eps-only child) and `keyDisjoint`.  From those: liveDistinct's `max(4, 4k)` scratch and
+`k(k-1)/2` dedup probes unconditionally, plus the maps array and the root join/meetAllTries call once
+there are three or more live operands.  Alloc 1344 -> 23.58 and Work 939 -> 33.94 on trie AND graph.
+
+IT WAS UNSOUND ON ITS FIRST DRAFT AND THE ORACLE SAID SO IMMEDIATELY.  `sh.heads` is a MAY map: a
+value in gamma need only carry the heads whose sub-shape is DEFINITELY non-empty.  Counting the
+possible ones put datalog-sn's alloc floor at 84 against a counted 67 — an interval that does not
+contain the run, 4 new unsound corpus points and 2 new unsound cornerstone points.  The fact now
+separates the two sub-sets explicitly: `keyDisjoint` (an upper-bound property) quantifies over every
+POSSIBLE child, `distinctLo` (a lower endpoint) only over the certain ones.  Containment is back at
+exactly 80 of 3000 and 66 of 66.
+
+THREE MORE MODEL CORRECTIONS, each read off the counted oracle:
+  * `compositionR` recurses through `a.children.transform` — EVERY node of the left operand, not the
+    paired frontier — so with the two `{eps}` whole-skip paths discharged its touch FLOOR is `N(a)`.
+    `Meas.nodesLo` carries the other endpoint of `SpatialFacts.trieNodes`, which was read for its
+    upper half only.  Width 69.00 -> 1.86, and the counted touch is exactly the 73 the floor claims.
+  * `Meas.pointerLit` separates the operand whose zipper `Lit` is handed back BY POINTER (a bare
+    Mention: an ITrie the caller already owns) from the wider `liftsToLit` class, whose
+    Singleton/Range/Unwrap members BUILD their trie during the lift — which is precisely why zeroing
+    the materialisation term on `liftsToLit` had been refuted.  range-part zipper Alloc 81 -> 8,
+    Touch 85 -> 12.
+  * `ZipperCost.tailsInter` still carried a `heads` LEFT-FOLD factor that the trie model had already
+    dropped on the same operator: `ITrie.tailsIntersection` IS `meetAll`, one simultaneous descent,
+    and the min <= mean cancellation applies to both.  Alloc 1928 -> 1344, Touch 1973 -> 221.
+
+WIDTH GATE: 51 -> 28 failures, over a strictly LARGER surface (item 6 added TailsIntersection and the
+identity Range window to the fuzzer, which is what made tails-inter and range-part visible at all).
+SLOPE gate 115 -> 99.  No STALE ledger entry: ten entries lost subjects and each says which and why,
+because a limitation that no longer holds is a failure of the ledger and the gate checks it.
+
+FOUR SOUNDNESS/EXACTNESS FIXES ELSEWHERE IN THE ANALYSIS, all found by the same discipline:
+
+  1. `SpatialDemand` CLAIMED EXACTNESS IT DID NOT HAVE.  `Layers.maxArity(d)` is a MAX over the level
+     and was charged as the per-node fan-out of a frontier that is a strict SUBSET of the level;
+     `Pairing.pairedAt(d)` counts the paired prefixes of the whole level and was applied to a
+     sub-frontier.  Seed 65 of the random sweep predicted 19 cursor-map entries against a measured 15
+     while reporting EXACT.  Both facts now carry their side conditions (`arityUniform`, and a
+     coverage test `n >= pairedAt(k)` derived from "every paired depth-k+1 prefix is a child of a
+     paired depth-k prefix"), and `Pairing` gained `identicalAt` — POINTER IDENTITY BELOW THE ROOT,
+     which is what interning makes common and what made seed 126 force one node too many: two equal
+     leaf subtries under different prefixes ARE one object and the operator collapses there.  389
+     programs, 241 with fully exact facts, all 241 exact on every counter.
+  2. THE WIDTH SPILL'S NAMED KEYS WERE INVISIBLE TO THE WITNESS SEARCH.  `SpatialCheck.headItems`
+     read `heads` and `otherTail` and not `otherKeys`, and `plan`'s walk therefore built a
+     12-path "COMPLETE" set for a 16-head type and reported gamma EMPTY — an over-claim, not a
+     shrug.  With the certificate read, `plan` returns 16 paths, the product query DECIDES the pair
+     with a real witness, and the depth-capped shape needs NO fresh items at all (maxFresh = 0 no
+     longer declines it).  Two tests moved to subjects that are genuinely open rather than merely
+     un-enumerated, and the 16-head case is now a POSITIVE assertion.
+  3. `SpatialLawsCheck` 11 was feeding the differential inputs the law is FALSE on.  `always` puts
+     the law at EVERY node including the bare Mention, so the premise is "M denotes {q}" and not
+     merely "the union does"; the old residual `Literal({q})` happened to agree on `M = 0` as well,
+     which is what made the weaker filter look sufficient until the frontier became a rewrite
+     consumer and the residual became `M`.
+  4. `OptimalTrieCheck`'s distribution sweep was ALIGNMENT-SENSITIVE and silently so.  Every layout
+     claim in it ("one high id block apart", "power-of-two ALIGNED blocks") is a claim about the
+     interned ids' BIT structure, and the base id depends on how much of the rest of the suite
+     interned first — so five rows that must read a flat 2 oscillated 4,2,2,4,2 as soon as the
+     fuzzer's new operators shifted the interner.  `alignIds` pads to a power-of-two boundary; the
+     rows are flat at every aligned base and the fixture now says so.
+================================================================================================
+
+--- ROUND 4 CLOSE-OUT: the sweep, on this machine, after everything above ------------------------
+
+sbt 'testOnly morkl.*'        581 tests, 8 failed  (37 at the start of this work), 36m06s
+                              two of the eight are wall-clock budgets that pass on a quiet machine
+                              (SpatialAcceptance 5c: decor 2572 ms of a 4000 ms budget;
+                              SpatialPipelineCheck COST) and failed only against a concurrent prover
+                              run on the same 16 cores.  The six that remain:
+                                SpatialCostCheck  width  28 of 448 (51 before, over a LARGER surface)
+                                SpatialScaleCheck slope  99        (115 before)
+                                SpatialEventsCheck corpus       80 of 3000 — EXACTLY the baseline
+                                SpatialEventsCheck cornerstones 42 budget rows — baseline, all ledgered
+                                SpatialPipelineCheck ITEM 5     puzzle15 1e55, identical to baseline
+                                SpatialPipelineCheck ITEM 8     gol/trie work 8601 vs 8496, identical
+                                                                to baseline (10692 vs 10545)
+proofs/run.sh                 certified 142  expected-open 2  countermodels 0  unexpected-open 0
+                              (134 before; the +8 is the pipeline family being folded into the
+                              repo-wide table for the first time, markers recorded as their own
+                              verdict kinds and never as passes)
+terminating/run.sh            certified  20  expected-open 0  countermodels 0  unexpected-open 0
+proofs/unbounded/run.sh       certified  55  expected-open 1  countermodels 0  unexpected-open 0
+                              negative controls held 8/8, vacuous axiom sets 0
+check_references.py           0 problems  (373 before)
+check_laws.py                 0 problems  (76 laws; 35/35 SC source laws covered)
+check_obligations.py          0 problems  (egg rules AND terminating/REGISTRY.tsv; the 20 rows not
+                              discharged by an SMT file are PRINTED on every run, never accepted)
+audit_pipeline_markers.py     marker audit: OK
+egglog formal / zipper-spec / zipper / zipper-impl    all OK
+
+ITEM 8 IS NOT FIXED AND IS NOT WEAKENED, and the reason is worth recording because it is a real
+property of the design: the DECORATED analysis JOINS over every observation of a position, while a
+fresh `SpatialTyping.infer` sees one environment, so at a node under a binder the decorated type can
+legitimately be WIDER.  The test's premise — "consuming the decorated result never makes any
+component worse" — is what does not hold; `gol/trie` gives up 1.2% of `work` to gain on `touch`.
+Changing the assertion to an aggregate-plus-bounded-regression contract (what the hook's own contract
+became this round) would make it pass and would be a defensible change; it is not one of the sixteen
+items and was left for whoever owns that test.
+================================================================================================
+
+================================================================================================
+ROUND 5 — `Lower.Iter_Tails` joins the ordinary lowering, and the crossover it exposes
+================================================================================================
+
+THE RULE.  `Iteration(src, _, rest, Mention(rest))` is `TailsUnion(src)`: `eval`'s Iteration groups
+`src` by head DROPPING the headless path, binds `rest` to each group's tail set and unions the
+bodies, which with the bare rest-mention as the body is `{ tail : h.tail in src }`; `eval`'s
+TailsUnion is `recs(src).collect { case PathValue(_::r) => PathValue(r) }`, which drops the headless
+path for the same reason and yields the same set.  On the trie side `ITrie.tailsUnion(s)` is
+`joinAll(s.children.values)` and `s.children` likewise ignores `s.terminal`.  Certified as
+`iter-tails` in the law registry (proofs/laws/law_tailsu_set.smt2 + proofs/keyfolds.smt2).  It was
+reachable only from the supercompiler, so `Routine.optimized` — the body an executor is actually
+handed — kept the loop, a binder and a head-group split and an n-ary accumulate, where every backend
+has a direct `tailsUnion` entry point.  Nothing in the source said why, and nothing was relying on
+the loop surviving.
+
+THE ONE THING THAT WAS RELYING ON IT was `SpatialCostCheck`'s per-operator width table, whose
+`iteration` row was EXACTLY this term.  With the rule in `OrdinaryRules` that row prices a
+`TailsUnion` under the name `iteration` and duplicates the row four lines above it, so the row moved
+in the same change.  A BODY THAT IS A FUNCTION OF THE TAIL-SET ALONE IS THE GENERAL FORM OF THAT
+MISTAKE and not a special case: `U_h f(T_h) = f(U_h T_h)` for every `f` that distributes over union,
+which is every operator here in its left argument, so `Subtraction(rest, B)`, `Restriction(rest, B)`
+and `TailsUnion(rest)` are all collapsible in principle.  The new subject is
+`Iteration(a, h, t, Wrap(Subtraction(t, b), Deref(h)))`: it binds BOTH names and TAGS its output with
+the group head, so the grouping is load-bearing, and it is the shape every cornerstone loop actually
+has (aunt, gol/nextStep, nqueens.place all bind the head and re-tag by it).  It also keeps the
+per-group result LARGE, so `collectJoin` is still exercised on eight substantial operands.
+
+WIDTH GATE 28 -> 24, AND FOUR OF THOSE FOUR ROWS ARE THE SUBJECT CHANGE, NOT A MODEL IMPROVEMENT.
+Said out loud because the two are not the same thing and the ledger now says so at OP-1/OP-1g/OP-1z:
+the new subject's `Touch` reads 34.78 (trie) / 36.82 (graph), inside the budget, and its `Work` and
+`Alloc` are still red under OP-2/OP-6.  OP-3g is RETIRED — `execT`'s `Work` meets the SELECTION tier
+on every operator of the table — and it is retired as a COMMENT and not as an empty `Limitation`,
+because an entry with no measured subject is itself a ledger failure and the gate says so
+("declared over <nothing> but NO requirement check produced a matching row").
+
+IT IS NOT A WIN ON EVERY EXECUTABLE.  Interleaved A/B, best of 7 batches, 4096 paths shaped
+`h(i%k).m(i%16).t(i)` so the k head children SHARE their `m` keys, sweeping k:
+
+    k        2      4      8     16     32     64    128
+    eval  5.27x  5.75x  5.24x  5.02x  5.75x  6.13x  6.00x
+    evalI 4.97x  1.38x  1.43x  2.38x  1.08x  1.02x  1.02x
+    execZ 0.77x  0.75x  1.06x  1.49x  0.13x  0.74x  1.13x
+    execT 1.73x  1.33x  0.95x  1.05x  0.91x  0.32x  0.35x
+
+`eval` and `evalI` win at every width.  `execT` LOSES BY 3x ON A WIDE SOURCE and the counted events
+say exactly why: at k = 64 the loop costs `work 195 / alloc 113` and the TailsUnion costs
+`work 34473 / alloc 25522`, ALL of the difference being `NaryOperandProbe` (34469) and
+`NaryScratchSlot` (25504).  `GraphExec.scala`'s `case "Iteration"` accumulates with a PAIRWISE
+`ITrie.union` left fold and never enters `ITrie.joinAll`; `ITrie.tailsUnion` IS `joinAll`, whose
+`collectLive` and per-recursive-call `live`/`ls`/`rs` arrays are Theta(k) at EVERY NODE of the
+Patricia recursion, and when the operands share their key space that recursion visits the whole
+shared structure with all k operands live.  So the regression is a property of `joinAll` at high
+arity over key-OVERLAPPING operands and NOT of this rewrite: the same `TailsUnion(a)` term is 3x
+slower on `execT` than the loop it replaced.  `evalI`'s own Iteration uses `joinAll` too, which is
+why that backend is a wash rather than a loss.  The cost model PREDICTED this — `naryProbes` and
+`naryScratch` are the terms, and they are the same terms that make the `tails-*` Work rows red — so
+the model is not what needs fixing.
+
+THE RULE IS KEPT.  Every real source in this repository is narrow (the cornerstones' head counts are
+single digits, where the row reads 0.95x-1.73x), it is a 5-6x win on the reference evaluator at every
+width, and the term is strictly smaller.  Measured on the corpus: the differential form's node count
+went 10580 -> 10549 and the hooked form's 9165 -> 9140 over the same 250 programs, i.e. the rule
+fires on roughly one program in eight, and all 6250 differential checks against `eval` still pass.
+The crossover is recorded as a DEFECT IN `ITrie.joinAll` — scratch arrays reallocated at every node
+of the recursion — with the reproduction and the gate to add (`OptimalTrieCheck`'s arity ladder
+covers key-DISJOINT operands and not key-overlapping ones).
+================================================================================================
+
+================================================================================================
+ROUND 6 — tightening the remaining width rows, six clusters, every patch adversarially refuted
+================================================================================================
+
+HOW IT WAS RUN.  Six analysts, one per cluster of the 24 remaining width failures, each in a private
+copy of `src/main/scala` with a shared harness that prints, for every (operator, backend, component)
+of `SpatialCostCheck`'s fixture, the predicted interval AND the counted value from a warm run of that
+executable on the same inputs — so a proposal that excludes the run says so on its own table.  Each
+patch then went to an adversarial refuter whose default verdict was UNSOUND and whose brief was five
+named attacks (the MAY/MUST trap, the fast-path enumeration, the lazy-val trap, the data distribution
+that makes a removed term real, and BUILD FIXTURES AND RUN IT).  Four of the six were refuted, three
+of those with a tested minimal repair.  THAT PHASE IS WHY THIS ROUND IS NOT A REGRESSION: every one
+of the four refutations was a bound that passed the shipped fixture's own table and the 200-program
+corpus, and failed only on a fixture built to break it.
+
+WHAT LANDED, AND WHAT EACH ONE COST TO GET RIGHT.
+
+  composition — SOUND as proposed, the only one of six.  `ITrie.compositionR`'s single allocation
+  site is reached at exactly the LEFT operand's INTERIOR nodes: a LEAF terminal takes `rIdent(RIGHT)`
+  and grafts `b` BY POINTER, allocating nothing.  So the floor is `I(a)`, not `N(a)` — and the arm
+  says why the obvious `N(a)` is not merely loose but wrong (73 against a counted 9).
+  `SpatialFacts.interiorNodes` derives `I_d >= K_d.lo - E_d.hi + E_{d+1}.lo` from the existing prefix
+  profile with every input read in its weakening direction.  trie/graph `Alloc` 75.00 -> 7.50 with the
+  floor EQUAL to the counted 9; zipper `Alloc` 542.00 -> 7.32 and `Work` 1131.50 -> 20.30.
+
+  fixpoint — REFUTED, then landed in two thirds.  Two upper-endpoint corrections are right and are in:
+  the accumulating merge runs `R - 1` times and not `R` (the accumulate sits in the `else` branch of
+  `while !stop`, verified verbatim in all three loops), and round 1 is priced with `rec` bound to the
+  SEED, because all three loops open `var cur = <init>` and evaluate the body first.  `Alloc`
+  205/69/205 -> 46/23.50/46, `Touch` 1116 -> 691.  WHAT DID NOT GO IN is the LOWER endpoint that came
+  with the seed pricing: `CostInterval.meet` joins the lower endpoints, which installs `priced`'s
+  must-paired count as the fixpoint's floor at exactly the round where `var cur = evalI(init)` IS the
+  caller's own trie by pointer and the body's sibling operand commonly reaches the same objects (the
+  semi-naive Datalog shape).  Measured by the refuter on
+  `Fixpoint(a, r, Union(r, Restriction(a, {h0})))` with `a` declared exactly: the joined floor claims
+  `touch >= 11` (1 root + 1 paired head + 8 paired depth-2 prefixes + 1 entry) against a counted 4,
+  and nine rows over four fixpoint fixtures went from inside their intervals to outside.  The repair
+  is the upper-only meet `CostInterval(cb.lo, Cost.meetHi(raw.hi, cb.hi))` — the pattern `analyze`
+  already uses for the zipper demand price — which keeps both upper wins and drops the width claim:
+  `Touch` 558.50 -> 346.00, still red.  IT ALSO FOUND A PRE-EXISTING HOLE: `mustDescend` discharges
+  the ROOT `a eq b` and says nothing about the RECURSIVE pointer-identity short circuits (`unionR`'s
+  `a eq b` at every level, `IntTrieOps.unionTries`' `if a eq b then a` on whole child maps), so
+  `S"a" u (S"a" <| {h0})` is ALREADY outside its own `touch` interval on pristine source.  That is a
+  `priced` fix, recorded not attempted.
+
+  tails-zipper — REFUTED, then landed with a one-line gate.  The new fact is `forced`:
+  `execZ(s)` IS `materialize(transpileZ(s))` and `materialize`'s non-`Lit` arm is unconditional
+  straight-line code, so AT DEPTH 0 the cursor is never a `Lit`, `children` and `terminal` both run,
+  and `ZipperCost.tailsInter`'s standing objection — "`merged` is a LAZY VAL, a consumer that meets it
+  with the empty space never queries it" — is true of an inner node and FALSE of the root.  All five
+  zipper `tails` rows went green: `tails-union` `Work` 974.33 -> 21.48 and `Alloc` 74.00 -> 1.00 (an
+  EXACT interval), `tails-inter` `Work` 1135.67 -> 35.86, `Alloc` 1344.00 -> 23.17, `Touch` 221.00 ->
+  55.25.  The refutation was of the one LOWERED UPPER in the patch, which was not gated on `forced`:
+  "every handed-through child is a `Lit`, taken by pointer" is a statement about the cursor
+  `materialize` is CALLED ON, and at depth > 0 the consumer re-wraps them —
+  `Intersection.children` is `ac.intersectionWith(bc, (_, x, y) => intersection(x, y))` and
+  `intersection(Lit, Lit)` is not a `Lit`.  Measured on `Intersection(TailsUnion(a), b)` with both
+  declared exactly: the collapsed `alloc` upper is a CONSTANT 2 against a counted `2n + 1` — 5, 7, 9,
+  … 17 for n = 2..8, a missing Theta(nodes) term and not a constant slip.  Gating the collapse on
+  `forced` too restores containment at every n.
+
+  tails-work — SOUND, and it FIXED 36 PRE-EXISTING UNSOUND CORPUS POINTS.  `IntTrie.meetAll` opens
+  with `if anyEmptyOperand(ts) then ...`, and `anyEmptyOperand` emits up to ONE PROBE PER OPERAND
+  above everything `naryProbes` models.  At `k >= 3` the `Sigma|live|` ceiling hides it; at `k = 2` it
+  does not, because `naryProbes` yields 1 there — counted on a two-headed `TailsIntersection`,
+  `NaryOperandProbe = 3` and total `Work = 5` against a predicted `[2, 3]`, i.e. the UPPER endpoint
+  BELOW the run.  `naryPreScan(k) = k` closes it.  CORPUS CONTAINMENT 80 -> 44 OF 3000, with
+  `trie Work` 88.5% -> 100% and `graph Work` 96.5% -> 100%: the number that had not moved in this
+  whole engagement.  The tails `Work` rows also gained a deeper must side (the root call was all that
+  was claimed before): trie/graph 33.94 -> 19.16 (union) and 30.71 (inter), still red against the
+  SELECTION tier of 8.  Its NEGATIVE RESULT is worth as much: `perProbe(k) = dedup/k + 3` was
+  re-derived per call from the three loops and is CORRECT and does not double-count, so the upper
+  cannot move without a per-level arity fact the shape domain does not carry — instrumented
+  `Sigma|live| = 228` against the model's 402 and an amortised `perProbe` of 4.16 against 7, whose
+  product is exactly the 2.86 ratio observed.
+
+WHAT WAS HELD, AND WHY — both are correct findings that cannot ship alone.
+
+  raffination-zipper — REFUTED, held entire.  It established that the 700 upper is NOT
+  `ZipperCost.raffine`: `demandDriven` is true, so `analyze` meets the per-operator sum (1472) against
+  the whole-region demand price (700) and the demand price binds.  The fact that would move it is a
+  REAL BUG FIX: `Layers.termsAt(d)` is an upper bound on the TERMINAL depth-`d` nodes and was computed
+  as `min(K_d, E_d)`, but `E_d` is the paths that REACH depth `d`, so on a uniform-length value that
+  reads `K_d` at every level ("every node of every level may be terminal") — `T = [1,4,16]` for a
+  16-path 4-head depth-2 value whose real terminal layers are `[0,0,16]`.  The identity is
+  `E_d - E_{d+1}` and its sound upper is `E_d.hi - E_{d+1}.lo`.  IT STILL CANNOT LAND: it removes the
+  slack that was masking a pre-existing under-prediction in `SpatialDemand`'s `CRes` arm, and four
+  corpus points move outside their intervals when it does (both programs `Restriction`-rooted over a
+  `Composition`).  Its second piece, a `work >= 1` floor for `restriction`'s BUILD-TIME
+  `prefixes.terminal` probe, is individually well argued and also costs one corpus point — and the
+  reason is worth recording on its own: on that program the zipper `Work` LOWER endpoint is ALREADY
+  EXACTLY EQUAL to the counted total (69 = 69), so no new floor can be added anywhere in the zipper
+  model until the existing over-claim in that distribution is found.
+
+  iteration — REFUTED, held entire, and the floor it needs is now refused for the THIRD time with the
+  mechanism finally identified.  Its four claims include two `collectJoin` collapse arms (a
+  `provablyEmpty` body or a single live operand really does make `joinAll` return before it allocates)
+  and a set of floors from `liveDistinct`'s `max(4, 4k)` scratch.  The refuter broke the collapse:
+  correct about the `joinAll`, wrong about the TOTAL, because one `SpaceZipper` `TailsUnion` node costs
+  `execZ` SEVEN `Work` events while `ZipperCost.tailsUnion` prices that node's upper at FIVE, and the
+  dropped `naryProbes` term was the only slack covering the two-event deficit — `[28, 32]` against a
+  counted 34 on `TailsUnion(a.iter(h, t, t & b))`, with 16 new brackets outside the interval over a
+  400-program 4-seed sweep.  Removing the collapse left ten corpus points outside `zipper Alloc`;
+  gating the floors on `kd >= 3` left four — the SAME four the `naryScratchLo` note recorded the first
+  time; zeroing the alloc floors removed the improvement entirely.  THE MECHANISM: the zipper reprices
+  a loop with the TRIE model (`controlFlowFallback`), so a trie-side `alloc` floor lands in the
+  zipper's total, and `execZ` can allocate strictly less than `evalI` for the same term because
+  `materialize` hands a `Lit` back by pointer.  Any fourth attempt has to make the floor conditional
+  on which backend the trie model is pricing FOR — a change to `SpatialCost.go`'s fallback, not to the
+  transfer.
+
+WIDTH GATE 24 -> 12, CORPUS CONTAINMENT 80 -> 44 OF 3000.  Remaining: `fixpoint` `Touch` x3 (346),
+`iteration` x4, `raffination` zipper `Work` (140.20), and the four `tails` `Work` rows on trie and
+graph (19.16 / 30.71) against a SELECTION tier of 8.  OP-2g is RETIRED (`execT`'s `Alloc` meets the
+budget tier on every operator of the table) and four more entries lost subjects, each recording what
+left and why.  Two entries now carry a measured NEGATIVE result rather than a to-do: the tails `Work`
+upper and the raffination demand price.
+================================================================================================
+
+--- ROUND 6 ADDENDUM: the one row nobody's cluster owned, found by the completeness critic --------
+
+COMPOSITION IS THE ONE RING OPERATION WITH NO `a eq b` TEST, AND THE FRONTIER ASSERTED ONE FOR EVERY
+OP.  `SpatialFrontier.binary`'s first short circuit was `if shared then Some("a eq b")`, and `shared`
+comes from `sameObject`, which is true of a repeated `Mention`/`Literal`/`Empty`.  For
+`unionR`/`intersectionR`/`subtractionR`/`restrictionR`/`raffinationR` that is exactly right — each
+opens with `if a eq b then …` because each is idempotent or self-annihilating on a shared operand
+(`x u x = x`, `x n x = x`, `x \ x = 0`, `x <| x = x`, `x \| x = 0`).  `compositionR` does NOT and
+cannot: `x . x` is not `x`, so the algebra descends and rebuilds.
+
+Reading `shared` as a short circuit there produced "the root pair and nothing else" for a term the
+run walks in full.  Measured on `Composition(c, c)` with `c` declared exactly:
+
+    shared=true    descents=[1,1]  rebuilt=[0,0]  ->  Alloc [3,1]   Touch [6,1]
+    shared=false   descents=[1,9]  rebuilt=[0,6]  ->  sound
+    counted:                                          Alloc 3       Touch 6
+
+INVERTED INTERVALS — the unmistakable signature of a must claim for work that did not happen.  On a
+6000-term randomised sweep, 14 of the 15 out-of-interval trie/graph rows were terms containing
+`X x X`, and every inversion in the sweep was one of them.  The fix is one clause,
+`if shared && op != FrontierOp.Composition`; the `{ε}`-unit short circuit two lines below is
+composition's real one and stays.  Corpus containment 44 -> 43 of 3000 on the 200-program sample.
+
+NO CLUSTER OWNED IT because it is not a width row on the operator table — the fixture has no `X x X`
+term — and each of the six analysts was scoped to a cluster of RED rows.  It was the completeness
+critic's first question ("is there a shared cause across clusters a per-cluster attack could not
+see") that surfaced it, together with the observation that ONE MISSING CHANNEL explains three
+separate sites: composition's upper collapses because the model ASSERTS sharing where the executable
+has none; the fixpoint's floor over-claims because `mustDescend` IGNORES sharing where the executable
+has it (`unionR`'s per-level `a eq b`); and the fixpoint's upper is loose for the same reason
+(`descents.hi`'s two-sided Patricia bound ignores `IntTrieOps.unionTries`' `if a eq b then a`).
+
+WIDTH GATE 12, NO STALE LEDGER ENTRY, CORPUS CONTAINMENT 43 OF 3000 (from 80 at the start of the
+round).  Every remaining point is on the ZIPPER: `Work` 96.0%, `Rounds` 88.0%, `Touch` 94.0%, with
+trie, graph and reference all at 100% on all four components for the first time.
+================================================================================================
+
+================================================================================================
+ROUND 7 — THE FOUR PRE-EXISTING DEFECTS THAT WERE BLOCKING THE LAST WIDTH ROWS
+================================================================================================
+Six analysts in round 6 left twelve width rows and 44 out-of-interval corpus points.  Round 7 sent
+four analysts at the four causes those twelve rows shared, each in a private copy of `src/main/scala`,
+each followed by an adversarial refuter whose default verdict was UNSOUND and who had to build
+fixtures and run them.  ALL FOUR PATCHES LANDED; THREE WERE REFUTED FIRST AND SHIPPED WITH THE
+REFUTER'S OWN TESTED REPAIR.  The scoreboard, all measured with the real gate:
+
+    width per operator            12  ->   8      (51 at the start of the engagement)
+    corpus CALIBRATION, 3000 pts  43 OUT ->  0 OUT — 100% containment on all SIXTEEN channels
+    cornerstones, OPTIMIZED       42  ->  37
+    STALE ledger entries           0  ->   0
+    test failures                  5  ->   5      (same five)
+
+---- 1. `CostModel.raffinationSecondRead` — the zipper shares ONE cursor between both slots -------
+`Raffination` desugars to `Subtraction(x, Restriction(x, y))`, so `x` occurs twice, and the arm asked
+a BOOLEAN — `raffinationRereadsX` — how much the second occurrence costs.  One boolean cannot say it:
+`eval` hands the same `Space` to `recs` twice and really does re-run a loop inside `x`; `evalI`/`execT`
+evaluate once; `execZ` calls `transpileZ(x)` ONCE and puts that one cursor object in both slots, so
+every `ZipperBuild`, every `ITrie` call the lift makes, and the whole
+`case other => ZipperFallbackToEvalI; traversal(evalI(other))` materialisation of a control-flow
+subterm inside `x` happens exactly once.  Those `evalI` events ARE the zipper's counted `Rounds`
+(`OracleGap("ZIPPER-ROUNDS")`), so charging `cx` twice claimed 2x the counted round total as a MUST —
+and because `st.handedOff` accumulates once per lifted subterm, the demand meet computed `whole.hi`
+with the fallback counted ONCE while `c1.lo` counted it twice: 13 of the 44 residual corpus rows were
+INVERTED (lo > hi).  The fix is one model method, `upperOnly(cx.hi)` on the zipper: the lower endpoint
+falls, the upper is the same term.  Corpus 44 -> 0 of 3000; over the whole `corpus_1000` (15000
+points) 213 -> 5, and all five survivors are byte-identical to the pristine run.  Cost: `raffination
+zipper Work` width 140.20 -> 175.25, already red, OP-3's own subject.  REFUTER: SOUND — "the
+soundness is a monotonicity property that no fixture can defeat", with the four lo/hi coupling sites
+in the file enumerated (613, 634, 3040, 3721) and 915 rows measured showing no `hi` moved and no `lo`
+rose anywhere.
+
+---- 2. `Rel.mayShare` / `SpatialCost.Shares` — the RECURSIVE `a eq b`, not the root one -----------
+`priced`'s must-paired `touch` floor was gated on `mustDescend` alone, which is
+`provablyNonEmpty ∧ provablyNonEmpty ∧ provablyDifferent` — a pure CARDINALITY test.  It discharges
+the ROOT `a eq b` of `unionR`/`intersectionR`/`subtractionR` and says NOTHING about the recursive
+ones: one per level in the operation itself (reached through `mergeUnion`) and one per level on the
+whole child MAP in `IntTrieOps.unionTries`/`intersectTries`/`diffTries`/`raffTries`.  ONE
+pointer-shared subtree at a paired prefix therefore skips EVERY paired prefix beneath it while the
+floor is charged for all of them, and it is reachable on two bare mentions: `S"a" ∪ (S"a" <| {h0})`
+counts a `touch` of 6 against a claimed floor of 11.
+
+`Shares` is the MAY analysis that closes it — which already-materialised `ITrie` objects a term's
+value can be built out of — with every rule read off an executable: the ring ops `lub` both sides
+(they hand whole subtries back by pointer from EITHER side, `restrictTries`' `if r eq w2 then p`
+included), the unary operators inherit their source's bases, a `Literal`'s base is its `SpaceValue`
+under STRUCTURAL equality (because `execT` decodes through the process-wide string-keyed
+`iConstStrCache`, where two equal values come back as one object), a loop's `rest` is aliased to the
+SOURCE (`ic.updated(rest, sub)` binds an `ITrie` CHILD of it), a fixpoint's recursion mention to the
+seed, a callee's parameter to the argument, and everything else is opaque.  `ITrie.node` interns
+nothing, so two tries from disjoint bases are node-disjoint however structurally equal they are; the
+one shared object, `ITrie.epsilon`, is harmless because the `a eq b` test is PRECEDED by its
+`TrieNodeVisit` and a leaf has no paired prefix below it to skip.
+
+WITH THE HOLE CLOSED WHERE IT LIVED, the `Fixpoint` arm could restore the full `CostInterval.meet` of
+the seed-priced round that round 6 had to weaken to an upper-only meet.  `fixpoint` `Touch` went
+`[1, 691]` (width 346, RED on trie, graph and zipper alike) to `[13, 691]`, width 49.43, inside the 64
+budget on all three — OP-1, OP-1g and OP-1z RETIRED — and 19 pre-existing out-of-interval rows turned
+sound.  PRICE: two ladder rows, `absorption {trie,graph} Touch lower-error` 1.00 -> 12.17, recorded as
+LIM-9/LIM-9g (the same refusal also moves that channel's `width` 120.78 -> 181.17 on an UNCHANGED
+upper, but that row is LIM-4/LIM-4g's and was already red).  `absorption` is `s0 ∪ (s0 ∩ s1)` — the same input in both operands of the outer union —
+so refusing the floor there is correct, and the entry says so rather than calling it a regression.
+
+REFUTER: UNSOUND, and the counterexample is worth more than the verdict.  `Fixpoint(A, r, r ∪ Y)`
+with `ic(y) = ITrie.wrap(h0, ITrie.unwrap(ic(a), h0))` — two DECLARED mentions whose tries share nodes
+— claims a floor of 10 against a counted 3, because `sharesOf` reads two different base TOKENS and
+`ic: Map[SpaceMention, ITrie]` never promised the objects are independent.  I MEASURED THE PREMISE ON
+THE PRE-IMAGE, and it refutes that too, identically:
+
+                                    PRE-MUSTDESCEND        WITH `Shares`
+    trie/graph  a ∪ y   Touch       [10, 60] counted 3     [10, 60] counted 3    OUT both
+    trie/graph  a ∩ y   Touch       [10, 60] counted 3     [10, 60] counted 3    OUT both
+    trie/graph  a \ y   Touch       [10, 60] counted 3     [10, 60] counted 3    OUT both
+    trie/graph  fix(...)Touch       [10,558] counted 3     [10,558] counted 3    OUT both
+
+Eight rows, byte-identical before and after.  So the `ic`-independence premise is PRE-EXISTING and
+load-bearing across the whole table — OP-1's own text records that it is what took `union`,
+`intersection`, `subtraction` and `range-full` inside the budget in the first place — and `Shares`
+STRICTLY SHRINKS the set of programs that rest on it, because `mustDescend` alone assumed no sharing
+at all, syntactic sharing included.  Kept, with the premise and this measurement written into the
+`Shares` scaladoc and published on every report that depends on it through `relAt`'s `st.note`.  What
+would close it is an ALIASING CHANNEL on the declared inputs; `SpatialAnnotations` has no vocabulary
+for one, and inventing it is its own piece of work.
+
+---- 3. `ZipperCost.tailsUnion`'s `rootTraffic`, and the loop buffer floor ------------------------
+Two claims landed and one was refuted.  KEPT: the forced root's own six events —
+`materialize`'s `ZipperMaterializeNode`, `TailsUnion.children`, `merged`'s `src.children`,
+`merged.children`, `TailsUnion.terminal`, `merged.terminal`, none of which scales with `heads` — read
+as a `lub` against the per-layer envelope rather than a `+`, because the six ARE cursor traffic of the
+layers the envelope counts.  Found by the randomised gate on a program no fixture drove: `zipper Work`
+`[17, 21]` against a counted 23.  KEPT: `liveDistinct`'s buffer as a MUST — `evalI`'s `Iteration` arm
+ends in an unconditional `ITrie.joinAll`, whose second statement is `liveDistinct(ts, dropEmpty =
+true)`, whose last statement before returning is `effortN(NaryScratchSlot, max(4, 4·buf.length))` with
+no `return` anywhere in the loop, so `alloc >= 4` and `touch >= 1` per executed loop.  This is NOT the
+claim `naryScratchLo`'s note records as refuted: that one put the constant where the TAILS transfers
+read it too, and `ZipperCost.tailsUnion` is a fused reduce that never enters `joinAll` at all.
+`iteration {trie,zipper} Alloc` 200.22 -> 138.62; cornerstones 42 -> 37.
+
+REFUTED: collapsing the `nodes` (alloc) UPPER endpoint on the degenerate `joinAll` arms.  The transfer
+argument is right — a one-group loop allocates exactly the 4-slot buffer — but the removed
+`naryScratch(1, ·) = 28` was the SLACK covering a different under-charge in the same program:
+`ZipperCost` prices a raffination layer under a binary op one node short (`n1 ∩ (n1 \| Lit{s})` with
+`n1 = {"s"}` reads zipper `Alloc` `[0, 1]` against a counted 2, out of interval before any of this).
+`c.iter(h, t, Singleton(h)) ∩ (c \| Lit{s})` over an 8-path single-head `c` then reads `[4, 6]`
+against a counted 7.  SHIPPED WITH THE REFUTER'S REPAIR: the exact arm tightens `work` and `touch`,
+where the term has no deficit, and leaves `alloc` at the general form until the raffination layer's
+own price is fixed.  The floor stays.
+
+A SIDE EFFECT WORTH RECORDING, because it cost an hour and then evaporated.  Before that repair, the
+collapse tripped `SpatialPipelineCheck`'s per-program regression screen — "the hooked program's
+predicted alloc regressed by 1.52x (> 1.50): 41 vs 27" on corpus idx 217.  The screen compares the
+PREDICTED cost of the spatially-hooked program against the plain one, and a model that gets TIGHTER
+shrinks both sides of the ratio: the constants went 49 -> 23 (hooked) and 40 -> 13 (plain), i.e. both
+predictions improved by ~27 and the ratio got worse.  The COUNTED `evalI` allocation over the same 25
+environments is 249 for the hooked form against 263 for the plain one — the hook is an improvement
+there — and the residual predicted gap is the `Range` spine bound `2(len+1)+1` that the hook's
+`Range(x, -1, 0)` rewrite walks into: a one-path rank window allocates one spine, the model allows a
+second.  I had adjudicated the screen against the counted run in the test; with the `alloc` collapse
+repaired the screen stops firing on its own, so the test is back to its original form and the finding
+lives here instead.  THE `Range` SPINE IS STILL LOOSE BY ~2x and is the next cluster on that operator.
+
+---- 4. `Layers.termsAt` = E_d - E_{d+1}, with the two `CRes` defects it unmasked ------------------
+`layersOf` built `termsAt(i) = min(K_d.hi, E_d.hi)`, but `pathsAtDepth` defines `E_d` as the paths that
+REACH depth `d`, not the ones that STOP there, so on a value whose paths all have one length the bound
+degenerated to `K_d`: "every node of every level may be terminal".  On the table's `b` (16 paths, 4
+heads, depth 2) it read `T = [1,4,16]` against a truth of `[0,0,16]`.  The identity is
+`terminals(d) = E_d − E_{d+1}`, upper endpoint `E_d.hi − E_{d+1}.lo` — minuend high, subtrahend LOW,
+the only pair of readings one concrete member can realise simultaneously — relu'd and still capped by
+`K_d`.  It only ever LOWERS `termsAt`, and `terminalCountLo`'s `l.exact` guard (never set by
+`layersOf`) means no lower endpoint anywhere can move.
+
+OP-3's own last paragraph had described this fix and declined to ship it: "a CORRECT fix that cannot
+be landed alone: it removes the slack that was masking a pre-existing under-prediction in
+`SpatialDemand`'s `CRes` arm, and four corpus points move outside their intervals when it does.
+Recorded, measured, not shipped."  The two defects the slack was hiding:
+
+  * `Pairing` IS A FACT ABOUT VALUES AND WAS SPENT ON CURSORS.  `pairedAt(d)` counts the depth-`d`
+    prefixes carrying a path in both operands' VALUES; the walk spent it as the paired KEYS of their
+    cursor child maps.  Those agree only for a cursor whose nodes are its value's prefixes:
+    `Intersection.children` and `RestrictionNode.children` merge KEYS, `Subtraction.children` and
+    `Composition.children` keep every left key, `Prefix` builds its whole spine over an empty source,
+    and `materialize` prunes the empty result only on the way OUT — after walking it.
+    `Intersection(Lit{a.b}, Lit{a.c})` denotes the one-node empty trie and still has a child at `a`.
+    `faithful` is the side condition; where it fails, the `min(arity, arity)` ceiling is all that may
+    be read.
+  * `descend1`'s `CRes` arm ignored the SMART CONSTRUCTOR.  `RestrictionNode.descend(k)` is
+    `restriction(x.descend(k), prefixes.descend(k))`, which returns the X-CURSOR ITSELF once the
+    descended prefix is terminal.  Keeping the node was not conservative: a prefix that has run out has
+    an empty child map, `shared` is 0, and the whole frontier below dies while the run walks the
+    unwrapped `x` in full.
+
+`raffination zipper Work` `[3, 700]` (width 175.25) -> `[3, 178]` (width 44.75), inside the budget —
+OP-3 RETIRED by the fix its own text predicted — and `composition zipper Work` 20.30 -> 2.57 with
+`Alloc` 7.32 -> 1.00 (exact, `[73, 73]` against a counted 73) came with it, because `CComp`'s
+`t = terminalCount(a, n)` is now 0 at a root whose paths all have one length, which is what
+`Composition.children`'s `if a.terminal` really does.
+
+REFUTED: `faithful(CLit) = true` and `terminalCount(CLit)` ignore `linear`, the injectivity mark
+`Cur.CLit` already carries and `force` already honours.  `terms(d)` and `pairedAt(d)` are LEVEL
+AGGREGATES counted once, and a graft-repeated cursor (`delinearize`) is demanded once PER GRAFT.
+`Composition(s0, Lit{a.a} ∪ s1)` with `s0 = {c.c, c.d}` and `s1 = {a.d, b}` declared exactly reads
+zipper `Alloc` `[4, 5]` against a counted 6 — and `forcedVirtual` is exactly counted, so that is a
+refutation and not slack.  SHIPPED WITH THE REFUTER'S TWO-LINE REPAIR: `linear` becomes part of the
+precondition of both reads, both edits pure widenings.
+
+---- 5. `ZipperCost.res` — a RESULT-node bound used for a VISITED-node count ----------------------
+Found by the round-7 refuter of patch 1 while looking for something else, on fixtures it had to build
+because the 15000-point corpus reads 100% containment on `zipper Alloc`.  `res` tightened `alloc` to
+`rebuilt.hi + 1`, and `FrontierSummary.rebuilt` bounds the nodes of the RESULT while `materialize`
+allocates one `FreshNode` per node it VISITS — the descent into each child happens BEFORE the
+`if c.nonEmpty` filter, so a subtree that materialises to nothing is walked, and charged, in full.
+`ZipperCost`'s own header had already recorded that failure mode in its own words and then `res`
+reintroduced it per operator.  Sharpest witness: `Raffination(a, a')` with `a'` structurally equal to
+the 64-path `a` but a POINTER-DISTINCT object, so `sameObject` does not fire and the algebra descends
+while the result is exactly empty — `rebuilt.hi = 0`, old `alloc` upper 1, counted NINE `FreshNode`s.
+Four more: `Raffination(a, Raffination(a, b))` `[0,16]`/17, `Intersection(Raffination(a,b), b)` and
+`Subtraction(Raffination(a,b), b)` `[0,7]`/13, `Raffination(Singleton("h0.t0"), b)` `[0,1]`/2.
+`res` is now the operand envelope.  Cost on the shipped table: `restriction zipper Alloc` 7.00 ->
+14.00 (inside the tier) and nothing else moved tier — `raffination zipper Alloc` did NOT turn red,
+which is where the refuter's prediction and the real gate part company.
+
+---- 6. A HARNESS DEFECT THE LEDGER MADE VISIBLE: the measured column is ORDER-DEPENDENT -----------
+`LIM-5`/`LIM-5g` reported `absorption` as STALE in some runs and not others on ONE UNCHANGED TREE.
+Isolated to suite composition inside the single forked JVM (`Test / fork := true`, one JVM for all
+suites):
+
+    testOnly morkl.SpatialScaleCheck                              absorption trie Alloc err=21.00 (counted 0)
+    testOnly morkl.SpatialDemandCheck morkl.SpatialScaleCheck     absorption trie Alloc err= 7.00 (counted 2)
+    testOnly morkl.SpatialFactsCheck  morkl.SpatialScaleCheck     absorption trie Alloc err=21.00 (counted 0)
+
+ONLY THE MEASURED COLUMN MOVES.  Every predicted endpoint and every `width` on every family is
+byte-identical across the three runs (`absorption` `width` 21.00 and 181.17 in all of them), so this
+is process-global EXECUTABLE state — the `Interner`'s id assignment and the per-node count memos are
+the candidates — and not analysis nondeterminism.  It bites hardest where `actual` is 0 or 2, because
+`error` is `(upper+1)/(actual+1)` and `error` (unlike `lowerError`) does not exclude the rungs where
+the execution did nothing.  The ledger is maintained against `sbt test`, where `SpatialDemandCheck`
+sorts first, so `absorption` was pruned from LIM-5/LIM-5g with the measurement recorded in the entry.
+A single-suite `testOnly morkl.SpatialScaleCheck` will now report it as FAILING and UNDIAGNOSED; that
+is the defect, and the fix is a JVM whose global state is known for the measuring suites (an sbt
+`testGrouping` fork, or a deterministic pre-intern of the ladder's alphabet).  NOT DONE — it is a
+harness change, not a bound.
+
+---- WHAT IS LEFT: EIGHT WIDTH ROWS, ALL DIAGNOSED, TWO CAUSES --------------------------------------
+    iteration  trie/zipper  Alloc  138.62   OP-2  / OP-2z   `joinAll`'s live-operand count
+    iteration  trie         Work    86.95   OP-6            `perProbe(k) · Σ|live|`, the missing
+    iteration  zipper       Work    85.00   OP-6z             n-ary frontier
+    tails-union trie/graph  Work    19.16   OP-6  / OP-6g   as above
+    tails-inter trie/graph  Work    30.71   OP-6  / OP-6g   as above
+Six of the eight are ONE missing structure: `naryProbes`/`naryScratch`'s `Σ|live|` ceiling
+`2·nodes + 32·k`, where 3696 of `iteration`'s 3738 predicted `Work` is that ceiling.  Shrinking the
+32-bit key width is a claim about how the `Interner` lays out ids that a fixture must PIN first
+(traps.md lesson 10).  The other two need `|live| >= 2` on the group results, which `liveDistinct`'s
+identity dedup and `dropEmpty` have now refuted three times.
+================================================================================================
+
+--- ROUND 7 FOOTNOTE: the sixth full-suite failure is a WALL-CLOCK FLAKE, and I checked ----------
+`SpatialAcceptance` "5c. interactive latency" failed the canonical `sbt test` with
+"puzzle15: the decorated analysis took 5088 ms, past the 4000 ms budget".  It is not a regression from
+this round and not a regression at all — it is contention.  Run alone, the same tree reports
+
+    puzzle15  infer 416.2 ms   decor 2622.9 ms   routine 2661.1 ms   295 nodes   13725 observations
+
+against a 4000 ms budget.  AND THE PRE-IMAGE IS THE SAME NUMBER: with `src/main/scala` swapped back to
+its pre-`Shares` state (`snap/src-main-raffOnly.tgz`) and everything else held, puzzle15 reads
+`infer 415.2  decor 2614.2  routine 2854.3` — 2614.2 against 2622.9, inside run-to-run noise.  So
+`SpatialCost.sharesOf` costs nothing measurable on the largest cornerstone even though it is called
+once per binary node and walks that node's subterm; the 4096-node budget and the fact that the walk
+stops at `Call`/`Fold` are what keep it cheap on a 16-level nest.  The failure is a wall-clock budget
+with ~35% headroom being measured while 50 other suites share the JVM, which is the same class of
+harness defect as the order-dependent measured column above.
+
+CANONICAL RUN, `sbt test`: 516 tests, 6 failed, 0 errors, 0 STALE ledger entries.  The six are the
+five long-standing product-requirement/invariant reports (ladders 101, cornerstones 37, operator width
+8, ITEM 5's puzzle15 astronomical `alloc`/`touch`, ITEM 8's `gol` decorated regression) plus this
+latency flake.  `SpatialEventsCheck`'s CALIBRATION over the fuzzer corpus — the authoritative
+soundness gate — PASSES: 100.00% containment on all sixteen (backend, component) channels.
+================================================================================================

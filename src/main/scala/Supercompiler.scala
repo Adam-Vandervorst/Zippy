@@ -366,6 +366,12 @@ object Matching:
     if ms(pattern, term) then Some((sm.toMap, pm.toMap)) else None
 
   // ---- homeomorphic embedding (the whistle) ---------------------------------
+  //
+  // obligation: terminating/REGISTRY.tsv O12a (drive steps are instances of the certified laws in
+  // proofs/laws/), O12b (fold soundness — OPEN, it depends on the inline/beta obligation O6a), O12c
+  // (msg correctness — a PROPERTY carried by SupercompilerTest) and O12d (this whistle is a
+  // well-quasi-order — ADMITTED with the Kruskal citation, NOT machine-checked).  The registry keeps
+  // those four rows visible precisely because two of them are not discharged.
 
   /** Homeomorphic embedding `a ⊴ b` on canonicalized configurations.  Free mentions/refs are
    *  universal variables (a variable embeds any variable of the same kind).  The supercompiler's

@@ -16,16 +16,16 @@ executable and machine-checked counterpart of that paper.
 | Area | Contents |
 | --- | --- |
 | `src/main/scala/` | The `Space` AST, reference evaluators (`eval`, `evalI`), compiled executors (`exec`, `execT`, the zipper executor `execZ`), hash-consed interned tries (`IntTrie`), the zipper runtime (`Zipper`), the positive supercompiler (`Supercompiler`), and the proof-emission pipeline (`EquivPipeline`). |
-| `src/test/scala/` | The full test and benchmark suite: executors, algebraic-law property tests, the fuzzed 1000-program corpus, the six-cornerstone equivalence pipeline, and the case studies from the paper. |
+| `src/test/scala/` | The full test and benchmark suite: executors, algebraic-law property tests, the fuzzed 1000-program corpus, the seven-cornerstone equivalence pipeline, and the case studies from the paper. |
 | `formal.egg`, `zipper.egg` | Illustrative, runnable egglog models: the core set language (eager set-of-paths semantics) and the zipper extension over the same prelude. |
 | `zipper-spec.egg`, `zipper-impl.egg` | The certified rewrite systems: the zipper movement/observation spec and the eager-trie implementation recursion. Every rule carries a proof/definitional annotation. |
 | `proofs/` | SMT-LIB proof obligations: per-law certificates (`laws/`, indexed by `laws/REGISTRY.tsv`), rule certifications, executor characterizations, and the machine-readable verdict table `STATUS.tsv`. |
-| `terminating/` | Termination proofs for the recursive case studies (TPTP + SMT-LIB twins): finite-universe measure arguments and the lexicographic semi-naive measure. |
+| `terminating/` | The RECURSION CERTIFICATES: what a `Fixpoint` computes, what each lowering pass preserves, and why each recursion terminates. `terminating/REGISTRY.tsv` is the total map from the lowering surface to its obligations; `terminating/STATUS.tsv` carries the per-prover verdicts. |
 | `zipper-egg-tests/` | Generated egglog artifacts: randomized spec/impl/reference differentials (`generated/`) and the per-program equivalence pipeline output (`pipeline/`). |
 | `scripts/` | Generators and CI checkers (see below). |
-| `SUPERCOMPILER.md` | Design, guiding examples, and limitations of the supercompiler. |
-| `BENCHMARKS.md` | Executor and zipper benchmark results. |
-| `residuals.md` | Why the residuated-division operators are omitted from the algebra. |
+| [`docs/SUPERCOMPILER.md`](docs/SUPERCOMPILER.md) | Design, guiding examples, and limitations of the supercompiler. |
+| [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | Executor, op-graph and zipper benchmark results, each stamped with the machine, toolchain and configuration it was produced on. |
+| [`docs/residuals.md`](docs/residuals.md) | Why the residuated-division operators are omitted from the algebra. |
 
 ## Requirements
 
@@ -38,15 +38,24 @@ executable and machine-checked counterpart of that paper.
 ## Running
 
 ```sh
-sbt test                          # full suite: executors, laws, corpus, case studies,
-                                  # and the six-cornerstone equivalence pipeline
+source .tools/env.sh               # JDK 21, sbt, scala-cli, z3, Vampire, egglog on PATH.
+                                  # Nothing below assumes a system install; every tool is also
+                                  # resolvable from $Z3/$VAMPIRE/$EGGLOG (see src/main/scala/Tools.scala)
+
+sbt 'testOnly morkl.*'            # full suite: executors, laws, corpus, case studies, and the
+                                  # SEVEN-cornerstone equivalence pipeline.  ~1 h: EquivPipelineTest
+                                  # runs z3 and Vampire on every emitted obligation and is most of
+                                  # it.  (`sbt test` skips suites already run since the last change.)
 
 egglog formal.egg                 # tour of the core set language (all checks pass)
 egglog zipper.egg                 # tour of the zipper extension
 
-proofs/run.sh                     # discharge every proof obligation with z3 AND Vampire;
-                                  # writes the machine-readable verdicts to proofs/STATUS.tsv
-terminating/run.sh                # z3 on the termination twins (pinned goal counts)
+proofs/run.sh                     # discharge every proof obligation with z3 AND Vampire, the
+                                  # pipeline family included; writes proofs/STATUS.tsv
+terminating/run.sh                # z3 AND vampire on the recursion corpus (pinned goal counts,
+                                  # writes terminating/STATUS.tsv)
+proofs/unbounded/run.sh           # TIER 3: the schematic FOL corpus, plus 8 negative controls and
+                                  # a per-file vacuity probe; writes proofs/unbounded/STATUS.tsv
 ```
 
 CI checkers (all exit non-zero on any problem):
@@ -71,9 +80,14 @@ with its certificate, and checkers keep that mapping total and honest — admitt
 obligations are machine-visible in `proofs/STATUS.tsv`, and a prover countermodel fails the
 build. On top of the law corpus, an automated pipeline proves per program that the optimised
 term, the zipper program, and the compiled operation graph are observationally equivalent to
-the reference semantics (equationally in egglog, denotationally in both provers), on six
-cornerstone programs with data-agnostic variants; optimiser rewrites are justified as instances
-of the certified laws by syntactic replay. Termination of the recursive case studies is proved
-by measure arguments in `terminating/`, cross-checked between TPTP and SMT-LIB. Randomized
+the reference semantics (equationally in egglog, denotationally in both provers), on seven
+cornerstone programs with data-agnostic variants — `puzzle3-full` being the one whose recursion is an
+unbounded `Space.Fixpoint`. A cell no prover discharges is recorded as `PROVER-BUDGET-EXCEEDED` with
+its attempt log and does NOT count as certified; optimiser rewrites are justified as instances
+of the certified laws by syntactic replay. `proofs/unbounded/` is a third tier: the same operator
+laws stated SCHEMATICALLY, over all spaces and all paths, which neither the interval propagation nor
+the ground SMT tier can express at all. The recursive case studies are certified in `terminating/` — what a `Fixpoint` computes, what each
+lowering pass preserves, and why each recursion terminates — with every goal discharged by z3 and
+re-run per goal under Vampire. Randomized
 differentials (thousands of checks per run) ground the egg models and the Scala executors
 against independent reference semantics.

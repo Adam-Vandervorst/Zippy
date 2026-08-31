@@ -5,7 +5,7 @@ import scala.collection.immutable.IntMap
 
 /** ================================================================================================
  *  THE OPTIMAL TRIE ALGEBRA: CASE SOUNDNESS, ITS EVENT ORACLE, AND ASYMPTOTIC GATES
- *  (review.md items 1 and 4)
+ *
  *
  *  `Backend.Trie` means `evalI` over `ITrie`.  That algebra is now the CASE-RETURNING one: its ring
  *  operations return `ITrie.AlgebraicResult` (`Empty | Identity(mask) | Bespoke`), decided at EVERY
@@ -132,7 +132,7 @@ class OptimalTrieCheck extends FunSuite:
 
   test("the algebraic case is SOUND on the correlated shapes a random corpus never generates") {
     // subsets, supersets, shared and unshared equal representation, prefix cylinders, epsilon/empty,
-    // self — review.md item 2's generator list, which is where these backends actually win.
+    // self — the generator list, which is where these backends actually win.
     val big = binTrie(4, "c")
     val bigTwin = binTrie(4, "c")                        // equal content, DISTINCT objects
     val sub = ITrie(false, IntMap.from(big.children.take(1)))   // a shared sub-branch of `big`
@@ -428,7 +428,7 @@ class OptimalTrieCheck extends FunSuite:
       () => ITrie.joinAll(parts))
     show("joinAll of k disjoint tries", now)
     // MATERIALISATION is the claim, and it is the FRESH NODES.  `alloc` also counts the per-call scratch
-    // slots of the operand handling now (EffortEvent.NaryScratchSlot, review.md's fifth oracle gap), and
+    // slots of the operand handling now (EffortEvent.NaryScratchSlot, the fifth oracle gap), and
     // that storage is `Θ(k)` per call BY CONSTRUCTION — gating the total flat would be gating the scratch
     // out of existence, which is the opposite of counting it.
     assertFlat("joinAll of k disjoint tries", now, "fresh nodes", _.ev(EffortEvent.FreshTrieNode))
@@ -496,7 +496,21 @@ class OptimalTrieCheck extends FunSuite:
   // ----------------------------------------------------------------------------------------------
 
   /** `k` one-level tries of `n` distinct heads each, from `k` non-overlapping symbol pools */
+  /** PAD THE INTERNER until the next id it hands out is a multiple of `to`.
+   *
+   *  Every layout claim in this file — "one high id block apart", "power-of-two ALIGNED blocks", "three
+   *  key-disjoint contiguous blocks" — is a claim about the BIT STRUCTURE of the interned ids, because
+   *  that is what `IntMap`'s Patricia branching reads.  `Interner` hands ids out in global first-use
+   *  order, so the BASE of any block this file interns depends on how much of the rest of the suite ran
+   *  first.  A base that is consecutive but not aligned turns "separated" into "shares the top branch
+   *  bit", and the measured class oscillates instead of being flat (`4,2,2,4,2` for a row that must read
+   *  a constant `2`).  That is a property of the FIXTURE, not of `IntTrie`: the same rows are flat at
+   *  every aligned base.  Aligning makes the arithmetic below mean what it says whatever ran before. */
+  def alignIds(to: Int): Unit =
+    while Interner.size % to != 0 do Interner.intern(f"sw.pad${Interner.size}%08d")
+
   def wideOperands(k: Int, n: Int, tag: String): Vector[ITrie] =
+    alignIds(4096)                                   // k·n ≤ 3·1024, so one aligned 4096-id window
     (0 until k).toVector.map(j => ITrie.fromPaths((0 until n).map(i => PathValue(List(s"$tag.p$j.i$i")))))
 
   val wideSizes = Vector(64, 128, 256, 512, 1024)
@@ -582,9 +596,14 @@ class OptimalTrieCheck extends FunSuite:
    *  suite: "striped" read flat, which is impossible for a fully interleaved merge).  One pool interned
    *  in one pass gives consecutive ids, and every distribution is an index set into it. */
   val poolSize = 12288
-  val pool: Array[Int] = (0 until poolSize).toArray.map(i => Interner.intern(f"sw.k$i%06d"))
+  val poolAlign = 16384                              // > 5·max(wideSizes) and a power of two
+  val pool: Array[Int] =
+    alignIds(poolAlign)
+    (0 until poolSize).toArray.map(i => Interner.intern(f"sw.k$i%06d"))
   assert(pool(1) - pool(0) == 1 && pool(poolSize - 1) - pool(0) == poolSize - 1,
          "the key pool must be a consecutive id range for the distributions to mean what they say")
+  assert(pool(0) % poolAlign == 0,
+         s"the key pool must be ALIGNED, not merely consecutive (base ${pool(0)}) — see `alignIds`")
 
   /** a one-level-plus-leaf trie over the pool ids at `idx`; `leaf` distinguishes the two sides so a
    *  PAIRED key forces a real recursive merge rather than an `eq` short circuit on a shared `epsilon` */
@@ -695,7 +714,7 @@ class OptimalTrieCheck extends FunSuite:
   }
 
   // ----------------------------------------------------------------------------------------------
-  // THE ARITY LADDER (review.md's first P0).
+  // THE ARITY LADDER (the first P0).
   //
   // Every n-ary gate above holds the ARITY FIXED (`wideOperands(3, n, …)`, the four-operand sweep) and
   // grows the operands, so nothing above measures the per-call operand handling itself — and that is
@@ -716,7 +735,7 @@ class OptimalTrieCheck extends FunSuite:
   //
   // Statistics: the suite's `steps` (descents + per-key entries) and ELAPSED wall time.  `steps` alone
   // CANNOT see the dedup — no identity comparison emits any of the three events it sums, which is
-  // exactly review.md's complaint about the "actual steps" oracle — so wall time is what discriminates
+  // exactly the complaint about the "actual steps" oracle — so wall time is what discriminates
   // `Θ(k²)` from `O(k)` here, and the class of each row is asserted in BOTH directions so the label is
   // the measured one and not a safe over-approximation.
   // ----------------------------------------------------------------------------------------------
@@ -864,7 +883,7 @@ class OptimalTrieCheck extends FunSuite:
     val n = 64
     val rs = arityLadder(k => { val os = sharedKeyOperands(k, n, s"ak.m$k"); () => ITrie.meetAll(os) }, 30)
     showArity(s"meetAll of k operands sharing $n keys", rs)
-    // MEASURED CONSTANT, and this row is the cleanest statement of review.md's oracle complaint: under
+    // MEASURED CONSTANT, and this row is the cleanest statement of the oracle complaint: under
     // every one of the `n` shared keys the `k` children are pairwise key-disjoint, so `meetAllTries`
     // rejects them at the ROOT of the children merge — one event, whatever `k` is — while the operand
     // scan that reaches that verdict is linear in `k` and emits nothing.  So `steps` is flat at 256 for
@@ -912,7 +931,7 @@ class OptimalTrieCheck extends FunSuite:
     // what is measured on each row, not by one class for both.
     assertArityClass("meetAll/blocks steps", rs.map(r => stepsOf(r.ev)), "constant")
     // THE SCAN IS WHAT THE VERDICT COSTS, and it is counted: probes grow with k where steps do not.  This
-    // pair of rows is the whole of review.md's oracle complaint in two numbers.
+    // pair of rows is the whole of the oracle complaint in two numbers.
     assertProbeShape("meetAll/blocks probes", rs, 6.0)
     assertElapsedNotQuadratic("meetAll/blocks", rs.map(_.nanos))
     for k <- arities do
@@ -925,7 +944,7 @@ class OptimalTrieCheck extends FunSuite:
     // so a whole-subspace accept was impossible in them however cheap the merge was.
     //
     // WHAT "ALLOCATES NOTHING" MEANS NOW.  `EffortComponent.Alloc` also counts the per-call scratch slots
-    // of the n-ary operand handling ([[EffortEvent.NaryScratchSlot]]) — the fifth oracle gap review.md
+    // of the n-ary operand handling ([[EffortEvent.NaryScratchSlot]]) — the fifth oracle gap the review
     // names, and it is `Θ(k)` per call BY CONSTRUCTION, so the total can no longer be 0.  The contract
     // this test exists for is MATERIALISATION and TRAVERSAL: not one fresh node is built, and the counts
     // do not grow with the size of the accepted subspace, which is the whole asymptotic claim.  Asserting

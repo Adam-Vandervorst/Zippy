@@ -32,7 +32,7 @@ final case class ITrie(terminal: Boolean, children: IntMap[ITrie]):
   def isEmpty: Boolean = !terminal && children.isEmpty
   def nonEmpty: Boolean = !isEmpty
 
-  /** CACHED TERMINAL COUNT (review.md item 4, first bullet).
+  /** CACHED TERMINAL COUNT.
    *
    *  `ITrie.range` used to recompute the full recursive size on EVERY query, *before* its own
    *  identity check, so even a full-window slice walked every node of the operand.  The count is now
@@ -61,7 +61,7 @@ final case class ITrie(terminal: Boolean, children: IntMap[ITrie]):
   def size: Int = count
 
   // Every other recursive walk below counts ONE EffortEvent.TrieNodeVisit per node it examines.
-  // These are the per-node descents review.md item 1 says were uncounted; `SpatialCost`'s `touch`
+  // These are the per-node descents the review says were uncounted; `SpatialCost`'s `touch`
   // component is defined by them (plus EffortEvent.PatriciaVisit), which is what makes `touch`
   // calibratable at all.
   def nodeCount: Int =
@@ -105,7 +105,7 @@ object ITrie:
     go(t, Nil); out.result()
 
   // ================================================================================================
-  // THE CASE-RETURNING ALGEBRA (review.md item 1, option (a))
+  // THE CASE-RETURNING ALGEBRA
   // ================================================================================================
 
   /** Per-node outcome of a set-algebraic operation, RELATIVE to its arguments — `Trie.AlgebraicResult`
@@ -333,7 +333,7 @@ object ITrie:
         else rBespoke(node(false, ch))
 
   /** raffination `x \| y == x ∖ (x <| y)`: drop every x-path that extends some y-prefix.  FUSED into
-   *  a single traversal of the y-guided part of x (review.md item 4, second bullet) — the defining
+   *  a single traversal of the y-guided part of x — the defining
    *  formula walks x twice and materialises the intermediate restriction, which is pure waste when
    *  the answer is `x` itself or `∅`. */
   def raffination(x: ITrie, y: ITrie): ITrie = pick(raffinationR(x, y), x, y)
@@ -351,7 +351,7 @@ object ITrie:
       else rBespoke(node(term, ch))
 
   /** composition (concatenation product) `{p ++ q : p ∈ a, q ∈ b}`: graft `b` at every terminal of
-   *  `a`.  THE GRAFT FRONTIER (review.md item 4, fifth bullet) is `a`'s NODES, not its terminals: the
+   *  `a`.  THE GRAFT FRONTIER is `a`'s NODES, not its terminals: the
    *  same `b` object is shared at every graft, but the spine above each graft is rebuilt, so a single
    *  depth-`d` path with ONE terminal still allocates `d` nodes.  The two identities below are what
    *  make the degenerate cases constant time: `a·{ε} == a` and `{ε}·b == b`. */
@@ -414,7 +414,7 @@ object ITrie:
     effortN(EffortEvent.NaryScratchSlot, math.max(4L, 4L * buf.length))
     buf
 
-  /** join-all: the union of MANY tries in ONE simultaneous pass (review.md item 4, third bullet).
+  /** join-all: the union of MANY tries in ONE simultaneous pass.
    *
    *  The children step is [[IntTrieOps.joinAllTries]], a simultaneous descent over all `k` children
    *  maps.  It keeps the property the balanced pairwise fold cannot express — a key present in exactly
@@ -472,7 +472,7 @@ object ITrie:
       effortN(EffortEvent.NaryOperandProbe, i.toLong)                // the result-identity search
       if res ne null then { effort(EffortEvent.SubtrieAcceptedByPointer); res } else node(term, ch)
 
-  /** meet-all: the intersection of MANY tries (review.md item 4, fourth bullet).
+  /** meet-all: the intersection of MANY tries.
    *
    *  The children step is [[IntTrieOps.meetAllTries]], a simultaneous descent over all `k` children
    *  maps.  It keeps the property that makes an n-ary meet worth having — the descent follows the
@@ -636,7 +636,7 @@ object ITrie:
         if ord(k + mid + 1) <= lo then a = mid + 1 else b = mid
       a
 
-  /** ORDER-STATISTIC SLICE (review.md item 4, first bullet).  `[lo, hi)` are indices into `n`'s own
+  /** ORDER-STATISTIC SLICE.  `[lo, hi)` are indices into `n`'s own
    *  canonical terminal list.  A child entirely inside the window is ACCEPTED WHOLE by pointer; a
    *  child entirely outside is REJECTED without being visited; only genuinely partial children are
    *  descended, and only they and the two cut frontiers are rebuilt.  The predecessor enumerated the
@@ -674,7 +674,7 @@ object ITrie:
 
   // ---- convergence ---------------------------------------------------------------------------------
 
-  /** THE FIXPOINT CONVERGENCE TEST (review.md item 4, sixth bullet).
+  /** THE FIXPOINT CONVERGENCE TEST.
    *
    *  `nxt == cur` was a full structural `==` walk every round, uninstrumented.  This walks only the
    *  EQUALITY FRONTIER: pointer identity settles a whole subtrie (the common case, because every
@@ -683,7 +683,7 @@ object ITrie:
    *  rejects without forcing one.  Each node actually compared counts one
    *  [[EffortEvent.EqualityFrontierVisit]] — accounted separately from `touch` on purpose: it is real
    *  executor work, but folding it into a calibrated component would silently change what every
-   *  existing `touch` bound is being compared against (that re-attribution belongs to review.md item
+   *  existing `touch` bound is being compared against (that re-attribution belongs to the review
    *  6, in the cost model). */
   def equalT(a: ITrie, b: ITrie): Boolean =
     effort(EffortEvent.EqualityFrontierVisit)

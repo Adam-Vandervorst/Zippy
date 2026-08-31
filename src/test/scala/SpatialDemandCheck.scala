@@ -3,7 +3,7 @@ package morkl
 import munit.FunSuite
 import scala.util.Random
 
-/** THE FOUR COUNTEREXAMPLES OF review.md ITEM 3, predicted and measured.
+/** THE FOUR COUNTEREXAMPLES OF the review ITEM 3, predicted and measured.
  *
  *  Each test states the LAW ("this forces one node, not `N(A) + N(B)`"), predicts it with
  *  [[SpatialDemand]], measures it with the [[ZipperDemandSink]] + [[EffortSink]] oracle on a real
@@ -26,7 +26,7 @@ class SpatialDemandCheck extends FunSuite:
 
   // ----------------------------------------------------------------------------------------------
   // fixtures: uniform tries, so a per-depth max arity IS every node's arity and the prediction is
-  // exact rather than merely an upper bound (these are also the geometric-scale generators review.md
+  // exact rather than merely an upper bound (these are also the geometric-scale generators the review
   // item 2 asks for: one knob, exponentially growing node counts)
   // ----------------------------------------------------------------------------------------------
 

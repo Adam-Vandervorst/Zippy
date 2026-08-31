@@ -1,0 +1,36 @@
+; AUTO-GENERATED — FALSE fixpoint: different steps
+; DATA-AGNOSTIC: inputs are uninterpreted path-set predicates; the goal (negated) states the two
+; programs produce the same output at EVERY path for ALL inputs.
+(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
+(declare-fun append (Path Path) Path)
+(assert (forall ((q Path)) (= (append nil q) q)))
+(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
+; certified lemmas (proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2 — both PROVED)
+(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
+  (= (= (cons k2 p) (append q r))
+     (or (and (= q nil) (= r (cons k2 p)))
+         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
+(assert (forall ((q Path)) (= (append q nil) q)))
+(declare-fun isPrefix (Path Path) Bool)
+(assert (forall ((p Path)) (isPrefix nil p)))
+(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
+(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
+  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
+
+(declare-fun fix_2 (Path) Bool)
+(declare-fun in_src (Path) Bool)
+(declare-fun fix_4 (Path) Bool)
+; FIXPOINT fix_2 — first-class: the LEAST post-fixpoint above init (never unrolled)
+(assert (forall ((zq Path)) (=> (in_src zq) (fix_2 zq))))
+(assert (forall ((zq Path)) (=> (or (fix_2 zq) (or (= zq (cons 0 nil)))) (fix_2 zq))))
+(define-fun s_1 ((p Path)) Bool (fix_2 p))
+; FIXPOINT fix_4 — first-class: the LEAST post-fixpoint above init (never unrolled)
+(assert (forall ((zq Path)) (=> (in_src zq) (fix_4 zq))))
+(assert (forall ((zq Path)) (=> (or (fix_4 zq) (or (= zq (cons 1 nil)))) (fix_4 zq))))
+(define-fun s_3 ((p Path)) Bool (fix_4 p))
+; PARK INDUCTION fix_2 ⊑ fix_4 — leastness of fix_2; BOTH premises are obligations
+(assert (=> (and (forall ((zr Path)) (=> (in_src zr) (fix_4 zr))) (forall ((zr Path)) (=> (or (fix_4 zr) (or (= zr (cons 0 nil)))) (fix_4 zr)))) (forall ((zq Path)) (=> (fix_2 zq) (fix_4 zq)))))
+; PARK INDUCTION fix_4 ⊑ fix_2 — leastness of fix_4; BOTH premises are obligations
+(assert (=> (and (forall ((zr Path)) (=> (in_src zr) (fix_2 zr))) (forall ((zr Path)) (=> (or (fix_2 zr) (or (= zr (cons 1 nil)))) (fix_2 zr)))) (forall ((zq Path)) (=> (fix_4 zq) (fix_2 zq)))))
+(assert (not (forall ((p Path)) (= (s_1 p) (s_3 p)))))
+(check-sat)

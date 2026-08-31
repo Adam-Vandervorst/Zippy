@@ -2,11 +2,16 @@ import numpy as np, matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+import os
+# THE ARTIFACT LIVES AT THE REPO ROOT, not /tmp: it is committed, and reading it from /tmp meant the
+# plot could silently be of a DIFFERENT run than the committed data.  `$ZIPPY_ROOT` overrides.
+ROOT = os.environ.get("ZIPPY_ROOT") or os.path.dirname(os.path.abspath(__file__))
 
 rows=[]; labels=[]; 
-with open("/tmp/prog_matrix.tsv") as f:
-    cols = f.readline().rstrip("\n").split("\t")[1:]
-    for line in f:
+with open(os.path.join(ROOT, "prog_matrix.tsv")) as f:
+    lines = [l for l in f if not l.startswith("#")]        # skip the provenance header
+    cols = lines[0].rstrip("\n").split("\t")[1:]
+    for line in lines[1:]:
         parts=line.rstrip("\n").split("\t")
         labels.append(parts[0]); rows.append([int(x) for x in parts[1:]])
 M=np.array(rows, dtype=float)
@@ -35,5 +40,5 @@ ax.set_xticks(np.arange(-.5,len(cols),1),minor=True); ax.set_yticks(np.arange(-.
 ax.grid(which="minor",color="white",linewidth=.6); ax.tick_params(which="minor",length=0)
 fig.colorbar(im,ax=ax,fraction=0.025,pad=0.02,label="count")
 fig.tight_layout()
-fig.savefig("/tmp/prog_matrix.png", dpi=130, bbox_inches="tight")
-print("rows",M.shape[0],"cols",M.shape[1],"total edges",int(M.sum()),"wrote /tmp/prog_matrix.png")
+fig.savefig(os.path.join(ROOT, "prog_matrix.png"), dpi=130, bbox_inches="tight")
+print("rows",M.shape[0],"cols",M.shape[1],"total edges",int(M.sum()),"wrote prog_matrix.png")

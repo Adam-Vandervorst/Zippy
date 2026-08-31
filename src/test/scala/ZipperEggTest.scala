@@ -24,19 +24,20 @@ class ZipperEggTest extends FunSuite:
   def sv(ps: PathValue*): SpaceValue = SpaceValue(ps.toSet)
 
   val dir = new java.io.File(Loaders.repoRoot, "zipper-egg-tests")
-  val eggBin = new java.io.File(System.getProperty("user.home"), ".cargo/bin/egglog")
+  val eggBin: Option[String] = Tools.egglog.path      // $EGGLOG -> PATH -> conventional locations
 
   /** Write `<name>.egg`, run egglog on it (if installed) and assert exit 0. */
   def runEgg(name: String, content: String): Unit =
     dir.mkdirs()
     val f = new java.io.File(dir, s"$name.egg")
     val w = new java.io.FileWriter(f); try w.write(content) finally w.close()
-    if eggBin.canExecute then
-      val out = new StringBuilder
-      val log = scala.sys.process.ProcessLogger(out.append(_).append('\n'), out.append(_).append('\n'))
-      val exit = scala.sys.process.Process(Seq(eggBin.getPath, s"$name.egg"), dir).!(log)
-      assertEquals(exit, 0, s"egglog rejected $name.egg:\n${out.toString.linesIterator.filterNot(_.contains("should start")).toList.takeRight(12).mkString("\n")}")
-    else Loaders.note(s"[zipper-egg] egglog not found; wrote $name.egg (not executed)")
+    eggBin match
+      case Some(bin) =>
+        val out = new StringBuilder
+        val log = scala.sys.process.ProcessLogger(out.append(_).append('\n'), out.append(_).append('\n'))
+        val exit = scala.sys.process.Process(Seq(bin, s"$name.egg"), dir).!(log)
+        assertEquals(exit, 0, s"egglog rejected $name.egg:\n${out.toString.linesIterator.filterNot(_.contains("should start")).toList.takeRight(12).mkString("\n")}")
+      case None => Loaders.note(s"[zipper-egg] ${Tools.egglog.missing}; wrote $name.egg (not executed)")
 
   /** DESCENT coincidence (movement spec): members reachable, non-members not — never materialised. */
   def emit(name: String, title: String, z: SpaceZipper, result: ITrie): Unit =

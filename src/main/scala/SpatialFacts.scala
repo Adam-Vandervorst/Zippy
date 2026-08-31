@@ -1,6 +1,6 @@
 package morkl
 
-/** SPATIAL FACTS — the DERIVED layer over the existing carriers (review.md finding 7).
+/** SPATIAL FACTS — the DERIVED layer over the existing carriers.
  *
  *  This file introduces NO new abstract domain.  Every quantity below is a projection of the two
  *  components that already exist:
@@ -102,7 +102,7 @@ final case class CommonPrefix(items: List[PathItem], definitelyPresent: Boolean)
   def nonTrivial: Boolean = items.nonEmpty
   def show: String = s"${if items.isEmpty then "ε" else items.mkString(".")}${if definitelyPresent then " (present)" else " (vacuous on ∅)"}"
 
-/** review.md finding 7's candidate ADT, DERIVED AS DATA.  Nothing here is wired into a backend —
+/** the candidate ADT, DERIVED AS DATA.  Nothing here is wired into a backend —
  *  that is another agent's integration surface; these are the justified candidates it can consume. */
 enum SpatialSpecialization:
   /** unroll the trie/recursive traversal completely through `maxDepth`, with the per-depth fan-out
@@ -180,7 +180,7 @@ final case class ChainBound(depth: Int,
 object SpatialFacts:
   import Lower.LenBounds
 
-  /** ONE configuration value for every budget this file spends (review.md finding 6 asks for exactly
+  /** ONE configuration value for every budget this file spends (the review asks for exactly
    *  that, per stage; this is the stage it can be done in without touching another file). */
   final case class Config(maxProfileDepth: Int = 64,
                           maxUnrollDepth: Int = 8,
@@ -415,6 +415,57 @@ object SpatialFacts:
         Ivl(lo, hi max lo)
     }
 
+  /** THE NODES THAT HAVE AT LEAST ONE CHILD — `I = Σ_{d≥0} I_d`, where `I_d` is the number of
+   *  distinct depth-`d` prefixes that some path STRICTLY extends.
+   *
+   *  WHY IT IS A DIFFERENT QUANTITY FROM [[trieNodes]], AND WHY IT NEEDS ITS OWN LOWER ENDPOINT.
+   *  `ITrie.compositionR` calls the one allocation site `ITrie.node` at exactly the nodes of its LEFT
+   *  operand that fall through both `{ε}` fast paths, i.e. at exactly the nodes with a child: a LEAF
+   *  terminal takes `rIdent(RIGHT)` and grafts `b` by pointer without allocating anything.  `N(a)`
+   *  over-counts that set by the leaf count, and on a full-width fixture the leaves ARE almost the
+   *  whole trie (64 of 73), so `N(a)` is not merely loose — it is not a lower bound on the allocation
+   *  at all.  This is the count that is.
+   *
+   *  ==THE LOWER ENDPOINT (LESSON 9: every input here is read in the direction that weakens it)==
+   *  Write `L_d` for the depth-`d` LEAVES.  A leaf at depth `d` is a path of length EXACTLY `d`
+   *  (a node with no child that is not terminal cannot exist in a trie: it holds nothing), and the
+   *  paths of length exactly `d` are `E_d − E_{d+1}`, so `L_d ≤ E_d − E_{d+1}`.  Every depth-`d`
+   *  prefix is a leaf or an interior node, so
+   *
+   *      I_d = K_d − L_d ≥ K_d − (E_d − E_{d+1}) ≥ K_d.lo − E_d.hi + E_{d+1}.lo
+   *
+   *  — `K_d` read at its LOW end, `E_d` at its HIGH end and `E_{d+1}` at its LOW end, which is the
+   *  only reading of the three that is sound simultaneously for one concrete member.  Clamped at 0 per
+   *  depth (a negative term is no information, not a credit against another level) and skipped
+   *  entirely when `E_d.hi` is `∞`.
+   *
+   *  ==THE UPPER ENDPOINT==  `I_d ≤ K_d` (an interior node is a prefix) and `I_d ≤ K_{d+1}` (distinct
+   *  interior nodes own disjoint, non-empty sets of depth-`d+1` child prefixes), so `I_d ≤ min` of the
+   *  two.  Past a TRUNCATED profile `prefixes` answers `Ivl.unknown`, so the min degrades to `K_d.hi`
+   *  and nothing unsound is read into the tail.
+   *
+   *  The empty space has no node with a child, hence `[0,0]` — NOT the `[1,1]` of [[trieNodes]], whose
+   *  one node is the childless root. */
+  def interiorNodes(t: SpatialType, cfg: Config = defaults): Either[SpatialContradiction, Ivl] =
+    profile(t, cfg).map { p =>
+      if t.isProvablyEmpty then Ivl(0, 0)
+      else
+        var lo = 0L
+        var hi = 0L
+        var d = 0
+        while d <= p.lastDepth do
+          val k = p.prefixes(d)
+          val e = p.paths(d)
+          val eNext = p.paths(d + 1)
+          val kNext = p.prefixes(d + 1)
+          hi = Ivl.add(hi, k.hi min kNext.hi)
+          if e.hi < Ivl.INF then
+            val leavesHi = e.hi - (eNext.lo min e.hi)          // >= L_d, and never negative
+            if k.lo > leavesHi then lo = Ivl.add(lo, k.lo - leavesHi)
+          d += 1
+        Ivl(lo, hi max lo)
+    }
+
   // ================================================================================================
   // 4.  COMMON PREFIXES AND SAFE EXTRACTION
   // ================================================================================================
@@ -441,7 +492,7 @@ object SpatialFacts:
     val items = out.result()
     CommonPrefix(items, definitelyPresent = items.nonEmpty && t.size.lo >= 1)
 
-  /** review.md finding 6's dead promise, discharged from the outside: `Fact.PrefixAbsent` is public
+  /** the dead promise, discharged from the outside: `Fact.PrefixAbsent` is public
    *  but `Fact.from` cannot emit it (a prefix has to be SUPPLIED).  This is the query that can. */
   def prefixAbsent(t: SpatialType, prefix: List[PathItem]): Option[Fact] =
     if t.isProvablyEmpty || !t.shape.mayHavePrefix(prefix) then Some(Fact.PrefixAbsent(prefix)) else None
@@ -459,7 +510,7 @@ object SpatialFacts:
     items >= 0 && t.size.lo >= 1 && !t.len.isEmpty && t.len.lo >= items
 
   // ================================================================================================
-  // 5.  EXACT VALUES  (review.md finding 7: "exact paths at known positions where available")
+  // 5.  EXACT VALUES  (the requirement: "exact paths at known positions where available")
   // ================================================================================================
 
   /** The single concrete space this type admits, when the shape pins one down: every level has a
@@ -534,7 +585,7 @@ object SpatialFacts:
                              Ivl(lo, hi), Sym.c(d.toLong) * n, n ** Sym.c(d.toLong)))
 
   // ================================================================================================
-  // 7.  SPECIALIZATION CANDIDATES  (review.md finding 7)
+  // 7.  SPECIALIZATION CANDIDATES
   // ================================================================================================
 
   /** Derive the backend-facing candidates this type licenses.  DATA only: nothing here rewrites a

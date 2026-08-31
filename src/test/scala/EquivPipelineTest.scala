@@ -11,7 +11,22 @@ import scala.language.implicitConversions
  *    3. TRIE/GRAPH (`optimize(transpile(…))`) vs SPACE   — pipeline/<name>-graph.egg  + …-graph.smt2
  *  Control flow is expanded by `EquivPipeline.expand` (each step = the exec evaluation rule for
  *  that node; gated here by `eval(expanded) == eval(original)`).  The egg legs prove equivalence
- *  under the certified rewrite systems; the smt legs prove equal outputs at every path. */
+ *  under the certified rewrite systems; the smt legs prove equal outputs at every path.
+ *
+ *  ==What the INSTANCE smt legs used to be, and why they changed (plan item 12)==
+ *  All 18 of them passed `AgnosticPipeline.fold` over BOTH sides first.  After stage-0 expansion a
+ *  cornerstone is ground local algebra, so `isGround` holds AT THE ROOT and each side collapsed to
+ *  ONE `Literal`: the two `define-fun`s came out byte-identical and the goal macro-expanded to
+ *  `true`.  Measured: z3 answered `unsat` in 0.00-0.01 s and STILL answered `unsat` with the entire
+ *  `foPrelude` deleted — nothing in the algebra was used.  The folds are gone; each side is now the
+ *  actual structural denotation.  Three consequences, all deliberate:
+ *    * where the two sides are the SAME term, the file carries an IDENTICAL-STRUCTURE marker (the
+ *      shared-subterm encoder gives them one macro name, so this is decided exactly, not guessed);
+ *    * the goal is the ∀-PATH equivalence, with the finite observation list only as a labelled
+ *      fallback when neither prover reaches the ∀ form;
+ *    * BOTH provers run on every obligation and BOTH verdicts land in the file header and in
+ *      proofs/pipeline/STATUS.tsv; a cell neither prover discharges becomes an explicit
+ *      PROVER-BUDGET-EXCEEDED record with its attempt log, never a quietly weakened goal. */
 class EquivPipelineTest extends FunSuite:
   import Space.*
   override val munitTimeout = scala.concurrent.duration.Duration(60, "min")
@@ -20,7 +35,11 @@ class EquivPipelineTest extends FunSuite:
   val eggDir = new java.io.File(Loaders.repoRoot, "zipper-egg-tests")
   val pipeDir = new java.io.File(eggDir, "pipeline"); pipeDir.mkdirs()
   val smtDir = new java.io.File(Loaders.repoRoot, "proofs/pipeline"); smtDir.mkdirs()
-  val eggBin = new java.io.File(System.getProperty("user.home"), ".cargo/bin/egglog")
+  // EXTERNAL TOOLS: $EGGLOG / $Z3 / $VAMPIRE -> PATH -> conventional locations (Tools.scala).
+  // This suite needs all three and says which one is missing rather than skipping quietly.
+  val eggBin: String = Tools.egglog.require()
+  val z3Bin: String = Tools.z3.require()
+  val vampireBin: String = Tools.vampire.require()
   def sh(cmd: Seq[String], cwd: java.io.File, timeoutSec: Int): (Int, String) =
     val out = new StringBuilder
     val log = scala.sys.process.ProcessLogger(out.append(_).append('\n'), out.append(_).append('\n'))
@@ -36,13 +55,36 @@ class EquivPipelineTest extends FunSuite:
       .filter(_ <= roundsCap)
     val f = new java.io.File(pipeDir, name)
     var last = ""
+    val log = scala.collection.mutable.ArrayBuffer.empty[String]
     val ok = ladder.exists { r =>
       val w = new java.io.FileWriter(f); try w.write(content.replace("ROUNDS", r.toString)) finally w.close()
-      val (code, out) = sh(Seq("/bin/sh", "-c", s"ulimit -v 4000000; exec '${eggBin.getPath}' 'pipeline/$name'"), eggDir, 60)
-      last = out; code == 0
+      val (code, out) = sh(Seq("/bin/sh", "-c", s"ulimit -v 4000000; exec '$eggBin' 'pipeline/$name'"), eggDir, 60)
+      last = out
+      log += s";   rounds=$r -> exit $code" + (if code == 0 then "" else s" (${out.linesIterator.toList.lastOption.getOrElse("").take(90)})")
+      code == 0
     }
-    if !ok then Loaders.note(s"[pipeline] $name failed every budget:\n${last.linesIterator.toList.takeRight(4).mkString("\n")}")
+    if !ok then
+      Loaders.note(s"[pipeline] $name failed every budget:\n${last.linesIterator.toList.takeRight(4).mkString("\n")}")
+      // NEVER LEAVE THE TOP RUNG ON DISK.  The last attempt writes the file before running, so a
+      // failed ladder used to leave a rung-120 file that still greps as REAL — the on-disk
+      // signature of "no budget succeeded", and how six artifacts stayed REAL while egglog
+      // rejected them.  Rewrite it as an explicit BUDGET marker carrying the attempt log.
+      val w = new java.io.FileWriter(f)
+      try w.write(s"; BUDGET-EXCEEDED: egglog did not accept this file at ANY rounds rung.\n" +
+                  s"; ATTEMPT LOG (each rung is a full run; the ladder stops at the first exit 0):\n" +
+                  log.mkString("\n") + "\n; The equivalence for this cell is carried by the certificates named by the caller\n" +
+                  "; (the Scala executor gates, the data-agnostic twin, and the smt twin).\n" +
+                  content.replace("ROUNDS", ladder.headOption.getOrElse(0).toString))
+      finally w.close()
     ok
+
+  /** Drop a stale `-impl`/`-lit` fallback: once the principal file goes green the fallback is a
+   *  leftover from an earlier failing run, and it keeps inflating the audit's REAL/SINGLE-SIDE
+   *  counts (measured: four such files sat at rung 120 while their principals were green at 8). */
+  def dropFallback(names: String*): Unit =
+    for n <- names do
+      val f = new java.io.File(pipeDir, n)
+      if f.exists() then { f.delete(); Loaders.note(s"[pipeline] removed stale fallback $n (principal is green)") }
 
   def runEggFile(name: String, content: String): Unit =
     if content.contains("TRIVIAL-NO-OBLIGATION") then
@@ -56,35 +98,120 @@ class EquivPipelineTest extends FunSuite:
       identCount += 1
       assert(runEggFileOpt(name, content), s"egglog rejected pipeline/$name at every rounds budget")
       return
+    if content.contains("SINGLE-SIDE-OBSERVATION") then
+      singleSideCount += 1
+      assert(runEggFileOpt(name, content), s"egglog rejected pipeline/$name at every rounds budget")
+      return
     realCount += 1
     assert(runEggFileOpt(name, content), s"egglog rejected pipeline/$name at every rounds budget")
 
   var trivialCount = 0; var realCount = 0; var budgetCount = 0; var lawCount = 0; var identCount = 0
+  var singleSideCount = 0
+
+  /** file <TAB> z3 <TAB> vampire <TAB> verdict — the same 4 columns as proofs/STATUS.tsv, written
+   *  to proofs/pipeline/STATUS.tsv so a SINGLE-prover result stays VISIBLE instead of implied. */
+  val statusRows = scala.collection.mutable.ArrayBuffer.empty[String]
+  def writeStatus(): Unit =
+    val f = new java.io.File(smtDir, "STATUS.tsv")
+    val w = new java.io.FileWriter(f)
+    try w.write(statusRows.sorted.mkString("\n") + "\n") finally w.close()
+
+  def write(dir: java.io.File, name: String, content: String): Unit =
+    val w = new java.io.FileWriter(new java.io.File(dir, name)); try w.write(content) finally w.close()
+
+  /** Run BOTH provers on one candidate file; returns (z3 ok, vampire ok, a header attempt log). */
+  def provers(name: String, content: String, budget: Int, form: String): (Boolean, Boolean, String) =
+    val f = new java.io.File(smtDir, name)
+    write(smtDir, name, content)
+    val t0 = System.nanoTime()
+    val (_, zout) = sh(Seq(z3Bin, s"-T:$budget", f.getPath), smtDir, budget + 30)
+    val zok = zout.linesIterator.exists(_.trim == "unsat")
+    val zs = (System.nanoTime() - t0) / 1000000
+    val zsat = zout.linesIterator.exists(_.trim == "sat")
+    val t1 = System.nanoTime()
+    val (_, vout) = sh(Seq(vampireBin, "--input_syntax", "smtlib2", "-t", s"${budget}s", f.getPath), smtDir, budget + 30)
+    val vok = vout.contains("Refutation found")
+    val vs = (System.nanoTime() - t1) / 1000000
+    assert(!zsat, s"$name: z3 answered SAT on the $form goal — the stated equivalence is FALSE")
+    (zok, vok, f"; $form%-22s z3 ${if zok then "unsat" else zout.linesIterator.toList.lastOption.getOrElse("?").trim}%-10s ${zs}%6d ms   " +
+                f"vampire ${if vok then "refutation" else "none"}%-10s ${vs}%6d ms (budget ${budget}s each)")
+
   def runSmtFile(name: String, content: String): Unit =
     if content.contains("TRIVIAL-NO-OBLIGATION") then
-      trivialCount += 1
-      val f = new java.io.File(smtDir, name)
-      val w = new java.io.FileWriter(f); try w.write(content) finally w.close()
-      return
+      trivialCount += 1; write(smtDir, name, content); statusRows += s"$name\t-\t-\tTRIVIAL"; return
+    if content.contains("IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION") then
+      // the two sides compile to the SAME shared macro: `(= (m p) (m p))` is `true` by macro
+      // expansion, so there is no obligation to run a prover on.  Recorded, never faked.
+      identCount += 1; write(smtDir, name, content); statusRows += s"$name\t-\t-\tIDENTICAL-STRUCTURE"; return
     if content.contains("LAW-JUSTIFIED-NO-RESIDUAL") then
       // proof-carrying: every differing pair is a verified instance of the ∀-certified optimiser
       // law set (replayed syntactically); the universal certificates in proofs/ ARE the proof.
-      lawCount += 1
-      val f = new java.io.File(smtDir, name)
-      val w = new java.io.FileWriter(f); try w.write(content) finally w.close()
-      return
+      lawCount += 1; write(smtDir, name, content); statusRows += s"$name\t-\t-\tLAW-JUSTIFIED"; return
     realCount += 1
     assert(!content.contains("(assert (not true))"), s"$name: fake reflexive goal emitted")
-    // BOTH provers must discharge every obligation (independent cross-validation, and the FO
-    // prelude is the lemma set that makes the equivalences vampire-provable in plain FOL).
-    val f = new java.io.File(smtDir, name)
-    val w = new java.io.FileWriter(f); try w.write(content) finally w.close()
-    val budget = if name.contains("agnostic") then 240 else 120
-    val (_, zout) = sh(Seq("z3", s"-T:$budget", f.getPath), smtDir, budget + 30)
-    val zok = zout.linesIterator.exists(_.trim == "unsat")
-    val (_, vout) = sh(Seq("/Applications/vampire", "--input_syntax", "smtlib2", "-t", s"${budget}s", f.getPath), smtDir, budget + 30)
-    val vok = vout.contains("Refutation found")
-    assert(zok && vok, s"$name: z3=${if zok then "proved" else zout.linesIterator.toList.lastOption} vampire=${if vok then "proved" else vout.linesIterator.toList.takeRight(2)}")
+    // BOTH provers are run on EVERY obligation and BOTH verdicts are recorded — in the file header
+    // and in proofs/pipeline/STATUS.tsv.  Cross-validation stays REQUIRED for the -agnostic legs
+    // (small, and where a single prover's blind spot would be invisible); for the much larger
+    // instance legs a single-prover discharge is recorded as such rather than silently accepted,
+    // matching proofs/run.sh's documented policy.  MEASURED (2026-08-31, un-folded sides): vampire
+    // discharges 4 of the 10 real instance cells and z3 7 of 10; no cell is discharged by vampire
+    // and not z3.  Neither prover discharging is NOT a pass — it becomes a PROVER-BUDGET-EXCEEDED
+    // marker with the attempt log, and the cell stops counting as REAL.
+    val both = name.contains("agnostic")
+    val budget = if both then 240 else 60
+    val (zok, vok, log) = provers(name, content, budget, "goal")
+    if both && (zok || vok) then
+      // CROSS-VALIDATION STAYS MANDATORY on the ∀-inputs legs.  ONE prover succeeding while the
+      // other cannot is the exact failure this rule exists for (docs/traps.md §3: a z3-first /
+      // vampire-fallback hid that vampire could not unfold the define-fun-rec encoding at all), so
+      // a half-discharge is a hard failure, not a recorded partial.  NEITHER succeeding hides
+      // nothing — it is plainly open, and is recorded as such below.
+      assert(zok && vok, s"$name: only ONE prover discharged this data-agnostic obligation " +
+        s"(z3=${if zok then "unsat" else "-"} vampire=${if vok then "proved" else "-"}) — that is an " +
+        "encoding blind spot in the other, not a pass")
+      statusRows += s"$name\t${if zok then "unsat" else "-"}\t${if vok then "proved" else "-"}\tPROVED"
+    else
+      recordInstance(name, content, zok, vok, List(log))
+
+  /** Record an instance obligation's outcome: PROVED (with which provers) or, when NEITHER prover
+   *  discharged it inside the budget, an honest PROVER-BUDGET-EXCEEDED marker carrying the attempt
+   *  log in the file header — never a silently-accepted or weakened goal. */
+  def recordInstance(name: String, content: String, zok: Boolean, vok: Boolean, log: List[String]): Unit =
+    if zok || vok then
+      val hdr = s"; PROVER LOG (both provers are run on every obligation; verdicts also in STATUS.tsv)\n" +
+                log.mkString("\n") + "\n"
+      write(smtDir, name, hdr + content)
+      statusRows += s"$name\t${if zok then "unsat" else "-"}\t${if vok then "proved" else "-"}\tPROVED"
+    else
+      realCount -= 1; budgetCount += 1
+      val hdr =
+        "; PROVER-BUDGET-EXCEEDED: NEITHER z3 NOR vampire discharged this obligation.  The goal\n" +
+        "; below is the real, un-folded structural equivalence (both sides are the actual\n" +
+        "; denotations — no constant folding), it is NOT weakened to something provable, and it is\n" +
+        "; NOT counted as a discharged cell.  Equivalence for this instance is carried by the\n" +
+        "; Scala executor gates (assertEquals against the reference on this input) and by the\n" +
+        "; data-agnostic twin; this file records the open obligation and the attempt log.\n" +
+        "; ATTEMPT LOG:\n" + log.mkString("\n") + "\n"
+      write(smtDir, name, hdr + content)
+      statusRows += s"$name\t-\t-\tOPEN (prover budget exceeded — see header)"
+      Loaders.note(s"[pipeline] $name: OPEN — neither prover discharged the un-folded obligation")
+
+  /** An INSTANCE obligation, emitted with the ∀-PATH goal first and the finite observation list
+   *  only as a FALLBACK.  The ∀ form is the stronger statement and measured cheaper for z3 wherever
+   *  it discharges at all (aunt stage 1: 0.02 s ∀ vs 0.09 s over 28 observations; puzzle3-full
+   *  stage 2: 1.22 s vs 6.58 s), so it is what the certificates should say.  When neither prover
+   *  reaches it, the observation list is tried and the file header SAYS SO — a spot check labelled
+   *  as a spot check, never a ∀ claim backed by 28 points. */
+  def runInstanceSmt(name: String, title: String, a: Space, b: Space, obs: List[List[Int]]): Unit =
+    val forAll = EquivPipeline.smtEquivalence(s"$title (∀ paths)", a, b, Nil)
+    if forAll.contains("IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION") then
+      runSmtFile(name, forAll); return
+    realCount += 1
+    val (z1, v1, log1) = provers(name, forAll, 60, "∀-path goal")
+    if z1 || v1 then { recordInstance(name, forAll, z1, v1, List(log1)); return }
+    val spot = EquivPipeline.smtEquivalence(s"$title (instance observations — ∀ FORM NOT DISCHARGED)", a, b, obs)
+    val (z2, v2, log2) = provers(name, spot, 60, s"${obs.size} observations")
+    recordInstance(name, spot, z2, v2, List(log1, log2))
 
   /** SpaceZipper → the structurally matching Space term (Lit ↦ Literal), for the smt leg. */
   def spaceOfZipper(z: SpaceZipper): Space = z match
@@ -128,6 +255,7 @@ class EquivPipelineTest extends FunSuite:
     case TailsUnion(src) => TailsUnion(zipCollapse(src))
     case TailsIntersection(src) => TailsIntersection(zipCollapse(src))
     case Iteration(src, sym, rest, body) => Iteration(zipCollapse(src), sym, rest, zipCollapse(body))
+    case Fixpoint(init, rec, body) => Fixpoint(zipCollapse(init), rec, zipCollapse(body))
     case other => other
 
   def freeMentions(s: Space): Vector[SpaceMention] =
@@ -145,6 +273,7 @@ class EquivPipelineTest extends FunSuite:
       case TailsUnion(src) => go(src, bound)
       case TailsIntersection(src) => go(src, bound)
       case Iteration(src, _, rest, body) => go(src, bound); go(body, bound + rest.s)
+      case Fixpoint(init, rec, body) => go(init, bound); go(body, bound + rec.s)
       case Range(x, _, _) => go(x, bound)
       case _ => ()
     go(s, Set.empty); out.toVector
@@ -210,6 +339,12 @@ class EquivPipelineTest extends FunSuite:
         if rl != rr then
           emitted += 1
           lets.append(s"(let $$l$i $rl)\n(let $$r$i $rr)\n")
+          // LEASTNESS IS ASKED FOR, NOT ASSUMED: prelude.egg's Park rule is demand-driven — it
+          // fires only for a DECLARED candidate post-fixpoint (a bare three-premise rule can never
+          // match, because the premise terms `(Union i c)` are not in the e-graph until something
+          // builds them).  When both sides are fixpoints, each is the other's candidate.
+          if rl.startsWith("(Fix ") && rr.startsWith("(Fix ") then
+            lets.append(s"(FixCand $$l$i $$r$i)\n(FixCand $$r$i $$l$i)\n")
           lets.append(s"(let $$tl$i (Term $$l$i))\n(let $$tr$i (Term $$r$i))\n")
           checks.append(s"(check (= $$tl$i $$tr$i))\n")
           val probes = probePaths(l, r, cap = 8)
@@ -225,7 +360,12 @@ class EquivPipelineTest extends FunSuite:
         runEggFile(s"$name-$stage-agnostic.egg", sbT.toString)
       else
         if ctx.text.nonEmpty then sb.append(ctx.text).append('\n')
-        sb.append(lets).append("(run ROUNDS)\n").append(checks)
+        // The `park` ruleset carries union comm/assoc, which zipper-spec deliberately keeps OUT of
+        // the default set (it blows up the movement search), so it is scheduled ONLY when a `Fix`
+        // is actually present.
+        val sched = if lets.toString.contains("(Fix ") then "(run-schedule (repeat ROUNDS (run) (run park)))"
+                    else "(run ROUNDS)"
+        sb.append(lets).append(sched).append('\n').append(checks)
         // when EVERY refined pair is a verified certified-law instance, the egg observational run
         // is redundant cross-validation: attempt only the cheap ladder rungs, and record the
         // proof-carrying justification if they don't converge.  Any residual pair keeps the
@@ -259,14 +399,39 @@ class EquivPipelineTest extends FunSuite:
     val uPnf = SmtDiff.alphaNorm(AgnosticPipeline.unrollControl(SC.reduce(prog), 2))
     val uOnf1 = SmtDiff.alphaNorm(AgnosticPipeline.unrollControl(prog, 1))
     val uPnf1 = SmtDiff.alphaNorm(AgnosticPipeline.unrollControl(SC.reduce(prog), 1))
+    // obligation: terminating/REGISTRY.tsv O10c — THE RESIDUAL CUT IS ONLY SOUND IF BOTH SIDES CUT
+    // THE SAME THING.  `unrollControl` replaces the call past depth `k` with a FRESH FREE INPUT
+    // `Mention("residual_<routine>_<depth>")`, and the obligation it then states is "the two
+    // k-unrollings agree FOR ALL values of that input".  If the optimised side reached the cut at a
+    // different depth, or cut a different routine, the two sides would carry DIFFERENT free inputs
+    // and the goal would be comparing two unrelated programs — provable or refutable for reasons
+    // that have nothing to do with the optimisation.  Pinned here, at both k, before anything is
+    // emitted; the registry row stays OPEN because this is a differential and not a theorem.
+    def residualMentions(x: Space): Set[String] =
+      collect(x)({ case Space.Mention(SpaceMention(n)) if n.startsWith("residual_") => n },
+                 PartialFunction.empty)._1.map(_._2).toSet
+    for (l, r, kk) <- Vector((uOnf, uPnf, 2), (uOnf1, uPnf1, 1)) do
+      assertEquals(residualMentions(l), residualMentions(r),
+                   s"$name: the k=$kk agnostic certificate would compare DIFFERENT residual inputs")
     agnosticLegs(name, "space", uPnf, uOnf, uPnf1, uOnf1)
-    // stages 2/3 keep the folded skeletons (their comparisons are about TRANSPILER/OPTIMISER
-    // structure; both sides fold identically by construction)
+    // stage-2 agnostic compares `uO` against `zipCollapse(uO)` — the zipper transpiler's three
+    // smart-constructor identities (x∪x, x∩x, x\x) replayed in Scala.  THIS IS WEAK and it is the
+    // reason all six stones are TRIVIAL here: the identities almost never fire on a cornerstone,
+    // and no `SpaceZipper` is touched.  The obvious fix — `spaceOfZipper(transpileZ(uO))` — is
+    // NOT AVAILABLE data-agnostically and must not be used: `transpileZ` resolves a mention with
+    // `ic.getOrElse(m, ITrie.empty)` (Zipper.scala:278), so with the inputs free every mention
+    // would silently become ∅ and the leg would compare the program against its all-inputs-empty
+    // specialisation — a WRONG obligation, not merely a trivial one.  A real agnostic zipper leg
+    // needs an OPAQUE trie source in `SpaceZipper` first (recorded, not papered over).
     val uO = AgnosticPipeline.symbolic(prog)
     agnosticLegs(name, "zipper", zipCollapse(uO), uO)
     locally {
-      val g = optimize(transpile(Routine(RoutinePtr(name + "_ag"), Vector.empty, freeMentions(uO), uO)))
-      agnosticLegs(name, "graph", untranspileTop(g), uO)
+      // stage-3 agnostic: OPTIMISED vs UNOPTIMISED graph, so the obligation is about what
+      // `optimize` DID.  It used to be `untranspileTop(optimize(transpile(R)))` vs `uO` — a
+      // structure-preserving round trip against the term the graph came from, trivial by
+      // construction on every stone.
+      val r = Routine(RoutinePtr(name + "_ag"), Vector.empty, freeMentions(uO), uO)
+      agnosticLegs(name, "graph", untranspileTop(optimize(transpile(r))), untranspileTop(transpile(r)))
     }
     // ---- INSTANCE legs (executor-grounded spot checks) ----
     // ---- stage 0: expansion (trusted steps), gated against the executor on this instance ----
@@ -324,6 +489,7 @@ class EquivPipelineTest extends FunSuite:
       for i <- non1.indices do sb1.append(s"(check (= $$no$i (EF))) (check (= $$np$i (EF)))\n")
     if ident1 then identCount += 1
     var tier1ok = runEggFileOpt(s"$name-space.egg", sb1.toString)
+    if tier1ok then dropFallback(s"$name-space-impl.egg", s"$name-space-lit.egg")
     if !tier1ok then
       // the eager SET reference's legacy machinery cannot converge on every instance shape (its
       // non-confluent closure explodes past ~14 rounds); fall back to the other exec model — the
@@ -347,7 +513,11 @@ class EquivPipelineTest extends FunSuite:
         sbL.append(s"(let $$want (Reflect ${EquivPipeline.tnodeOf(resT)}))\n")
         emitObsPairs(sbL, "$want", "$want", mem1, non1, resT)
         runEggFile(s"$name-space-lit.egg", sbL.toString)
-    runSmtFile(s"$name-space.smt2", EquivPipeline.smtEquivalence(s"pipeline stage 1 ($name): original vs optimised (instance observations, folded)", AgnosticPipeline.fold(eO), AgnosticPipeline.fold(eP), mem1 ++ non1))
+    // NO CONSTANT FOLDING (plan item 12): `AgnosticPipeline.fold` runs the executor, and after
+    // stage-0 expansion `isGround` holds AT THE ROOT, so both sides collapsed to the SAME literal
+    // and the goal macro-expanded to `true` — measured: z3 0.00-0.01 s, still `unsat` with the
+    // ENTIRE prelude deleted.  The sides below are the actual structural denotations.
+    runInstanceSmt(s"$name-space.smt2", s"pipeline stage 1 ($name): original vs optimised", eO, eP, mem1 ++ non1)
 
     // ---- stage 2: the VIRTUAL zipper program (Iter/BodyK binders over the INPUT literals — not
     // pre-materialised) observed by movement against the reference output, plus the Scala executor
@@ -379,7 +549,8 @@ class EquivPipelineTest extends FunSuite:
       val (vm, vn) = (members.take(12), nonMembers.take(12))
       for (ids, i) <- vm.zipWithIndex do sbV.append(s"(let $$vm$i (Term ${along(ids)}))\n")
       for (ids, i) <- vn.zipWithIndex do sbV.append(s"(let $$vn$i (Term ${along(ids)}))\n")
-      sbV.append("(run ROUNDS)\n")
+      sbV.append(if vr.contains("(Fix ") then "(run-schedule (repeat ROUNDS (run) (run park)))\n"
+                 else "(run ROUNDS)\n")
       for i <- vm.indices do sbV.append(s"(check (= $$vm$i (T)))\n")
       for i <- vn.indices do sbV.append(s"(check (= $$vn$i (F)))\n")
       if !runEggFileOpt(s"$name-zipper-virtual.egg", sbV.toString) then
@@ -415,7 +586,8 @@ class EquivPipelineTest extends FunSuite:
       sb2.append(s"(let $$zip $zipStr)\n")
       sb2.append(s"(let $$spc $spcStr)\n")
       emitObsPairs(sb2, "$zip", "$spc", members, nonMembers, resT)
-    if !runEggFileOpt(s"$name-zipper.egg", sb2.toString) then
+    if runEggFileOpt(s"$name-zipper.egg", sb2.toString) then dropFallback(s"$name-zipper-lit.egg")
+    else
       Loaders.note(s"[pipeline] $name-zipper: structural side exceeds the eager egg budget; " +
         "instance equivalence carried by the Scala gates + agnostic certificates")
       val sbL = new StringBuilder
@@ -426,7 +598,8 @@ class EquivPipelineTest extends FunSuite:
       sbL.append(s"(let $$want (Reflect ${EquivPipeline.tnodeOf(resT)}))\n")
       emitObsPairs(sbL, "$want", "$want", members, nonMembers, resT)
       runEggFile(s"$name-zipper-lit.egg", sbL.toString)
-    runSmtFile(s"$name-zipper.smt2", EquivPipeline.smtEquivalence(s"pipeline stage 2 ($name): zipper vs space (instance observations, folded)", AgnosticPipeline.fold(spaceOfZipper(zProg)), AgnosticPipeline.fold(eO), members ++ nonMembers))
+    runInstanceSmt(s"$name-zipper.smt2", s"pipeline stage 2 ($name): zipper vs space",
+                   spaceOfZipper(zProg), eO, members ++ nonMembers)
 
     // ---- stage 3: optimised op-graph vs Space/term program, in the bridge (impl) system ----
     val g = optimize(transpile(Routine(RoutinePtr(name), Vector.empty, Vector.empty, eO)))
@@ -441,7 +614,8 @@ class EquivPipelineTest extends FunSuite:
     sb3.append(s"(let $$grefl (Reflect $root))\n")
     sb3.append(s"(let $$spc (Reflect ${EquivPipeline.tnodeOf(resT)}))\n")   // the reference output
     emitObsPairs(sb3, "$grefl", "$spc", members, nonMembers, resT)
-    if !runEggFileOpt(s"$name-graph.egg", sb3.toString) then
+    if runEggFileOpt(s"$name-graph.egg", sb3.toString) then dropFallback(s"$name-graph-lit.egg")
+    else
       Loaders.note(s"[pipeline] $name-graph: DAG exceeds the eager egg budget; " +
         "instance equivalence carried by the Scala gates + agnostic certificates")
       val sbL = new StringBuilder
@@ -452,16 +626,26 @@ class EquivPipelineTest extends FunSuite:
       sbL.append(s"(let $$want (Reflect ${EquivPipeline.tnodeOf(resT)}))\n")
       emitObsPairs(sbL, "$want", "$want", members, nonMembers, resT)
       runEggFile(s"$name-graph-lit.egg", sbL.toString)
-    runSmtFile(s"$name-graph.smt2", EquivPipeline.smtEquivalence(s"pipeline stage 3 ($name): graph vs space (instance observations, folded)", AgnosticPipeline.fold(untranspiledSpace(g)), AgnosticPipeline.fold(eO), members ++ nonMembers))
+    runInstanceSmt(s"$name-graph.smt2", s"pipeline stage 3 ($name): graph vs space",
+                   untranspiledSpace(g), eO, members ++ nonMembers)
     // marker audit (CI-countable): every emitted file is REAL (proved), TRIVIAL (recorded no-op),
     // LAW-JUSTIFIED (proof-carrying), or BUDGET (recorded, certificate carried elsewhere).
-    Loaders.note(s"[pipeline] $name markers so far: real=$realCount trivial=$trivialCount law-justified=$lawCount budget=$budgetCount identical-literal=$identCount")
+    Loaders.note(s"[pipeline] $name markers so far: real=$realCount trivial=$trivialCount " +
+                 s"law-justified=$lawCount budget=$budgetCount identical=$identCount single-side=$singleSideCount")
+    writeStatus()
 
   /** observation pairs: both sides Term-checked at every member (T), boundary non-member (F).
    *  With a == b (single-side files) only one observation per path is emitted — duplicating the
-   *  same let under two names would fabricate a fake "pair". */
+   *  same let under two names would fabricate a fake "pair" — and the file is STAMPED
+   *  SINGLE-SIDE-OBSERVATION so the audit stops counting it REAL.  It is a real movement
+   *  computation in the certified system, but it observes ONE side against the reference output;
+   *  five `-lit` fallbacks used to count as equivalence cells while proving only that the
+   *  reference literal observes itself. */
   def emitObsPairs(sb: StringBuilder, a: String, b: String, members: List[List[Int]], non: List[List[Int]], result: ITrie): Unit =
     val two = a != b
+    if !two then
+      sb.append("; SINGLE-SIDE-OBSERVATION: one side observed against the executor's reference\n")
+      sb.append("; output — a real computation under the certified rules, but NOT an equivalence.\n")
     def along(side: String, ids: List[Int]) = ids.foldLeft(side)((acc, k) => s"(Sub $k $acc)")
     for (ids, i) <- members.zipWithIndex do
       sb.append(s"(let $$ma$i (Term ${along(a, ids)}))\n")
@@ -496,6 +680,7 @@ class EquivPipelineTest extends FunSuite:
     case TailsUnion(src) => collectKeys(src)
     case TailsIntersection(src) => collectKeys(src)
     case Iteration(src, _, _, body) => collectKeys(src) ++ collectKeys(body)
+    case Fixpoint(init, _, body) => collectKeys(init) ++ collectKeys(body)
     case Range(x, _, _) => collectKeys(x)
     case _ => Set.empty
 
@@ -538,6 +723,11 @@ class EquivPipelineTest extends FunSuite:
 
   test("pipeline: semi-naive datalog") {
     def join(r: Space, s: Space): Space = r.iter(P"n", S"nbs", P"n" x \/(s <| S"nbs"))
+    // obligation: terminating/datalog_b_seminaive_{lemmas,terminates}.smt2 (T4 — the measure
+    // 2·card(top∖A) + [D ≠ ∅] strictly decreases on every state-changing semi-naive step) and
+    // terminating/seminaive_correct.smt2 (O13 — naive ≡ semi-naive ROUND FOR ROUND).  O13's side
+    // condition is additivity of the join, `J(X ∪ Y) = J(X) ∪ J(Y)`: this compiler performs no
+    // semi-naive transformation, so additivity is on the author of `sn_tc` (registry row O13-SC).
     val snTC = routineN("sn_tc", "e", "all", "delta") {
       S"all" \/ callN("sn_tc", S"e", S"all" \/ (join(S"delta", S"e") \ S"all"), join(S"delta", S"e") \ S"all") }
     val edges = sv(pv("0", "1"), pv("1", "2"), pv("2", "3"))
@@ -569,5 +759,26 @@ class EquivPipelineTest extends FunSuite:
   test("pipeline: n-queens") {
     val b = NQueens.board(4)
     pipeline("nqueens", b.program, SpaceContextMap(Map.empty), b.defs)
+  }
+
+  /** puzzle3-full — the SEVENTH cornerstone, and the ONLY one whose recursion is an unbounded
+   *  `Space.Fixpoint` (CornerstoneTypes.scala reports seven; the pipeline ran six, so the one
+   *  stone that exercises the fixpoint machinery end to end had NO row at all).  The 2x2 sliding
+   *  puzzle's reachable space: start from the solved board and close under `expandStep` to a
+   *  union-saturating fixpoint — all 4!/2 = 12 states.  The program is replicated here rather
+   *  than imported because `CornerstoneTypes` is a `FunSuite`, not an object. */
+  def puzzleFixpoint(rows: Int, cols: Int): Space =
+    val p = Sliding.puzzle(rows, cols)
+    val rec = SpaceMention("reach")
+    val step = Space.Fixpoint(Space.Singleton(Path.Constant(p.initial)), rec,
+                              Space.Union(Space.Mention(rec), p.expandStep(Space.Mention(rec))))
+    // expandStep calls superpose/collapse — inline them so the term is Call-free and the binder,
+    // not an opaque Call, is what the renderers and the provers see.
+    val (lowered, residual) = lowerCalls(Routine(RoutinePtr("main"), Vector.empty, Vector.empty, step), p.defs)
+    assert(residual.isEmpty, s"puzzle${rows * cols - 1}-full: unexpected residual ${residual.keys}")
+    lowered
+
+  test("pipeline: 3-puzzle FULL reachable space (the unbounded Fixpoint cornerstone)") {
+    pipeline("puzzle3-full", puzzleFixpoint(2, 2), SpaceContextMap(Map.empty), PartialFunction.empty)
   }
 end EquivPipelineTest

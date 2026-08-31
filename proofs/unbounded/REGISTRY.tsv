@@ -1,0 +1,82 @@
+# proofs/unbounded/REGISTRY.tsv — TIER 3, THE UNBOUNDED TIER.
+#
+# One row per obligation.  `generalises` names the TIER-1 (Lower.sizeBounds / Lower.lenBounds,
+# a syntactic interval per AST node) or TIER-2 (SizeZ3 / LenZ3, one ground `(declare-const n<i>
+# Int)` per AST node) claim, or the instance-tier .smt2 obligation, that the row's schematic
+# statement subsumes.  Neither of those tiers can quantify over inputs at all — that is the whole
+# point of this directory; see _signature.p's header.
+#
+# Verdicts live in STATUS.tsv, written by run.sh.  Rows whose id starts with N are NEGATIVE
+# CONTROLS: they are FALSE and must NOT be provable, and run.sh fails the run if one is proved.
+#
+# ONE PROVER.  There is no z3 column anywhere in this tier: the statements are quantified
+# first-order sentences over uninterpreted sorts, and an SMT-LIB rendering would need
+# `declare-datatypes` for `path`, which docs/traps.md 3 records vampire cannot consume — so the
+# twin could not be cross-checked by the prover that actually discharges this tier.  The negative
+# controls and run.sh's vacuity probe are the compensating checks.
+#
+# id	file	operator	statement	generalises
+U01	lattice_union.p	union	u is idempotent/commutative/associative with unit {} and is the JOIN of the inclusion order	tier-1 Lower.sizeBounds Union arm; SC.reduce union normalisation; formal.egg union laws
+U02	lattice_inter.p	intersection	n is idempotent/commutative/associative, annihilated by {}, and is the MEET of the inclusion order	tier-1 Lower.sizeBounds Intersection arm; the trie meet fast paths in AlgebraicResult
+U03	lattice_distrib.p	union / intersection	absorption both ways and distributivity both ways: the inclusion lattice is DISTRIBUTIVE	the push-intersection-through-union rewrite in the trie backends
+U04	lattice_order.p	inclusion	sub is a partial order with bottom {}, and agrees with both algebraic characterisations	the saturated subset relation SizeConstraints.encode builds over one term's nodes
+U05	subtraction.p	subtraction	A\B is inside A, disjoint from B, splits A with AnB, and equals A\(AnB)	tier-1 Lower.sizeBounds Subtraction arm (lo = max(0, lo_a - hi_b), hi = hi_a)
+U06	set_partitions.p	union / intersection / subtraction	the two disjoint decompositions: AuB = A + (B\A) and B = (AnB) + (B\A)	the subset edges SizeConstraints.encode saturates per node
+U07	mono_setops.p	union / intersection / subtraction	u and n monotone in both arguments; \ monotone in the minuend, ANTITONE in the subtrahend	every SC.reduce rewrite that replaces a subterm by a smaller/larger one
+U08	restriction.p	restriction	restr is a filter: inside its source, idempotent, {}-annihilated, identity at {eps}, union-distributive in both arguments	tier-1 Lower.sizeBounds Restriction arm (lo = 0, hi = hi_x); proofs/keys_restriction.smt2
+U09	raffination.p	raffination	THE PARTITION: restr(X,Y) u raff(X,Y) = X and the two are disjoint; the {eps} / {} corners	the Raffination arm of eval and of tier-1 Lower.sizeBounds; proofs/restriction.smt2
+U10	prefix_disjoint.p	restriction / raffination	no path of Y a prefix of any path of X  =>  restr = {}, raff = X, and X,Y disjoint	the disjoint-prefix subtrie shortcut (docs/guide.md)
+U11	mono_prefix.p	restriction / raffination	restr monotone in both arguments; raff monotone in the source and ANTITONE in the prefix set	the Restriction/Raffination arms of SpatialTypes.infer, which widen instead of reasoning about variance
+U12	composition_assoc.p	composition	composition is associative	proofs/composition.smt2 (instance tier); tier-1's Composition size arm n_a * n_b
+U13	composition_unit.p	composition	{eps} is a two-sided unit and {} a two-sided annihilator for composition	proofs/lemma_append_nil.smt2 (append-nil, PROVED) lifted to spaces
+U14	composition_distrib.p	composition	composition distributes over union in both arguments	the union-hoisting rewrites in SC.reduce / formal.egg
+U15	mono_compose.p	composition	composition is monotone in both arguments	tier-1's Composition size arm; the Composition arm of SpatialTypes.infer
+U16	wrap_roundtrip.p	wrap / unwrap	unwrap(wrap(A,W),W) = A for every A and W; wrap(A,eps) = A; unwrap(A,eps) = A	proofs/impl_wrap.smt2 + proofs/impl_unwrap.smt2 (one wrap of one literal)
+U17	wrap_restriction.p	wrap / unwrap / restriction	wrap(unwrap(A,W),W) = restr(A,{W}) — the re-wrap is NOT optional	SingletonRestriction_Unwrap, the law docs/traps.md 4 records as having dropped its prefix
+U18	wrap_as_comp.p	wrap / composition	wrap(A,W) = comp({W}, A), which is what eval computes	the Wrap arm of eval (recs(Composition(Singleton(p), src)))
+U19	wrap_nest.p	wrap / unwrap	wrap nests RIGHT-to-left (app(V,U)), unwrap nests LEFT-to-right (app(U,V))	UnwrapConcat_Unwraps, the law docs/traps.md 4 records as having reversed the factor order
+U20	unwrap_hom.p	unwrap	unwrap is a BOOLEAN homomorphism: commutes with u, n and \, kills {}, monotone	the Unwrap arms of SC.reduce and tier-1 Lower.sizeBounds (lo = 0, hi = hi_src)
+U21	mono_concat.p	wrap / unwrap	wrap monotone and union-preserving and {}-killing; unwrap monotone	the Wrap/Unwrap arms of SpatialTypes.infer
+U22	tails_union.p	tails-union	tu is a union homomorphism and monotone; tu(AnB) is only CONTAINED in tu(A) n tu(B); tu({}) = tu({eps}) = {}	proofs/threeway_tailsunion_trie.smt2; tier-1's TailsUnion arm (hi = hi_src)
+U23	tails_union_wrap.p	tails-union / unwrap	tu(wrap(A, h::eps)) = A and unwrap(A, h::eps) = grp(h,A) — one trie level down and back	the single-head descend/ascend fast path in the trie backends
+U24	tails_intersection.p	tails-intersection	ti(A) is inside tu(A); ti({}) = ti({eps}) = {}; with exactly ONE head, ti = tu	proofs/threeway_tailsinter_trie.smt2, proofs/keyfold_tailsinter.smt2
+U25	mono_tails.p	tails-union / tails-intersection	tu monotone; ti monotone ONLY when the larger source introduces no new head	the TailsUnion/TailsIntersection arms of SpatialTypes.infer
+U26	grp_union.p	iteration	head groups of a union split; an absent head gives an EMPTY group; the collapsed forms	the groupMap(_._1)(_._2) grouping in eval's Iteration arm
+U27	iteration.p	iteration	iter over a headless source ({} or {eps}) is {}; iter is monotone in the source for every MONOTONE body	SpatialCost's generic Iteration transfer; tier-1's Iteration arm; the headedGuard of docs/traps.md 1
+U28	iteration_split_sub.p	iteration	forward half of the head-disjoint split	IterUnion_Indep / the same-source iteration merges in SC.reduce
+U29	iteration_split_sup.p	iteration	reverse half of the head-disjoint split	IterUnion_Indep / the same-source iteration merges in SC.reduce
+U30	iteration_split.p	iteration	iter(A u B, F) = iter(A,F) u iter(B,F) when A and B share NO HEAD (false without the guard)	IterateLiteral_Union's 'group by distinct HEAD, not unroll per path' (docs/traps.md 1)
+U31	iteration_tailsunion.p	iteration / tails-union	an iteration whose body is the identity on the rest-space IS the tails-union	ALGEBRA.md's TailsUnion_Iteration rewrite
+U32	mono_control.p	iteration / fixpoint	iter monotone in the source (monotone body); fix monotone in the seed; Park induction in usable form	the Iteration/Fixpoint arms of SpatialTypes.infer and SpatialCost.fixRounds
+U33	fixpoint.p	fixpoint	the least pre-fixpoint is UNIQUE, monotone in the seed, and idempotent under re-seeding	terminating/least_fixpoint_unique.p (same fact for an abstract join-semilattice)
+U34	fixpoint_unfold.p	fixpoint	for a MONOTONE body, fix(I,G) = I u G(fix(I,G))	docs/SUPERCOMPILER.md's denotation; tier-2's Fixpoint arm (n >= n_init, hi = inf)
+U35	kleene_below_base.p	fixpoint	base case: at depth 0 both the iterate and the accumulation lie below every pre-fixpoint	eval's union-saturating Fixpoint loop
+U36	kleene_below_step.p	fixpoint	step case: one round preserves 'iterate and accumulation are below X' for a MONOTONE body	eval's union-saturating Fixpoint loop
+U37	kleene_grows_base.p	fixpoint	base case: acc(0) = init contains the seed	docs/design_size_constraints.md's tier-2 closure edge init subset= Fixpoint(init,..)
+U38	kleene_grows_step.p	fixpoint	step case: the accumulation never loses the seed (no hypothesis on the body)	docs/design_size_constraints.md's tier-2 closure edge init subset= Fixpoint(init,..)
+U39	kleene_acc_is_cur_base.p	fixpoint	base case: acc(0) = cur(0)	the asFixpoint recognition condition (union-saturating body shape)
+U40	kleene_acc_is_cur_step.p	fixpoint	step case: for an EXTENSIVE body the accumulation equals the last iterate	the asFixpoint recognition condition (union-saturating body shape)
+U41	kleene_conv.p	fixpoint	cur(k+1) = cur(k)  =>  acc(k) = fix(init, body): eval's stopping test computes the LEAST pre-fixpoint	eval's 'if nxt == cur then stop' rule, asserted by construction and nowhere else certified
+U42	card_subadd.p	union / subtraction	|A u B| =< |A| + |B| and |A| =< |A\B| + |B|	tier-1 Lower.sizeBounds Union/Subtraction arms; the linear constraints SizeConstraints.encode emits
+U43	card_meet.p	intersection	|A n B| =< |A| and |A n B| =< |B|	tier-1's hi = min(hi_a, hi_b) for Intersection
+U44	card_incl_excl.p	union / intersection	|A u B| + |A n B| = |A| + |B|	nothing at tier-1/tier-2: both treat the union and the intersection node independently
+U45	card_partition.p	restriction / raffination	|X| = |restr(X,Y)| + |raff(X,Y)| exactly	the cost model's assumption that a restriction and its raffination cost one traversal of the source
+U46	card_wrap.p	wrap	|wrap(A,W)| = |A| — via the injective-image principle and left cancellation of append	tier-1's Wrap arm (n = n_src) and the corresponding SizeConstraints equality constraint
+U47	length_setops.p	union / intersection / subtraction	the length-bound transfer rules for u, n, \ and for a subspace	tier-1 Lower.lenBounds Union/Intersection/Subtraction arms and tier-2 LenZ3
+U48	length_compose.p	composition	lengths ADD: bounds on the factors give the summed bound on the product	tier-1 Lower.lenBounds Composition arm (lo_a + lo_b, hi_a + hi_b)
+U49	length_wrap.p	wrap	every path of wrap(A,W) is |W| items longer than a path of A; the two interval rules follow	tier-1 Lower.lenBounds Wrap arm (adds |p| to both endpoints)
+U50	length_tails.p	tails-union / unwrap	a bound of N+1 on the source gives N on the tails; a bound of |W|+N gives N after unwrap	tier-1 Lower.lenBounds TailsUnion/Unwrap arms (lo-1 / lo-|p|, clamped at 0)
+U51	mon_cancel_base.p	paths	base case of left cancellation of append	the (= q nil) arm of proofs/lemma_append_cons.smt2
+U52	mon_cancel_step.p	paths	step case of left cancellation of append	the (?q2. q = cons(k2,q2)) arm of proofs/lemma_append_cons.smt2
+U53	mon_cancel.p	paths	app(P,Q) = app(P,R) => Q = R, DIRECTLY (no staging) — OPEN: needs induction on P	proofs/lemma_append_cons.smt2's finite-depth split, of which this is the unbounded form
+U54	composition_head_split.p	composition / tails-union	pointwise: every tail of a product is a tail of the left factor times the right, or (only if eps is in the left) a tail of the right	proofs/composition.smt2 / composition_norm.smt2 for one concrete literal pair
+U55	composition_head_sup.p	composition / tails-union	the two reverse inclusions of the tails-of-a-product decomposition	the same instance-tier obligations
+U56	composition_head.p	composition / tails-union	tu(A.B) = tu(A).B u tu(B) when eps in A, and tu(A).B otherwise — one trie level down through a product	tier-1's TailsUnion-of-Composition path, which simply widens to [0, hi]
+N01	negative/not_wrap_nest_reversed.p	wrap [NEGATIVE]	wrap(wrap(A,U),V) = wrap(A, U++V) — FALSE, the order is V++U	near-miss of U19; the exact inversion docs/traps.md 4 records
+N02	negative/not_unwrap_nest_reversed.p	unwrap [NEGATIVE]	unwrap(unwrap(A,U),V) = unwrap(A, V++U) — FALSE, the order is U++V	near-miss of U19
+N03	negative/not_ti_eq_tu.p	tails-intersection [NEGATIVE]	ti(A) = tu(A) unconditionally — FALSE, only with exactly one head	near-miss of U24
+N04	negative/not_ti_monotone.p	tails-intersection [NEGATIVE]	A subset B => ti(A) subset ti(B) — FALSE without the no-new-head guard	near-miss of U25
+N05	negative/not_iter_split.p	iteration [NEGATIVE]	iteration splits over an ARBITRARY union — FALSE, a shared head merges the groups	near-miss of U30
+N06	negative/not_card_additive.p	union [NEGATIVE]	|A u B| = |A| + |B| unconditionally — FALSE without disjointness	near-miss of U42/U44
+N07	negative/not_tu_cap_equality.p	tails-union [NEGATIVE]	tu(A n B) = tu(A) n tu(B) — FALSE, only subset holds	near-miss of U22
+N08	negative/not_restr_identity.p	restriction [NEGATIVE]	restr(X,Y) = X — FALSE, only when Y contains eps	near-miss of U08

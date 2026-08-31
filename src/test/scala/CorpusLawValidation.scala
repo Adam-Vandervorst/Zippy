@@ -23,15 +23,7 @@ class CorpusLawValidation extends FunSuite:
   test("law pipeline over the corpus: SC.reduce(prog) == prog on random inputs".tag(SlowTag.Slow)) {
     val M = sys.props.get("lawvalid.m").map(_.toInt).getOrElse(100)
     val progLimit = sys.props.get("lawvalid.progs").map(_.toInt).getOrElse(Int.MaxValue)
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assert(f.exists, s"corpus not found at ${f.getPath} — run the corpus test first")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]]
-      catch case e: java.io.InvalidClassException =>
-        throw new AssertionError("corpus_1000.ser is STALE — rerun morkl.ProgramExpressivity", e)
-      finally ois.close()
-    }.take(progLimit)
+    val recs = Corpus.load(progLimit)
 
     val rng = new java.util.Random(133742)
     final case class Env(sv: Array[SpaceValue], pv: Array[PathValue])

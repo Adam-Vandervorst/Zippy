@@ -7,7 +7,7 @@ import scala.language.implicitConversions
 /** Benchmarks: reference Set evaluator `eval` vs trie evaluator `evalT`, with and without the
  *  supercompiler pass, scaled up across all six domains.  Each scenario asserts the two
  *  evaluators agree, then reports wall-clock (best-of-N after warmup).  Results are appended to
- *  BENCHMARKS.md.  Tagged Slow; run with `bin/test 'morkl.TrieBench'`. */
+ *  docs/BENCHMARKS.md.  Tagged Slow; run with `sbt 'testOnly morkl.TrieBench'`. */
 class TrieBench extends FunSuite:
   import Space.*
 
@@ -68,7 +68,13 @@ class TrieBench extends FunSuite:
     (for x <- 0 until w; y <- 0 until w if r.nextInt(100) < density yield (x, y)).toSet
 
   test("BENCHMARKS: eval (Set) vs evalT (TreeMap trie) vs evalI (interned IntMap trie)".tag(SlowTag.Slow)) {
-    emit("\n## Benchmark run (" + java.time.LocalDate.now + ")\n")
+    // the heading and the provenance block are written by `BenchmarkReport`; `out` carries the BODY
+    val reportSlug = "executor-scaling"
+    val reportTitle = "Executor scaling: eval vs evalT vs evalI"
+    val reportExtras = Seq(
+      "timing" -> "best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source)",
+      "interner" -> "WARM — `Interner` and the literal memo carry every id from earlier rows of the same run",
+      "seed" -> "fixed per benchmark; the workloads are deterministic")
     emit("| domain | scale | eval ms | evalT ms | evalI ms | evalI/eval | evalI/evalT | note |")
     emit("|---|---|---:|---:|---:|---:|---:|---|")
 
@@ -151,9 +157,10 @@ class TrieBench extends FunSuite:
     emit("domains are pure algebra; PathItems are interned to Ints before evaluation (no PathItem")
     emit("is touched during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.\n")
     val avgSpeedup = geomean(ex.map(_.suEval))
-    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
-    val header = if f.exists then "" else "# MORKL trie vs reference benchmarks\n\n`eval` = reference Set[List[PathItem]] evaluator; `evalT` = TreeMap[PathItem] trie; `evalI` = interned IntMap trie (PathItems interned to Ints before evaluation).\nevalI/eval and evalI/evalT are speedups (higher = evalI faster).\n"
-    val w = new java.io.FileWriter(f, true); try { w.write(header); w.write(out.toString) } finally w.close()
+    // REPLACE this section, never append one — see the note in GraphBench.  `BenchmarkReport` writes
+    // the heading and the provenance block; `out` carries the body.
+    BenchmarkReport.write(new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md"),
+                          reportSlug, reportTitle, out.toString, reportExtras)
     assert(avgSpeedup > 1.0, f"expected trie to be faster on average, got ${avgSpeedup}%.2fx")
   }
 end TrieBench

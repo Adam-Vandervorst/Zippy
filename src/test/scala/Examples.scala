@@ -6,7 +6,8 @@ import scala.language.implicitConversions
 import scala.io.Source
 
 /** Tag for heavy/integration tests (full 3x3 puzzle state space, large n-queens). They still
- *  run by default; `bin/test` callers can filter them with munit's `--exclude-tags Slow`. */
+ *  run by default; filter them with munit's `--exclude-tags Slow`
+ *  (`sbt 'testOnly * -- --exclude-tags=Slow'`). */
 object SlowTag:
   val Slow = new munit.Tag("Slow")
 
@@ -92,7 +93,7 @@ class ExAuntMetta extends FunSuite:
 
   // portable resolution: env override, repo-relative, then known local checkout
   val lotCandidates = Seq(sys.props.getOrElse("lot.metta", "lot.metta"), "lot.metta",
-                          "/Users/michaelpolyntsov/Zippy/lot.metta")
+                          sys.env.getOrElse("ZIPPY_DATA", "data") + "/lot.metta")
   /** Real lot.metta if present, else the in-repo AuntQuery fixture (so the suite runs anywhere). */
   val fam: Loaders.Family =
     Loaders.resolve(lotCandidates*).flatMap(f => Loaders.mettaFamily(f.getPath)).getOrElse(
@@ -278,7 +279,7 @@ class ExGameOfLife extends FunSuite:
   import Space.*
 
   val fredFile = Loaders.resolve(sys.props.getOrElse("fred.rle", "fred.rle"),
-    "tests/fred.rle", "/Users/michaelpolyntsov/hashlife/tests/fred.rle")
+    "tests/fred.rle", sys.env.getOrElse("ZIPPY_DATA", "data") + "/fred.rle")
 
   def runMorkl(live: Set[(Int, Int)]): Set[(Int, Int)] =
     GoL.cells(eval(Space.Call(RoutinePtr("nextStep"), Vector(), Vector(Space.Literal(GoL.field(live)))))(using rc = GoL.rulesFor(live ++ GoL.step(live)).defs))

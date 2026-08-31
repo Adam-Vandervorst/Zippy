@@ -377,7 +377,7 @@ object SpatialTypes:
         val x = rec(src)
         // the group count comes from the SPATIAL source type met with the baseline: using only
         // `Lower.sizeBounds(src)` threw away a declared input type, so iterating over a mention
-        // typed "exactly two length-1 paths" still reported [0, inf) (review.md)
+        // typed "exactly two length-1 paths" still reported [0, inf)
         val sb = meetSize(x.size, Lower.sizeBounds(src, envSizes(env), env.routines, env.active))
         if x.isProvablyEmpty || x.len.hi == 0 then SpaceType.empty  // no HEADED path ⇒ no groups
         else
@@ -406,7 +406,7 @@ object SpatialTypes:
         // ADDS counts, a finite-count candidate can only satisfy that when the body contributes
         // nothing — every other case must have its counts widened to ∞ first.  Earlier this held
         // only as a side effect of the widening schedule (widenCounts kicked in at k ≥ 2), which is
-        // exactly the kind of accidental soundness review.md warned about; it is now required
+        // exactly the kind of accidental soundness the review warned about; it is now required
         // explicitly.  The SUPPORT (which lengths occur) is what survives widening, and that is the
         // real result here — the reachable-state-space fixpoints are length-homogeneous.
         var t = i0
@@ -432,7 +432,7 @@ object SpatialTypes:
         else
           // no verified post-fixpoint ⇒ counts unbounded, but keep every length fact the supplied
           // env and routine table still justify (the old fallback recomputed lenBounds with an
-          // EMPTY env, discarding exactly the information the caller had provided — review.md).
+          // EMPTY env, discarding exactly the information the caller had provided).
           val lb = Lower.lenBounds(s, envLens(env), env.paths, env.routines, env.active)
           val hull = if lb.isEmpty then i0.len else if i0.len.isEmpty then lb
                      else LenBounds(lb.lo min i0.len.lo, lb.hi max i0.len.hi)
@@ -465,7 +465,7 @@ object SpatialTypes:
    *  space, so every class upper is capped by `total.hi`; when only one class is live that makes the
    *  reduction exact.  Without this the product was unreduced and `infer(...).size` could be 64x
    *  looser than `sizeOf(...)` on the very same term — a four-deep rest-chained iteration reported
-   *  [0, 256] where the tier-1 head-partition law already knew [0, 4] (review.md 7). */
+   *  [0, 256] where the tier-1 head-partition law already knew [0, 4]. */
   private def reduceTotal(t: SpaceType, total: SizeBounds): SpaceType =
     if total.hi == Ivl.INF then t
     else SpaceType(SortedMap.from(t.byLen.map((l, c) => l -> Ivl(c.lo, c.hi min total.hi))),
@@ -555,7 +555,7 @@ object SpatialTypes:
   // ---- projections, clamped by the dedicated analyses ------------------------------------------
   // Every one of these passes the caller's ROUTINE TABLE down to the tier-1/z3 analyses.  Not doing
   // so silently discarded the interprocedural information the caller supplied, so a "sharpest
-  // answer" could be LOOSER than plain `Lower.sizeBounds(s, rc)` — see review.md.  Declared input
+  // answer" could be LOOSER than plain `Lower.sizeBounds(s, rc)` — see the review.  Declared input
   // TYPES still reach only the spatial tier: the other two take mention bounds through their own
   // env, so `envSizes`/`envLens` translate what is translatable (a `SpaceType` down to its size and
   // length projections) instead of dropping it.
@@ -587,7 +587,7 @@ object SpatialTypes:
   /** a z3 answer is usable when it was fully solved OR partly solved — a `PartiallySolved` result
    *  has baseline endpoints where an objective failed and optimal ones elsewhere, so it still
    *  dominates the baseline and meeting with it can only tighten.  Discarding it threw away real
-   *  information (review.md). */
+   *  information. */
   private def usable(st: SizeZ3.Status): Boolean = st match
     case SizeZ3.Status.Solved | SizeZ3.Status.PartiallySolved(_) => true
     case _ => false

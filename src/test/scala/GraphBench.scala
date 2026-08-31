@@ -69,7 +69,13 @@ class GraphBench extends FunSuite:
     Loaders.note(s"[opt-iters ${b.label}] ${pc.getOrElse("opt_iters", 0L)}")
 
   test("GRAPH BENCHMARKS: exec vs execT vs evalI".tag(SlowTag.Slow)) {
-    emit("\n## Op-graph backend benchmark (" + java.time.LocalDate.now + ")\n")
+    // the heading and the provenance block are written by `BenchmarkReport`; `out` carries the BODY
+    val reportSlug = "op-graph-backend"
+    val reportTitle = "Op-graph backend benchmark"
+    val reportExtras = Seq(
+      "timing" -> "best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source)",
+      "interner" -> "WARM — `Interner` and the literal memo carry every id from earlier rows of the same run",
+      "seed" -> "fixed per benchmark; the workloads are deterministic")
     emit("eval-based `exec` vs trie-native `execT`.  `execT` = transpiled graph; `execT(opt)` =")
     emit("push_out(LICM)+optimize_sharing(CSE); `execT(inline+opt)` = all Calls inlined into the graph")
     emit("then optimized (the executor-ready form — no Call dispatch, constants decoded once).  Last")
@@ -183,8 +189,15 @@ class GraphBench extends FunSuite:
     System.out.println(f"GEOMEAN comp+run = $geo%.4f ms ; run-only = $geoR%.4f ms over ${crVals.size} benchmarks  [$tag]")
     emit(f"\n**comp+run geomean = $geo%.3f ms ; run-only geomean = $geoR%.3f ms** over ${crVals.size} benchmarks ($tag).")
 
-    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
-    val w = new java.io.FileWriter(f, true); try w.write(out.toString) finally w.close()
+    // REPLACE this section, never append one: five appenders x every run had grown docs/BENCHMARKS.md
+    // into a 3700-line tape of ~28 near-identical replays in which the CURRENT numbers were
+    // indistinguishable from numbers produced months earlier, by different code, on a different
+    // machine — and none of them said which machine.  `BenchmarkReport` writes the heading, the
+    // provenance block (`RunEnvironment`: cpu, ram, os, jvm + its actual flags, heap, scala, git
+    // commit + dirty flag, timestamp, `Tuning` toggles) and the body between stable markers; history
+    // lives in git, which is what git is for.
+    BenchmarkReport.write(new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md"),
+                          reportSlug, reportTitle, out.toString, reportExtras)
   }
 end GraphBench
 
@@ -208,7 +221,13 @@ class SubgraphHoistBench extends FunSuite:
   def hd(n: String): Path = Path.Deref(PathRef(n))
 
   test("SUBGRAPH HOISTING A/B: optimize hoist off vs on".tag(SlowTag.Slow)) {
-    emit("\n## Loop-invariant subgraph hoisting — A/B (" + java.time.LocalDate.now + ")\n")
+    // the heading and the provenance block are written by `BenchmarkReport`; `out` carries the BODY
+    val reportSlug = "subgraph-hoisting"
+    val reportTitle = "Loop-invariant subgraph hoisting — A/B"
+    val reportExtras = Seq(
+      "timing" -> "best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source)",
+      "interner" -> "WARM — `Interner` and the literal memo carry every id from earlier rows of the same run",
+      "seed" -> "fixed per benchmark; the workloads are deterministic")
     emit("Runtime of `execT(optimize(g))` with push_out's subgraph hoisting OFF vs ON — the ONLY")
     emit("difference between columns (inline/CSE/executor identical).  Synthetic: an invariant inner")
     emit("iteration over a 60-path literal inside an outer loop of size N (with hoisting it runs once,")
@@ -259,8 +278,15 @@ class SubgraphHoistBench extends FunSuite:
       row("n-queens place(6)", R"q"() := b.program, Map.empty, b.defs)
     }
 
-    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
-    val w = new java.io.FileWriter(f, true); try w.write(out.toString) finally w.close()
+    // REPLACE this section, never append one: five appenders x every run had grown docs/BENCHMARKS.md
+    // into a 3700-line tape of ~28 near-identical replays in which the CURRENT numbers were
+    // indistinguishable from numbers produced months earlier, by different code, on a different
+    // machine — and none of them said which machine.  `BenchmarkReport` writes the heading, the
+    // provenance block (`RunEnvironment`: cpu, ram, os, jvm + its actual flags, heap, scala, git
+    // commit + dirty flag, timestamp, `Tuning` toggles) and the body between stable markers; history
+    // lives in git, which is what git is for.
+    BenchmarkReport.write(new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md"),
+                          reportSlug, reportTitle, out.toString, reportExtras)
   }
 end SubgraphHoistBench
 
@@ -285,7 +311,13 @@ class SCOptBench extends FunSuite:
   def emit(s: String): Unit = { out.append(s).append('\n'); Loaders.note(s) }
 
   test("SC OPTIMIZATION BENCHMARK: all six domains".tag(SlowTag.Slow)) {
-    emit("\n## Optimization across all SC domains (" + java.time.LocalDate.now + ")\n")
+    // the heading and the provenance block are written by `BenchmarkReport`; `out` carries the BODY
+    val reportSlug = "sc-domains"
+    val reportTitle = "Optimization across all SC domains"
+    val reportExtras = Seq(
+      "timing" -> "best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source)",
+      "interner" -> "WARM — `Interner` and the literal memo carry every id from earlier rows of the same run",
+      "seed" -> "fixed per benchmark; the workloads are deterministic")
     emit("Each program is made Call-free by `lowerCalls` (acyclic calls inlined; union-saturating")
     emit("recursion lowered to a Fixpoint), then `execT` is timed on the unoptimized vs `optimize`d")
     emit("graph.  `opt speedup` = unopt/opt (the LICM+CSE win); `hoist` = optNoHoist/opt (the")
@@ -322,7 +354,8 @@ class SCOptBench extends FunSuite:
     // 1b. aunt — royal92 genealogy (~3000 people, ~11.6k facts; the lot.metta fixture is too small)
     locally {
       val royalCandidates = Seq(sys.props.getOrElse("royal92.metta", "royal92_simple.metta"),
-                                "royal92_simple.metta", "/Users/michaelpolyntsov/Zippy/royal92_simple.metta")
+                                "royal92_simple.metta",
+                                sys.env.getOrElse("ZIPPY_DATA", "data") + "/royal92_simple.metta")
       Loaders.resolve(royalCandidates*).flatMap(f => Loaders.mettaFamily(f.getPath)) match
         case Some(r92) =>
           run("aunt (royal92)", Routines.aunt_query_routine, Map("family" -> r92.family, "people" -> r92.people), PartialFunction.empty)
@@ -373,8 +406,15 @@ class SCOptBench extends FunSuite:
       run("gol step 12x12", R"g"() := call, Map.empty, rules.defs)
     }
 
-    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
-    val w = new java.io.FileWriter(f, true); try w.write(out.toString) finally w.close()
+    // REPLACE this section, never append one: five appenders x every run had grown docs/BENCHMARKS.md
+    // into a 3700-line tape of ~28 near-identical replays in which the CURRENT numbers were
+    // indistinguishable from numbers produced months earlier, by different code, on a different
+    // machine — and none of them said which machine.  `BenchmarkReport` writes the heading, the
+    // provenance block (`RunEnvironment`: cpu, ram, os, jvm + its actual flags, heap, scala, git
+    // commit + dirty flag, timestamp, `Tuning` toggles) and the body between stable markers; history
+    // lives in git, which is what git is for.
+    BenchmarkReport.write(new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md"),
+                          reportSlug, reportTitle, out.toString, reportExtras)
   }
 end SCOptBench
 
@@ -427,7 +467,13 @@ class AblationStages extends FunSuite:
     emit(f"| $label%-18s | ${c(tEval)} | ${c(tEvalI)} | ${c(tEvalISC)} | ${c(tExecOpt)} | ${c(tExecSCOpt)} |")
 
   test("ABLATION: pipeline stages (eval → evalI → SC → opt-graph → SC+opt-graph)".tag(SlowTag.Slow)) {
-    emit("\n## Pipeline-stage ablation (" + java.time.LocalDate.now + ")\n")
+    // the heading and the provenance block are written by `BenchmarkReport`; `out` carries the BODY
+    val reportSlug = "pipeline-ablation"
+    val reportTitle = "Pipeline-stage ablation"
+    val reportExtras = Seq(
+      "timing" -> "best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source)",
+      "interner" -> "WARM — `Interner` and the literal memo carry every id from earlier rows of the same run",
+      "seed" -> "fixed per benchmark; the workloads are deterministic")
     emit("Time to evaluate each example through five increasingly-compiled paths (ms, best of N; modest")
     emit("inputs so the Set `eval` reference and supercompilation are feasible).  `eval(def)` = Set")
     emit("reference; `evalI(def)` = interned-trie interpreter; `evalI(SC)` = interpret the supercompiled")
@@ -477,7 +523,14 @@ class AblationStages extends FunSuite:
       row("temperature 1024", Union(Restriction(world, Literal(NOAA.interval(0, 128, 10))), Restriction(world, ss"VW")), Map.empty, PartialFunction.empty)
     }
 
-    val f = new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md")
-    val w = new java.io.FileWriter(f, true); try w.write(out.toString) finally w.close()
+    // REPLACE this section, never append one: five appenders x every run had grown docs/BENCHMARKS.md
+    // into a 3700-line tape of ~28 near-identical replays in which the CURRENT numbers were
+    // indistinguishable from numbers produced months earlier, by different code, on a different
+    // machine — and none of them said which machine.  `BenchmarkReport` writes the heading, the
+    // provenance block (`RunEnvironment`: cpu, ram, os, jvm + its actual flags, heap, scala, git
+    // commit + dirty flag, timestamp, `Tuning` toggles) and the body between stable markers; history
+    // lives in git, which is what git is for.
+    BenchmarkReport.write(new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md"),
+                          reportSlug, reportTitle, out.toString, reportExtras)
   }
 end AblationStages

@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==============================================================================================
- *  THE EFFORT ORACLE AND THE CALIBRATION TABLE — review.md finding 2.
+ *  THE EFFORT ORACLE AND THE CALIBRATION TABLE.
  *
  *  The complaint was precise: "the effort model has no 'actual steps' oracle, so tightness is not
  *  measurable", and four concrete attribution errors followed from that.  This suite is the answer:
@@ -25,7 +25,7 @@ import scala.language.implicitConversions
  *  is a test oracle.  The analysis under test (`SpatialCost.analyze`) never runs the program — the
  *  last test in this file pins that with a grounded closure that throws if executed.
  *
- *  COVERAGE, HONESTLY (review.md item 1).  ALL FOUR backends have counted runs — Reference (`eval`),
+ *  COVERAGE, HONESTLY.  ALL FOUR backends have counted runs — Reference (`eval`),
  *  Trie (`evalI`), Graph (`execT`) and Zipper (`execZ`) — and all four COMPONENTS are calibrated,
  *  `touch` included, because IntTrie.scala and IntTrieOps.scala are instrumented now.  There are NO
  *  STRUCTURAL EXCLUSIONS: the zipper's `evalI` fallback is priced and measured rather than dropped.
@@ -102,7 +102,7 @@ class SpatialEventsCheck extends FunSuite:
                                       "ZIPPER-ROUNDS")
 
   test("ORACLE COVERAGE: every (executable, component) is COUNTED or a DECLARED gap, and no gap is a hole") {
-    // review.md's fifth product requirement, and the reason it is a requirement: "an oracle-coverage
+    // the fifth product requirement, and the reason it is a requirement: "an oracle-coverage
     // assertion that every backend loop and allocation category is either counted or deliberately outside
     // the advertised unit ... today only the touch gap is asserted while the four gaps in
     // SpatialEvents.scala are prose, not assertions."  A paragraph cannot fail.  This does.
@@ -319,7 +319,7 @@ class SpatialEventsCheck extends FunSuite:
   }
 
   test("evalI's and the ITrie algebra's hooks are where they claim to be (exact hand-computed counts)") {
-    // These are the three sources review.md item 1 says were uncounted: evalI dispatches, ITrie /
+    // These are the three sources the review says were uncounted: evalI dispatches, ITrie /
     // IntTrieOps per-node descent, and trie-node allocation.
     val la = litN(8, "ta"); val lb = litN(8, "tb")
     evalI(la); evalI(lb)                                               // fill the iLiteral memo cache
@@ -336,7 +336,7 @@ class SpatialEventsCheck extends FunSuite:
            s"the 2(m+n) Patricia envelope is violated: ${u(EffortEvent.PatriciaVisit)} > 32 — ${u.show}")
     println(s"EVENTS: evalI union of two 8-path literals: ${u.show}")
 
-    // THE N-ARY OPERAND LOOPS, hand-computed exactly (review.md's first P0).  `ITrie.liveDistinct`
+    // THE N-ARY OPERAND LOOPS, hand-computed exactly (the first P0).  `ITrie.liveDistinct`
     // compares each operand against the DISTINCT ones buffered before it and its buffer starts at 4 slots,
     // so the counts below are arithmetic, not observations:
     //
@@ -509,7 +509,15 @@ class SpatialEventsCheck extends FunSuite:
     val partCold = SpatialCost.analyze(Space.Range(S"s0", 0, 3), Backends.trieCold)
     assert(identCold.cost.touch.bigO > BigO.const,
            s"a COLD full window still walks every node to compute t.size: ${identCold.show}")
-    assert(partCold.cost.touch.bigO.logs >= 1, s"the per-node key sort must appear: ${partCold.show}")
+    // THE PER-NODE KEY SORT IS NO LONGER INSIDE `touch`, AND THAT IS DELIBERATE.  `touch` is
+    // contractually `TrieNodeVisit + PatriciaVisit`; `IntTrie.ordered`'s `sortBy` emits neither, so a
+    // `heads·log(heads)` term inside `touch` charged work no counted run can confirm or refute — pure
+    // unmeasurable slack, and the dominant term in `range-part`'s interval width.  It is DECLARED
+    // rather than deleted: the report names the site and says why it is outside the counted vocabulary.
+    assertEquals(partCold.cost.touch.bigO.logs, 0,
+                 s"an UNCOUNTABLE sort must not sit inside `touch`: ${partCold.show}")
+    assert(partCold.assumptions.exists(_.contains("IntTrie.ordered")),
+           s"…and it must be DECLARED instead of dropped: ${partCold.assumptions.mkString(" | ")}")
     // the OLD model's claim, still true on a COLD object: the trie is NOT cheaper than the reference
     val refIdent = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.referenceCold)
     assert(refIdent.cost.bigO < identCold.cost.bigO,
@@ -528,7 +536,9 @@ class SpatialEventsCheck extends FunSuite:
                  s"a warm full window on a declared input reads a cached count: ${identWarm.show}")
     // the per-node key sort is NOT dropped by the cache state (see `TrieAlgebraCost.range`'s scaladoc)
     val partWarm = SpatialCost.analyze(Space.Range(S"s0", 0, 3), Backends.trieWarm)
-    assert(partWarm.cost.touch.bigO.logs >= 1, s"the per-node key sort must survive: ${partWarm.show}")
+    assert(partWarm.assumptions.exists(_.contains("IntTrie.ordered")),
+           s"the sort assumption is not dropped by the cache state either (see `TrieAlgebraCost.range`): " +
+           partWarm.assumptions.mkString(" | "))
     println(s"EVENTS: FIX 3 — trie Range(x,0,0) touch cold = ${identCold.cost.touch.show}, " +
             s"warm/declared = ${identWarm.cost.touch.show}, warm/freshly-built = ${fresh.cost.touch.show}; " +
             s"Range(x,0,3) touch = ${partCold.cost.touch.show}")
@@ -561,7 +571,7 @@ class SpatialEventsCheck extends FunSuite:
   }
 
   // ==============================================================================================
-  // 5. THE REGRESSION review.md ASKS FOR BY NAME
+  // 5. THE REGRESSION the review ASKS FOR BY NAME
   // ==============================================================================================
 
   test("IDENTITY REGRESSION: a bigger input must NOT increase modelled warm work for an identity op") {
@@ -692,7 +702,7 @@ class SpatialEventsCheck extends FunSuite:
    *  cornerstone's definitional term is not what runs: `Routine.optimized` applies the spatial hook and
    *  then the ordinary `Lower` rule list, and THAT body is what an executor is handed.  The decorated
    *  analysis is re-run on the optimized body so the prediction consumes per-node facts that address the
-   *  term being priced (review.md item 8). */
+   *  term being priced. */
   def optimizedForm(c: Case): (Routine, Map[Backend, SpatialCost.Report]) =
     val ann = SpatialAnnotations(
       spaces = c.spaces.view.mapValues(SpatialType.of).toMap,
@@ -708,7 +718,7 @@ class SpatialEventsCheck extends FunSuite:
        b -> SpatialCost.analyze(opt.body, env, Backends.of(b, ExecutionPhase.Warm),
                                 CostForm.Optimized)).toMap)
 
-  /** THE PRODUCT-REQUIREMENT GATE  (review.md item 7).
+  /** THE PRODUCT-REQUIREMENT GATE.
    *
    *  ==WHAT WAS HERE==
    *  Two maps of thresholds, `corpusGate` and `cornerstoneGate`, each "READ OFF THE MEASUREMENT this
@@ -743,7 +753,7 @@ class SpatialEventsCheck extends FunSuite:
           val errs = sub.map(_.slack)
           val widths = sub.map(r => (r.upper + 1.0) / (r.lower + 1.0))
           // THE LOWER ENDPOINT AGAINST THE TRUTH, sampled only where the execution DID something.
-          // review.md's second product requirement: "no zero lower endpoint when a nonempty execution
+          // the second product requirement: "no zero lower endpoint when a nonempty execution
           // must allocate or touch".  The counted run is the evidence that the work was mandatory — a
           // test oracle, never an input to a bound.
           val lowErrs = sub.filter(_.actual > 0L).map(r => (r.actual.toDouble + 1.0) / (r.lower + 1.0))
@@ -797,7 +807,7 @@ class SpatialEventsCheck extends FunSuite:
                   bad.take(8).map(b => s"${b.label}/${b.component} actual=${b.actual} in " +
                                        f"[${b.lower}%.0f, ${b.upper}%.0f]").mkString("; ") +
                   (if bad.length > 8 then s" ... and ${bad.length - 8} more" else ""))
-    // THE WORKLOAD CLASS, DECLARED AND PRINTED even when this class is not ratio-gated — review.md asks
+    // THE WORKLOAD CLASS, DECLARED AND PRINTED even when this class is not ratio-gated — the review asks
     // for a declared maximum ratio "per component AND WORKLOAD CLASS", so a class that opts out has to say
     // so in the table rather than by the absence of a gate call.
     ProductRequirement.workloadOf(scope) match
@@ -824,12 +834,7 @@ class SpatialEventsCheck extends FunSuite:
            (if fs.length > 30 then s"\n  ... and ${fs.length - 30} more" else ""))
 
   test("CALIBRATION: predicted intervals vs counted events over the fuzzer corpus") {
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assume(f.exists, "corpus not found")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
-    }.take(sys.props.get("cal.progs").map(_.toInt).getOrElse(200))
+    val recs = Corpus.load(sys.props.get("cal.progs").map(_.toInt).getOrElse(200))
     val A = SpaceFuzzer.alphabet
     val rng = new java.util.Random(20260807)
     def randPath() = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))
@@ -896,7 +901,7 @@ class SpatialEventsCheck extends FunSuite:
 
   /** ESTIMATES THAT ARE STILL INFINITE ON A CLOSED, TERMINATING, NON-GROUNDED CORNERSTONE.
    *
-   *  review.md item 5: "`infinity` and zero-to-infinity intervals on executable closed programs are
+   *  the requirement: "`infinity` and zero-to-infinity intervals on executable closed programs are
    *  failed results ... Make 'zero infinite estimates on closed, terminating, non-grounded programs' a
    *  test invariant rather than maintaining an allow-list of expected failures."
    *
@@ -914,7 +919,7 @@ class SpatialEventsCheck extends FunSuite:
   /** PREDICTIONS THAT ARE STILL SYMBOLIC ON A CLOSED CORNERSTONE, and therefore have no number at all.
    *
    *  ==WHAT CHANGED==
-   *  These rows used to be SKIPPED: no number, so nothing to compare, so no gate row — and, as review.md
+   *  These rows used to be SKIPPED: no number, so nothing to compare, so no gate row — and, as the review
    *  points out, no place in the advertised containment statistic either.  "For a closed benchmark, a
    *  remaining symbolic cardinality must be a hard failure, not a skipped numeric point excluded from the
    *  advertised '100% containment'."  So each one now emits a FAILING `numeric` requirement row per
@@ -978,7 +983,7 @@ class SpatialEventsCheck extends FunSuite:
     var sawAstronomical = Vector.empty[String]
     var sawSymbolic = Set.empty[String]
     var folded = Vector.empty[String]
-    // THE COVERAGE ACCOUNTING review.md asks for: how many (cornerstone, backend, component) points
+    // THE COVERAGE ACCOUNTING the review asks for: how many (cornerstone, backend, component) points
     // COULD have produced a number, and which ones did not.  Without it "100% containment" is a rate over
     // an unstated denominator, and a prediction with no number silently improves it.
     var possible = 0
@@ -1061,7 +1066,7 @@ class SpatialEventsCheck extends FunSuite:
     if sawInfinite != infiniteEstimates.keySet then
       hard :+= s"the set of cornerstones with an INFINITE prediction on the OPTIMIZED form changed; " +
                s"declared ${infiniteEstimates.keySet.toVector.sorted}, observed ${sawInfinite.toVector.sorted}"
-    // AN ASTRONOMICAL BOUND FAILS EXACTLY AS AN INFINITE ONE DOES (review.md)
+    // AN ASTRONOMICAL BOUND FAILS EXACTLY AS AN INFINITE ONE DOES
     if sawAstronomical.nonEmpty then
       hard :+= s"${sawAstronomical.length} predicted endpoint(s) at or above " +
                s"${GateRow.fmt(ProductRequirement.Astronomical)} on a closed, terminating, non-grounded " +

@@ -5,7 +5,7 @@ import scala.collection.mutable
 
 /** BOUNDED RECURSION — interprocedural routine SUMMARIES, a DECREASING path-length MEASURE, an
  *  explicit CALL-DEPTH BOUND derived from that measure plus a maximum input length, and
- *  RESIDUALISATION of the traversal into exactly that many specialised levels.  This is review.md
+ *  RESIDUALISATION of the traversal into exactly that many specialised levels.  This is the review
  *  finding 2: "if the maximum path length is four and a recursive routine consumes one item per
  *  call, eliminate recursion and specialize four levels".
  *
@@ -74,6 +74,11 @@ import scala.collection.mutable
  *  ≤ L+1 steps).  Outside the precondition the residual may differ, which is exactly why the
  *  precondition is part of the artifact.  This has been checked differentially (see
  *  `SpatialRecursionCheck`), not proved. */
+// obligation: terminating/bounded_recursion_residual.smt2 (O11a: the measure makes depth L+1
+// unreachable; O11c: the cut is sound given summary soundness and γ(⊥) = ∅).  The abstract half —
+// that a re-checked post-fixpoint really is one — is proofs/spatial/lat_postfixpoint.smt2 (O11b);
+// the `#sr#` capture-avoidance below is O11d, a PROPERTY carried by SpatialRecursionCheck.
+// terminating/REGISTRY.tsv is the index.
 object SpatialRecursion:
   import Lower.{LenBounds, SizeBounds}
 
@@ -619,7 +624,7 @@ object SpatialRecursion:
   // ================================================================================================
 
   /** The CONDITIONAL artifact.  `precondition` is the input type the bound depended on; without it
-   *  the residual is not equivalent to the original (review.md 5), so it travels with it and
+   *  the residual is not equivalent to the original, so it travels with it and
    *  [[applicableTo]] decides an actual argument tuple against it. */
   final case class BoundedRecursion(routine: RoutinePtr,
                                     precondition: Map[SpaceMention, SpatialType],

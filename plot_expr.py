@@ -1,7 +1,11 @@
 import numpy as np, matplotlib
 matplotlib.use("Agg"); import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
-d = np.genfromtxt("/tmp/expressivity.csv", delimiter=",", names=True)
+import os
+# THE ARTIFACT LIVES AT THE REPO ROOT, not /tmp: it is committed, and reading it from /tmp meant the
+# plot could silently be of a DIFFERENT run than the committed data.  `$ZIPPY_ROOT` overrides.
+ROOT = os.environ.get("ZIPPY_ROOT") or os.path.dirname(os.path.abspath(__file__))
+d = np.genfromtxt(os.path.join(ROOT, "expressivity.csv"), delimiter=",", names=True, comments="#")
 uo=d["uniqueOut"]; ent=d["entropy"]; nE=d["nEmpty"]; nId=d["nIdentity"]; sx=d["sensX"]; sp=d["sensP"]; nodes=d["nodes"]; sz=d["avgSize"]
 N=len(uo)
 fig,ax=plt.subplots(2,3,figsize=(18,10))
@@ -61,5 +65,5 @@ txt=("SUMMARY (N=%d programs, 100 inputs each)\n\n"
         100*np.mean(uo<=5),100*np.mean((uo>=6)&(uo<=50)),100*np.mean((uo>=51)&(uo<=99)),100*np.mean(uo==100),
         dependsX,dependsP,both,neither,anyId,someEmpty,sz.mean())
 g.text(0.0,1.0,txt,va="top",ha="left",fontsize=11,family="monospace")
-fig.tight_layout(rect=[0,0,1,0.96]); fig.savefig("/tmp/expressivity.png",dpi=120,bbox_inches="tight")
-print("wrote /tmp/expressivity.png")
+fig.tight_layout(rect=[0,0,1,0.96]); fig.savefig(os.path.join(ROOT, "expressivity.png"),dpi=120,bbox_inches="tight")
+print("wrote expressivity.png")

@@ -204,6 +204,9 @@ object SpaceFuzzer:
     Pair(randTrie(8, 3), randTrie(8, 3), (a, b) => Loc.Union(Set(a, b))) -> 2,
     Pair(randTrie(10, 3), randTrie(5, 2), (a, b) => Loc.Subtraction(a, b)) -> 1,
     Pair(randRepeat, randTrie(6, 2), (a, b) => Loc.Compose(a, b)) -> 1,
+    // the ARGUMENT side of the same gap: `Loc.Raffination` was written and never drawn.  The unaccepted
+    // operand is length-1 paths, so it prunes real branches instead of being an identity.
+    Pair(randTrie(10, 3), randTrie(4, 1), (a, b) => Loc.Raffination(a, b)) -> 1,
   )).flatMap(identity)
   def argDist: Dist[SpaceValue] = argLoc.map(_.instantiate()).filter(sv => sv.paths.nonEmpty && sv.paths.size <= 28)
 
@@ -241,6 +244,35 @@ object SpaceFuzzer:
     private def somePrefixLit(using rng: Random): Space =                       // 1-item prefixes drawn from the argument's heads
       val its = firstItems.filter(_ => rng.nextBoolean()); val use = if its.isEmpty then Vector(pick(firstItems)) else its
       Space.Literal(SpaceValue(use.map(it => PathValue(List(it))).toSet))
+
+    /** RAFFINATION'S SUBTRAHEND must remove SOMETHING without removing EVERYTHING.  `x \| y` keeps the
+     *  `x`-paths that do NOT extend a `y`-prefix, so an independently drawn `y` removes nothing (the
+     *  node is an identity) while `somePrefixLit`'s "all of the argument's heads" draw removes
+     *  everything (the node is ∅).  Both extremes are degenerate — the operator would appear in the
+     *  corpus and never be OBSERVED.  This keeps a PROPER non-empty subset of the heads whenever there
+     *  is more than one, so the node is a real partition of `x`. */
+    private def someHeadLit(using rng: Random): Space =
+      val its = firstItems.filter(_ => rng.nextBoolean())
+      val use =
+        if its.isEmpty then Vector(pick(firstItems))
+        else if its.length == firstItems.length && its.length > 1 then its.tail
+        else its
+      Space.Literal(SpaceValue(use.map(it => PathValue(List(it))).toSet))
+
+    /** TAILS-INTERSECTION'S SOURCE.  `TailsIntersection(s)` is the MEET of `s`'s per-head tail sets, so
+     *  on an arbitrary source over a 4-letter alphabet it is ∅ almost always.  Draw a source with a
+     *  SHARED tail structure instead: `heads · body` gives every head the identical tail set, so the
+     *  meet is exactly `body`, and a union of two such factors meets to the intersection of their
+     *  bodies.  One draw in four is still an arbitrary source, so the empty case stays in the corpus.
+     *
+     *  `Composition` is multiplicative, but the left factor here is at most `|firstItems| ≤ 4`
+     *  one-item paths and `SpaceFuzzer.example`'s `maxResult` filter still applies. */
+    private def sharedTailSrc(d: Int, scope: Scope)(using rng: Random): Space =
+      if rng.nextInt(4) == 0 then operand(d - 1, scope)
+      else
+        val shared = Space.Composition(someHeadLit, operand(d - 1, scope))
+        if rng.nextBoolean() then shared
+        else Space.Union(shared, Space.Composition(someHeadLit, operand(d - 1, scope)))
 
     // a leaf MAY reference any enclosing iteration binder — `Singleton(Path.Deref(v))` is a VARIABLE
     // path (`sP"v"`), a core building block; `Mention(t)` is the bound tail-set; `v ++ const` mixes them.
@@ -283,9 +315,14 @@ object SpaceFuzzer:
 
     private def rec(d: Int, scope: Scope)(using rng: Random): Space =
       if d <= 0 then built(leaf(scope), scope)
+      // THE TABLE IS THE COVERAGE CLAIM.  `raff` mirrors `restr`'s weight (they are the complementary
+      // halves of one partition, and `RaffinationPush`/`RaffRestrictAlgebra` are only exercised through
+      // it) and `tailsi` mirrors `tails`.  `ProgramExpressivity`'s corpus census asserts that every key
+      // here actually survives into `corpus_1000.ser`, so a constructor cannot silently drop out again.
       else built(Categorical.ratios(Seq(
-        "leaf" -> 2, "union" -> 2, "inter" -> 2, "sub" -> 2, "wrap" -> 2, "unwrap" -> 2, "comp" -> 1,
-        "restr" -> 2, "iter" -> 3, "tails" -> 1, "range" -> 1, "reorder" -> 1)).sample match
+        "leaf" -> 2, "union" -> 2, "inter" -> 2, "sub" -> 2, "raff" -> 2, "wrap" -> 2, "unwrap" -> 2,
+        "comp" -> 1, "restr" -> 2, "iter" -> 3, "tails" -> 1, "tailsi" -> 1, "range" -> 1,
+        "reorder" -> 1)).sample match
         case "leaf"  => leaf(scope)
         case "union" => Space.Union(operand(d - 1, scope), operand(d - 1, scope))
         case "inter" => Space.Intersection(operand(d - 1, scope), side(d, scope, Space.Literal(someArg)))        // overlaps the argument
@@ -294,8 +331,16 @@ object SpaceFuzzer:
         case "unwrap"=> Space.Unwrap(operand(d - 1, scope), constP(PathValue(List(pick(firstItems)))))  // strip a real head
         case "comp"  => Space.Composition(operand(d - 1, scope), compRhs(d, scope))
         case "restr" => Space.Restriction(operand(d - 1, scope), side(d, scope, somePrefixLit))
+        case "raff"  => Space.Raffination(operand(d - 1, scope), side(d, scope, someHeadLit))
         case "tails" => Space.TailsUnion(operand(d - 1, scope))
-        case "range" => val lo = rng.nextInt(3); Space.Range(operand(d - 1, scope), lo, lo + 1 + rng.nextInt(3))
+        case "tailsi"=> Space.TailsIntersection(sharedTailSrc(d, scope))
+        // ONE DRAW IN SIX IS THE IDENTITY WINDOW (`hi == 0`, so `RangeBounds.normalize` returns the whole
+        // space and `sliceRange`/`ITrie.range` return their input).  The old draw could never produce it
+        // — `hi` was always ≥ 1 — so the corpus contained zero full-window ranges and the identity arm of
+        // every Range cost model went unexercised.
+        case "range" =>
+          if rng.nextInt(6) == 0 then Space.Range(operand(d - 1, scope), rng.nextInt(2), 0)
+          else { val lo = rng.nextInt(3); Space.Range(operand(d - 1, scope), lo, lo + 1 + rng.nextInt(3)) }
         case "reorder" => reorder(d, scope)
         case _ =>                                                                              // iteration: binds a fresh var, visible in the body
           val hpr = PathRef("h" + rng.nextInt(1000000)).known(1); val tv = SpaceMention("t" + rng.nextInt(1000000))

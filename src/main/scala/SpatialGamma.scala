@@ -3,7 +3,7 @@ package morkl
 /** THE SEMANTIC LAYER OF THE SPATIAL DOMAIN — γ, α, the order that IS γ-containment, and the lattice
  *  operations of the HISTOGRAM component.
  *
- *  ==WHO OWNS WHAT (review.md 6)==
+ *  ==WHO OWNS WHAT==
  *  This file is the OWNER of the length-histogram component's laws — [[gammaSpace]], [[leqSpace]],
  *  [[lubSpace]], [[meetSpace]] — because `SpaceType`'s own file (SpatialTypes.scala) carries the
  *  count TRANSFERS and its normalisation, and there was nowhere else the four semantic operations
@@ -14,9 +14,9 @@ package morkl
  *
  *  The operator table, the finite universes and the grounded fixtures now live in
  *  [[SpatialGamma.TestOnly]] and are re-exported for source compatibility; nothing in the production
- *  analysis path may read them (review.md 6 — they were only ever consumed by tests).
+ *  analysis path may read them (the review — they were only ever consumed by tests).
  *
- *  review.md 6 asks for the law family the corpus is missing:
+ *  The review asks for the law family the corpus is missing:
  *
  *      eval(s, concreteEnv) ∈ γ(infer(s, abstractEnv))          -- per-operator simulation
  *      γ(a op# b) ⊇ γ(a) op γ(b)                                 -- local soundness of a transfer
@@ -141,7 +141,7 @@ object SpatialGamma:
   /** γ for the shape, WEAK (may-only) reading. */
   def gammaShapeMay(sh: Shape, v: SpaceValue): Boolean = gammaShape(weakenAll(sh), v)
 
-  /** γ for the reduced product — the predicate review.md 6 asks for.  The product's own γ
+  /** γ for the reduced product — the predicate the review asks for.  The product's own γ
    *  ([[SpatialType.accepts]]) additionally checks the two REDUCED PROJECTIONS, so it is the
    *  stronger predicate and the one the gates use; this is the componentwise conjunction the law
    *  statements in this file are written against. */
@@ -250,7 +250,7 @@ object SpatialGamma:
   def leq(a: SpatialType, b: SpatialType): Boolean = SpatialType.leq(a, b)
 
   // ----------------------------------------------------------------------------------------------
-  // THE CANONICAL FORM OF A HISTOGRAM  (review.md 4, second half)
+  // THE CANONICAL FORM OF A HISTOGRAM
   // ----------------------------------------------------------------------------------------------
   /** THE γ-PRESERVING CANONICAL FORM.  `γ(canonSpace(t)) = γ(t)`, EXACTLY — not ⊇, not ⊆.  It is not
    *  a widening and not a reduction; it rewrites the REPRESENTATION so that two types denoting the
@@ -260,7 +260,7 @@ object SpatialGamma:
    *    1. A spill bucket whose window admits exactly ONE untracked length `w` is exactly the tracked
    *       class `w ↦ rest`: γ's clause "the total at untracked lengths lies in `rest`, and they all
    *       lie in the window" degenerates to "the count at `w` lies in `rest`".  This is the rewrite
-   *       review.md 4 asks for — it ALIGNS a spilled partition with a tracked one — and the exact
+   *       The review asks for — it ALIGNS a spilled partition with a tracked one — and the exact
    *       count-vector measurement in `SpatialLawCheck` attributes 28 of the 29 non-vacuous false
    *       negatives to the pair of partitions it repairs.  (If the window admits NO untracked length
    *       the bucket is vacuous and disappears — or, when something is forced into it, the type is
@@ -320,7 +320,7 @@ object SpatialGamma:
   /** WHY [[leqSpace]] said no — the bit positions of [[leqSpaceMask]].  There is no second
    *  implementation of the order here: `leqSpace` IS `leqSpaceMask == 0`, and the mask exists so the
    *  incompleteness measurement in `SpatialLawCheck` can attribute a false negative to a channel
-   *  instead of guessing.  (review.md 4: "find the actual cause with a measurement".) */
+   *  instead of guessing.  (the requirement: "find the actual cause with a measurement".) */
   object LeqSpaceWhy:
     val PointwiseHi = 1   // some length where `a` permits more paths than `b` does
     val PointwiseLo = 2   // some length where `b` FORCES more paths than `a` guarantees
@@ -364,7 +364,7 @@ object SpatialGamma:
       val untrackedByB: Long => Boolean = l => !b.byLen.contains(l)
       // ---- (c) SUPPORT.  Every length `a` may put a path at, `b` must permit — by TRACKING it or by
       // covering it with its own spill window.  Requiring `b`'s WINDOW to contain a's was the
-      // review.md 4 defect: with `a`'s spill window aligned onto classes `b` tracks, containment can
+      // The review defect: with `a`'s spill window aligned onto classes `b` tracks, containment can
       // hold with `b` carrying no spill bucket at all.  `canonSpace` has already folded a
       // single-length window into a tracked class, so what remains here is the multi-length case.
       val windowOk =
@@ -404,7 +404,7 @@ object SpatialGamma:
   def leqShape(a: Shape, b: Shape): Boolean = Shape.leqStrong(a, b)
 
   // ==============================================================================================
-  // 5. TEST SUPPORT — NOT part of the analysis (review.md 6)
+  // 5. TEST SUPPORT — NOT part of the analysis
   // ==============================================================================================
 
   /** THE FINITE UNIVERSES, THE OPERATOR TABLE, the grounded fixtures and the callee routine.  Only

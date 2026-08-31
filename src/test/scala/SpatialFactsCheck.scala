@@ -117,7 +117,7 @@ class SpatialFactsCheck extends FunSuite:
     assertEquals(sound, Ivl(0, 2), s"the spill may contribute only its upper endpoint here: ${sound.show}")
     assert(inIvl(sound, 0L))
 
-    // the unsound variant whispers.md warns about, written out so the trap is a regression
+    // the unsound variant the design note warns about, written out so the trap is a regression
     def unsound(st: SpaceType, d: Int): Ivl =
       var out = Ivl.zero
       for (len, c) <- st.byLen if len >= d do out = Ivl(Ivl.add(out.lo, c.lo), Ivl.add(out.hi, c.hi))
@@ -363,11 +363,30 @@ class SpatialFactsCheck extends FunSuite:
       val deepest = if v.paths.isEmpty then 0 else v.paths.map(_.items.length).max
       if deepest <= Shape.MaxDepth then assertEquals(SpatialFacts.exactValue(t), Some(v), s"exactValue for ${v.pretty}")
       else assertEquals(SpatialFacts.exactValue(t), None, s"exactValue must not over-claim for ${v.pretty}")
-    // the witness: {a·a·a·a·a} and {a·a·a·a·b} are indistinguishable to the capped trie, and the
-    // histogram cannot tell them apart either, so no query on this carrier may pin either down
+    // THE WITNESS MOVED, AND THAT IS THE POINT OF THE UNTRACKED-HEAD CERTIFICATE.  {a·a·a·a·a} and
+    // {a·a·a·a·b} used to be indistinguishable to the capped trie: `capDepth` collapsed the level-4
+    // node to an untracked COUNT with a ⊤ tail and threw the head NAMES away, so γ admitted both.
+    // Channel (e) keeps the names through the collapse — "the untracked heads are within {a}" — so
+    // the second value is now correctly REJECTED, and `exactValue` may pin the first down.
     val five = SpatialType.of(sv(p("a", "a", "a", "a", "a")))
-    assert(SpatialTyping.gammaMember(sv(p("a", "a", "a", "a", "b")), five),
-           "the capped carrier really admits a second value here")
+    assert(!SpatialTyping.gammaMember(sv(p("a", "a", "a", "a", "b")), five),
+           "the depth spill keeps the head NAMES, so a different deep head is not admitted")
+    assert(SpatialTyping.gammaMember(sv(p("a", "a", "a", "a", "a")), five),
+           "and the value itself is of course still admitted")
+    // …and the certificate carries a SET, not one name: a two-path value past the cap keeps both, and
+    // a third head is still refused.
+    val two = SpatialType.of(sv(p("a", "a", "a", "a", "a"), p("a", "a", "a", "a", "b")))
+    assert(SpatialTyping.gammaMember(sv(p("a", "a", "a", "a", "a"), p("a", "a", "a", "a", "b")), two))
+    assert(!SpatialTyping.gammaMember(sv(p("a", "a", "a", "a", "a"), p("a", "a", "a", "a", "c")), two),
+           s"a head the spill did not name must stay out: ${two.show}")
+    // WHERE THE RESIDUAL IMPRECISION NOW LIVES.  It is no longer the carrier: the length histogram
+    // forbids a path longer than the collapsed level and channel (e) forbids a different head at it,
+    // so γ(five) really is the singleton.  It is the QUERY — `exactValue` reads the SHAPE, whose
+    // level-MaxDepth node is an untracked COUNT with a ⊤ tail, and refuses to pin anything below the
+    // cap rather than cross-reading the histogram.  Sound, incomplete, and stated as such: the loop
+    // above holds it to `None` for every value deeper than the cap.
+    assert(!SpatialTyping.gammaMember(sv(p("a", "a", "a", "a", "a", "a")), five),
+           "the histogram forbids a path longer than the collapsed level")
     assertEquals(SpatialFacts.exactValue(five), None)
     println(s"[deep]  ${deepUniverse.size} spaces of length ≤ 6, $checks exact degrees, " +
             s"$exactPastCap past the depth-$MaxDepthShown cap of which $rawTopPastCap had a ⊤ raw shape upper")
@@ -475,7 +494,7 @@ class SpatialFactsCheck extends FunSuite:
                s"$label claimed $k extractions but ${v.pretty}")
   }
 
-  test("Fact.PrefixAbsent is emittable — review.md 6's dead promise, discharged by a query") {
+  test("Fact.PrefixAbsent is emittable — the dead promise, discharged by a query") {
     val t = SpatialType.of(sv(p("a", "x"), p("a", "y")))
     assertEquals(SpatialFacts.prefixAbsent(t, List("b")), Some(Fact.PrefixAbsent(List("b"))))
     assertEquals(SpatialFacts.prefixAbsent(t, List("a", "z")), Some(Fact.PrefixAbsent(List("a", "z"))))
@@ -799,7 +818,7 @@ class SpatialFactsCheck extends FunSuite:
   // ================================================================================================
 
   /** the deterministic substitution generator: TEST support, deliberately not in production
-   *  (review.md finding 6 asks for exactly that separation) */
+   *  (the review asks for exactly that separation) */
   object PatternGenerator:
     private def product[A](axes: Vector[(String, Vector[A])]): Iterator[Map[String, A]] =
       def go(i: Int, acc: Map[String, A]): Iterator[Map[String, A]] =

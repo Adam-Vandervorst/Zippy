@@ -311,6 +311,36 @@ class GraphExecT extends FunSuite:
     assert(residual.keySet.map(_.s) == Set("f", "g"), s"both must stay residual: ${residual.keys.map(_.s)}")
   }
 
+  /** obligation: terminating/unroll_vs_kleene.smt2 (O10a) and fixpoint_is_lfp.smt2 (O1), as
+   *  EXECUTABLE statements.
+   *
+   *  `eval`'s `Fixpoint` runs TWO sequences: the iterate `cur(n+1) = body[rec := cur(n)]` and the
+   *  ACCUMULATOR `acc(n+1) = acc(n) ∪ cur(n+1)`, seeded with `init`.  The two coincide only when the
+   *  body is monotone AND inflationary (`I ⊆ F(I)`), which the .smt2 file proves and refutes with two
+   *  counterexamples.  This test pins the executable half of the second one, so that a future
+   *  "simplification" of the loop to `return cur` — which looks obviously right, and is what every
+   *  textbook Kleene iteration does — cannot land silently.  All four executors must agree. */
+  test("O10a: the fixpoint ACCUMULATOR is load-bearing — a monotone, non-inflationary body") {
+    // H(X) = {b}, ignoring X: monotone (constant functions are), NOT inflationary over I = {a}.
+    val prog = Fixpoint(Literal(SpaceValue("a")), SpaceMention("r"), Literal(SpaceValue("b")))
+    // cur: {a} -> {b} -> {b} (stationary).  acc: {a} -> {a,b}.  The LAST ITERATE is {b}; the answer
+    // is the accumulated {a,b}, which is the least post-fixpoint ABOVE the seed — the thing `Fixpoint`
+    // is specified to compute.
+    val expected = SpaceValue("a", "b")
+    assertEquals(eval(prog), expected, "eval must return the ACCUMULATOR, not the last iterate")
+    assertEquals(evalI(prog).toSpaceValue, expected)
+    assertEquals(execZ(prog).toSpaceValue, expected)
+    assertEquals(runGraphT(optimize(transpile(R"main"() := prog))).toSpaceValue, expected)
+    assertNotEquals(expected, SpaceValue("b"), "the last iterate is NOT the answer")
+    // …and the binder SURVIVES the agnostic pipeline's control unrolling (plan item 1): `unrollControl`
+    // no longer expands a `Fixpoint` into `init ∪ F(init) ∪ F(F(init))`, so the certificate it feeds
+    // the provers states "the fixpoints agree" and not "the 2-unrollings agree".
+    given PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
+    val unrolled = AgnosticPipeline.unrollControl(prog, 2)
+    assertEquals(unrolled, prog, s"unrollControl must leave a Fixpoint alone: ${unrolled.show}")
+    assertEquals(eval(unrolled), expected)
+  }
+
   test("lower: n-queens place(6) inlines all acyclic calls -> Call-free, execT == eval") {
     val b = NQueens.board(6)
     val (top, residual) = lowerCalls(R"main"() := b.program, b.defs)

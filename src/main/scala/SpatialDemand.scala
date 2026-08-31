@@ -4,7 +4,7 @@ import scala.collection.immutable.IntMap
 import scala.collection.mutable.ArrayBuffer
 
 /** ==============================================================================================
- *  ZIPPER DEMAND ANALYSIS  (review.md item 3, plus the zipper half of item 6)
+ *  ZIPPER DEMAND ANALYSIS
  *
  *  WHY THIS FILE EXISTS.  `ZipperCost` (SpatialCost.scala) prices each subexpression of a fused
  *  zipper term independently and the traversal ADDS those prices.  That is the wrong semantics for a
@@ -28,7 +28,7 @@ import scala.collection.mutable.ArrayBuffer
  *  time.  At each depth it holds a frontier of (cursor shape, count) pairs; a step forces one layer
  *  stack, charges the child-map work of every layer in it, and produces the next frontier.  Demand
  *  STOPS at a shape that has collapsed to a `Lit` — that is the accept-by-pointer case, and it is why
- *  the four counterexamples in review.md item 3 come out right:
+ *  the four counterexamples in the review come out right:
  *
  *   - a `Union` layer survives only on keys PRESENT IN BOTH operands (`IntMap.unionWith` hands an
  *     unshared key's value through unchanged), so two deep tries with disjoint root branches force
@@ -41,7 +41,7 @@ import scala.collection.mutable.ArrayBuffer
  *     is grafted by pointer; a left epsilon forces one node and accepts all of `b`.
  *
  *  NO EVALUATION HAPPENS HERE.  The analysis consumes [[Layers]] (a per-depth structural profile) and
- *  [[Pairing]] (the relational sibling fact review.md item 2 asks for) and returns counts.  It never
+ *  [[Pairing]] (the relational sibling fact the review asks for) and returns counts.  It never
  *  constructs a `SpaceZipper`, never calls `children`/`terminal`/`descend`, and never calls
  *  `eval`/`evalI`/`execZ`.  `Layers.ofTrie`/`Pairing.ofTries` are FACT EXTRACTORS for the calibration
  *  harness — the same role `Meas.exact` plays for sizes — and the analysis proper is a combinator over
@@ -71,7 +71,7 @@ import scala.collection.mutable.ArrayBuffer
  *  outgrow the shape budget — the run is marked `truncated` and STOPS CLAIMING TO BE A BOUND, rather
  *  than returning a number that is not one.
  *
- *  PART 1 of this file is the ORACLE (review.md item 6, zipper half): the per-child-map-ENTRY
+ *  PART 1 of this file is the ORACLE: the per-child-map-ENTRY
  *  instrumentation the existing `EffortEvent` vocabulary is missing, in its own vocabulary and its own
  *  sink so that the four calibrated `EffortComponent`s and their gates are untouched.  PART 2 is the
  *  analysis.  They meet in `SpatialDemandCheck`, which predicts with PART 2 and measures with PART 1. */
@@ -114,7 +114,7 @@ enum ZipperDemandComponent:
 
 /** One counted unit of ZIPPER child-map work.  Each case names the exact source site that emits it.
  *
- *  These are the counts review.md item 6 says the oracle misses: `Lit.children`,
+ *  These are the counts the review says the oracle misses: `Lit.children`,
  *  `Union/Intersection/Subtraction.children` run `IntMap.transform`/`unionWith`/`intersectionWith`
  *  while ONE `ZipperCursorRead` is counted for the WHOLE map operation, and `materialize` iterates and
  *  updates child maps and allocates virtual nodes with nothing counted at all. */
@@ -278,20 +278,30 @@ object Layers:
     Layers(nodes.toVector, terms.toVector, ar.toVector)
 
 /** THE RELATIONAL SIBLING FACT for one binary node: how many prefixes at each depth carry a node in
- *  BOTH operands.  This is review.md item 2's "relational frontier" at the zipper level, and it is
+ *  BOTH operands.  This is the "relational frontier" at the zipper level, and it is
  *  what turns `min(N(a), N(b))` into the actual control parameter: a `Union`/`Subtraction` layer only
  *  survives on a PAIRED key, an `Intersection`/`Restriction` only descends into one.
  *
  *  `pairedAt = None` falls back to the `min(K_d(a), K_d(b))` ceiling, which is sound and is all a
  *  unary size/shape domain can give.  `same` is the pointer-identity fact `SpaceZipper.sameSpace`
  *  tests: the smart constructors then return an operand (or `empty`) with no traversal at all. */
-final case class Pairing(pairedAt: Option[Vector[Long]], same: Boolean = false, exact: Boolean = true):
+final case class Pairing(pairedAt: Option[Vector[Long]], same: Boolean = false, exact: Boolean = true,
+                        /** HOW MANY OF THE PAIRED DEPTH-`d` PREFIXES CARRY THE SAME OBJECT ON BOTH
+                         *  SIDES.  `same` is this fact at the root, and the smart constructors act on
+                         *  it there (`SpaceZipper.sameSpace`); BELOW the root an interned trie makes
+                         *  the same thing happen at a prefix, and the layer collapses to a `Lit` with
+                         *  no node materialised at all.  The analysis does not model a per-prefix
+                         *  collapse — its frontier is a COUNT, not a set of objects — so where this
+                         *  is non-zero its answer is an upper bound and it says so. */
+                        identicalAt: Vector[Long] = Vector.empty):
   /** the paired frontier at relative depth `d`, never above either side's own arity */
   def paired(d: Int, arityA: Long, arityB: Long): Long =
     val ceiling = math.min(arityA, arityB)
     pairedAt match
       case Some(v) => math.min(if d >= 0 && d < v.length then v(d) else 0L, ceiling)
       case None => ceiling
+  /** paired depth-`d` prefixes whose two subtries are the SAME OBJECT */
+  def identical(d: Int): Long = if d >= 0 && d < identicalAt.length then identicalAt(d) else 0L
 
 object Pairing:
   /** no relational knowledge: the `min` ceiling */
@@ -308,13 +318,18 @@ object Pairing:
     // traversal at all.  Recording it here is what lets the analysis stay EXACT on `x ∪ x` / `x ∖ x`.
     if a eq b then return Pairing(None, same = true, exact = true)
     val out = ArrayBuffer.empty[Long]
+    val ident = ArrayBuffer.empty[Long]
     var level: Vector[(ITrie, ITrie)] = Vector((a, b))
     while level.nonEmpty do
       out += level.size.toLong
+      // POINTER IDENTITY BELOW THE ROOT is the same fact `sameSpace` reads at the root, and interning
+      // makes it common: two equal leaf subtries under different prefixes ARE one object, so the
+      // operator collapses there and materialises nothing.  Recorded per depth.
+      ident += level.count((x, y) => x eq y).toLong
       level = level.flatMap { (x, y) =>
         x.children.iterator.flatMap((k, xc) => y.children.get(k).map(yc => (xc, yc))).toVector
       }
-    Pairing(Some(out.toVector))
+    Pairing(Some(out.toVector), identicalAt = ident.toVector)
 
 /** THE ZIPPER IR the analysis walks — one case per `SpaceZipper` constructor `transpileZ` can build.
  *
@@ -440,6 +455,41 @@ object SpatialDemand:
     case CDelegate(inner) => 1L + layerCount(inner)
     case CBoth(a, b) => math.max(layerCount(a), layerCount(b))
 
+  /** IS THIS CURSOR'S NODE SET THE PREFIX SET OF THE VALUE IT DENOTES?
+   *
+   *  THE ONE PRECONDITION [[Pairing]] NEEDS AND DID NOT STATE.  `Pairing.pairedAt(d)` is a fact about
+   *  the two operands' VALUES — how many depth-`d` prefixes carry a path in both — and
+   *  `SpatialCost.demandOf` reads it off a `SpatialFrontier` summary of the two operand TYPES.  The
+   *  demand walk then spends it as the number of paired keys in the two operands' CURSOR child maps.
+   *  Those two sets agree only where a cursor holds a node exactly at the prefixes its value has:
+   *
+   *   - `Lit` is a real trie node, so it agrees by construction;
+   *   - `Union.children` is `keys(a) ∪ keys(b)` and the union's prefixes are `prefixes(a) ∪ prefixes(b)`,
+   *     so a union of faithful operands is faithful;
+   *   - `TailsUnion`'s `merged` is a `Union` chain over the source's child cursors — same argument;
+   *   - EVERY OTHER cursor can hold a node at a prefix that carries no path.  `Intersection.children`
+   *     and `RestrictionNode.children` merge KEYS (`{a.b} ∩ {a.c}` denotes `∅` but its cursor has a
+   *     child at `a`), `Subtraction.children` keeps every left key, `Composition.children` maps every
+   *     left key even when the right operand is empty, and `Prefix` builds its whole spine over an empty
+   *     source.  `materialize` prunes those to nothing only on the way OUT — after walking them — which
+   *     is exactly the work the price has to contain.
+   *
+   *  Read in the wrong place, `pairedAt` therefore UNDER-counts a virtual operand's paired keys, and the
+   *  arms that keep neither operand's unpaired keys (`CIn`, `CRes`) then drop the whole frontier below.
+   *  `relPaired` takes this as its `faith` argument and falls back to the `min(arity, arity)` ceiling —
+   *  which is a statement about the cursors and is sound for any operand. */
+  private def faithful(c: Cur): Boolean = c match
+    // …AND `linear` IS PART OF IT.  `Cur.CLit`'s own mark says the cursor is demanded ONCE; a
+    // graft-repeated one (`delinearize`) is demanded once PER GRAFT, and `pairedAt(d)` counts the level
+    // a single time, so on a repeated cursor the fact is not an upper bound on the paired keys the run
+    // meets.  Measured: `Composition(s0, Literal({a.a}) ∪ s1)` with `s0 = {c.c, c.d}` and
+    // `s1 = {a.d, b}` declared exactly reads zipper `Alloc` `[4, 5]` against a counted 6 without this
+    // clause — `forcedVirtual` is an exactly counted quantity, so that is a refutation and not slack.
+    case CLit(_, _, lin) => lin
+    case CUn(a, b, _, _) => faithful(a) && faithful(b)
+    case CDelegate(inner) => faithful(inner)
+    case _ => false
+
   /** are ALL facts in this stack exact?  This drives the ONE place where the upper and the lower bound
    *  disagree: accepting a restricted subtree needs a LOWER bound on terminal prefixes. */
   private def exactAll(c: Cur): Boolean = c match
@@ -457,7 +507,12 @@ object SpatialDemand:
    *  `Prefix` with items left and a `RestrictionNode` are structurally never terminal: the code returns
    *  a literal `false` without reading either operand. */
   private def terminalCount(c: Cur, n: Long): Long = c match
-    case CLit(l, d, _) => math.min(n, l.terms(d))
+    // `terms(d)` IS A LEVEL AGGREGATE AND NEEDS THE SAME INJECTIVITY SIDE CONDITION `faithful` needs:
+    // it counts the terminal nodes of depth `d` ONCE, so on a graft-repeated cursor it under-counts the
+    // terminals the run meets.  Non-linear, the only sound statement is "if the level has a terminal at
+    // all, assume every demanded key is one" — a widening, which is the direction this read must fail in.
+    case CLit(l, d, lin) =>
+      if lin then math.min(n, l.terms(d)) else (if l.terms(d) > 0L then n else 0L)
     case CUn(a, b, _, _) => math.min(n, Ivl.add(terminalCount(a, n), terminalCount(b, n)))
     case CIn(a, b, _, _) => math.min(terminalCount(a, n), terminalCount(b, n))
     case CDiff(a, _, _, _) => terminalCount(a, n)
@@ -513,6 +568,13 @@ object SpatialDemand:
     case CDelegate(inner) => n + termReads(inner, n)
     case CBoth(a, b) => termReads(a, n) + termReads(b, n)
 
+  /** Does EVERY node at depth `d` have the same child count?  `nodes(d) · maxArity(d) == entries(d)`
+   *  says the level's total child count is exactly its node count times its widest node, which for a
+   *  max is possible only when every node attains it.  When it holds, `maxArity(d)` is a per-node
+   *  FACT; when it does not, it is only a bound. */
+  private def arityUniform(l: Layers, d: Int): Boolean =
+    Ivl.mul(l.nodes(d), l.maxArity(d)) == l.entries(d)
+
   /** `min(n · per, cap)` without overflowing */
   private def capMul(n: Long, per: Long, cap: Long): Long =
     if n <= 0L || per <= 0L || cap <= 0L then 0L
@@ -537,7 +599,15 @@ object SpatialDemand:
   /** The AGGREGATE cost of forcing `children` on `n` prefixes that share one cursor shape, plus the
    *  next frontier.  `kids` counts KEYS, and its counts sum to the arity of the child map the cursor
    *  returns — which is exactly what `materialize` then iterates and rebuilds. */
-  private final case class Step(reads: Long, entries: Long, alloc: Long, kids: Vector[(Cur, Long)]):
+  private final case class Step(reads: Long, entries: Long, alloc: Long, kids: Vector[(Cur, Long)],
+                               /** DID THIS STEP SEE THE WHOLE LEVEL?  `Layers` and `Pairing` are
+                                *  PER-LEVEL aggregates: `maxArity(d)` is a max over the level and
+                                *  `pairedAt(d)` counts the paired prefixes of the level.  Applied to a
+                                *  frontier that is a STRICT SUBSET of the level they are upper bounds
+                                *  and nothing more, so a run that consumes one that way is still a
+                                *  bound but is no longer the measurement.  This flag is what lets the
+                                *  relational arms tell the two apart. */
+                               full: Boolean = false):
     def arity: Long = kids.foldLeft(0L)((s, kv) => Ivl.add(s, kv._2))
 
   /** the cursor `transpileZ` builds, plus the work it does WHILE BUILDING it (the `restriction`
@@ -599,52 +669,124 @@ object SpatialDemand:
         paired.filter(_._2 > 0L) ++
           (if keepA then ka else Vector.empty) ++ (if keepB then kb else Vector.empty)
 
-    /** the LOWER endpoint of the paired frontier: the fact itself when it is exact, 0 otherwise */
-    def sharedLoOf(rel: Pairing, shared: Long): Long = if rel.exact then shared else 0L
+    /** the LOWER endpoint of the paired frontier: the fact itself when it is exact, 0 otherwise.
+     *
+     *  `faith` IS PART OF "EXACT" HERE, and leaving it out is an under-prediction in the OPPOSITE
+     *  direction from the one [[relPaired]] fixes.  When the fact does not describe these cursors,
+     *  `relPaired` hands back the `min(arity, arity)` CEILING — an upper bound and nothing more — and a
+     *  `keepA`/`keepB` arm spends the lower endpoint as `na - sl`, the keys that survive UNPAIRED.
+     *  Reading a ceiling there SHRINKS the unpaired remainder and drops shapes off the frontier.
+     *  Measured: `((⟨a.a.a.d⟩ \| ⟨a.a.a.d⟩) <| L{a})("a")` counted `Work` 47 / `Alloc` 11 against
+     *  `[12, 29]` / `[0, 9]` when `faith` was ignored here — the one program in a 1200-program random
+     *  sweep that the ceiling made WORSE. */
+    def sharedLoOf(rel: Pairing, shared: Long, faith: Boolean): Long =
+      if rel.exact && faith then shared else 0L
+
+    /** `Pairing.paired`, PLUS the coverage side-condition the fact needs to be a measurement.
+     *  `pairedAt(d)` counts the paired prefixes of the WHOLE level `d`.  When the two operands' steps
+     *  saw their whole levels (`Step.full`) that count IS the frontier's paired count; when either saw
+     *  a strict subset, the frontier's own paired count can only be SMALLER, so the number is an upper
+     *  bound and the run stops claiming exactness.  This is what over-forced a `Subtraction`'s
+     *  accepted-by-pointer children at seed 126 (predicted 7 forced / 2 accepted against a measured
+     *  6 / 3): the level had more paired keys than the two frontier nodes did.
+     *
+     *  THE COVERAGE TEST IS `n >= pairedAt(k)`, not "the frontier is the whole level".  Every paired
+     *  depth-`k+1` prefix is a child of a paired depth-`k` prefix, so a frontier that already holds
+     *  ALL `pairedAt(k)` of them has all of `pairedAt(k+1)`'s parents and the level count is the
+     *  frontier count.  This is why a `Restriction` by a single deep path stays exact even though its
+     *  frontier is one node of a very wide level: `pairedAt` is 1 there too.
+     *
+     *  ==AND THE SIDE CONDITION THAT MAKES IT A FACT ABOUT THE CURSORS AT ALL (`faith`)==
+     *  `pairedAt(d)` counts the depth-`d` prefixes that carry a node in both operands' VALUES.  The walk
+     *  spends it as the number of paired keys in the two operands' CURSOR CHILD MAPS, and those are the
+     *  same set only for a cursor whose nodes ARE its value's prefixes.  A virtual cursor's are not:
+     *  `Intersection(Lit{a.b}, Lit{a.c})` denotes `∅` — a one-node trie — yet its `children` is
+     *  `{a ↦ Intersection(…)}`, because `intersectionWith` merges KEYS and `materialize` prunes the
+     *  empty result only on the way out.  So on any operand where [[faithful]] fails, `pairedAt` is not
+     *  an upper bound on the paired keys and the `min(arity, arity)` ceiling is all that may be read.
+     *
+     *  This is not a precision nicety.  On corpus program #86,
+     *  `((((((s0 ∩ s0) × s0) <| L{b,d}) ∩ L{b.d,d}) ∖ ⟨d.b.d⟩) <| L{b,d})`, the root `Restriction`'s left
+     *  operand is provably empty, so the frontier fact says `pairedAt = [0]` and `paired(1) = 0`.  `CRes`
+     *  keeps NEITHER operand's unpaired keys, so the whole frontier died at depth 1 and the region was
+     *  priced at 1 forced node.  The run forces 2 (the root `RestrictionNode` and the depth-1
+     *  `Subtraction` at key `d`, whose subtree materialises to `∅` but is walked in full first): counted
+     *  `Work` 42 against a predicted `[14, 32]` and `Alloc` 5 against `[0, 4]`. */
+    def relPaired(rel: Pairing, k: Int, n: Long, sa: Step, sb: Step, faith: Boolean): Long =
+      val ceiling = math.min(sa.arity, sb.arity)
+      if !faith then
+        // the fact does not describe these cursors; the ceiling does, and the run is no longer exact
+        if rel.pairedAt.exists(v => v.exists(_ < ceiling)) then inexact = true
+        return ceiling
+      val shared = rel.paired(k + 1, sa.arity, sb.arity)
+      val covers = rel.pairedAt.forall(v => n >= (if k >= 0 && k < v.length then v(k) else 0L))
+      // A PAIRED CHILD WHOSE TWO SUBTRIES ARE ONE OBJECT does not become a layer at all: the smart
+      // constructor returns a `Lit` (or `∅`) by pointer.  The frontier here is a COUNT, so the
+      // analysis cannot tell WHICH of the `shared` children that is and charges them all — an upper
+      // bound, and the reason seed 126's interned `2·1` leaf came out as one forced node too many.
+      if shared > 0L && (!covers || rel.identical(k + 1) > 0L) then inexact = true
+      shared
 
     def force(c: Cur, n: Long): Step = if truncated then Step(0, 0, 0, Vector.empty) else c match
       // `Lit.children` REBUILDS THE WHOLE CHILD MAP (`IntMap.transform`, one `Lit` per entry).  This is
-      // the growing work review.md item 6 says one `ZipperCursorRead` was standing in for.
+      // the growing work the review says one `ZipperCursorRead` was standing in for.
       case CLit(l, d, lin) =>
         val e = if lin then capMul(math.min(n, l.nodes(d)), l.maxArity(d), l.entries(d))
                 else Ivl.mul(n, l.maxArity(d))
-        Step(n, e, e, kid(CLit(l, d + 1, lin), e))  // one `children` read per prefix, even off the end
+        // `maxArity(d)` is a MAX OVER THE LEVEL, so charging it per frontier node is the node's real
+        // fan-out only in two situations: the WHOLE level is on the frontier (`n >= nodes(d)`, and the
+        // `entries(d)` cap then carries the true total), or the level is ARITY-UNIFORM.  Anywhere else
+        // the analysis is charging the widest node of the level for a narrower one — still an upper
+        // bound, which is the claim, but no longer the MEASUREMENT, so the run must stop saying
+        // `exact`.  The uniform-trie fixtures below this file's four counterexamples were relying on
+        // this silently; a random trie whose depth-`d` nodes have different arities is the case that
+        // caught it (`SpatialDemandCheck`'s soundness sweep, seed 65: predicted 19 cursor-map entries
+        // against a measured 15, all four of the extra ones this one level's max arity).
+        if !arityUniform(l, d) && (!lin || n < l.nodes(d)) then inexact = true
+        // one `children` read per prefix, even off the end
+        Step(n, e, e, kid(CLit(l, d + 1, lin), e), full = lin && n >= l.nodes(d))
 
       // Union: `unionWith` walks BOTH child maps, and a key present in only ONE side keeps that side's
       // child cursor UNCHANGED — so the Union layer survives only on the PAIRED frontier and an
       // unshared branch of a concrete operand is accepted by pointer.
       case CUn(a, b, rel, k) =>
         val sa = force(a, n); val sb = force(b, n)
-        val shared = rel.paired(k + 1, sa.arity, sb.arity)
+        val faith = faithful(a) && faithful(b)
+        val shared = relPaired(rel, k, n, sa, sb, faith)
         Step(n + sa.reads + sb.reads,
              Ivl.add(Ivl.add(sa.entries, sb.entries), Ivl.add(sa.arity, sb.arity)),
              Ivl.add(Ivl.add(sa.alloc, sb.alloc), shared),
-             pairKids(sa.kids, sb.kids, shared, sharedLoOf(rel, shared),
-                      (x, y) => CUn(x, y, rel, k + 1), true, true))
+             pairKids(sa.kids, sb.kids, shared, sharedLoOf(rel, shared, faith),
+                      (x, y) => CUn(x, y, rel, k + 1), true, true),
+             full = sa.full && sb.full)
 
       // Intersection: only the paired frontier survives at all — an unshared branch is REJECTED whole.
       // This is what keeps an outer intersection proportional to its selective operand while the inner
       // union grows (ZipperScaleBench's (A ∪ B) ∩ C).
       case CIn(a, b, rel, k) =>
         val sa = force(a, n); val sb = force(b, n)
-        val shared = rel.paired(k + 1, sa.arity, sb.arity)
+        val faith = faithful(a) && faithful(b)
+        val shared = relPaired(rel, k, n, sa, sb, faith)
         Step(n + sa.reads + sb.reads,
              Ivl.add(Ivl.add(sa.entries, sb.entries), Ivl.add(sa.arity, sb.arity)),
              Ivl.add(Ivl.add(sa.alloc, sb.alloc), shared),
-             pairKids(sa.kids, sb.kids, shared, sharedLoOf(rel, shared),
-                      (x, y) => CIn(x, y, rel, k + 1), false, false))
+             pairKids(sa.kids, sb.kids, shared, sharedLoOf(rel, shared, faith),
+                      (x, y) => CIn(x, y, rel, k + 1), false, false),
+             full = sa.full && sb.full)
 
       // Subtraction: `a.children.transform` walks every left entry and probes `b`'s map for it (2 per
       // left entry).  A left key MISSING from the right keeps the left child cursor unchanged — the
       // "missing right branch returns the whole left subtree" identity.
       case CDiff(a, b, rel, k) =>
         val sa = force(a, n); val sb = force(b, n)
-        val shared = rel.paired(k + 1, sa.arity, sb.arity)
+        val faith = faithful(a) && faithful(b)
+        val shared = relPaired(rel, k, n, sa, sb, faith)
         Step(n + sa.reads + sb.reads,
              Ivl.add(Ivl.add(sa.entries, sb.entries), Ivl.add(sa.arity, sa.arity)),
              Ivl.add(Ivl.add(sa.alloc, sb.alloc), shared),
-             pairKids(sa.kids, sb.kids, shared, sharedLoOf(rel, shared),
-                      (x, y) => CDiff(x, y, rel, k + 1), true, false))
+             pairKids(sa.kids, sb.kids, shared, sharedLoOf(rel, shared, faith),
+                      (x, y) => CDiff(x, y, rel, k + 1), true, false),
+             full = sa.full && sb.full)
 
       // Composition: one wrapper per left entry, and AT A TERMINAL LEFT FOCUS the right cursor's OWN
       // children are spliced in — the right operand is GRAFTED BY POINTER, not copied per terminal.
@@ -658,7 +800,8 @@ object SpatialDemand:
         val aTerm = termReads(a, n)
         val viaA: Vector[(Cur, Long)] = sa.kids.map((c, m) => (CComp(c, b): Cur, m))
         if t <= 0L then
-          Step(n + sa.reads + aTerm, Ivl.add(sa.entries, sa.arity), Ivl.add(sa.alloc, sa.arity), viaA)
+          Step(n + sa.reads + aTerm, Ivl.add(sa.entries, sa.arity), Ivl.add(sa.alloc, sa.arity), viaA,
+               full = sa.full)
         else
           val sb = force(b, t)
           // how many of `a`'s child keys collide with `b`'s root keys is a relational fact nobody
@@ -674,8 +817,8 @@ object SpatialDemand:
       // nodes.  Once the prefix is consumed the layer VANISHES — `children` IS `src.children` — so the
       // focus node copies exactly one child map and everything below it is the source's own cursor.
       case CPre(rem, src) =>
-        if rem > 0 then Step(n, n, n, kid(CPre(rem - 1, src), n))
-        else { val s = force(src, n); Step(n + s.reads, s.entries, s.alloc, s.kids) }
+        if rem > 0 then Step(n, n, n, kid(CPre(rem - 1, src), n), full = true)
+        else { val s = force(src, n); Step(n + s.reads, s.entries, s.alloc, s.kids, full = s.full) }
 
       // Restriction: `intersectionWith` walks both maps, and `restriction(xc, pc)` RETURNS `xc` as soon
       // as the prefix side is terminal.  So the forced frontier is the paired NON-TERMINAL frontier and
@@ -683,7 +826,8 @@ object SpatialDemand:
       // terminal prefixes, so we assume none and keep the forced count an upper bound.
       case CRes(x, p, rel, k) =>
         val sx = force(x, n); val sp = force(p, n)
-        val shared = rel.paired(k + 1, sx.arity, sp.arity)
+        val faith = faithful(x) && faithful(p)
+        val shared = relPaired(rel, k, n, sx, sp, faith)
         // Keys whose PREFIX child is terminal accept the x-child wholesale.  BOTH endpoints of that
         // count are needed: the number of accepts is bounded ABOVE by `pTermHi` (that is what is
         // reported), while the number of surviving `RestrictionNode`s — the part that COSTS — is bounded
@@ -702,14 +846,15 @@ object SpatialDemand:
         Step(n + sx.reads + sp.reads + Ivl.mul(shared, probeUnit),
              Ivl.add(Ivl.add(sx.entries, sp.entries), Ivl.add(sx.arity, sp.arity)),
              Ivl.add(Ivl.add(sx.alloc, sp.alloc), shared),
-             accepted ++ pairKids(sx.kids, sp.kids, resShared, sharedLoOf(rel, resShared),
-                                  (a2, b2) => CRes(a2, b2, rel, k + 1), false, false))
+             accepted ++ pairKids(sx.kids, sp.kids, resShared, sharedLoOf(rel, resShared, faith),
+                                  (a2, b2) => CRes(a2, b2, rel, k + 1), false, false),
+             full = sx.full && sp.full)
 
       // A delegating virtual node (`TailsUnion`, `TailsIntersection`): one forced node at the top, then
       // the inner cursor's children — the layer does not repeat below it.
       case CDelegate(inner) =>
         val s = force(inner, n)
-        Step(n + s.reads, s.entries, s.alloc, s.kids)
+        Step(n + s.reads, s.entries, s.alloc, s.kids, full = s.full)
 
       // both possible shapes are charged, and both kid sets go on the next frontier
       case CBoth(a, b) =>
@@ -741,9 +886,23 @@ object SpatialDemand:
           (CUn(CComp(a2, b), b2, Pairing.unknown, 0), own + rb, 2L + aa + ab)
       case CPre(rem, src) =>
         if rem > 0 then (CPre(rem - 1, src), 1L, 0L) else { val (s, r, a) = descend1(src); (s, 1L + r, a) }
+      // `RestrictionNode.descend(k)` is `restriction(x.descend(k), prefixes.descend(k))` — THE SMART
+      // CONSTRUCTOR, not the constructor.  It returns the X-CURSOR ITSELF the moment the descended
+      // prefix is terminal, and only otherwise builds another `RestrictionNode`.  Keeping the node
+      // unconditionally is NOT the conservative choice, because `CRes.force` intersects with the prefix
+      // side: a prefix that has run out has an EMPTY child map, `shared` is 0, and the whole frontier
+      // below dies — while the run is walking the un-wrapped `x` cursor in full.  Measured on
+      // `((⟨a.a.a.d⟩ \| ⟨a.a.a.d⟩) <| L{a})("a")`: the outer restriction collapses at the `"a"` descent
+      // (`L{a}` descends to `{ε}`, terminal) and the run forces the three `Subtraction` spine nodes of
+      // `⟨a.a.d⟩` — counted `Work` 47, `Alloc` 11 against a predicted `[12, 29]` / `[0, 9]`.  So the
+      // same three-way split `ZIR.Res` makes at build time is made here, on the descended prefix.
       case CRes(x, p, rel, k) =>
         val (x2, rx, ax) = descend1(x); val (p2, rp, ap) = descend1(p)
-        (CRes(x2, p2, rel, k + 1), 1L + rx + rp + termReads(p2, 1L), 1L + ax + ap)
+        val cur =
+          if terminalCountLo(p2, 1L) >= 1L then x2                                  // provably collapsed
+          else if terminalCount(p2, 1L) >= 1L then CBoth(x2, CRes(x2, p2, rel, k + 1))
+          else CRes(x2, p2, rel, k + 1)
+        (cur, 1L + rx + rp + termReads(p2, 1L), 1L + ax + ap)
       case CDelegate(inner) => val (i2, r, a) = descend1(inner); (i2, 1L + r, a)
       case CBoth(a, b) =>
         val (a2, ra, aa) = descend1(a); val (b2, rb, ab) = descend1(b)
@@ -763,7 +922,7 @@ object SpatialDemand:
       case ZIR.Lift(l) => Build(CLit(note(l), 0, true), 0, 0, 0, 0)
       // `transpileZ` materialises a control-flow / positional subterm through `evalI` and re-lifts the
       // RESULT, so the fused expression sees a `Lit`.  Its `evalI` cost belongs to the trie model; the
-      // boundary is reported separately so the two halves are never one number (review.md item 3).
+      // boundary is reported separately so the two halves are never one number.
       case ZIR.Fallback(r) => Build(CLit(note(r), 0, true), 0, 0, 0, 1)
       case ZIR.Un(x, y, rel0) =>
         val rel = note(rel0)

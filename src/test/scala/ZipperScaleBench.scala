@@ -192,7 +192,8 @@ class ZipperScaleBench extends FunSuite:
   // ===============================================================================================
   test("aunt query on the REAL royal92 genealogy: execZ vs eval / evalI / execT(opt)".tag(SlowTag.Slow)) {
     val candidates = Seq(sys.props.getOrElse("royal92.metta", "royal92_simple.metta"),
-                         "royal92_simple.metta", "/Users/michaelpolyntsov/Zippy/royal92_simple.metta")
+                         "royal92_simple.metta",
+                         sys.env.getOrElse("ZIPPY_DATA", "data") + "/royal92_simple.metta")
     Loaders.resolve(candidates*).flatMap(f => Loaders.mettaFamily(f.getPath)) match
       case None => System.out.println("\n(royal92_simple.metta not found — aunt(royal92) execZ benchmark skipped)\n")
       case Some(r92) =>

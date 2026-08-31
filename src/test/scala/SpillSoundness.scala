@@ -4,7 +4,7 @@ import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
-/** SPILL / WIDENING SOUNDNESS (from review.md's stop-ship finding).
+/** SPILL / WIDENING SOUNDNESS (from the stop-ship finding).
  *
  *  The representation keeps per-length classes plus ONE spill bucket for "all other lengths".  The
  *  invariant that makes `at(l)` meaningful is that the spill's length range never covers a tracked
@@ -127,13 +127,13 @@ class SpillSoundness extends FunSuite:
   }
 end SpillSoundness
 
-/** The remaining review.md findings that are precision (not soundness) bugs. */
+/** The remaining the review that are precision (not soundness) bugs. */
 class ReviewFindings extends FunSuite:
   import Space.*
   import Lower.{LenBounds, SizeBounds}
 
   test("loops use the DECLARED input type, not just the syntactic baseline") {
-    // review.md: "With an environment stating that xs has exactly two length-one paths, iterating
+    // the requirement: "With an environment stating that xs has exactly two length-one paths, iterating
     // {h} over xs evaluates to exactly two paths; this analysis returns { len 1: [0, inf] }"
     val prog = S"xs".iter(P"h", S"t", Space.Singleton(P"h"))
     val env = SpatialEnv(spaces = Map(SpaceMention("xs") -> SpaceType.closed(1L -> Ivl(2, 2))))

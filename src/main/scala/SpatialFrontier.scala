@@ -1,7 +1,7 @@
 package morkl
 
 /** ==============================================================================================
- *  RELATIONAL FRONTIER COST — review.md item 2.
+ *  RELATIONAL FRONTIER COST.
  *
  *  `SpatialCost`'s merge bounds are SIZE-ONLY: `merge2(a,b) = 3(N(a)+N(b))` for `touch` and
  *  `tighter(N(a),N(b))` for `alloc`.  Both discard the control state of the persistent algorithms.
@@ -11,7 +11,7 @@ package morkl
  *  paired logical nodes, not the parameter itself.
  *
  *  ==THE PARAMETER==
- *  For restriction review.md defines it exactly; this file generalises it to the whole ring.  Write
+ *  For restriction the review defines it exactly; this file generalises it to the whole ring.  Write
  *  `X_u` for the subtrie of `X` at prefix `u` (present iff some `X`-path starts with `u`):
  *
  *  {{{
@@ -59,7 +59,7 @@ package morkl
  *
  *  ==WHICH PROGRAM IS BEING PRICED==
  *  The case-returning persistent algebra — `Trie.unionR`/`intersectionR`/`subtractionR`/
- *  `restrictionR`/`raffinationR`/`compositionR` (Trie.scala:159-365), the algebra review.md item 1
+ *  `restrictionR`/`raffinationR`/`compositionR` (Trie.scala:159-365), the algebra the review
  *  calls the one that matters — and the interned `ITrie`/`IntTrieOps` descent that implements the same
  *  frontier over Patricia child maps.  The two differ by an ADDITIVE CONSTANT PER OPERATION:
  *  `ITrie.union` allocates its root node even when the case-returning form returns `Identity`, so
@@ -107,7 +107,7 @@ object FrontierCase:
 enum FrontierGate:
   case Symmetric, RightGated
 
-/** THE PER-OPERATION FRONTIER RULES — review.md item 2's table, encoded.  `frontier` names the
+/** THE PER-OPERATION FRONTIER RULES — the table, encoded.  `frontier` names the
  *  quantity that actually controls the work and `wholeSubtree` names the case the size-only bound
  *  loses. */
 enum FrontierOp:
@@ -190,7 +190,7 @@ object DepthFrontier:
 final case class FrontierSyms(descents: Sym, descentsLo: Sym, rebuilt: Sym, patricia: Sym,
                               fallback: Boolean)
 
-/** THE BINARY SUMMARY review.md item 2 asks for.
+/** THE BINARY SUMMARY the review asks for.
  *
  *  `descents` is `Θ(|Q| + J)` — the counted per-node entries into the algebra.  `rebuilt` is the
  *  fresh-node bound: `|A|` for the pruned ops, `|Q|` for the merges, `0` whenever `cases` proves an
@@ -315,6 +315,8 @@ object SpatialFrontier:
     def kAt(d: Int): Ivl = if d < k.length then k(d) else if truncated then Ivl.unknown else Ivl.zero
     def eAt(d: Int): Ivl = if d < e.length then e(d) else if truncated then Ivl.unknown else Ivl.zero
     /** terminal depth-`d` prefixes = paths of length exactly `d` */
+    /** may this side contain the ε path?  `Presence.No` is a PROOF that it cannot. */
+    def mayEps: Boolean = shape.eps.mayBe
     def terminalAt(d: Int): Ivl = meet(subI(eAt(d), eAt(d + 1)), kAt(d))
     def nonTerminalAt(d: Int): Ivl = subI(kAt(d), terminalAt(d))
     def lastDepth: Int = k.length - 1
@@ -413,7 +415,7 @@ object SpatialFrontier:
           // `min(x.others.hi, y.others.hi)` is a COUNT-ONLY pairing: two anonymous head sets of sizes 52
           // and 52 might share all 52 or none, and past `Shape.MaxHeads` the carrier cannot tell (the
           // spill keeps the count and drops the names — SpatialShape's channel (c)/(d) note).  This is
-          // exactly where review.md's first P1 row is lost: a key-disjoint union's `|Q_{d+1}|` is 0 and
+          // exactly where the first P1 row is lost: a key-disjoint union's `|Q_{d+1}|` is 0 and
           // this says `min(K_d, K_d) = n`.  With an enumerable head set on both sides the multiplicity
           // would be the size of the ACTUAL intersection — `SpatialFrontierCheck`'s key-disjoint sweep
           // measures the crossover and LIM-5 records what carrying one costs.
@@ -482,14 +484,33 @@ object SpatialFrontier:
       case Union | FixpointUnion =>
         if l.provablyEmpty then Set(CRight) else if r.provablyEmpty then Set(CLeft)
         else if headDisjoint then Set(CBespoke) else base
+      // ============================================================================================
+      // ε IS NOT A HEAD, AND `headDisjoint` DOES NOT SEE IT.
+      //
+      // `headDisjoint` proves the two HEAD SETS are disjoint.  It says nothing about the ε path,
+      // which has no head — and ε is exactly the member these four operators handle specially.
+      // Every arm below that leans on `headDisjoint` therefore needs its own ε side-condition, and
+      // three of them did not have one.  The bug was found by making the frontier's verdict a
+      // SEMANTIC rewrite (`SpatialPipeline.frontierEdits`) and running it over the corpus: a
+      // `Restriction(x, x)` with `x = {ε}` was rewritten to `∅` while `eval` gave `{ε}` — because
+      // `x <| x` keeps every path that has a prefix in `x`, and ε is a prefix of itself.  As a COST
+      // claim the same arms were predicting zero allocation where a node is allocated.
+      // ============================================================================================
       case Intersection =>
-        if l.provablyEmpty || r.provablyEmpty || headDisjoint then Set(CEmpty) else base
+        // ε survives the meet when BOTH sides may have it, so disjoint heads do not make it empty
+        if l.provablyEmpty || r.provablyEmpty then Set(CEmpty)
+        else if headDisjoint && !(l.mayEps && r.mayEps) then Set(CEmpty)
+        else base
       case Subtraction =>
+        // `x ∖ y` loses ε only when BOTH have it; if either cannot, ε is untouched and so is x
         if l.provablyEmpty then Set(CEmpty)
-        else if r.provablyEmpty || headDisjoint then Set(CLeft) else base
+        else if r.provablyEmpty then Set(CLeft)
+        else if headDisjoint && !(l.mayEps && r.mayEps) then Set(CLeft)
+        else base
       case Restriction =>
         if l.provablyEmpty || r.provablyEmpty then Set(CEmpty)
-        else if headDisjoint then Set(CEmpty)
+        // ε ∈ RIGHT is a prefix of EVERY left path, so all of x is kept however disjoint the heads
+        else if headDisjoint && !r.mayEps then Set(CEmpty)
         else if r.epsOnly then Set(CLeft)                      // ε prefixes everything: all of X kept
         // A COVERING PREFIX: some right path is a prefix of the prefix EVERY left path starts with,
         // so every left path is kept and the whole left space is accepted.  `CommonPrefix` is vacuous
@@ -500,7 +521,9 @@ object SpatialFrontier:
         if l.provablyEmpty then Set(CEmpty)
         else if r.epsOnly then Set(CEmpty)                     // ε prefixes everything: all of X dropped
         else if covers(l, r) then Set(CEmpty)                  // every left path extends a right prefix
-        else if r.provablyEmpty || headDisjoint then Set(CLeft)
+        else if r.provablyEmpty then Set(CLeft)
+        // and the dual: ε ∈ RIGHT drops all of x, so disjoint heads alone do not make it the identity
+        else if headDisjoint && !r.mayEps then Set(CLeft)
         else base
       case Composition =>
         if l.provablyEmpty || r.provablyEmpty then Set(CEmpty)
@@ -575,8 +598,22 @@ object SpatialFrontier:
       notes += "priced for the INTERNED ITrie algebra: +1 node and +1 descent, it has no Identity case"
 
     // ---- the three constant-time short circuits, before any frontier is computed ----------------
+    //
+    // COMPOSITION IS THE ONE RING OPERATION WITH NO `a eq b` TEST, and asserting one for it was
+    // UNSOUND.  `unionR`, `intersectionR`, `subtractionR`, `restrictionR` and `raffinationR` each open
+    // with `if a eq b then …` (IntTrie.scala) because each of them is idempotent or self-annihilating
+    // on a shared operand: `x ∪ x = x`, `x ∩ x = x`, `x ∖ x = ∅`, `x <| x = x`, `x \| x = ∅`.
+    // `compositionR` does NOT, and cannot: `x · x` is not `x`, so the algebra has to descend and
+    // rebuild.  Reading `shared` as a short circuit for it produced a frontier of "the root pair and
+    // nothing else" for a term the run walks in full — measured on `Composition(c, c)` with `c`
+    // declared exactly, `descents = [1, 1]` and `rebuilt = [0, 0]` give `Alloc [3, 1]` and
+    // `Touch [6, 1]` against a counted 3 and 6: INVERTED INTERVALS, the unmistakable signature.  On a
+    // 6000-term randomised sweep 14 of the 15 out-of-interval trie/graph rows were terms containing
+    // `X x X`, and every inversion in the sweep was one of them.
+    //
+    // The `{ε}` unit test two lines down is composition's real short circuit and stays.
     val shortCircuit: Option[String] =
-      if shared then Some("a eq b")
+      if shared && op != FrontierOp.Composition then Some("a eq b")
       else if l.provablyEmpty || r.provablyEmpty then
         // every op has an explicit empty guard on at least one side; union/subtraction return the
         // other operand by pointer, the rest return `empty`
@@ -694,7 +731,7 @@ object SpatialFrontier:
     // THE ASYMPTOTIC DIFFERENCE BETWEEN THE TWO BACKENDS.  The case-returning algebra propagates
     // `Identity` to the root and allocates NOTHING (Trie.scala:333-336); the interned one has no
     // `Identity` to return, so it rebuilds its whole frontier — `0` against `|A|`, which is a SLOPE
-    // difference and not a constant.  review.md item 2, last sentence of the restriction paragraph.
+    // difference and not a constant.  The review of the restriction paragraph.
     val rebuiltCore =
       if identity && !cfg.interned then Ivl.zero else if op.prunes then aTot else qTot
     val rebuilt = Ivl(rebuiltCore.lo, Ivl.add(rebuiltCore.hi, extra))
@@ -734,7 +771,7 @@ object SpatialFrontier:
                     source = source, fallback = fallback, notes = notes)
 
   /** COMPOSITION.  The left operand's nodes are the frontier (each is entered once and rebuilt —
-   *  review.md item 4's correction to `Trie.scala:294-304`: a single depth-`d` path has ONE terminal
+   *  the correction to `Trie.scala:294-304`: a single depth-`d` path has ONE terminal
    *  but the code rebuilds its `d`-node spine), plus one union frontier per NON-LEAF terminal of the
    *  left.  A LEAF terminal grafts `B` by pointer and costs nothing, which is why a single-path left
    *  operand composes in `Θ(|p|)` with zero extra allocation. */

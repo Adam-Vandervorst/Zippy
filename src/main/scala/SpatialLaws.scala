@@ -1,7 +1,7 @@
 package morkl
 
 /** ==================================================================================================
- *  SEMANTIC LAWS AS PRODUCTION INPUTS TO THE ANALYSIS  (review.md 2).
+ *  SEMANTIC LAWS AS PRODUCTION INPUTS TO THE ANALYSIS.
  *
  *  ==THE PROBLEM THIS FILE FIXES==
  *  The subsystem knew several facts it could not USE.  `SpatialAcceptance` 6a–6c proved, in standalone
@@ -22,7 +22,7 @@ package morkl
  *  A law is carried on [[SpatialConfig.laws]], which `SpatialAnnotations` already holds, so every stage
  *  that takes annotations takes laws — no new plumbing at any call site.
  *
- *  ==A MEET IS NOT A SAFETY ARGUMENT  (review.md 9)==
+ *  ==A MEET IS NOT A SAFETY ARGUMENT==
  *  The channel is a MEET, so `γ(after) ⊆ γ(before)` holds by the ALGEBRA whatever the law says.  That
  *  used to be written here as if it were the safety argument, and it is NOT one.  An OVER-approximation
  *  is only useful because it CONTAINS the real value; a bound that narrows it below the real value
@@ -48,7 +48,7 @@ package morkl
  *  ([[NodeAnalysis.laws]]) instead of being folded silently into a number, and why a consumer can name
  *  every law an answer depends on ([[LawApplication.tightened]]).
  *
- *  ==ORDER INDEPENDENCE IS A SATURATION, NOT A COMMUTATIVITY REMARK  (review.md 9)==
+ *  ==ORDER INDEPENDENCE IS A SATURATION, NOT A COMMUTATIVITY REMARK==
  *  `refine` used to apply laws left to right with each one OBSERVING the previous one's result, and
  *  argue order-independence from the commutativity of meet.  That argument is wrong: a law's `bound`
  *  reads `site.inferred`, so a permutation changes the BOUNDS, not only the order they are combined in
@@ -71,7 +71,7 @@ package morkl
  *  happens in the test that constructs the law, never inside an analysis.
  *  ================================================================================================ */
 
-/** WHY a law's bound may be believed.  This is the justification tag review.md 2 asks for, and it is
+/** WHY a law's bound may be believed.  This is the justification tag the review asks for, and it is
  *  a sum type rather than a string so a consumer can DECIDE on it ([[discharged]]). */
 enum LawEvidence:
   /** checked against a reference executor / an independent reference implementation.  `what` names the
@@ -97,7 +97,7 @@ enum LawEvidence:
     case _ => true
   def show: String = s"$tag ($detail)"
 
-/** WHICH JUSTIFICATIONS MAY NARROW AN ANSWER  (review.md 9: "make the policy explicit and enforced in
+/** WHICH JUSTIFICATIONS MAY NARROW AN ANSWER  (the requirement: "make the policy explicit and enforced in
  *  code, not documented").
  *
  *  A law's bound is a soundness PREMISE, and a false one breaks an over-approximation — so the question
@@ -165,12 +165,12 @@ enum LawOutcome:
   /** the bound and the transfers describe no common value: the law was DROPPED */
   case Contradicted
   /** applicable, contributed a bound, and the ACTIVE [[LawEvidencePolicy]] refused it: the bound was
-   *  NOT met and the answer is the transfers' own (review.md 9).  The bound it WOULD have contributed is
+   *  NOT met and the answer is the transfers' own.  The bound it WOULD have contributed is
    *  reported in [[LawApplication.why]], so the cost of the missing proof obligation is visible. */
   case Refused
   def show: String = toString
 
-/** ONE LAW APPLICATION, kept ON the node so a consumer can see WHICH law tightened WHAT (review.md 2).
+/** ONE LAW APPLICATION, kept ON the node so a consumer can see WHICH law tightened WHAT.
  *  `occurrences` counts the observations of this position at which the same (law, outcome) recurred —
  *  a binder body under a 16-level nest has thousands, and keeping one record per observation would be
  *  a memory leak dressed up as provenance. */
@@ -209,7 +209,7 @@ object SpatialLaws:
 
   /** MEET every applicable law's bound into `site.inferred` and report what each law did.
    *
-   *  ==A CHECKED MONOTONE SATURATION, NOT A LEFT FOLD  (review.md 9)==
+   *  ==A CHECKED MONOTONE SATURATION, NOT A LEFT FOLD==
    *  The previous engine walked the vector left to right and handed each law the PREVIOUS law's result.
    *  That makes the answer depend on the permutation, because a law's `bound` reads `site.inferred` as a
    *  premise: `finiteSolutionCount` declines unless the length is pinned, so `[pin, count]` produces a
@@ -244,7 +244,7 @@ object SpatialLaws:
    *  sibling would have reached the same answer, because it did prove that much; the joint answer is the
    *  meet of everything that was accepted.
    *
-   *  ==THE EVIDENCE POLICY IS ENFORCED HERE  (review.md 9)==
+   *  ==THE EVIDENCE POLICY IS ENFORCED HERE==
    *  A bound whose evidence `policy` does not license is computed (so the report can say what it would
    *  have bought) and then NOT met: [[LawOutcome.Refused]].  Under the default
    *  [[LawEvidencePolicy.RequireDischarged]] no undischarged axiom can move the answer, hence none can
@@ -508,10 +508,10 @@ object SpatialLaws:
       }
     }
 
-/** carry laws on the annotations every stage already takes (review.md 2: "Carry it in
+/** carry laws on the annotations every stage already takes (the requirement: "Carry it in
  *  `SpatialAnnotations`").  An extension rather than a field because `SpatialAnnotations` holds a
  *  [[SpatialConfig]], and THAT is where every other per-run budget and knob lives — a second channel
- *  for the same kind of value would be exactly the drift review.md 3 objects to. */
+ *  for the same kind of value would be exactly the drift the review objects to. */
 extension (ann: SpatialAnnotations)
   def withLaws(ls: SpatialBoundLaw*): SpatialAnnotations = ann.copy(config = ann.config.withLaws(ls*))
   def laws: Vector[SpatialBoundLaw] = ann.config.laws

@@ -11,6 +11,14 @@ promoted to generated certificates (gen_law_obligations.py).
 """
 import pathlib, subprocess, sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from toolpath import resolve, missing_message      # $Z3 / $VAMPIRE -> PATH -> conventional
+
+Z3 = resolve("z3")
+if Z3 is None:
+    sys.exit(missing_message("z3"))
+VAMPIRE = resolve("vampire")     # optional: z3 alone still screens, and the table records "-"
+
 root = pathlib.Path(__file__).resolve().parent.parent
 out = root / "proofs" / "laws" / "MINED.tsv"
 tmp = pathlib.Path("/tmp/mine_law.smt2")
@@ -84,15 +92,17 @@ results = []
 for name, goal, assume in CANDS:
     text = PRELUDE + SETS + CONSTS + assume + f"(assert (not {goal}))\n(check-sat)\n"
     tmp.write_text(text)
-    z = subprocess.run(["z3", "-T:20", str(tmp)], capture_output=True, text=True).stdout.strip().splitlines()
+    z = subprocess.run([Z3, "-T:20", str(tmp)], capture_output=True, text=True).stdout.strip().splitlines()
     zr = z[-1] if z else "?"
     verdict = {"unsat": "PROVED", "sat": "COUNTERMODEL"}.get(zr)
     vr = "-"
-    if verdict is None:
-        v = subprocess.run(["/Applications/vampire", "--input_syntax", "smtlib2", "-t", "20s", str(tmp)],
+    if verdict is None and VAMPIRE is not None:
+        v = subprocess.run([VAMPIRE, "--input_syntax", "smtlib2", "-t", "20s", str(tmp)],
                            capture_output=True, text=True).stdout
         vr = "proved" if "Refutation found" in v else "-"
         verdict = "PROVED" if vr == "proved" else "UNKNOWN"
+    elif verdict is None:
+        verdict = "UNKNOWN"
     results.append((name, zr, vr, verdict))
     print(f"{name:34s} z3={zr:8s} vampire={vr:7s} => {verdict}")
 

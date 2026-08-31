@@ -2,7 +2,7 @@ package morkl
 
 import munit.FunSuite
 
-/** BOUNDED RECURSION, end to end — review.md finding 2.
+/** BOUNDED RECURSION, end to end.
  *
  *  The headline: a recursive routine that consumes ONE ITEM PER CALL, over an input annotated
  *  "every path has at most four items", must yield `maxCallDepth = 4` and a fully residualised,
@@ -336,7 +336,7 @@ class SpatialRecursionCheck extends FunSuite:
     (checked, bad, witness)
 
   /** M1 and M2 are BOTH load-bearing, and the numeric drop now survives a VARIABLE-length prefix
-   *  because the product is reduced in both directions (review.md 5).
+   *  because the product is reduced in both directions.
    *
    *  History: this test used to assert `NoBound` here, on the reasoning that `p0 ∈ [1,3]` items
    *  makes the histogram's variable-length unwrap arm give up (it does — see the assertion below,

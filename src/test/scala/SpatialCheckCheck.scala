@@ -3,7 +3,7 @@ package morkl
 import munit.FunSuite
 import Lower.LenBounds
 
-/** THE CONSUMER-FACING SPATIAL TYPECHECKER — the acceptance suite for review.md 1.
+/** THE CONSUMER-FACING SPATIAL TYPECHECKER — the acceptance suite for the review.
  *
  *  The review lists five tests and they are the acceptance criteria; each has its own section below,
  *  numbered to match:
@@ -30,7 +30,7 @@ import Lower.LenBounds
  *       EVERY concrete input, with `eval` as ground truth.  This is the distinction the API's wording
  *       claims, demonstrated rather than asserted.
  *
- *  ==AND THE COMBINED PRODUCT QUERY  (review.md 10)==
+ *  ==AND THE COMBINED PRODUCT QUERY==
  *  §4 used to end at "the product-interaction class is `Unknown`, and that is honest".  It is now DECIDED:
  *  when the inferred type's shape has CLOSED head sets, `γ(inferred)` is enumerated in full and every
  *  member is tested with the product γ, so a containment visible only to the CONJUNCTION of shape and
@@ -44,7 +44,7 @@ import Lower.LenBounds
  *
  *  4d measures the residual incompleteness rate on the diagnostic pool and NAMES the reason for every pair
  *  it still cannot decide, so "sound but incomplete" stays a number.  5d additionally gates that a
- *  certificate names every semantic law it depended on (review.md 9).
+ *  certificate names every semantic law it depended on.
  *
  *  `eval` appears in §10 only, as ground truth. Nothing in `src/main/scala/SpatialCheck.scala` calls it. */
 class SpatialCheckCheck extends FunSuite:
@@ -100,7 +100,7 @@ class SpatialCheckCheck extends FunSuite:
     out.result().take(n)
 
   // ================================================================================================
-  // 1.  CONCRETE MEMBERSHIP ACCEPTS EXACTLY γ            (review.md 1, required test 1)
+  // 1.  CONCRETE MEMBERSHIP ACCEPTS EXACTLY γ            (the review required test 1)
   // ================================================================================================
 
   test("1a. concrete membership is EXACT on point types: accepts(v, α w) ⟺ v == w") {
@@ -283,7 +283,7 @@ class SpatialCheckCheck extends FunSuite:
           refuted += 1
         case SpatialCheck.Proved(_, c) =>
           // TWO grounds are legitimate, and a `Proved` must rest on one of them: the sound componentwise
-          // order, or a COMPLETE enumeration of γ(a) with no counterexample in it (review.md 10).
+          // order, or a COMPLETE enumeration of γ(a) with no counterexample in it.
           assert(SpatialType.leq(a, b) || c.exhaustion.exists(_.decidesContainment),
                  s"Proved without the order AND without a complete enumeration: ${a.show} ⊑ ${b.show}")
           assert(c.corroboration.forall(_.witness.isEmpty))
@@ -358,7 +358,7 @@ class SpatialCheckCheck extends FunSuite:
   }
 
   test("4b. …and the COMBINED shape×histogram query DECIDES it: Proved, with a complete enumeration") {
-    // THIS IS review.md 10's FIX.  The pair is a genuine `leq` false negative (4a proves that) and it used
+    // THIS IS the FIX.  The pair is a genuine `leq` false negative (4a proves that) and it used
     // to come back `Unknown` — "the bounded universe cannot see a witness, so nothing is claimed either
     // way".  The product query does not compare the components at all: it ENUMERATES γ(fnA) — which the
     // closed shape makes finite and provably complete — and tests each member with the full product γ.
@@ -424,10 +424,10 @@ class SpatialCheckCheck extends FunSuite:
    *  should be one (the union transfer's class upper is `hi_a + hi_b`), but the bidirectional reducer
    *  caps it back with the shape's total upper and the order then succeeds.  So this enumerates the
    *  false negatives instead — pairs where γ-containment is DECIDED true on the finite universe and the
-   *  order still says no — measures the rate the way review.md 1 does, attributes each to its channels,
+   *  order still says no — measures the rate the way the review does, attributes each to its channels,
    *  and asserts the property that matters for every one of them at once. */
   test("4d. leq's incompleteness, measured and attributed — and NONE of it becomes a type error") {
-    // THE DIAGNOSTIC POOL review.md 10 quotes: 62 γ-contained pairs with γ(a) ∩ U inhabited, of which the
+    // THE DIAGNOSTIC POOL the review quotes: 62 γ-contained pairs with γ(a) ∩ U inhabited, of which the
     // componentwise order misses 10 (16.1%).  Those 10 all used to be `Unknown`; this test now also
     // measures how many the COMBINED product query DECIDES, and names the reason for every one it cannot.
     val rng = new java.util.Random(606060)
@@ -508,7 +508,7 @@ class SpatialCheckCheck extends FunSuite:
   }
 
   test("4e. THE REFUTER NEVER FABRICATES: no γ-contained pair on the universe is ever Refuted") {
-    // this is the property that makes `Refuted` trustworthy, and the one review.md 1 insists on: a
+    // this is the property that makes `Refuted` trustworthy, and the one the review insists on: a
     // `false` from the order must not become a type error.
     val rng = new java.util.Random(5150)
     val ts = pool(rng, 110)
@@ -628,8 +628,15 @@ class SpatialCheckCheck extends FunSuite:
     assertEquals(SpatialCheck.decide(many, SpatialType.top,
                                      ProductSearch(maxPaths = 16, maxCandidates = 8L)), None,
                  "an enumeration past maxCandidates must be declined")
-    assert(SpatialCheck.declined(deep, SpatialType.empty, ProductSearch(maxFresh = 0)).exists(
+    // THE FRESH-ITEM BUDGET BITES ONLY WHERE THE HEADS ARE GENUINELY ANONYMOUS.  A ⊤ head set names
+    // nothing, so a complete alphabet needs fresh items and `maxFresh = 0` declines…
+    val anon = SpatialType.reduce(SpatialType(Shape.top, SpaceType.exact(1L, 1L)))
+    assert(SpatialCheck.declined(anon, SpatialType.empty, ProductSearch(maxFresh = 0)).exists(
              _.contains("maxFresh")), "the fresh-item budget must be honoured too")
+    // …while the DEPTH-CAPPED shape needs none at all any more: channel (e) names the heads the
+    // collapse dropped, so its alphabet is finite and known and the query decides on a zero budget.
+    assertEquals(SpatialCheck.declined(deep, SpatialType.empty, ProductSearch(maxFresh = 0)), None,
+                 s"a NAMED spill needs no fresh item: ${deep.shape.show}")
     println(s"PRODUCT/declines: every limit declines with a named reason; a closed ${d.paths.size}-path " +
       "shape and a depth-capped one both decide; maxPaths/maxCandidates/maxFresh all honoured")
   }
@@ -692,7 +699,7 @@ class SpatialCheckCheck extends FunSuite:
   }
 
   test("5d. every SpatialAssumption case is actually EMITTED — none is a dead promise") {
-    // review.md 6 objects to `Fact.PrefixAbsent` being a public case `Fact.from` never emits.  The same
+    // The review objects to `Fact.PrefixAbsent` being a public case `Fact.from` never emits.  The same
     // must not be true of the premises a certificate names, so each one is produced here.
     var seen = Set.empty[String]
     def note(as: Vector[SpatialAssumption]): Unit = seen = seen ++ as.map(_.productPrefix)
@@ -742,7 +749,7 @@ class SpatialCheckCheck extends FunSuite:
                              SpatialSignature(Map(q -> PathType.known(p("a"))), Map.empty,
                                               SpatialType.empty)).diagnosis.assumptions)
 
-    // …and a run under a DISCHARGED semantic law that tightens, for LawBound: review.md 9 requires a
+    // …and a run under a DISCHARGED semantic law that tightens, for LawBound: the review requires a
     // certificate to NAME every law it depended on, so the premise has to exist and has to be emitted.
     val lm = SpaceMention("lawful")
     val lr = Routine(RoutinePtr("lawful"), Vector.empty, Vector(lm), Space.Mention(lm))
@@ -893,7 +900,7 @@ class SpatialCheckCheck extends FunSuite:
   }
 
   // ================================================================================================
-  // 11.  THE SEARCH REPORTS ITS NUMBERS INSTEAD OF HANGING  (whispers.md §2's contract)
+  // 11.  THE SEARCH REPORTS ITS NUMBERS INSTEAD OF HANGING  (the search's stated contract)
   // ================================================================================================
 
   test("11. the bounded search reports path count, space count and budget, and stops on the budget") {
@@ -923,21 +930,36 @@ class SpatialCheckCheck extends FunSuite:
     assert(small.completeOnUniverse, small.show)
     println(s"SEARCH/complete: ${small.show}")
     // …and from the case where the universe could not hold a member of the inferred type AT ALL, where
-    // "no witness" is vacuous and must NOT read as an exhaustive pass
-    val wide16 = SpatialGamma.alpha(SpaceValue((0 until 16).map(i => p("h" + i)).toSet))
-    val vacuousSearch = SpatialCheck.searchWitness(wide16, SpatialType.empty,
+    // "no witness" is vacuous and must NOT read as an exhaustive pass.  The subject has to be one the
+    // PRODUCT query cannot decide either, or its complete enumeration answers first — see the
+    // 16-head case just below, which is exactly that and no longer reaches this path.
+    val wideOpen = SpatialType.reduce(SpatialType(Shape.top, SpaceType.exact(1L, 40L)))
+    val vacuousSearch = SpatialCheck.searchWitness(wideOpen, SpatialType.empty,
                                                    WitnessSearch(maxItems = 2, maxLen = 1, maxPaths = 4,
                                                                  maxCandidates = 10000L))
     assert(vacuousSearch.outOfScope, vacuousSearch.show)
     assert(!vacuousSearch.completeOnUniverse,
            s"a universe that cannot hold a member must not claim completeness:\n${vacuousSearch.show}")
     assert(vacuousSearch.witness.isEmpty)
-    val (v2, _) = SpatialCheck.types(wide16, SpatialType.empty,
+    val (v2, _) = SpatialCheck.types(wideOpen, SpatialType.empty,
                                      WitnessSearch(maxItems = 2, maxLen = 1, maxPaths = 4))
     assert(v2.isUnknown, v2.show)
     val r2 = v2 match { case SpatialCheck.Unknown(_, r) => r; case _ => "" }
     assert(r2.contains("could not look"), r2)
     println(s"SEARCH/out-of-scope: ${vacuousSearch.show}")
+    // A 16-HEAD TYPE IS PAST `Shape.MaxHeads`, AND THE WIDTH SPILL NOW NAMES WHAT IT DROPPED.  That
+    // certificate is what makes the alphabet finite and known, so `plan` can build a COMPLETE path set
+    // over it (12 tracked + 4 spilled) and the product query decides the pair outright — with a real
+    // member as the witness, not a shrug.  Before channel (e) the spilled heads were anonymous, the
+    // walk needed 16 fresh items, and the answer was "could not look".
+    val wide16 = SpatialGamma.alpha(SpaceValue((0 until 16).map(i => p("h" + i)).toSet))
+    assert(wide16.shape.otherKeys.isDefined, s"the spill must name its keys: ${wide16.shape.show}")
+    assertEquals(SpatialCheck.plan(wide16, SpatialType.empty, ProductSearch.default).map(_.size),
+                 Right(16), s"the complete path set must include the SPILLED heads: ${wide16.shape.show}")
+    val (v16, _) = SpatialCheck.types(wide16, SpatialType.empty,
+                                      WitnessSearch(maxItems = 2, maxLen = 1, maxPaths = 4))
+    assert(v16.isRefuted, s"a complete enumeration must decide it: ${v16.show}")
+    println(s"SEARCH/named-spill: ${v16.show}")
     // a type whose SHORTEST path is longer than the caller's maxLen: the ceiling is raised to that
     // length rather than leaving the universe empty, because that is the only length worth looking at
     val deepT = SpatialType.reduce(SpatialType(Shape.top, SpaceType.exact(9L, 1L)))

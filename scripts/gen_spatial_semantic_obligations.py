@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the SPATIAL-SEMANTIC obligation corpus under proofs/spatial-semantic/ + its REGISTRY.
 
-review.md finding 6: `proofs/spatial/` contains lattice algebra and path lemmas but NOTHING that
+the review: `proofs/spatial/` contains lattice algebra and path lemmas but NOTHING that
 states, let alone proves, the semantic laws
 
     eval(s, concreteEnv) ∈ γ(infer(s, abstractEnv))
@@ -348,7 +348,7 @@ emit("gsem_disjoin_sound",
      "widening leaves a tracked class inside the spill window, `disjoin` folds it in with "
      "lo = max (NOT +, because the two claims may describe the same paths) and hi = +, widening the "
      "window.  Theorem: every concrete vector admitted before the fold is admitted after.  This is "
-     "the repair review.md credits in its item 1, stated as a γ fact for the first time.",
+     "the repair the review credits in its item 1, stated as a γ fact for the first time.",
      CNT + TY + """
 (declare-const a Ty)
 (declare-const n0 Int) (declare-const n1 Int) (declare-const n2 Int) (declare-const n3 Int)
@@ -379,7 +379,7 @@ emit("gsem_satisfies_weaker",
      "bound has any paths at all, so t = {len1:[1,2], spill{2,3}:[1,2]} accepts a value with two "
      "length-2 paths and no length-1 path, which is not in γ(t).  "
      "`SpecializedRoutine.applicableTo` is built on `satisfies`, so a guarded dispatcher can select "
-     "a specialisation for an input violating the precondition it was derived under (review.md 5).",
+     "a specialisation for an input violating the precondition it was derived under.",
      CNT + TY + """
 (define-fun T () Ty (mkty (mki (fin 0) (fin 0)) (mki (fin 1) (fin 2)) (mki (fin 1) (fin 2)) 2 3))
 ; SpatialTyping.satisfies, transcribed: total size, the classes PRESENT in v, the length hull
@@ -705,7 +705,7 @@ emit("gsem_l1_restrict_sound",
 emit("gsem_l1_headcount_rules",
      "the HEAD-COUNT bounds for ∪, ∩, ∖ and <| over a 3-head universe",
      "`Shape.headCount` is the group count of an `Iteration`, the fact the length histogram cannot "
-     "express at all (review.md 1).  Theorem: the number of DISTINCT heads of A∪B is at most the sum "
+     "express at all.  Theorem: the number of DISTINCT heads of A∪B is at most the sum "
      "and at least each side's; of A∩B at most the minimum; of A∖B and A<|B at most A's; and with "
      "CLOSED head sets the union's head set is exactly the union of the two.  Stated on the concrete "
      "sets, which is what the abstract rule has to bracket.",

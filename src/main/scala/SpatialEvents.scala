@@ -1,7 +1,7 @@
 package morkl
 
 /** ==============================================================================================
- *  EFFORT EVENTS — the "actual steps" oracle review.md finding 2 says the effort model is missing.
+ *  EFFORT EVENTS — the "actual steps" oracle the review says the effort model is missing.
  *
  *  THE PROBLEM.  `SpatialCost` predicts `work`/`alloc`/`rounds`/`touch`, but until now nothing in
  *  the tree DEFINED those units operationally, so "is the prediction close?" was unanswerable and
@@ -24,7 +24,7 @@ package morkl
  *  ("the disarmed sink's cost is measured, not asserted"), both per hook in a tight loop and at
  *  executor level with the hook count of the workload in hand.
  *
- *  WHAT IS COUNTED NOW, AND WHAT IS STILL NOT (review.md item 1).  The three gaps the previous
+ *  WHAT IS COUNTED NOW, AND WHAT IS STILL NOT.  The three gaps the previous
  *  revision admitted — `evalI` node dispatches, `ITrie`/`IntTrieOps` per-node descent, and trie-node
  *  allocation — are CLOSED: IntTrie.scala and IntTrieOps.scala carry hooks
  *  ([[EffortEvent.TrieDispatch]], [[EffortEvent.TriePathDispatch]], [[EffortEvent.TrieNodeVisit]],
@@ -33,7 +33,7 @@ package morkl
  *  All FOUR backends therefore have counted runs, and `touch` — previously an oracle-free component —
  *  is a CALIBRATED component on the three trie-shaped backends.
  *
- *  THE N-ARY OPERAND LOOPS AND THEIR SCRATCH STORAGE ARE COUNTED TOO (review.md's first P0).  A fifth
+ *  THE N-ARY OPERAND LOOPS AND THEIR SCRATCH STORAGE ARE COUNTED TOO (the first P0).  A fifth
  *  gap used to sit alongside the four below and was worse than any of them, because it was the only one
  *  UNBOUNDED IN ARITY: nothing in `IntTrieOps.joinAllTries`/`meetAllTries` or `ITrie.liveDistinct`
  *  emitted any event for the `O(k)` operand loops each recursive call performs, nor for the `Θ(k)`
@@ -68,7 +68,7 @@ package morkl
  *   4. `Interner.intern` PER PATH ITEM (IntTrie.scala).  `internPath` / `uninternPath` do one
  *      `ConcurrentHashMap` lookup and one cons cell per item of the path, and the only event on that
  *      route is ONE [[EffortEvent.TriePathDispatch]] for the whole `Path` subterm — so a length-`L`
- *      constant costs `L` map probes and is counted as 1.  review.md item 6, fourth bullet, names this
+ *      constant costs `L` map probes and is counted as 1.  The review names this
  *      and it is NOT closed.  The gap is bounded by the path-length channel the cost model already
  *      carries (`Lower.LenBounds`): it is at most `len(p)` per counted `TriePathDispatch`, i.e. a
  *      factor the model can name, not an unbounded one.  It is a `Work` gap only; `intern` allocates
@@ -77,7 +77,7 @@ package morkl
  *      in `SpatialEventsCheck` and every calibrated `Work` bound at once — hence it is declared here
  *      rather than done quietly.
  *
- *  WHAT THE CASE-RETURNING ALGEBRA ADDED (review.md items 1 and 2).  `ITrie`'s ring operations return
+ *  WHAT THE CASE-RETURNING ALGEBRA ADDED.  `ITrie`'s ring operations return
  *  `ITrie.AlgebraicResult`, so `evalI` — the executable `Backend.Trie` names — accepts and rejects
  *  whole subtries by pointer.  That control state is now counted: [[EffortEvent.AlgebraEmpty]],
  *  [[EffortEvent.AlgebraIdentityLeft]], [[EffortEvent.AlgebraIdentityRight]],
@@ -107,7 +107,7 @@ enum EffortComponent:
   case Explain
 
 /** One counted unit of executor effort.  Every case names its emitting executable(s); a case with no
- *  emitter is not allowed to exist (review.md finding 6 on `Fact.PrefixAbsent`: a public promise
+ *  emitter is not allowed to exist (the review on `Fact.PrefixAbsent`: a public promise
  *  nothing ever produces is worse than no promise). */
 enum EffortEvent(val component: EffortComponent, val emitter: String):
   // ---- node dispatches -------------------------------------------------------------------------
@@ -138,7 +138,7 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
    *   - one operand placed on a side of `br` by the split, or one `Tip` value read;
    *   - one operand tested by the result-identity search that decides whether the merge IS an operand.
    *
-   *  WHY IT EXISTS (review.md's first P0).  None of that work emits [[TrieNodeVisit]],
+   *  WHY IT EXISTS (the first P0).  None of that work emits [[TrieNodeVisit]],
    *  [[PatriciaVisit]] or [[PatriciaEntry]], so the "actual steps" oracle could not see it at all — and
    *  what it could not see was a `Θ(k²)` dedup behind a scaladoc that claimed `O(k)`.  Counting it makes
    *  the per-call operand cost a MEASURED quantity: `OptimalTrieCheck`'s arity ladder reads this event,
@@ -185,7 +185,7 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
    *   - `ITrie.liveDistinct`'s `ArrayBuffer` contributes `2k` slots — the total over its doublings from
    *     empty to `k`, not the final capacity.
    *
-   *  WHY IT EXISTS (review.md's first P0, last paragraph).  This storage was absent from `Alloc`
+   *  WHY IT EXISTS (the first P0, last paragraph).  This storage was absent from `Alloc`
    *  entirely — a fifth oracle gap on top of the four this file declares, and the only one UNBOUNDED IN
    *  ARITY: a `k`-operand join allocates `Θ(k)` slots at every recursive call, which on the arity ladder
    *  in `OptimalTrieCheck` is the dominant term of the measured wall time.  Counting it is what lets a
@@ -200,7 +200,7 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
   /** one routine call entered */
   case CallEntry extends EffortEvent(EffortComponent.Rounds, "eval,evalI,execT")
 
-  // ---- the ALGEBRAIC RESULT CASE of the case-returning trie algebra (review.md items 1 and 2) ----
+  // ---- the ALGEBRAIC RESULT CASE of the case-returning trie algebra ----
   // Explanatory by construction: these do not add work, they say WHICH work was avoided.  A cost
   // model cannot express "an entire left subspace was accepted by pointer" unless the oracle counts
   // it, and a `Meas`-only summary (size/len/heads/nodes plus `same`/`headDisjoint`) cannot express it
@@ -230,7 +230,7 @@ enum EffortEvent(val component: EffortComponent, val emitter: String):
   case PatriciaEntry extends EffortEvent(EffortComponent.Explain, "evalI,execT,execZ")
   /** one node compared by `ITrie.equalT` — the fixpoint convergence test's EQUALITY FRONTIER.
    *
-   *  Accounted separately from `touch` DELIBERATELY.  It is real executor work (review.md item 6 is
+   *  Accounted separately from `touch` DELIBERATELY.  It is real executor work (the review is
    *  right that a structural `==` walk was uninstrumented), but folding it into a calibrated component
    *  would silently change what every existing `touch` bound in `SpatialCost` is compared against.
    *  Counting it here makes the frontier visible now; re-attributing it belongs with the cost-model
@@ -264,7 +264,7 @@ enum GapStatus:
  *  ONE DECLARED GAP between the counted oracle and the work an executor actually performs.
  *
  *  ==WHY THIS EXISTS AS DATA==
- *  The gaps were PROSE, in the file comment above.  review.md's fifth product requirement is "an
+ *  The gaps were PROSE, in the file comment above.  the fifth product requirement is "an
  *  ORACLE-COVERAGE ASSERTION that every backend loop and allocation category is either counted or
  *  deliberately outside the advertised unit", and it notes that only the `touch` gap was ever asserted
  *  (`the declared touch-oracle gap is exactly one backend`) while the rest were paragraphs.  A paragraph
@@ -464,7 +464,7 @@ inline def effortN(inline e: EffortEvent, inline n: Long): Unit =
  *   - `iLiteral`/`iLiteralStr` build an `ITrie` from a `SpaceValue` on first sight and return the
  *     cached trie afterwards, so a warm `Literal` is a map lookup and not `|v|` insertions;
  *   - `eval(Literal(v))` returns the ALREADY STORED `Set` in both phases — the `|v|` construction
- *     cost belongs to whoever built the literal, not to the evaluator (review.md finding 2, first
+ *     cost belongs to whoever built the literal, not to the evaluator (the review first
  *     bullet);
  *   - `transpile` + `optimize` + `Interner` work happens once per program, not per execution. */
 enum ExecutionPhase:
@@ -512,7 +512,7 @@ object Calibration:
   def median(xs: Vector[Double]): Double = quantile(xs, 0.5)
   def p95(xs: Vector[Double]): Double = quantile(xs, 0.95)
 
-  /** Aggregate a bag of calibration points into the table review.md asks for: containment rate plus
+  /** Aggregate a bag of calibration points into the table the review asks for: containment rate plus
    *  median, p95 and WORST slack (the two the tightness gate reads), keyed by whatever `label` the
    *  caller grouped by.  `unbounded` and `zeroActual` are reported so a tight-looking row cannot be
    *  tight only because most of its predictions said nothing. */
@@ -540,7 +540,7 @@ object Calibration:
       Summary(key, cs.length, cs.count(_.contains), median(xs), p95(xs), xs.max,
               cs.count(!_.bounded), cs.count(_.actual == 0L))
 
-  /** Spearman rank correlation — kept, but DEMOTED to a secondary trend metric (review.md 2). */
+  /** Spearman rank correlation — kept, but DEMOTED to a secondary trend metric. */
   def spearman(xs: Vector[Double], ys: Vector[Double]): Double =
     require(xs.length == ys.length && xs.nonEmpty)
     def ranks(v: Vector[Double]): Vector[Double] =

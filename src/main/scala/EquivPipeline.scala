@@ -25,22 +25,38 @@ object EquivPipeline:
    *  append/isPrefix as QUANTIFIED AXIOMS (no define-fun-rec/match — vampire does not unfold
    *  those), plus the certified lemma set (append-cons split, append-nil) that lets BOTH z3 and
    *  vampire discharge the equivalences in plain FOL, including for variable-input programs. */
-  val foPrelude: String = """(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
-(declare-fun append (Path Path) Path)
+  /** The prelude in three independently-includable blocks.  `append` is reachable only from
+   *  `Composition`, `isPrefix` only from `Restriction`/`Raffination`; a file using neither carried
+   *  SIX unused quantified axioms (one with a nested existential) — pure saturation fuel for
+   *  vampire, and exactly the noise that hid the old degenerate files' PRELUDE-INDEPENDENCE
+   *  (plan item 12: stripping the whole prelude left every one of the 18 instance files still
+   *  `unsat`).  [[prunedPrelude]] keeps only the blocks a given body actually mentions. */
+  val preludeDatatype: String = """(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))"""
+  val preludeAppend: String = """(declare-fun append (Path Path) Path)
 (assert (forall ((q Path)) (= (append nil q) q)))
 (assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
-(declare-fun isPrefix (Path Path) Bool)
-(assert (forall ((p Path)) (isPrefix nil p)))
-(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
-(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
-  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
 ; certified lemmas (proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2 — both PROVED)
 (assert (forall ((k2 Int) (p Path) (q Path) (r Path))
   (= (= (cons k2 p) (append q r))
      (or (and (= q nil) (= r (cons k2 p)))
          (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
-(assert (forall ((q Path)) (= (append q nil) q)))
-"""
+(assert (forall ((q Path)) (= (append q nil) q)))"""
+  val preludeIsPrefix: String = """(declare-fun isPrefix (Path Path) Bool)
+(assert (forall ((p Path)) (isPrefix nil p)))
+(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
+(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
+  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))"""
+
+  /** the FULL prelude (every block) — the data-agnostic legs quantify over free inputs, so they
+   *  cannot decide statically which operators a model will need. */
+  val foPrelude: String =
+    s"$preludeDatatype\n$preludeAppend\n$preludeIsPrefix\n"
+
+  /** the datatype plus exactly the axiom blocks `body` (the emitted defs + goal) refers to. */
+  def prunedPrelude(body: String): String =
+    (preludeDatatype ::
+      (if body.contains("append") then List(preludeAppend) else Nil) :::
+      (if body.contains("isPrefix") then List(preludeIsPrefix) else Nil)).mkString("\n") + "\n"
 
 
 
@@ -64,6 +80,7 @@ object EquivPipeline:
       case Unwrap(src, p) => Unwrap(expand(src), Path.Constant(pv(p)))
       case TailsUnion(src) => TailsUnion(expand(src))
       case TailsIntersection(src) => TailsIntersection(expand(src))
+      // obligation: terminating/REGISTRY.tsv O9c — the head-group union is `proofs/keyfold_iter.smt2`
       case Iteration(src, sym, rest, body) =>                 // exec's rule: union over head groups
         val srcE = expand(src)
         val groups = eval(srcE).paths.collect { case PathValue(h :: t) => (h, PathValue(t)) }.groupMap(_._1)(_._2)
@@ -72,6 +89,8 @@ object EquivPipeline:
                         sc.grown(Map(rest -> SpaceValue(tails.toSet))), rc)
         }
         if parts.isEmpty then Empty else parts.reduceLeft(Union.apply)
+      // obligation: terminating/fixpoint_is_lfp.smt2 (O1, O9a) — this loop IS the two-sequence
+      // Kleene recurrence that file axiomatises, so `expand` computes the same limit `eval` does
       case Fixpoint(init, rec, body) =>                       // exec's rule: unroll to convergence
         val initE = expand(init)
         var cur = eval(initE)
@@ -227,8 +246,21 @@ object EquivPipeline:
     def fresh(prefix: String): String = { n += 1; s"${prefix}_$n" }
     def emit(s: String): Unit = defs.append(s).append('\n')
     def text: String = defs.toString
+    /** STRUCTURAL SHARING: one macro per DISTINCT subterm, across BOTH sides of an obligation.
+     *  Two effects, both measured on the instance legs (the un-folded sides, 2026-08-31):
+     *    (a) size — puzzle15-zipper 339 895 → 41 172 chars, aunt-zipper 38 775 → 7 115,
+     *        puzzle3-full-graph 711 906 → 56 KB: the two sides of a pipeline obligation share
+     *        almost all of their literal leaves, and the un-shared encoder emitted each copy;
+     *    (b) VACUITY BECOMES DECIDABLE AT THE ENCODER — if the two sides are the same term they
+     *        now get the SAME macro name, so `smtEquivalence` can refuse to emit `(= (m p) (m p))`
+     *        and write an honest marker instead (this is the plan-item-12 failure mode).
+     *  Sharing is a naming change only: a define-fun is a definition, the goal is unchanged, and
+     *  the prover still has to prove it (measured: aunt-space z3 0.02 s shared vs 0.02 s unshared,
+     *  aunt-zipper times out at 120 s in BOTH forms — sharing buys size, not provability). */
+    private val memo = scala.collection.mutable.HashMap.empty[Space, String]
     /** compile `s`; returns the name of a (define-fun <name> ((p Path)) Bool ...). */
-    def den(s: Space): String =
+    def den(s: Space): String = memo.getOrElseUpdate(s, denRaw(s))
+    private def denRaw(s: Space): String =
       def pathTerm(ids: List[Int]): String = ids.foldRight("nil")((k, acc) => s"(cons $k $acc)")
       val name = fresh("m")
       val body = s match
@@ -260,19 +292,37 @@ object EquivPipeline:
       name
 
   /** A full SMT equivalence file for two local-algebra programs.  With `obs` empty the goal is the
-   *  ∀-path equivalence; with `obs` given (instance spot checks) the goal is the finite conjunction
-   *  over the observation paths — ground-decidable. */
+   *  ∀-path equivalence (the STRONGER statement, and measured cheaper for z3 on every stone that
+   *  discharges at all: aunt-space 0.02 s ∀ vs 0.09 s over 28 observations, puzzle3-full-zipper
+   *  1.22 s vs 6.58 s); with `obs` given the goal is the finite conjunction over the observation
+   *  paths — ground-decidable, and the honest FALLBACK when the ∀ form is out of prover reach.
+   *
+   *  If the two sides compile to the SAME shared macro (structurally identical denotations) the
+   *  file carries an IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION marker instead of a goal:
+   *  `(= (m p) (m p))` is `true` by macro expansion and the prover does no work — that vacuity
+   *  is plan item 12, and it must be recorded, not emitted as a fake obligation. */
   def smtEquivalence(title: String, a: Space, b: Space, obs: List[List[Int]] = Nil): String =
     val smt = new Smt
     val na = smt.den(a); val nb = smt.den(b)
+    if na == nb then
+      return s"""; AUTO-GENERATED — $title
+; IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION: the two sides compile to the SAME shared
+; membership macro — they are the same local-algebra term, so `(= ($na p) ($nb p))` expands to
+; `true` and no prover would do any work on it.  The structural identity IS the equivalence
+; result for this cell (it is checked in Scala, not asserted here); the optimiser/transpiler
+; comparison that is NOT definitional for this stone is carried by the -agnostic twin.
+"""
+    val goal =
+      if obs.isEmpty then s"(assert (not (forall ((p Path)) (= ($na p) ($nb p)))))"
+      else obs.map(ids => ids.foldRight("nil")((k, acc) => s"(cons $k $acc)"))
+              .map(pt => s"(= ($na $pt) ($nb $pt))").mkString("(assert (not (and ", " ", ")))")
+    val body = s"${smt.text}\n$goal"
     s"""; AUTO-GENERATED — $title
 ; Both sides compiled to their denotational membership formulas over the same inputs;
-; the goal (negated): the programs produce the SAME OUTPUT — equal membership at every path.
-${EquivPipeline.foPrelude}
-${smt.text}
-${if obs.isEmpty then s"(assert (not (forall ((p Path)) (= ($na p) ($nb p)))))"
-   else obs.map(ids => ids.foldRight("nil")((k, acc) => s"(cons $k $acc)"))
-           .map(pt => s"(= ($na $pt) ($nb $pt))").mkString("(assert (not (and ", " ", ")))")}
+; the goal (negated): the programs produce the SAME OUTPUT — ${if obs.isEmpty then "equal membership at EVERY path"
+                                                              else s"equal membership at the ${obs.size} observation path(s)"}.
+${prunedPrelude(body)}
+$body
 (check-sat)
 """
 
@@ -311,7 +361,55 @@ object AgnosticPipeline:
     case Range(x, lo, hi) => Range(substMention(x, m, r), lo, hi)
     case other => other
 
-  /** k-unroll Fixpoints and recursive Calls; inline acyclic Calls; keep everything else. */
+  /** MONOTONICITY of `s` in the space mention `m`: does `X ⊑ Y` imply `s[m↦X] ⊑ s[m↦Y]`?
+   *
+   *  This is the SIDE CONDITION under which a `Space.Fixpoint`'s executor semantics (⋃ₙ Fⁿ(init),
+   *  stopping at the first repeat — [[EquivPipeline.expand]]) coincides with the LEAST POST-FIXPOINT
+   *  that the first-class FOL/egg models axiomatise.  Without it those axioms are simply wrong (an
+   *  antitone step has iterates that oscillate and no least post-fixpoint above init), so
+   *  [[AgSmt.fixSym]] refuses to emit a `Fixpoint` denotation when this returns false rather than
+   *  quietly asserting something unsound.
+   *
+   *  The algebra is monotone EVERYWHERE except three places, each a set complement in disguise:
+   *    * `Subtraction(x, y)` in `y`      — x \ y shrinks as y grows;
+   *    * `Raffination(x, y)` in `y`      — x \| y = x \ (x <| y), so y is complemented too
+   *                                        (x itself IS monotone: each path is judged alone);
+   *    * `TailsIntersection(src)`        — ⋂ over the PRESENT heads: one more head can only
+   *                                        shrink the meet.
+   *  `Range` (the positional ordered slice, outside the certified algebra) and an opaque `Call`
+   *  have unknown variance and are treated as non-monotone whenever `m` is free in them. */
+  def monotoneInMention(s: Space, m: SpaceMention): Boolean =
+    def free(x: Space): Boolean = usesMention(x, m.s)
+    def go(x: Space): Boolean = x match
+      case Empty | Literal(_) | Singleton(_) | Mention(_) => true
+      case Union(a, b) => go(a) && go(b)
+      case Intersection(a, b) => go(a) && go(b)
+      case Composition(a, b) => go(a) && go(b)
+      case Restriction(a, b) => go(a) && go(b)              // monotone in BOTH operands
+      case Subtraction(a, b) => go(a) && !free(b)
+      case Raffination(a, b) => go(a) && !free(b)
+      case Wrap(src, _) => go(src)
+      case Unwrap(src, _) => go(src)
+      case TailsUnion(src) => go(src)
+      case TailsIntersection(src) => !free(src)
+      case Iteration(src, _, rest, body) =>
+        // monotone in `src` only if the body is monotone in the tails it binds (a bigger source
+        // yields bigger tail-sets as well as more head groups)
+        (!free(src) || (go(src) && monotoneInMention(body, rest))) && (rest.s == m.s || go(body))
+      case Fixpoint(init, rec, body) => go(init) && (rec.s == m.s || go(body))
+      case other => !free(other)                            // Range / Call / grounded: unknown variance
+    go(s)
+
+  /** k-unroll recursive Calls; inline acyclic Calls; keep Fixpoint and everything else INTACT.
+   *
+   *  FIXPOINT IS NO LONGER UNROLLED (plan item 1).  It used to become
+   *    `init ∪ F(init) ∪ F(F(init))` at k = 2, so the certificate stated "the 2-unrollings agree",
+   *  never "the fixpoints agree"; the only reason for it was that neither downstream renderer could
+   *  represent a `Fixpoint` at all.  Both can now — `renderZ` emits `(Fix init (BodyK …))` and
+   *  `AgSmt.denRaw` emits an uninterpreted predicate with the two post-fixpoint axioms plus Park
+   *  induction — so the binder survives to the provers.  Recursive `Call`s that no `asFixpoint`
+   *  lowering turns into a `Fixpoint` are still k-unrolled and cut with a fresh shared free input;
+   *  that residual is the honest remaining approximation and it is named in the emitted files. */
   def unrollControl(s: Space, k: Int)(using rc: PartialFunction[RoutinePtr, Routine]): Space = s match
     case Union(a, b) => Union(unrollControl(a, k), unrollControl(b, k))
     case Intersection(a, b) => Intersection(unrollControl(a, k), unrollControl(b, k))
@@ -325,11 +423,19 @@ object AgnosticPipeline:
     case TailsIntersection(src) => TailsIntersection(unrollControl(src, k))
     case Iteration(src, sym, rest, body) => Iteration(unrollControl(src, k), sym, rest, unrollControl(body, k))
     case Range(x, lo, hi) => Range(unrollControl(x, k), lo, hi)
-    case Fixpoint(init, rec, body) =>
-      var acc = unrollControl(init, k)
-      for _ <- 1 to k do acc = Union(acc, unrollControl(substMention(body, rec, acc), k))
-      acc
-    case Call(rp, refs, mentions) if rc.isDefinedAt(rp) =>
+    case Fixpoint(init, rec, body) => Fixpoint(unrollControl(init, k), rec, unrollControl(body, k))
+    case Call(rp, refs, mentions) if rc.isDefinedAt(rp) && {
+      // TRY TO LOWER BEFORE UNROLLING.  A self-recursion `asFixpointGeneral` recognises becomes a
+      // real `Space.Fixpoint`, which now survives to both renderers with a first-class model; only
+      // the shapes no lowering recognises are k-unrolled and cut with a fresh free input.
+      // MEASURED (2026-08-31): the corpus' ONLY self-recursive cornerstone routine, datalog-sn's
+      // `sn_tc`, is NOT lowerable — it changes TWO mentions at once (`all` and `delta`) and
+      // `asFixpointGeneral` requires exactly one, the documented honest-residual case — so the
+      // guard fires nowhere today and datalog-sn still gets the residual k-unrolling.  It is here
+      // so that "we unroll" stops being the DEFAULT and becomes the fallback (non-recursive
+      // routines take the same path as before: `asFixpointGeneral` returns None for them).
+      val r = rc(rp); asFixpointGeneral(rp, r.refs, r.mentions, r.body).isEmpty
+    } =>
       val Routine(_, refns, mentionns, body) = rc(rp)
       // substitute args; unroll self-recursion k levels, then cut with a fresh shared free input
       def inlineOnce(depth: Int, args: Vector[Space]): Space =
@@ -356,6 +462,14 @@ object AgnosticPipeline:
         case Call(orp, rs, ms) if rc.isDefinedAt(orp) => unrollControl(Call(orp, rs, ms.map(expandCalls(_, depth))), k)
         case other => other
       inlineOnce(0, mentions.map(unrollControl(_, k)))
+    case Call(rp, refs, mentions) if rc.isDefinedAt(rp) =>
+      // the lowerable case: substitute the actual arguments into the Fixpoint form and keep going
+      val r = rc(rp)
+      val fixBody = asFixpointGeneral(rp, r.refs, r.mentions, r.body).get
+      var b = fixBody
+      for (pr, arg) <- r.refs zip refs do b = substPathRef(b, pr, arg)
+      for (mn, arg) <- r.mentions zip mentions do b = substMention(b, mn, unrollControl(arg, k))
+      unrollControl(b, k)
     case other => other
 
   def substPathRef(s: Space, pr: PathRef, arg: Path): Space =
@@ -406,7 +520,15 @@ object AgnosticPipeline:
       case Range(x, _, _) => isGround(x, boundP, boundM)
       case _ => false
 
-  /** constant-fold maximal ground subtrees (the folded per-op semantics are certified in proofs/). */
+  /** Constant-fold maximal ground subtrees (the folded per-op semantics are certified in proofs/).
+   *
+   *  NEVER APPLY THIS TO A SIDE OF AN OBLIGATION.  It runs the executor, so after
+   *  [[EquivPipeline.expand]] — which has already turned a cornerstone into ground local algebra —
+   *  `isGround` holds AT THE ROOT and the whole program collapses to ONE `Literal`.  Both sides of
+   *  an instance obligation then fold to the same literal and the goal becomes `(= B B)`: all 18
+   *  every `proofs/pipeline` INSTANCE `.smt2` file was vacuous this way (plan item 12; z3 answered
+   *  `unsat` in 0.00-0.01 s and stayed `unsat` with the ENTIRE prelude deleted).  It is only ever
+   *  legitimate on an ANALYSIS INPUT — [[symbolic]], where free mentions keep the skeleton alive. */
   def fold(s: Space): Space =
     if isGround(s, Set.empty, Set.empty) then Literal(evalI(s)(using PathContextMap(Map.empty), Map.empty, PartialFunction.empty).toSpaceValue)
     else s match
@@ -421,6 +543,7 @@ object AgnosticPipeline:
       case TailsUnion(src) => TailsUnion(fold(src))
       case TailsIntersection(src) => TailsIntersection(fold(src))
       case Iteration(src, sym, rest, body) => Iteration(fold(src), sym, rest, fold(body))
+      case Fixpoint(init, rec, body) => Fixpoint(fold(init), rec, fold(body))
       case Range(x, lo, hi) => Range(fold(x), lo, hi)
       case other => other
 
@@ -476,7 +599,7 @@ object AgnosticPipeline:
       case TailsIntersection(src) => s"(TailsIntersection ${rz(src)})"
       case Range(x, lo, hi) =>
         // Range is the POSITIONAL ordered-slice op — outside the certified path-set algebra
-        // (fallbacks.md); over free inputs it is treated as an opaque shared input, keyed by its
+        // (the design note); over free inputs it is treated as an opaque shared input, keyed by its
         // operand's rendering + bounds so both sides align iff their Range subtrees align.
         val key = s"range|$lo|$hi|" + renderZ(x, penv, senv, ctx, false)
         s"(Src (N ${Interner.intern(("$range$" + key.hashCode))}))"
@@ -504,6 +627,31 @@ object AgnosticPipeline:
         val il = pUsed.map(penv).foldRight("(INil)")((v, acc) => s"(ICons $v $acc)")
         val zl = sUsed.map(senv).foldRight("(ZNil)")((v, acc) => s"(ZCons $v $acc)")
         s"(Iter ${rz(src)} (BodyK $id $il $zl))"
+      case Fixpoint(init, rec, body) =>
+        // FIRST-CLASS (plan item 1): `(Fix init (BodyK i …))` with the step defunctionalized
+        // exactly like an Iteration body, and an `FApp` rule instead of an `App` rule.  The three
+        // Fix rules in the egg preludes only MERGE e-classes (no unrolling rewrite), so
+        // the run still saturates; leastness has to be ASKED for with `(FixCand f c)`.
+        if !monotoneInMention(body, rec) then
+          throw IllegalStateException(
+            s"agnostic renderer: Fixpoint body is NOT monotone in ${rec.s} — the recursion variable " +
+            "sits under a complement (Subtraction/Raffination right operand, or TailsIntersection), " +
+            "so the least-post-fixpoint model would not denote the executor's iterate union")
+        val pUsed = penv.keys.toList.sorted.filter(n => usesPathRef(body, n))
+        val sUsed = senv.keys.toList.sorted.filter(n => usesMention(body, n) && n != rec.s)
+        val patP = pUsed.indices.map(i => s"ci$i").toList; val patS = sUsed.indices.map(i => s"cz$i").toList
+        val bodyPat = renderZ(body, penv ++ (pUsed zip patP).toMap,
+                              senv ++ (sUsed zip patS).toMap + (rec.s -> "x"), ctx, false)
+        val key = "fix|" + bodyPat + "|" + pUsed.size + "|" + sUsed.size
+        val id = ctx.appRules.getOrElseUpdate(key, {
+          val i = ctx.nextId; ctx.nextId += 1
+          val il = patP.foldRight("(INil)")((v, acc) => s"(ICons $v $acc)")
+          val zl = patS.foldRight("(ZNil)")((v, acc) => s"(ZCons $v $acc)")
+          (i, s"(rewrite (FApp (BodyK $i $il $zl) x) $bodyPat)")
+        })._1
+        val il = pUsed.map(penv).foldRight("(INil)")((v, acc) => s"(ICons $v $acc)")
+        val zl = sUsed.map(senv).foldRight("(ZNil)")((v, acc) => s"(ZCons $v $acc)")
+        s"(Fix ${rz(init)} (BodyK $id $il $zl))"
       case other => throw IllegalStateException(s"agnostic renderer: unsupported $other")
 
   def usesPathRef(s: Space, name: String): Boolean =
@@ -524,6 +672,7 @@ object AgnosticPipeline:
       case TailsUnion(src) => usesPathRef(src, name)
       case TailsIntersection(src) => usesPathRef(src, name)
       case Iteration(src, sym, _, body) => usesPathRef(src, name) || (sym.s != name && usesPathRef(body, name))
+      case Fixpoint(init, _, body) => usesPathRef(init, name) || usesPathRef(body, name)
       case Range(x, _, _) => usesPathRef(x, name)
       case _ => false
 
@@ -540,6 +689,7 @@ object AgnosticPipeline:
     case TailsUnion(src) => usesMention(src, name)
     case TailsIntersection(src) => usesMention(src, name)
     case Iteration(src, _, rest, body) => usesMention(src, name) || (rest.s != name && usesMention(body, name))
+    case Fixpoint(init, rec, body) => usesMention(init, name) || (rec.s != name && usesMention(body, name))
     case Range(x, _, _) => usesMention(x, name)
     case _ => false
 
@@ -612,6 +762,7 @@ object AgnosticPipeline:
           val key = "rng_" + (s"$lo|$hi|" + x.toString).hashCode.toHexString
           decls += s"(declare-fun $key (Path) Bool)"   // opaque positional op, shared across sides
           s"($key $pt)"
+        case fx @ Fixpoint(init, rec, body) => s"(${fixSym(fx, init, rec, body, penv, senv)} $pt)"
         case Iteration(src, sym, rest, body) =>
           val h = fresh("h"); val q = fresh("q")
           val tails = fresh("tails")
@@ -624,6 +775,59 @@ object AgnosticPipeline:
           val expanded = expandTails(inlined, s"TAILS$h", src, h, penv, senv)
           s"(exists (($h Int)) (and (exists (($q Path)) ${den(src, s"(cons $h $q)", penv, senv)}) $expanded))"
         case other => throw IllegalStateException(s"agnostic smt: unsupported $other")
+    // ------------------------------------------------------------------------------------------
+    // FIXPOINT — FIRST-CLASS IN PLAIN FOL (plan item 1).  Before this, `denRaw` threw on Fixpoint
+    // and `unrollControl` k-unrolled it away, so the agnostic certificates only ever said "the
+    // 2-unrollings agree".  A Fixpoint now becomes an UNINTERPRETED PREDICATE `fix_i : Path → Bool`
+    // constrained by the two POST-FIXPOINT axioms
+    //     ∀q. init(q) → fix(q)            ∀q. body[rec↦fix](q) → fix(q)
+    // and, per ordered pair of fixpoints appearing in one obligation, a PARK INDUCTION instance
+    //     (∀r. init_f(r) → g(r)) ∧ (∀r. body_f[rec↦g](r) → g(r))  →  ∀q. fix_f(q) → g(q)
+    // which is a THEOREM of the intended semantics, not an assumption: its two premises are
+    // obligations the prover still has to discharge, so it cannot make a goal vacuous.  Mutual
+    // containment then yields equality in plain FOL with no new quantifier alternation.
+    //
+    // SOUNDNESS SIDE CONDITION: the axioms hold of ⋃ₙ Fⁿ(init) only when F is MONOTONE in `rec`;
+    // [[AgnosticPipeline.monotoneInMention]] decides that syntactically and this method REFUSES to
+    // emit rather than assert something unsound.
+    private val fixMemo = scala.collection.mutable.HashMap.empty[(Space, Map[String, String], Map[String, String]), String]
+    private val fixes = scala.collection.mutable.ArrayBuffer.empty[(String, Space, Space, SpaceMention, Map[String, String], Map[String, String])]
+    def fixSym(fx: Space, init: Space, rec: SpaceMention, body: Space,
+               penv: Map[String, String], senv: Map[String, String]): String =
+      fixMemo.getOrElseUpdate((fx, penv, senv), {
+        if !AgnosticPipeline.monotoneInMention(body, rec) then
+          throw IllegalStateException(
+            s"agnostic smt: Fixpoint body is NOT monotone in ${rec.s} — the recursion variable sits " +
+            "under a complement (Subtraction/Raffination right operand, or TailsIntersection).  The " +
+            "least-post-fixpoint axioms would then be false of the executor's iterate union, so no " +
+            "first-class denotation is emitted (the caller must record an honest marker)")
+        val f = fresh("fix")
+        decls += s"(declare-fun $f (Path) Bool)"
+        emitDef(s"; FIXPOINT $f — first-class: the LEAST post-fixpoint above init (never unrolled)")
+        emitDef(s"(assert (forall ((zq Path)) (=> ${den(init, "zq", penv, senv)} ($f zq))))")
+        emitDef(s"(assert (forall ((zq Path)) (=> ${den(body, "zq", penv, senv + (rec.s -> f))} ($f zq))))")
+        fixes += ((f, init, body, rec, penv, senv))
+        f
+      })
+
+    /** One PARK INDUCTION instance per ORDERED pair of (compiled fixpoint, candidate predicate),
+     *  where the candidates are the other fixpoints PLUS whatever `extra` names the caller passes —
+     *  normally the two sides' own root macros.  The `extra` list is not decoration: MEASURED on
+     *  puzzle3-full, `SC.reduce` collapses the fixpoint side to a ground 12-path literal while the
+     *  original side keeps the binder, so the obligation has exactly ONE `fix` symbol and
+     *  fixpoint-to-fixpoint pairing emits NOTHING — leastness against the literal is the only form
+     *  of the argument that exists.  Call once, AFTER both sides are compiled and after the root
+     *  macros are emitted: `fixes` must be complete and the instances must follow the defining
+     *  axioms in the file. */
+    def emitParkInstances(extra: List[String] = Nil): Unit =
+      val snapshot = fixes.toList
+      val candidates = snapshot.map(_._1) ++ extra
+      for (f, initF, bodyF, recF, pe, se) <- snapshot; g <- candidates if f != g do
+        val premInit = s"(forall ((zr Path)) (=> ${den(initF, "zr", pe, se)} ($g zr)))"
+        val premStep = s"(forall ((zr Path)) (=> ${den(bodyF, "zr", pe, se + (recF.s -> g))} ($g zr)))"
+        emitDef(s"; PARK INDUCTION $f ⊑ $g — leastness of $f; BOTH premises are obligations")
+        emitDef(s"(assert (=> (and $premInit $premStep) (forall ((zq Path)) (=> ($f zq) ($g zq)))))")
+
     /** replace (MARK t) applications with den(src, (cons h t)). */
     private def expandTails(f: String, mark: String, src: Space, h: String, penv: Map[String, String], senv: Map[String, String]): String =
       var out = f
@@ -637,8 +841,13 @@ object AgnosticPipeline:
 
   def smtAgnostic(title: String, a: Space, b: Space): String =
     val smt = new AgSmt
-    val fa = smt.den(a, "p", Map.empty, Map.empty)
-    val fb = smt.den(b, "p", Map.empty, Map.empty)
+    val fa0 = smt.den(a, "p", Map.empty, Map.empty)
+    val fb0 = smt.den(b, "p", Map.empty, Map.empty)
+    // name both roots so a fixpoint on ONE side can take the OTHER side as its Park candidate
+    smt.emitDef(s"(define-fun sideA ((p Path)) Bool $fa0)")
+    smt.emitDef(s"(define-fun sideB ((p Path)) Bool $fb0)")
+    smt.emitParkInstances(List("sideA", "sideB"))   // after BOTH sides and both root macros
+    val (fa, fb) = ("(sideA p)", "(sideB p)")
     s"""; AUTO-GENERATED — $title
 ; DATA-AGNOSTIC: inputs are uninterpreted path-set predicates; the goal (negated) states the two
 ; programs produce the same output at EVERY path for ALL inputs.
@@ -691,6 +900,12 @@ object SmtDiff:
       case (Range(s1, l1, h1), Range(s2, l2, h2)) if l1 == l2 && h1 == h2 => diff(s1, s2, penv, senv)
       case (Iteration(s1, y1, r1, b1), Iteration(s2, y2, r2, b2)) if y1.s == y2.s && r1.s == r2.s =>
         diff(s1, s2, penv, senv) ++ diff(b1, b2, y1.s :: penv, r1.s :: senv)
+      case (Fixpoint(i1, r1, b1), Fixpoint(i2, r2, b2)) if r1.s == r2.s =>
+        // CONGRUENCE for the least fixpoint: lfp is monotone in BOTH init and step, so
+        // init₁ = init₂ and step₁ = step₂ (pointwise, with `rec` freed) give lfp₁ = lfp₂ — Park
+        // induction in each direction with the identity as the mediating predicate.  `alphaNorm`
+        // has already canonicalised the binder, so the `r1.s == r2.s` guard is not a restriction.
+        diff(i1, i2, penv, senv) ++ diff(b1, b2, penv, r1.s :: senv)
       case _ => List((a, b, penv, senv))
 
   /** diff pairs partitioned into LAW-JUSTIFIED (proof-carrying: instances of the ∀-certified
@@ -708,6 +923,7 @@ object SmtDiff:
     }.mkString("\n")
     val smt = new AgnosticPipeline.AgSmt
     var reflexive = 0
+    val parkCands = scala.collection.mutable.ArrayBuffer.empty[String]
     val obs = residual.zipWithIndex.flatMap { case ((l, r, ps, ss), i) =>
       val penv = ps.map(n => n -> s"bv_${i}_$n").toMap
       val senv = ss.map(n => n -> s"bm_${i}_${n.replaceAll("[^A-Za-z0-9]", "_")}").toMap
@@ -716,8 +932,13 @@ object SmtDiff:
       else
         penv.values.foreach(v => smt.decls += s"(declare-const $v Int)")
         senv.values.foreach(v => smt.decls += s"(declare-fun $v (Path) Bool)")
-        Some(s"(forall ((p Path)) (= $fl $fr))")
+        val (nl, nr) = (s"pairL$i", s"pairR$i")
+        smt.emitDef(s"(define-fun $nl ((p Path)) Bool $fl)")
+        smt.emitDef(s"(define-fun $nr ((p Path)) Bool $fr)")
+        parkCands ++= List(nl, nr)
+        Some(s"(forall ((p Path)) (= ($nl p) ($nr p)))")
     }
+    smt.emitParkInstances(parkCands.toList)   // after EVERY pair: each side is the other's candidate
     val nPairs = justified.size + residual.size
     if obs.isEmpty && justified.isEmpty then
       return s"""; AUTO-GENERATED — $title
@@ -771,6 +992,10 @@ ${smt.defsText}
         val (ns, nr) = (s"av$i", s"ar$i")
         Iteration(go(src, pm, mm), PathRef(ns).known(1), SpaceMention(nr),
                   go(body, pm + (sym.s -> ns), mm + (rest.s -> nr)))
+      case Fixpoint(init, rec, body) =>
+        val i = fresh()
+        val nr = s"af$i"
+        Fixpoint(go(init, pm, mm), SpaceMention(nr), go(body, pm, mm + (rec.s -> nr)))
       case other => other
     def rp(p: Path, pm: Map[String, String]): Path = p match
       case Path.Deref(pr) => Path.Deref(PathRef(pm.getOrElse(pr.s, pr.s)).known(1))
@@ -803,7 +1028,7 @@ ${smt.defsText}
     "restriction-singleton-unwrap" -> "proofs/laws/law_restrict_set.smt2",
     "iter-tails" -> "proofs/laws/law_tailsu_set.smt2 + proofs/keyfolds.smt2",
     "tailsunion-singleton" -> "proofs/laws/law_tailsu_set.smt2",
-    "range-singleton" -> "GROUND — trusted positional boundary (fallbacks.md); executor-evaluated",
+    "range-singleton" -> "GROUND — trusted positional boundary (the design note); executor-evaluated",
     "unwrap-wrap" -> "proofs/laws/law_unwrap_set.smt2",
     "iter-transpose-semijoin" -> "proofs/laws/law_iter_transpose_semijoin.smt2 + laws/law_transpose_spec.smt2",
     "iter-witness-head-narrow" -> "proofs/laws/law_iter_head_narrow.smt2",

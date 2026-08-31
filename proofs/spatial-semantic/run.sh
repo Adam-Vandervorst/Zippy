@@ -1,5 +1,5 @@
 #!/bin/sh
-# Discharge the SPATIAL-SEMANTIC obligations (review.md finding 6: γ, α, the order, and the
+# Discharge the SPATIAL-SEMANTIC obligations (the review: γ, α, the order, and the
 # per-operator may/must rules) and write proofs/spatial-semantic/STATUS.tsv.
 #
 # Every file asserts the NEGATION of its theorem, so per prover:
@@ -20,12 +20,15 @@
 # This script writes ONLY proofs/spatial-semantic/STATUS.tsv.  It does not touch proofs/STATUS.tsv,
 # so the two corpora stay independently auditable.
 cd "$(dirname "$0")"
+. ../../scripts/toolpath.sh                    # $Z3 / $VAMPIRE -> PATH -> conventional locations
+Z3_BIN=$(resolve_tool z3)           || { echo "$(tool_missing z3)" >&2; exit 1; }
+VAMPIRE_BIN=$(resolve_tool vampire) || { echo "$(tool_missing vampire)" >&2; exit 1; }
 pass=0; cm=0; open=0
 : > STATUS.tsv
 for path in gsem_*.smt2; do
   f=$(basename "$path" .smt2)
-  z3r=$(z3 -T:60 "$path" 2>&1 | tail -1)
-  vr=$(/Applications/vampire --input_syntax smtlib2 -t 60s "$path" 2>&1 | grep -q "Refutation found" && echo proved || echo -)
+  z3r=$("$Z3_BIN" -T:60 "$path" 2>&1 | tail -1)
+  vr=$("$VAMPIRE_BIN" --input_syntax smtlib2 -t 60s "$path" 2>&1 | grep -q "Refutation found" && echo proved || echo -)
   if [ "$z3r" = "sat" ]; then
     st="COUNTERMODEL"; cm=$((cm+1))
   elif [ "$z3r" = "unsat" ] || [ "$vr" = "proved" ]; then

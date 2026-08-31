@@ -1,8 +1,8 @@
 # A Supercompiler for MORKL
 
 This document describes the supercompiler for the MORKL space/path algebra implemented in
-[`src/main/scala/Supercompiler.scala`](src/main/scala/Supercompiler.scala), and the guiding
-examples that validate it in [`src/test/scala/`](src/test/scala/).
+[`src/main/scala/Supercompiler.scala`](../src/main/scala/Supercompiler.scala), and the guiding
+examples that validate it in [`src/test/scala/`](../src/test/scala).
 
 MORKL programs compute over **spaces** — finite sets of dotted **paths** (e.g.
 `parent.Tom.Bob`, `Cell.2.3`). The algebra has set operations (union `\/`, intersection
@@ -133,9 +133,10 @@ No system JVM/sbt is required beyond `scala-cli`.  One reproducible command from
 checkout (builds a scratch dir of symlinks + using-directives; nothing to install):
 
 ```
-bin/test                    # full suite (108 tests; lot.metta/fred.rle/carac/NOAA examples
-                            # use the real files when present, deterministic fixtures otherwise)
-bin/test 'morkl.ExDatalog'  # one suite
+sbt test                          # full suite (lot.metta / fred.rle / carac / NOAA examples
+                                  # use the real files when present ($ZIPPY_DATA or -D overrides),
+                                  # deterministic fixtures otherwise)
+sbt 'testOnly morkl.ExDatalog'    # one suite
 ```
 
 The committed NOAA fixture (`src/test/resources/noaa_slice.txt`) is reproduced by

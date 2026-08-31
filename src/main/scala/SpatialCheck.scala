@@ -2,7 +2,7 @@ package morkl
 
 import Lower.LenBounds
 
-/** THE CONSUMER-FACING SPATIAL TYPECHECKER  (review.md 1).
+/** THE CONSUMER-FACING SPATIAL TYPECHECKER.
  *
  *  ==THREE QUESTIONS, WHICH ONE BOOLEAN MUST NOT ANSWER==
  *  The subsystem already decided all three, in three adjacent places, with three different
@@ -14,7 +14,7 @@ import Lower.LenBounds
  *  | is an inferred type ABSTRACTLY INCLUDED in a declared one?    | [[SpatialCheck.types]]         | SOUND; COMPLETE (decided) whenever the inferred shape's head sets are closed and the enumeration fits the budget, otherwise `Unknown` |
  *  | does this ROUTINE have the declared spatial signature?        | [[SpatialCheck.checkRoutine]]  | `Proved` sound modulo the annotations; never `Refuted` from imprecision |
  *
- *  ==WHERE THE ABSTRACT QUESTION IS DECIDED, AND WHERE IT IS NOT  (review.md 10)==
+ *  ==WHERE THE ABSTRACT QUESTION IS DECIDED, AND WHERE IT IS NOT==
  *  `SpatialType.leq` is `Shape.leqStrong × SpatialGamma.leqSpace` — two COMPONENTWISE tests — so a
  *  containment visible only to the CONJUNCTION of shape and histogram is invisible to it, whatever is
  *  repaired inside either clause.  That class used to come back `Unknown`.  [[SpatialCheck.decide]] now
@@ -42,7 +42,7 @@ import Lower.LenBounds
  *     order can ever prove this signature from this inferred type, so the declaration, the input
  *     annotations, or the precision of the analysis has to change.  It is deliberately NOT a claim that
  *     the routine can produce that value — the inferred type OVER-approximates the routine's image, so
- *     the witness may be a spurious member introduced by abstraction (whispers.md §2 is right about
+ *     the witness may be a spurious member introduced by abstraction (the design note is right about
  *     this and the wording here follows it).  A SEMANTIC refutation needs an evaluated input/output
  *     witness, and an analysis may not evaluate its subject; see NO EVALUATION below.
  *   - `Unknown(inferred, reason)` — everything else, and in particular EVERY `false` from the order.  A
@@ -72,7 +72,7 @@ import Lower.LenBounds
 
 /** THE declared type of one path parameter.
  *
- *  review.md 1 sketches `paths: Map[PathRef, PathType]`; whispers.md §2 spells the payload out as
+ *  The review sketches `paths: Map[PathRef, PathType]`; the design note spells the payload out as
  *  `SpatialPathInput(value: Option[PathValue], len: LenBounds)`.  They are the same thing, so this
  *  carries whispers' payload under the review's name.  The two cases are not interchangeable: a KNOWN
  *  path value is what keeps `Wrap`/`Unwrap`/`Singleton` exact (the shape transfer reads the actual
@@ -100,7 +100,7 @@ object PathType:
   /** a ref that IS bound but about which nothing is declared */
   val unknown: PathType = PathType(None, LenBounds.unknown)
 
-/** THE ROUTINE-LEVEL CONTRACT review.md 1 asks for: a declared type for every path ref and space
+/** THE ROUTINE-LEVEL CONTRACT the review asks for: a declared type for every path ref and space
  *  mention the routine takes, and the expected result type.  Keyed by the routine's own PARAMETER
  *  names, so a signature is checkable against the routine without a call site. */
 final case class SpatialSignature(paths: Map[PathRef, PathType],
@@ -109,7 +109,7 @@ final case class SpatialSignature(paths: Map[PathRef, PathType],
 
   /** the analysis environment this signature denotes.
    *
-   *  Two deliberate differences from whispers.md §2's `env`:
+   *  Two deliberate differences from the design note's `env`:
    *
    *   - it does NOT also populate `lenv.spaces`/`lenv.paths`.  `SpatialTyping.Env.lengths` already
    *     derives both from `spaces`/`paths`/`opaque`, and `lenv.paths` is layered ON TOP of the derived
@@ -141,7 +141,7 @@ final case class SpatialSignature(paths: Map[PathRef, PathType],
     val ss = spaces.toVector.sortBy(_._1.s).map((m, t) => s"${m.s}: ${t.show}")
     s"(${(ps ++ ss).mkString("; ")}) -> ${result.show}"
 
-  /** THE BRIDGE to the pipeline's input-annotation value (review.md 6 asks for ONE of these, not one
+  /** THE BRIDGE to the pipeline's input-annotation value (the review asks for ONE of these, not one
    *  per stage).  A signature is exactly `SpatialAnnotations` plus a declared RESULT, and this is the
    *  isomorphism: [[PathType]]'s two cases are the pipeline's `paths` (known constant) and `pathLens`
    *  (bounded length) maps.  Going through here rather than re-deriving an environment is what keeps
@@ -184,6 +184,9 @@ enum ResultChannel:
   case Head(prefix: List[PathItem])
   /** the untracked-head COUNT (`others`) of the shape node at `prefix` */
   case UntrackedCount(prefix: List[PathItem])
+  /** the untracked-head DOMAIN (`otherKeys`, channel (e)) of the shape node at `prefix`: the
+   *  certificate names every head the shape does not track, and the value has one it does not name */
+  case HeadDomain(prefix: List[PathItem])
   /** the untracked-head TAIL SUMMARY (`otherTail`) of the shape node at `prefix` */
   case OtherTail(prefix: List[PathItem])
   /** the comparison ran out of shape depth before deciding this subtree */
@@ -205,6 +208,7 @@ enum ResultChannel:
     case Eps(p) => p.length.toLong
     case Head(p) => p.length.toLong
     case UntrackedCount(p) => p.length.toLong + 1L
+    case HeadDomain(p) => p.length.toLong + 1L
     case OtherTail(p) => p.length.toLong + 2L
     case DepthCap(p) => p.length.toLong + 1L
     case LengthClass(l) => l
@@ -219,6 +223,7 @@ enum ResultChannel:
     case Eps(_) => "eps"
     case Head(_) => "head"
     case UntrackedCount(_) => "untracked-head count"
+    case HeadDomain(_) => "untracked-head domain"
     case OtherTail(_) => "otherTail summary"
     case DepthCap(_) => "shape depth cap"
     case LengthClass(_) => "length class"
@@ -234,6 +239,7 @@ enum ResultChannel:
       case Eps(p) => s"ε @ ${at(p)}"
       case Head(p) => s"head ${at(p)}"
       case UntrackedCount(p) => s"untracked-head count @ ${at(p)}"
+      case HeadDomain(p) => s"untracked-head domain @ ${at(p)}"
       case OtherTail(p) => s"otherTail summary @ ${at(p)}"
       case DepthCap(p) => s"shape depth cap @ ${at(p)}"
       case LengthClass(l) => s"length class $l"
@@ -260,7 +266,7 @@ final case class ChannelFailure(channel: ResultChannel, inferredSays: String, de
 // ==================================================================================================
 
 /** The premises a spatial verdict rests on.  A `Proved` that does not name these is the "marketing fog"
- *  review.md 1 warns about: the analysis TRUSTS the declared input types, trusts its own transfers, and
+ *  The review warns about: the analysis TRUSTS the declared input types, trusts its own transfers, and
  *  degrades to ⊤ in named places. */
 enum SpatialAssumption:
   /** the declared type of a space parameter is TRUSTED, not verified — a caller that violates it
@@ -291,7 +297,7 @@ enum SpatialAssumption:
   case FixpointPostFixpoint
   /** the head-group union: one body shape per group, count channels opened for the untracked arm */
   case HeadGroupUnion
-  /** A SEMANTIC LAW the answer DEPENDS ON (review.md 9: "any certificate must name every law it
+  /** A SEMANTIC LAW the answer DEPENDS ON (the requirement: "any certificate must name every law it
    *  depended on").  Emitted for every [[LawApplication]] that TIGHTENED a node of the analysis the
    *  verdict was computed from — one per (law, evidence), with the number of occurrences it moved.
    *
@@ -389,6 +395,17 @@ object SpatialChannels:
         out += ChannelFailure(ResultChannel.UntrackedCount(prefix), ivl(sh.others),
                               s"$n untracked heads (${untracked.keys.toVector.sorted.take(3).mkString(",")})",
                               "the untracked-head count channel excludes the value")
+      // (e) THE UNTRACKED-HEAD DOMAIN.  γ's fifth clause: every head the shape does not track must be
+      // NAMED by the certificate.  Without this arm the mirror reported `channels=` (nothing) on a
+      // value γ rejects, which is a mirror that has stopped mirroring.
+      for ks <- sh.otherKeys do
+        val unnamed = untracked.keys.filterNot(ks.contains).toVector.sorted
+        if unnamed.nonEmpty then
+          out += ChannelFailure(ResultChannel.HeadDomain(prefix),
+                                if ks.isEmpty then "no untracked head at all"
+                                else s"untracked heads within {${ks.toVector.sorted.take(6).mkString(",")}}",
+                                s"untracked head(s) ${unnamed.take(3).mkString(",")}",
+                                "the untracked-head certificate does not name a head the value has")
       for (h, tv) <- groups.toVector.sortBy(_._1) if sh.heads.contains(h) do
         out ++= shapeValueFailures(sh.heads(h), tv, prefix :+ h, d - 1)
       for (h, c) <- sh.heads.toVector if !groups.contains(h) do
@@ -403,7 +420,7 @@ object SpatialChannels:
                                 "the untracked-head tail summary does not admit that tail-set")
       out.result()
 
-  /** mirror of `SpatialGamma.gammaSpace`.  The clause review.md 1's first required test is about is the
+  /** mirror of `SpatialGamma.gammaSpace`.  The clause the first required test is about is the
    *  tracked LOWER bound of a class the value leaves EMPTY — precisely the gap
    *  `SpatialTyping.withinEnvelope` has and `accepts` does not. */
   private def histValueFailures(t: SpaceType, v: SpaceValue): Vector[ChannelFailure] =
@@ -482,6 +499,22 @@ object SpatialChannels:
       val bOnly = b.heads.keySet.diff(a.heads.keySet).size.toLong
       val loOut = Ivl.add(Ivl.relu(a.others.lo - bOnly),
                           a.heads.count((h, t) => !b.heads.contains(h) && t.definitelyNonEmpty).toLong)
+      // (e) the ORDER's side of the untracked-head domain: `a` may not permit an untracked head that
+      // `b`'s certificate forbids.  `b.otherKeys = None` is ⊤ and admits everything.
+      for bk <- b.otherKeys do
+        val aOutside: Set[PathItem] =
+          if a.others.hi == 0 then Set.empty
+          else a.otherKeys.getOrElse(Set.empty)
+        val extra = (aOutside ++ a.heads.iterator.filter(_._2.possiblyNonEmpty).map(_._1))
+          .filterNot(h => b.heads.contains(h) || bk.contains(h))
+        val unnamed = a.others.hi > 0 && a.otherKeys.isEmpty
+        if extra.nonEmpty || unnamed then
+          out += ChannelFailure(ResultChannel.HeadDomain(prefix),
+            if unnamed then "an unnamed untracked head set"
+            else s"untracked head(s) ${extra.toVector.sorted.take(3).mkString(",")}",
+            if bk.isEmpty then "no untracked head at all"
+            else s"untracked heads within {${bk.toVector.sorted.take(6).mkString(",")}}",
+            "the inferred type permits an untracked head the declaration's certificate forbids")
       if hiOut > b.others.hi then
         out += ChannelFailure(ResultChannel.UntrackedCount(prefix),
           s"up to $hiOut heads outside the declared head set", ivl(b.others),
@@ -593,7 +626,7 @@ end SpatialChannels
 // 5.  THE BOUNDED EXHAUSTIVE REFUTER
 // ==================================================================================================
 
-/** THE BUDGET of the witness search, in the terms whispers.md §2 insists on reporting rather than
+/** THE BUDGET of the witness search, in the terms the design note insists on reporting rather than
  *  hanging inside: an item alphabet, a maximum path length, hence a path count `P`, hence `2^P`
  *  candidate spaces.  For alphabet size `A` and length `L` the path count is `Σ A^i`, so two items with
  *  `L = 2` is `2^7 = 128` spaces while two items with `L = 4` is already `2^31` — which is why
@@ -649,7 +682,7 @@ final case class WitnessReport(universe: WitnessUniverse, examined: Long, budget
     s"$head — ${universe.show}; examined $examined, $prunedByCardinality pruned by cardinality"
 
 // ==================================================================================================
-// 5b.  THE COMBINED SHAPE×HISTOGRAM DECISION  (review.md 10)
+// 5b.  THE COMBINED SHAPE×HISTOGRAM DECISION
 // ==================================================================================================
 
 /** THE BUDGET of the exhaustive product decision.
@@ -674,7 +707,7 @@ object ProductSearch:
  *  `leq` is `Shape.leqStrong × SpatialGamma.leqSpace`: two COMPONENTWISE tests.  A containment that is
  *  only visible to the CONJUNCTION of the two — the shape forbids a second path under any head, so a
  *  count vector the histogram admits is unreachable — is invisible to both clauses and to their
- *  conjunction, and is exactly the class review.md 10 measures (10 of 62 contained pairs in
+ *  conjunction, and is exactly the class the review measures (10 of 62 contained pairs in
  *  `SpatialCheckCheck` 4d's pool).  This query does not compare the components at all: it ENUMERATES
  *  `γ(inferred)` and asks `SpatialTyping.accepts` — the full product γ — about each member.
  *
@@ -721,7 +754,7 @@ final case class ProductDecision(paths: Vector[PathValue], examined: Long, membe
 /** CONCRETE MEMBERSHIP — the question that can be, and here is, SOUND AND COMPLETE for this carrier.
  *  Decided by `SpatialTyping.accepts` (full γ), never by `withinEnvelope`, which admits values outside
  *  γ.  `Rejected` carries the channels the value violates, so "not a member" is actionable.  Adopted
- *  from whispers.md §2's `ValueCheck`, with the channel diagnosis added. */
+ *  from the design note's `ValueCheck`, with the channel diagnosis added. */
 enum ValueCheck:
   case Accepted(value: SpaceValue, expected: SpatialType)
   case Rejected(value: SpaceValue, expected: SpatialType, channels: Vector[ChannelFailure])
@@ -745,7 +778,7 @@ final case class CheckCertificate(order: String,
                                   assumptions: Vector[SpatialAssumption],
                                   facts: Vector[Fact],
                                   corroboration: Option[WitnessReport],
-                                  /** EVERY SEMANTIC LAW THE ANSWER DEPENDS ON (review.md 9).  One
+                                  /** EVERY SEMANTIC LAW THE ANSWER DEPENDS ON.  One
                                    *  record per law application that tightened a node of the analysis
                                    *  the verdict came from — never a summary, never omitted.  The
                                    *  `require` below is the enforcement: a certificate CANNOT be
@@ -777,7 +810,7 @@ final case class CheckCertificate(order: String,
       corroboration.map(c => s"  corroboration: ${c.show}").toVector ++
       exhaustion.map(d => s"  exhaustion: ${d.show}").toVector).mkString("\n")
 
-/** THE THREE-WAY RESULT review.md 1 requires, and nothing else may stand in for it. */
+/** THE THREE-WAY RESULT the review requires, and nothing else may stand in for it. */
 enum SpatialCheck:
   case Proved(inferred: SpatialType, certificate: CheckCertificate)
   /** `witness` inhabits `inferred` and NOT the declared type: ABSTRACT conformance is refuted.  Read
@@ -787,7 +820,7 @@ enum SpatialCheck:
   case Unknown(inferred: SpatialType, reason: String)
 
   /** the inferred type, whichever verdict this is.  (Named `inferredType` because every case already
-   *  carries a field called `inferred`, which is the spelling review.md 1 asks for.) */
+   *  carries a field called `inferred`, which is the spelling the review asks for.) */
   def inferredType: SpatialType = this match
     case Proved(t, _) => t
     case Refuted(t, _) => t
@@ -815,14 +848,14 @@ final case class Blame(channel: ResultChannel, node: NodeId, expression: String,
     s"${assumption.show}"
 
 /** everything a caller needs in order to act on a failed proof (the verdict itself stays the three-way
- *  enum, which is what review.md 1 asks the API to expose). */
+ *  enum, which is what the review asks the API to expose). */
 final case class CheckDiagnosis(failures: Vector[ChannelFailure],
                                 blame: Vector[Blame],
                                 assumptions: Vector[SpatialAssumption],
                                 search: Option[WitnessReport],
                                 notes: Vector[String],
                                 /** the COMBINED shape×histogram query, when the inferred type's shape
-                                 *  admitted a complete finite enumeration (review.md 10).  `None` means
+                                 *  admitted a complete finite enumeration.  `None` means
                                  *  the checker could not decide the product and fell back to the
                                  *  componentwise order plus the bounded refuter. */
                                 product: Option[ProductDecision] = None):
@@ -838,7 +871,7 @@ final case class CheckDiagnosis(failures: Vector[ChannelFailure],
       product.map("  product " + _.show).toVector ++ notes.map("  ! " + _)).mkString("\n")
 
 /** the full answer: the verdict, its diagnosis, and the ONE decorated analysis both came from — so a
- *  consumer gets per-node facts with lexical provenance out of the same traversal (review.md 4). */
+ *  consumer gets per-node facts with lexical provenance out of the same traversal. */
 final case class SpatialCheckReport(check: SpatialCheck,
                                     signature: SpatialSignature,
                                     analysis: SpatialAnalysis,
@@ -891,9 +924,14 @@ object SpatialCheck:
   // ---- the bounded exhaustive refuter ------------------------------------------------------------
 
   /** every head item either shape tracks, to a bounded depth */
+  /** Every item the shape can PUT AT A HEAD, tracked or spilled.  The `otherKeys` clause is channel
+   *  (e): past `Shape.MaxHeads` the width spill keeps a COUNT and the NAMES, and those names are as
+   *  real an alphabet as the tracked ones — leaving them out made a 16-head type look like a 12-head
+   *  one to both the witness universe and [[plan]]'s completeness walk. */
   private def headItems(s: Shape, d: Int): Set[PathItem] =
     if d <= 0 then Set.empty
-    else s.heads.keySet.toSet ++ s.heads.valuesIterator.flatMap(headItems(_, d - 1)).toSet ++
+    else s.heads.keySet.toSet ++ s.otherKeys.getOrElse(Set.empty) ++
+      s.heads.valuesIterator.flatMap(headItems(_, d - 1)).toSet ++
       s.otherTail.iterator.flatMap(headItems(_, d - 1)).toSet
 
   /** an item NO type in play tracks — the only way a witness can escape a CLOSED declared head set */
@@ -952,7 +990,7 @@ object SpatialCheck:
    *  witness is a legible witness), skips cardinalities `γ(inferred)` cannot contain at all, and returns
    *  an explicitly UNDECIDED report rather than a claim when the budget runs out.
    *
-   *  ==WHY NOT whispers.md §2's `FiniteSpatialValidation.check`==
+   *  ==WHY NOT THE DESIGN NOTE'S `FiniteSpatialValidation.check`==
    *  That generator enumerates INPUT TUPLES and calls `eval` on the routine body, so (a) it cannot live
    *  in an analysis file under this tree's rule that an analysis never runs its subject, and (b) its
    *  counterexample is a SEMANTIC one about the routine, a different and stronger claim than the
@@ -961,7 +999,7 @@ object SpatialCheck:
    *  an explicit case budget, and return a distinct budget-exceeded state instead of hanging or
    *  pretending completeness.  `SpatialGamma.TestOnly.gammaLeqWitness` is also not used: it eagerly
    *  materialises all `2^P` values, it takes the universe as a parameter instead of deriving it from the
-   *  two types, and production code may not read test support (review.md 6). */
+   *  two types, and production code may not read test support. */
   def searchWitness(inferred: SpatialType, declared: SpatialType, cfg: WitnessSearch): WitnessReport =
     val u = universeFor(inferred, declared, cfg)
     var examined = 0L
@@ -995,7 +1033,7 @@ object SpatialCheck:
     WitnessReport(u, examined, cfg.maxCandidates, pruned, finished = found.isEmpty && !stopped,
                   outOfScope = kLo > kHi, found)
 
-  // ---- the COMBINED shape×histogram decision  (review.md 10) -------------------------------------
+  // ---- the COMBINED shape×histogram decision -------------------------------------
 
   /** THE PATH SET A COMPLETE ENUMERATION OF `γ(a)` NEEDS — `Right` with the paths, or `Left` with the
    *  reason no finite one is provably complete.
@@ -1038,8 +1076,12 @@ object SpatialCheck:
     else
       // does any node within reach actually have an OPEN head set?  When none does, no fresh item is
       // needed at all and the alphabet is exactly the tracked heads (the common case).
+      // A node whose untracked heads are NAMED (channel (e)) is not open in this sense: its alphabet
+      // is finite and known, so the walk below can enumerate it and no fresh item stands for it.
       def anyOpen(s: Shape, d: Long): Boolean =
-        d > 0 && (!s.headsClosed || s.heads.valuesIterator.exists(anyOpen(_, d - 1)))
+        d > 0 && ((!s.headsClosed && s.otherKeys.isEmpty) ||
+                  s.heads.valuesIterator.exists(anyOpen(_, d - 1)) ||
+                  (!s.headsClosed && s.otherTail.exists(anyOpen(_, d - 1))))
       val needFresh: Long = if !anyOpen(a.shape, ln.hi) then 0L else Ivl.mul(sz.hi, ln.hi)
       if needFresh > cfg.maxFresh then
         Left(s"an OPEN head set needs up to $needFresh fresh item(s) for a complete alphabet " +
@@ -1075,8 +1117,16 @@ object SpatialCheck:
                 for (h, c) <- s.heads if !over do go(c, h :: revPrefix, depth + 1)
                 if !s.headsClosed then
                   // every item of T this node does NOT track is a distinct case (it may be tracked
-                  // elsewhere, or by `b`); the fresh ones stand for every item neither type names
-                  for x <- (tracked.diff(s.heads.keySet.toSet).toVector.sorted ++ fresh) if !over do
+                  // elsewhere, or by `b`); the fresh ones stand for every item neither type names.
+                  // WHEN THE SPILL NAMED THEM (channel (e)) the set is EXACTLY those names: walking
+                  // `tracked` instead would spend the budget on keys this node PROVES absent, and
+                  // walking only `s.heads` — what the first version of this did once the certificate
+                  // made `under` return `∅` off the certificate — silently dropped every spilled head
+                  // and called the resulting path set COMPLETE.
+                  val alt = s.otherKeys match
+                    case Some(ks) => ks.diff(s.heads.keySet.toSet).toVector.sorted
+                    case None => tracked.diff(s.heads.keySet.toSet).toVector.sorted ++ fresh
+                  for x <- alt if !over do
                     go(s.under(x), x :: revPrefix, depth + 1)
         go(a.shape, Nil, 0L)
         if over then
@@ -1110,7 +1160,7 @@ object SpatialCheck:
       Some(total)
 
   /** THE EXHAUSTIVE PRODUCT DECISION: enumerate `γ(inferred)` and ask the full product γ about every
-   *  member (review.md 10).  `None` when no provably complete enumeration is available or it would exceed
+   *  member.  `None` when no provably complete enumeration is available or it would exceed
    *  `cfg` — nothing is claimed then, [[declined]] says which, and the caller falls back to the
    *  componentwise order plus the bounded refuter.
    *
@@ -1172,8 +1222,8 @@ object SpatialCheck:
    *  exactly one place.
    *
    *  `laws` are the law applications the inferred type was computed under; a verdict may not be a
-   *  `Proved` when one of them tightened it on UNDISCHARGED evidence (review.md 9).  `product` is the
-   *  budget of the combined shape×histogram query (review.md 10). */
+   *  `Proved` when one of them tightened it on UNDISCHARGED evidence.  `product` is the
+   *  budget of the combined shape×histogram query. */
   def types(inferred: SpatialType, declared: SpatialType,
             search: WitnessSearch = WitnessSearch.default,
             assumptions: Vector[SpatialAssumption] = Vector(SpatialAssumption.TransferSoundness),
@@ -1188,7 +1238,7 @@ object SpatialCheck:
     val undischarged0 = laws.filter(_.assumed)
     val (v, d) = verdict(inferred, declared, search, assumptions, facts, corroborate,
                          if undischarged0.isEmpty then laws else laws.filterNot(_.assumed), product)
-    // ---- REFUSE UNDISCHARGED LAW EVIDENCE IN A VERDICT  (review.md 9) -----------------------------
+    // ---- REFUSE UNDISCHARGED LAW EVIDENCE IN A VERDICT -----------------------------
     // A law that tightened the inferred type with no discharged proof obligation makes the whole verdict
     // conditional on an axiom.  `SpatialLaws.refine` will not MEET such a bound under the production
     // policy, so this is the belt to that braces: it fires only when a caller deliberately ran
@@ -1217,7 +1267,7 @@ object SpatialCheck:
 
     // ⊥ ⊑ everything, so a contradictory annotation set would "prove" every signature.  That is a
     // vacuous truth about a routine nothing can call, and reporting it as `Proved` is exactly the trap
-    // review.md 1 is about.
+    // The review is about.
     if inferred.uninhabited then
       (SpatialCheck.Unknown(inferred,
         "VACUOUS: the inferred type is the explicit ⊥ — no concrete space satisfies the declared " +
@@ -1225,7 +1275,7 @@ object SpatialCheck:
           "input annotations (or the transfer that produced the contradiction)."),
        CheckDiagnosis(failures, Vector.empty, assumptions, None, mirror))
     else
-      // ---- THE COMBINED SHAPE×HISTOGRAM QUERY, WHEN IT CAN DECIDE  (review.md 10) ------------------
+      // ---- THE COMBINED SHAPE×HISTOGRAM QUERY, WHEN IT CAN DECIDE ------------------
       // Not a sharper heuristic: a DIFFERENT KIND of answer.  A complete enumeration of γ(inferred),
       // each member tested with the full product γ, decides the containment outright — including the
       // PRODUCT INTERACTION class no componentwise order can see.  It therefore runs before `leq` is
@@ -1331,7 +1381,7 @@ object SpatialCheck:
 
   // ---- the routine check -------------------------------------------------------------------------
 
-  /** THE ROUTINE CHECK — the operation review.md 1 says is missing.  Three-way, honest, and never
+  /** THE ROUTINE CHECK — the operation the review says is missing.  Three-way, honest, and never
    *  turning the order's imprecision into a type error. */
   def checkRoutine(routine: Routine, signature: SpatialSignature,
                    routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
@@ -1350,13 +1400,13 @@ object SpatialCheck:
              product: ProductSearch = ProductSearch.default): SpatialCheckReport =
     val (missingP, missingS) = signature.missing(routine)
     // ONE traversal: the decorated analysis IS the inference here, so the verdict and the per-node facts
-    // an optimizer consumes cannot come from two different runs (review.md 4).
+    // an optimizer consumes cannot come from two different runs.
     val env = signature.env(routines, Set(routine.name))
     val analysis = SpatialAnalysis.of(routine.body, env, cfg)
     val inferred = analysis.root
     val assumptions = premises(routine, signature, routines, analysis, cfg, missingP, missingS)
     val facts = analysis.rootFacts
-    // EVERY LAW THE ANSWER DEPENDS ON travels into the verdict (review.md 9), so the certificate names
+    // EVERY LAW THE ANSWER DEPENDS ON travels into the verdict, so the certificate names
     // them and an undischarged one cannot be certified.  `lawApplications` is the whole audit trail —
     // the refused and the declining ones included — because the verdict's notes report those too.
     val lawApps = analysis.lawApplications
@@ -1364,7 +1414,7 @@ object SpatialCheck:
     val (verdict0, diag0) =
       types(inferred, signature.result, search, assumptions, facts, corroborate, lawApps, product)
     // the per-node failing-channel sets, computed ONCE: `blameFor` used to re-run the whole order
-    // comparison per (node, channel), which is the quadratic re-query pattern review.md 4 objects to.
+    // comparison per (node, channel), which is the quadratic re-query pattern the review objects to.
     val perNode: Map[NodeId, Set[ResultChannel]] =
       if diag0.failures.isEmpty then Map.empty
       else analysis.nodes.iterator.map(n =>
@@ -1380,7 +1430,7 @@ object SpatialCheck:
           s"[${missingS.map(_.s).mkString(",")}] are UNDECLARED and were analysed as ⊤; declaring them " +
           "is usually what makes a signature provable.")
       case (v, _) => v
-    // A LAW WHOSE EVIDENCE WAS REFUSED IS REPORTED HERE (review.md 9).  Nothing rests on it — that is the
+    // A LAW WHOSE EVIDENCE WAS REFUSED IS REPORTED HERE.  Nothing rests on it — that is the
     // point — but a user who wrote a law and saw no effect must be told WHY, and told what discharging
     // the obligation would buy, rather than left to wonder whether the law ever fired.
     val refusedNotes = lawApps.filter(_.refused).groupBy(a => (a.law, a.evidence)).toVector
@@ -1406,7 +1456,7 @@ object SpatialCheck:
     for r <- routine.refs; t <- sig.paths.get(r) do out += SpatialAssumption.InputPathAnnotation(r, t)
     for m <- missingS do out += SpatialAssumption.MissingSpaceAnnotation(m)
     for r <- missingP do out += SpatialAssumption.MissingPathAnnotation(r)
-    // EVERY SEMANTIC LAW THE ANSWER DEPENDS ON, named as the premise it is (review.md 9).  Only the
+    // EVERY SEMANTIC LAW THE ANSWER DEPENDS ON, named as the premise it is.  Only the
     // TIGHTENING applications are premises: a law that declined, that added nothing, that contradicted
     // the transfers and was dropped, or that the evidence policy REFUSED, moved no answer and is
     // therefore not something the verdict rests on — those are reported in the diagnosis notes instead.

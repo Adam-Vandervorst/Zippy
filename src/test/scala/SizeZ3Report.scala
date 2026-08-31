@@ -141,12 +141,7 @@ class SizeZ3Report extends FunSuite:
 
   test("corpus: 1000 programs x 100 inputs — baseline vs z3 distributions + limits in scope") {
     assume(SizeZ3.available, "z3 not on PATH")
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assert(f.exists, "corpus not found — run the corpus test first")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
-    }
+    val recs = Corpus.load()
     runDistribution("corpus, independent draws", recs.map(_.prog))
   }
 

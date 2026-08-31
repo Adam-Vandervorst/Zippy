@@ -210,7 +210,7 @@ Analyses read **annotated types only** — no evaluation output feeds a bound.
 | `SpatialCheck` / `SpatialChannels` / `SpatialSignature` | `SpatialCheck.scala` | The consumer-facing typechecker: `Proved`/`Refuted(witness)`/`Unknown` per channel, witness search over a finite universe, `SpecializedRoutine(precondition, residual)`, and a diagnosis naming the blamed channel. |
 | `SpatialLaws` / `SpatialBoundLaw` / `LawEvidence` | `SpatialLaws.scala` | Semantic laws as analysis inputs, each carrying provenance and an evidence policy separating assumed from proved; `refine` applies them to a position's bound. |
 | `SpatialGamma` | `SpatialGamma.scala` | The concretization γ used by the law and acceptance suites to test soundness against `eval`. |
-| `SpatialAnnotations` / `RoutineAnalysis` / `SpatialPipeline` / `SpatialHook` | `SpatialPipeline.scala` | The ordinary entry point: annotate a routine, analyze it once, expose `backendCost`/`selectBackend`/`Rewrite`s, and `SpatialHook.rewrite` — the spatial rewrite `Routine.optimized` runs before the `Lower` rules. |
+| `SpatialAnnotations` / `RoutineAnalysis` / `SpatialPipeline` / `SpatialHook` | `SpatialPipeline.scala` | The ordinary entry point: annotate a routine, analyze it once, expose `backendCost`/`compareBackends` (an interval COMPARISON — automatic backend selection is a non-goal)/`Rewrite`s, and `SpatialHook.rewrite` — the spatial rewrite `Routine.optimized` runs before the `Lower` rules. |
 
 ## 10. Supercompiler
 
@@ -233,7 +233,7 @@ All in `Supercompiler.scala`.
 | `AgnosticPipeline` | `EquivPipeline.scala` | The data-agnostic certificates: inputs stay uninterpreted, `unrollControl` k-unrolls fixpoints and cuts residual self-calls to a fresh free input. |
 | `SmtDiff` | `EquivPipeline.scala` | Decomposes whole-program equivalence into optimizer-rewritten subterm pairs, classified law-justified (replayed against the certified corpus) or residual obligation. AC-aware. |
 | `lawCertificates` | `EquivPipeline.scala` | Law name → certificate file, mirroring `proofs/laws/REGISTRY.tsv`. |
-| `EquivPipelineTest` | `src/test/scala/EquivPipelineTest.scala` | Runs all three stages on the six cornerstones, writes `proofs/pipeline/*.smt2` and `zipper-egg-tests/pipeline/*.egg`, verifies with egglog + z3 + Vampire. |
+| `EquivPipelineTest` | `src/test/scala/EquivPipelineTest.scala` | Runs all three stages on the SEVEN cornerstones (`puzzle3-full` is the one whose recursion is an unbounded `Space.Fixpoint`), writes `proofs/pipeline/*.smt2` + its own `proofs/pipeline/STATUS.tsv` and `zipper-egg-tests/pipeline/*.egg`, verifies with egglog + z3 + Vampire. A cell neither prover discharges becomes a `PROVER-BUDGET-EXCEEDED` record with its attempt log and stops counting as REAL. |
 
 | Script | What |
 |---|---|
@@ -318,7 +318,7 @@ All in `Supercompiler.scala`.
 | Example | Where |
 |---|---|
 | Aunt query | `AuntQuery` (`src/test/scala/MORKL.scala`), `ExAuntMetta` (`Examples.scala`) |
-| Datalog TC (naive + semi-naive) | `ExDatalog` (`Examples.scala`), `DatalogShowTest`, `datalog-morkl.txt` |
+| Datalog TC (naive + semi-naive) | `ExDatalog` (`Examples.scala`), `DatalogShowTest`, `datalog-morkl.txt`. Naive ≡ semi-naive is certified round-for-round by `terminating/seminaive_correct.smt2` (O13) — GIVEN additivity of the join operator, `J(X ∪ Y) = J(X) ∪ J(Y)`. There is no semi-naive transformation in this compiler, so that side condition is on the author of the semi-naive program. |
 | Game of Life | `GoL` + `ExGameOfLife` (`Examples.scala`) |
 | N-queens | `NQueens` + `ExNQueens` (`Examples.scala`) |
 | Sliding puzzle (8/15) | `Sliding` + `ExSlidingPuzzle` (`Examples.scala`) |
@@ -343,15 +343,31 @@ All in `Supercompiler.scala`.
 `eval` is the fixed point of trust: backends are checked against it, rewrites must preserve it,
 intervals must contain it, and certificates are emitted only after a Scala gate confirms it.
 
+## 14b. Cross-cutting infrastructure
+
+| Component | File | What |
+|---|---|---|
+| `Tools` | `Tools.scala` | THE external-tool resolver: `$Z3` / `$VAMPIRE` / `$EGGLOG`, then `PATH`, then a short conventional-location list, then a NAMED error. `scripts/toolpath.sh` and `scripts/toolpath.py` are its `sh` and Python twins, reading the same variables and the same lists. No absolute tool path exists anywhere in the tree. |
+| `RunEnvironment` | `RunEnvironment.scala` | Provenance for every generated number: cpu / cores / RAM / OS+kernel / JVM vendor+version / the JVM's actual flags / max heap / Scala version / git commit + dirty flag / UTC timestamp / the `Tuning` toggles. `markdown` for a table, `oneLine` for a CSV header. |
+| `BenchmarkReport` | `RunEnvironment.scala` | THE writer for a generated results section: replaces the section between its markers and stamps the provenance block, instead of appending a new copy. |
+| `Corpus` | `Corpus.scala` (test) | THE corpus loader, with ABSENT / STALE / UNREADABLE diagnosed separately and the regeneration command in every message. Twenty test files used to open the file themselves. |
+| `scripts/check_references.py` | | CI: every markdown link and every file-shaped token in the tree must resolve. |
+| `TraversalTotality` | `TraversalTotality.scala` (test) | CI: every generic term traversal (`collect`, `subs`, `freeMentions`, `freeRefs`, `SizeZ3.children`) must see a marker in EVERY subterm position of EVERY `Space` constructor. |
+
 ## 15. Artifacts & data
 
 | Artifact | What |
 |---|---|
 | `corpus_1000.txt` / `.ser` | 1000 fuzzed programs (text source of truth + binary accelerator), produced by `ProgramExpressivity`. Schema drift trips the STALE guards. `corpus_runtimes.csv` is the derived timing table. |
-| [BENCHMARKS.md](BENCHMARKS.md) | Steady-state timing tables per executor and domain, compile separated from run; generated in append mode by `TrieBench`/`GraphBench`. |
+| [BENCHMARKS.md](BENCHMARKS.md) | Steady-state timing tables per executor and domain, compile separated from run. Each section is REGENERATED IN PLACE between `<!-- BEGIN benchmark:<slug> -->` markers by `BenchmarkReport`, and carries the machine / toolchain / configuration it was produced on (`RunEnvironment`). |
 | `proofs/` | The SMT-LIB obligation corpus (laws, `impl_*`, `threeway_*`, `refine_*`, `spatial/`, `spatial-semantic/`), each asserting the negated theorem. `proofs/STATUS.tsv` is the repo-wide PROVED/OPEN table; `proofs/laws/REGISTRY.tsv` + `MINED.tsv` index the law certificates. |
 | `formal.egg`, `zipper-spec.egg`, `zipper-impl.egg` | The set-of-paths reference, the per-key movement calculus, and the eager `ITrie` model. `zipper-egg-tests/` holds the extracted preludes, the randomized differentials, and the observation matrix. |
-| `proofs/pipeline/*.smt2`, `zipper-egg-tests/pipeline/*.egg` | Per-cornerstone equivalence artifacts emitted by `EquivPipelineTest`, audited by `audit_pipeline_markers.py`. |
+| `proofs/pipeline/*.smt2`, `zipper-egg-tests/pipeline/*.egg` | Per-cornerstone equivalence artifacts emitted by `EquivPipelineTest`, audited by `audit_pipeline_markers.py` (whose `.smt2` vacuity detector is what caught the 18 degenerate instance obligations) and folded into the repo-wide table by `proofs/run.sh`. |
+| `proofs/pipeline/fixpoint-gate/` | The OVER-STRONG-AXIOM gate for the first-class `Fixpoint` denotation: one TRUE fixpoint equality both provers discharge, three FALSE ones neither does. An axiomatisation strong enough to prove the false ones would make every enclosing obligation vacuous. |
 | `build.log` | Append-only development journal (sessions, marker/registry counts, tightness deltas). Corrections are appended as ERRATA blocks, never edited in place. |
-| `build.sbt` | Present, but the working build is **scala-cli** — see [README.md](../README.md) for the exact command. |
+| `expressivity.csv`, `prog_matrix.tsv` | The expressivity census and the parent-position × child-type matrix, produced by `ProgramExpressivity` / `ProgramStats`. Both carry a `#` provenance header; `plot_expr.py`, `plot_expr2.py`, `plot_matrix.py` read them from the repo root and skip it. |
+| `terminating/` | The recursion certificates. `REGISTRY.tsv` is the TOTAL map from the eleven lowering sites to their obligations (with OPEN and PROPERTY rows kept visible); `STATUS.tsv` carries both provers' verdicts. |
+| `proofs/unbounded/` | TIER 3: schematic operator laws in TPTP/FOL, quantified over ALL spaces, paths and bodies — the claims tier-1 (`Lower.sizeBounds`, no object language) and tier-2 (`SizeZ3`, ground: one `(declare-const n<i> Int)` per AST node) cannot state at all. `_*.p` are axiom modules, the rest are one-theorem files, `negative/` holds FALSE controls that must not be provable. `run.sh` also runs a per-file vacuity probe and writes `STATUS.tsv`; index in `REGISTRY.tsv`; gated by `src/test/scala/UnboundedTier.scala`. Vampire only — see `run.sh`'s header for why there is no z3 twin. |
+| `project/build.properties` | Pins the sbt version. Reproducing a number from `docs/BENCHMARKS.md` or `proofs/STATUS.tsv` means reproducing the toolchain, and the sbt launcher picks a version per project — leaving it unpinned makes the build a moving target the same way an unpinned prover would. |
+| `build.sbt` | The build. `Test / fork := true` is load-bearing, not cosmetic — see `src/test/scala/Corpus.scala` for the classloader failure it prevents. `.jvmopts` sizes the sbt JVM itself. |
 | Sibling docs | [ALGEBRA.md](ALGEBRA.md) (theory), [SUPERCOMPILER.md](SUPERCOMPILER.md), [design_plan.md](design_plan.md), [design_size_constraints.md](design_size_constraints.md), [design_spatial_lattice.md](design_spatial_lattice.md), [traps.md](traps.md), [guide.md](guide.md), [residuals.md](residuals.md), [fuzzer_zipper_draft.md](fuzzer_zipper_draft.md). |

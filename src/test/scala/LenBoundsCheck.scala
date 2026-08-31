@@ -89,12 +89,7 @@ class LenBoundsCheck extends FunSuite:
 
   // ---- random programs: bounds never violated ---------------------------------------------------
   test("soundness over the corpus: every path length inside both tiers' bounds; z3 dominates baseline") {
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assert(f.exists, "corpus not found — run morkl.ProgramExpressivity first")
-    val recs = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close()
-    }
+    val recs = Corpus.load()
     val rng = new java.util.Random(20260805)
     val A = SpaceFuzzer.alphabet
     def randPath(): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))

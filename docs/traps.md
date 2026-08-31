@@ -107,6 +107,28 @@ Why: a solver read-off or exact evaluation is sound only *relative* to the trust
 
 Grounded in: **z3 size bounds are clamped to the baseline — tighter everywhere, unsound nowhere**; **`groundFold` eps-pin would have been unsound (caught in review)**; **`groundFold` is budgeted so exact evaluation can't blow up compile time**; **Interval size-analysis sketch had unsound transfer functions**.
 
+## 9. A LOWER endpoint may be derived only from MUST facts — and most of this domain's maps are MAY maps
+
+- Do: Before using an abstract quantity as a floor, ask which endpoint it is. `Shape.heads` is a MAY map (a value in γ need only carry the heads whose sub-shape is DEFINITELY non-empty), `Meas.nodes`/`nodesHi` is an UPPER bound, `Layers.maxArity(d)` is a MAX over a level, and `Pairing.pairedAt(d)` counts the whole level.
+- Do: Carry BOTH endpoints where a must-count needs one — `Meas.nodesLo` exists because `SpatialFacts.trieNodes` returns an interval and only its upper half was being read.
+- Do: State the SIDE CONDITION that turns a level-wide fact into a per-frontier one, and drop the exactness claim when it does not hold (`arityUniform`; "the frontier already holds all `pairedAt(k)` paired prefixes").
+- Do: Re-run the counted-event calibration after every floor. A floor that exceeds the run produces an INVERTED interval, which is the unmistakable signature — and the corpus finds it in one pass.
+- Don't: Reach for a "surely at least" constant. Three separate must-counts in `SpatialCost` were derived from plausible readings of an abstract map and refuted within one calibration run each; the fourth worked because the quantity was rederived (live DISTINCT operands, not heads) rather than re-guessed.
+
+Why: an upper bound used as a lower endpoint is not conservative in the safe direction — it excludes the real run from the predicted interval, and every consumer downstream then reasons from an interval the program is not in.
+
+Grounded in: **`kLo` scratch/probe must-counts refuted on the first corpus run (heads ≠ live operands)**; **`liveDistinct`'s bare `ArrayBuffer(4)` refuted for the zipper**; **`rebuilt.lo` as a must-rebuild count refuted on eight programs**; **`TailsFacts.distinctLo` counted POSSIBLE children and put datalog-sn's alloc floor at 84 against a counted 67**.
+
+## 10. A fixture whose claim is about representation must PIN the representation
+
+- Do: When a test asserts a cost class that depends on interned-id bit structure ("separated ranges", "power-of-two aligned blocks"), pad the interner to an alignment boundary first. The base id depends on how much of the rest of the suite ran before it.
+- Do: Assert the pinned property (`pool(0) % align == 0`), not only the derived one (`consecutive`).
+- Do: Suspect the fixture, not the subject, when a measured class OSCILLATES across a geometric ladder (`4,2,2,4,2` where the claim is a flat 2).
+
+Why: a global side table shared by the whole suite makes a "pure" measurement depend on test ORDER, so the test passes or fails according to what was interned first — and the failure looks like a regression in the code under test.
+
+Grounded in: **`OptimalTrieCheck`'s distribution sweep and arity gates broke when the fuzzer gained two operators, purely because the interner base moved**.
+
 ---
 
 **Meta-principle:** In an algebra/verification engine a wrong answer is silent by default — so buy observability at authoring time: enumerate the edge shapes, keep every rule diffed against a certified oracle, canonicalize so equality means equality, refuse silent fallbacks, and let a large seeded differential gate surface the shapes you didn't think to enumerate.

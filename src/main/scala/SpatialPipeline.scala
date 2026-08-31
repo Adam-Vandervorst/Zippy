@@ -1,7 +1,7 @@
 package morkl
 
 /** ==================================================================================================
- *  THE SPATIAL PIPELINE — one ordinary entry point (review.md finding 3).
+ *  THE SPATIAL PIPELINE — one ordinary entry point.
  *
  *  ==THE PROBLEM==
  *  Everything the spatial subsystem knows was reachable only by a caller who already knew which of
@@ -56,7 +56,7 @@ package morkl
 // ==================================================================================================
 
 /** WHAT THE ANALYSIS IS ALLOWED TO ASSUME, and the budgets it may spend — one value for every stage
- *  (review.md finding 6: "use one `SpatialAnnotations`/`SpatialConfig` value for all analysis
+ *  (the requirement: "use one `SpatialAnnotations`/`SpatialConfig` value for all analysis
  *  stages").
  *
  *  The three input channels are deliberately separate because they mean different things and are
@@ -74,7 +74,7 @@ final case class SpatialAnnotations(
   paths: Map[PathRef, PathValue] = Map.empty,
   pathLens: Map[PathRef, Lower.LenBounds] = Map.empty,
   routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
-  /** EVERY budget EVERY stage spends — one value (review.md finding 6).  The fact stage's
+  /** EVERY budget EVERY stage spends — one value.  The fact stage's
    *  `SpatialFacts.Config` and the residualiser's `SpatialRecursion.Limits` are PROJECTIONS of it
    *  ([[factConfig]], [[limits]]) and no longer separate fields, so a caller who narrows the analysis
    *  cannot leave the two downstream stages on their defaults by accident. */
@@ -131,10 +131,10 @@ final case class SpatialAnnotations(
    *
    *  THIS FORM HAS NO DECORATED ANALYSIS, so every per-node type query inside `SpatialCost` is a FRESH
    *  `SpatialTyping.infer` and every law/spatial refinement the decorated analysis made is thrown away
-   *  (review.md item 8).  Use [[costEnvFor]] wherever a decorated analysis exists — which is everywhere
+   *.  Use [[costEnvFor]] wherever a decorated analysis exists — which is everywhere
    *  in this pipeline. */
   def costEnv: SpatialCost.Env = SpatialCost.Env(facts = env()).withRoutines(routines)
-  /** the cost environment THAT CONSUMES THE DECORATED, `NodeId`-INDEXED ANALYSIS (review.md item 8). */
+  /** the cost environment THAT CONSUMES THE DECORATED, `NodeId`-INDEXED ANALYSIS. */
   def costEnvFor(d: SpatialAnalysis): SpatialCost.Env = costEnv.withDecorated(d)
 
   def restrictingSpaces: Map[SpaceMention, SpatialType] =
@@ -207,7 +207,23 @@ enum Rewrite:
   case Prefocus(prefix: PathValue)
   /** the ordinary `Lower` rule list, run on the spatially rewritten body */
   case OrdinaryLower(before: Int, after: Int)
+  /** THE RELATIONAL FRONTIER PROVED THE RESULT IS AN OPERAND (or ∅): a ring node whose case set is a
+   *  singleton is not a cost verdict, it is a semantic one — see [[SpatialPipeline.frontierEdits]] */
+  case FrontierIdentity(at: NodeId, op: String, side: String)
+  /** an `Iteration` over a source with exactly ONE head is a SUBSTITUTION, not a loop */
+  case IterationSubstitute(at: NodeId, head: PathItem)
+  /** the source has no headed path, or the body is provably ∅: the loop yields ∅ */
+  case IterationDrop(at: NodeId, why: String)
+  /** the shape PROVES no path of the source starts with this prefix, so the `Unwrap` is ∅ */
+  case UnwrapAbsent(at: NodeId, prefix: List[PathItem])
+  /** the window provably covers the whole space, whatever its size: `Range` is the identity */
+  case RangeIdentity(at: NodeId, why: String)
   def show: String = this match
+    case FrontierIdentity(at, op, side) => s"frontier-identity at ${at.show}: $op = $side"
+    case IterationSubstitute(at, h) => s"iteration-substitute at ${at.show}: the one head is `$h`"
+    case IterationDrop(at, why) => s"iteration-drop at ${at.show}: $why"
+    case UnwrapAbsent(at, p) => s"unwrap-absent at ${at.show}: prefix ${p.mkString(".")} is PROVED absent"
+    case RangeIdentity(at, why) => s"range-identity at ${at.show}: $why"
     case EliminateEmpty(at, s, n) => s"eliminate-empty at ${at.show}: $n nodes ($s)"
     case ConstantFold(at, s, p, n) => s"constant-fold at ${at.show}: $n nodes -> $p paths ($s)"
     case Residualise(r, k, mb, l) => s"residualise ${r.s}: $k levels (measure bound $mb, input maxLen $l), Call-free"
@@ -223,8 +239,8 @@ enum Rewrite:
  *  backend-facing candidates it licenses.
  *
  *  ==WHY NOT THE NAME `SpatialAnalysis`==
- *  review.md sketches `analyzeRoutine(r, ann): SpatialAnalysis`.  `SpatialAnalysis` is now the
- *  DECORATED PER-NODE analysis of one `Space` (SpatialAnalysis.scala) — the answer to review.md
+ *  The review sketches `analyzeRoutine(r, ann): SpatialAnalysis`.  `SpatialAnalysis` is now the
+ *  DECORATED PER-NODE analysis of one `Space` (SpatialAnalysis.scala) — the answer to the review
  *  finding 4 — and it carries no routine, no annotations and no scope, so it cannot be the return type
  *  of a routine-level query without either duplicating it or lying about what it contains.  This type
  *  WRAPS it: `decorated` IS that value, unchanged, and every projection here is a projection of it
@@ -252,11 +268,11 @@ final case class RoutineAnalysis(routine: Routine,
   /** THE COST ENVIRONMENT THIS ANALYSIS LICENSES.  It carries `decorated`, so `SpatialCost` reads every
    *  per-node type out of the analysis that already ran — law refinements and per-node spatial
    *  refinements included — instead of starting a fresh `SpatialTyping.infer` traversal and discarding
-   *  them (review.md item 8: "Life tightens cardinality from 5,785 to 45 without changing its predicted
+   *  them (the requirement: "Life tightens cardinality from 5,785 to 45 without changing its predicted
    *  work"). */
   def costEnv: SpatialCost.Env = annotations.costEnvFor(decorated)
 
-  /** every executable's predicted warm interval over the SAME facts (review.md finding 7), CONSUMING the
+  /** every executable's predicted warm interval over the SAME facts, CONSUMING the
    *  decorated result.  The form is `AsGiven`: this is whatever body the analysis was run on — use
    *  [[SpatialPipeline.costOfOptimized]] / [[SpatialPipeline.costOfResidual]] for a statement about what
    *  actually runs. */
@@ -280,7 +296,7 @@ final case class RoutineAnalysis(routine: Routine,
 // 4.  STAGE 2 RESULT — THE SAFE ARTIFACT
 // ==================================================================================================
 
-/** A SPECIALISATION AND ITS FALLBACK.  This is the artifact review.md finding 3 asks for: "conditional
+/** A SPECIALISATION AND ITS FALLBACK.  This is the artifact the review asks for: "conditional
  *  facts must produce a guarded version plus fallback, or rewrite only callers already proved to
  *  satisfy the precondition".
  *
@@ -319,7 +335,7 @@ final case class GuardedRoutine(original: Routine,
              paths: Map[PathRef, PathValue] = Map.empty): Routine =
     if applicableTo(spaces, paths) then residual else fallback
 
-  /** THE `SpatialTyping.SpecializedRoutine` VIEW — review.md's `optimize(...): SpecializedRoutine`.
+  /** THE `SpatialTyping.SpecializedRoutine` VIEW — the `optimize(...): SpecializedRoutine`.
    *
    *  `SpecializedRoutine.precondition` is a `Map[SpaceMention, SpatialType]` and has nowhere to put a
    *  PATH precondition.  Handing back the conditional residual with only the space half of the
@@ -419,7 +435,7 @@ object SpatialPipeline:
   // STAGE 2 — optimize
   // ------------------------------------------------------------------------------------------------
 
-  /** review.md finding 3's signature.  The result is the SAFE artifact: a `SpecializedRoutine` whose
+  /** the signature.  The result is the SAFE artifact: a `SpecializedRoutine` whose
    *  precondition is EMPTY exactly when the facts were unconditional.  Use [[optimizeGuarded]] to get
    *  the fallback as well (and see [[GuardedRoutine.asSpecialized]] for the one case this view cannot
    *  represent). */
@@ -539,7 +555,7 @@ object SpatialPipeline:
   // STAGE 3 — lower
   // ------------------------------------------------------------------------------------------------
 
-  /** review.md finding 3's signature.  The precondition travels ON the artifact, so this can rebuild
+  /** the signature.  The precondition travels ON the artifact, so this can rebuild
    *  the analysis environment from it; what it cannot recover is the ROUTINE TABLE (a
    *  `SpecializedRoutine` does not carry one), so `Call` nodes are analysed as ⊤ here.  Pass the
    *  annotations through [[lower]]'s three-argument form to keep the table. */
@@ -649,7 +665,7 @@ object SpatialPipeline:
           case e: MatchError =>
             notes += s"transpile has no operation-graph node for a subterm of this program: ${e.getMessage.take(90)}"
             None
-    // COST CONSUMES THE DECORATED ANALYSIS (review.md item 8) whenever the lowering left the body's
+    // COST CONSUMES THE DECORATED ANALYSIS whenever the lowering left the body's
     // positions intact.  A candidate rewrite invalidates every `NodeId`, and `SpatialCost` refuses a
     // position whose subterm does not match, so in that case the decorated input is dropped explicitly
     // rather than silently ignored — and it is SAID, because it costs precision.
@@ -677,7 +693,7 @@ object SpatialPipeline:
     Backend.values.iterator.map(b => b -> lower(g, b, ann, ra)).toMap
 
   // ------------------------------------------------------------------------------------------------
-  // COST ON THE FORM THAT ACTUALLY RUNS  (the user's third steer; review.md item 8's second half)
+  // COST ON THE FORM THAT ACTUALLY RUNS  (the user's third steer; the second half)
   // ------------------------------------------------------------------------------------------------
 
   /** THE COST OF `Routine.optimized`'s BODY — the spatial hook plus the ordinary `Lower` rule list.
@@ -719,73 +735,129 @@ object SpatialPipeline:
                                Backends.of(b, ExecutionPhase.Warm), CostForm.Definitional)).toMap
 
   // ------------------------------------------------------------------------------------------------
-  // BACKEND SELECTION
+  // BACKEND COMPARISON  —  AUTOMATIC SELECTION IS A NON-GOAL
   // ------------------------------------------------------------------------------------------------
 
-  /** WHY A BACKEND WON, with the components that decided it and the form they were measured on. */
-  final case class BackendChoice(best: Backend, scores: Map[Backend, Double],
-                                 components: Map[Backend, CostPoint], form: CostForm,
-                                 modelledTouch: Set[Backend], notes: Vector[String]):
+  /** ONE BACKEND'S PER-COMPONENT INTERVAL at a valuation, plus the symbolic form it came from. */
+  final case class BackendBracket(backend: Backend,
+                                  numeric: Map[EffortComponent, (Double, Double)],
+                                  symbolic: CostInterval,
+                                  touchModelled: Boolean):
     def show: String =
-      val rows = Backend.values.toVector.map { b =>
-        val c = components(b)
-        f"  ${b.slug}%-10s work=${c.work}%12.0f alloc=${c.alloc}%12.0f rounds=${c.rounds}%10.0f " +
-        f"touch=${c.touch}%14.0f${if modelledTouch(b) then " (touch MODELLED)" else ""}  => ${scores(b)}%.0f"
+      val cells = BackendComparison.Components.map { c =>
+        val (lo, hi) = numeric(c)
+        f"${c.toString.toLowerCase}%-7s[${BackendBracket.f(lo)}%10s, ${BackendBracket.f(hi)}%10s]"
+      }.mkString("  ")
+      f"  ${backend.slug}%-10s $cells${if touchModelled then "  (touch MODELLED)" else ""}"
+  object BackendBracket:
+    def f(d: Double): String = if d.isInfinite then "inf" else if math.abs(d) >= 1e6 then f"$d%.2e" else f"$d%.0f"
+
+  /** ==============================================================================================
+   *  THE BACKEND COMPARISON REPORT.  THERE IS NO `best`.
+   *
+   *  Picking a backend automatically is a NON-GOAL of this analysis, and the previous API's confidence
+   *  was not supportable.  It scored each backend as `work + alloc + rounds + touch` at one valuation
+   *  and took an `argmin`.  Four defects, each fatal on its own:
+   *
+   *   1. THE SUM IS DIMENSIONALLY INCOHERENT.  The four components have four different counted oracles
+   *      ([[EffortComponent]]): `work` is AST/trie dispatches and cursor reads, `alloc` is fresh trie
+   *      nodes and frames, `rounds` is loop-body entries and fixpoint rounds, `touch` is
+   *      `TrieNodeVisit` + `PatriciaVisit`.  Adding a `FixpointRound` to a Patricia node visit has no
+   *      meaning; and since `touch` is Θ(n) per merge while `rounds` is O(1), the "four-component
+   *      score" was `touch` plus rounding noise on every trie-shaped program.
+   *   2. ONLY THE UPPER ENDPOINT WAS COMPARED (`Report.cost` is `interval.hi`), so a backend bracketed
+   *      `[1, 1000]` "beat" one bracketed `[900, 1001]`.  [[SpatialCost.Report.bracket]] — which hands
+   *      out `(lower, upper)` per component and exists for exactly this — was never called.
+   *   3. NO OVERLAP TEST AND NO SYMBOLIC TEST.  `minBy` over `Double`s at ONE valuation, while
+   *      [[Sym.dominates]] (which decides the ordering for EVERY assignment with variables ≥ 2) sits
+   *      unused in the same tree.
+   *   4. IT MINIMISED ACROSS A DECLARED ORACLE GAP.  `ReferenceCost.touchNoOracle` says `eval`'s
+   *      `touch` is a MODEL with no counted evidence, and `SpatialCost.analyze` therefore forces that
+   *      backend's `touch` LOWER endpoint to 0 — so nothing can ever be proved to dominate the
+   *      reference on `touch`.  Declaring the gap and then computing an argmin across it is precisely
+   *      the over-confidence.
+   *
+   *  ==WHAT THIS REPORTS INSTEAD==
+   *  Every backend's per-component INTERVAL over the same facts, and a DOMINANCE relation that holds
+   *  only when the intervals are disjoint on every component.  `INCOMPARABLE` — the normal answer — is
+   *  a result, not a failure: four models of differing fidelity predicting overlapping intervals is
+   *  what the evidence supports, and the caller is the one who knows which component it is paying for.
+   *  ============================================================================================== */
+  final case class BackendComparison(form: CostForm,
+                                     brackets: Map[Backend, BackendBracket],
+                                     valuation: Map[String, Double],
+                                     notes: Vector[String]):
+    /** `a` dominates `b` iff on EVERY component `a`'s interval lies strictly below `b`'s — the two are
+     *  disjoint and `a` is the lower one.  Never true when an endpoint is infinite. */
+    def dominates(a: Backend, b: Backend): Boolean =
+      a != b && BackendComparison.Components.forall { c =>
+        val (_, ahi) = brackets(a).numeric(c)
+        val (blo, _) = brackets(b).numeric(c)
+        ahi.isFinite && blo.isFinite && ahi < blo
       }
-      (s"backend selection on ${form.show} => ${best.slug}" +: rows ++: notes.map("  ! " + _)).mkString("\n")
+    /** the same question with NO valuation: [[Sym.dominates]] settles it for every assignment with
+     *  free variables ≥ 2, which is the domain the symbolic algebra assumes. */
+    def dominatesSymbolically(a: Backend, b: Backend): Boolean =
+      a != b && BackendComparison.Components.forall { c =>
+        (brackets(a).symbolic.hi.calibrated(c).symOpt,
+         brackets(b).symbolic.lo.calibrated(c).symOpt) match
+          case (Some(ahi), Some(blo)) => Sym.dominates(blo, ahi) && ahi != blo
+          case _ => false
+      }
+    def dominated: Vector[(Backend, Backend)] =
+      for a <- Backend.values.toVector; b <- Backend.values.toVector if dominates(a, b) yield (a, b)
+    /** THE ONLY CIRCUMSTANCE under which this API names a backend: it dominates all three others on
+     *  all four components.  `None` — the normal answer — means INCOMPARABLE. */
+    def unanimous: Option[Backend] =
+      Backend.values.find(a => Backend.values.forall(b => a == b || dominates(a, b)))
+    def verdict: String = unanimous match
+      case Some(b) => s"${b.slug} dominates on every component (disjoint intervals)"
+      case None => "INCOMPARABLE — no backend's intervals are disjoint-and-below on every component"
+    def show: String =
+      (s"backend comparison on ${form.show}: $verdict" +:
+       Backend.values.toVector.map(brackets(_).show) ++:
+       dominated.map((a, b) => s"  · ${a.slug} < ${b.slug} (all four components disjoint)") ++:
+       notes.map("  ! " + _)).mkString("\n")
 
-  /** BACKEND SELECTION BY PREDICTED COST, over COMPARABLE COMPONENTS (review.md item 8, last sentence).
-   *
-   *  ==WHAT WAS WRONG==
-   *  The score was `work + alloc + rounds` with `touch` dropped for EVERY backend, because ONE backend
-   *  (`Reference`) has no counted oracle for it.  `touch` is where the trie algebra's whole asymptotic
-   *  content lives — a merge of two n-node tries is ONE `TrieOpEntry` but `Θ(n)` node visits — so
-   *  dropping it made the comparison reward whichever executable is least instrumented, which is the
-   *  opposite of what a cost model is for.
-   *
-   *  ==WHAT IT IS NOW==
-   *  All four components, for all backends.  `Reference`'s `touch` is a MODEL rather than a measurement
-   *  and the choice says so ([[BackendChoice.modelledTouch]]) instead of solving the problem by deleting
-   *  the axis: a declared model is comparable, an omitted component is not.  Ties still break in
-   *  `Backend.values` order, deterministically. */
-  def chooseBackend(body: Space, ann: SpatialAnnotations,
-                    valuation: Map[String, Double] = Map.empty,
-                    form: CostForm = CostForm.AsGiven,
-                    decorated: Option[SpatialAnalysis] = None): BackendChoice =
+  object BackendComparison:
+    val Components: Vector[EffortComponent] =
+      Vector(EffortComponent.Work, EffortComponent.Alloc, EffortComponent.Rounds, EffortComponent.Touch)
+
+  /** EVERY EXECUTABLE'S PER-COMPONENT INTERVAL OVER THE SAME FACTS.  A report, not a choice. */
+  def compareBackends(body: Space, ann: SpatialAnnotations,
+                      valuation: Map[String, Double] = Map.empty,
+                      form: CostForm = CostForm.AsGiven,
+                      decorated: Option[SpatialAnalysis] = None): BackendComparison =
     val env = decorated.map(ann.costEnvFor).getOrElse(ann.costEnv)
-    val reports = Backend.values.iterator.map { b =>
-      b -> SpatialCost.analyze(body, env, Backends.of(b, ExecutionPhase.Warm), form)
+    val brackets = Backend.values.iterator.map { b =>
+      val model = Backends.of(b, ExecutionPhase.Warm)
+      val r = SpatialCost.analyze(body, env, model, form)
+      b -> BackendBracket(b,
+                          BackendComparison.Components.map(c => c -> r.bracket(c, valuation)).toMap,
+                          r.interval, model.touchNoOracle.isDefined)
     }.toMap
-    val comps = reports.view.mapValues(_.cost.at(valuation)).toMap
-    val scores = comps.view.mapValues(p => p.work + p.alloc + p.rounds + p.touch).toMap
-    val modelled =
-      Backend.values.iterator.filter(b => Backends.of(b, ExecutionPhase.Warm).touchNoOracle.isDefined).toSet
-    val best = Backend.values.toVector.minBy(b => (scores(b), b.ordinal))
+    val modelled = brackets.values.filter(_.touchModelled).map(_.backend.slug).toVector.sorted
     val notes = Vector(
-      "the score is work + alloc + rounds + TOUCH.  Dropping `touch` — which is what this did before —" +
-      " omits the component that carries the trie algebra's asymptotics and therefore rewards the" +
-      " least-instrumented executable (review.md item 8).",
-      if modelled.isEmpty then "every backend's `touch` has a counted oracle"
-      else s"`touch` is a MODEL (no counted oracle) for: ${modelled.toVector.map(_.slug).sorted.mkString(", ")}" +
-           " — declared, not omitted") ++
+      "the components are NOT summed: `work`, `alloc`, `rounds` and `touch` have four different " +
+      "counted oracles (see EffortComponent) and no common unit, so a scalar score over them is " +
+      "meaningless and an argmin over that score is not a backend recommendation.",
+      "dominance requires the intervals to be DISJOINT on every component; any overlap is reported " +
+      "as INCOMPARABLE rather than resolved by an arbitrary tie-break.") ++
+      (if modelled.isEmpty then Vector.empty
+       else Vector(s"`touch` is a MODEL with no counted oracle for: ${modelled.mkString(", ")} — its " +
+                   "lower endpoint is forced to 0, so nothing can be proved to dominate it there")) ++
       (if form.describesWhatRuns then Vector.empty
-       else Vector(s"priced on ${form.show}; prefer `costOfOptimized` / `costOfResidual` for a statement " +
-                   "about what actually runs"))
-    BackendChoice(best, scores, comps, form, modelled, notes)
+       else Vector(s"priced on ${form.show}; prefer `costOfOptimized` / `costOfResidual` for a " +
+                   "statement about what actually runs"))
+    BackendComparison(form, brackets, valuation, notes)
 
-  /** THE HISTORICAL TWO-VALUE FORM, now scoring all four components (see [[chooseBackend]]). */
-  def selectBackend(body: Space, ann: SpatialAnnotations,
-                    valuation: Map[String, Double] = Map.empty): (Backend, Map[Backend, Double]) =
-    val c = chooseBackend(body, ann, valuation)
-    (c.best, c.scores)
-
-  /** SELECTION ON THE FORM THAT RUNS: `Routine.optimized`'s body, with its own decorated analysis. */
-  def selectBackendOptimized(r: Routine, ann: SpatialAnnotations,
-                             valuation: Map[String, Double] = Map.empty): BackendChoice =
+  /** THE COMPARISON ON THE FORM THAT RUNS: `Routine.optimized`'s body, with its own decorated analysis. */
+  def compareBackendsOptimized(r: Routine, ann: SpatialAnnotations,
+                               valuation: Map[String, Double] = Map.empty): BackendComparison =
     given PartialFunction[RoutinePtr, Routine] = ann.routines
     val opt = r.optimized
     val a = analyzeRoutine(opt, ann)
-    chooseBackend(opt.body, ann, valuation, CostForm.Optimized, Some(a.decorated))
+    compareBackends(opt.body, ann, valuation, CostForm.Optimized, Some(a.decorated))
 
   // ------------------------------------------------------------------------------------------------
   // THE HOOK FOR THE ORDINARY OPTIMIZER
@@ -821,7 +893,7 @@ object SpatialPipeline:
     val d = SpatialAnalysis.of(body, ann.env(), ann.config)
     if d.root.uninhabited then body else rewriteNodes(body, d, ann)._1
 
-  /** REWRITE ONLY THE CALL SITES ALREADY PROVED TO SATISFY THE PRECONDITION — review.md finding 3's
+  /** REWRITE ONLY THE CALL SITES ALREADY PROVED TO SATISFY THE PRECONDITION — the review 3's
    *  second option for conditional facts.
    *
    *  A `Call(rp, refs, mentions)` in `host` is redirected to `to` exactly when every mention argument's
@@ -865,9 +937,40 @@ object SpatialPipeline:
   // THE PER-NODE REWRITES
   // ------------------------------------------------------------------------------------------------
 
-  /** elimination + constant folding, driven by the decorated analysis.  It takes the DECORATED
-   *  analysis rather than the `RoutineAnalysis` wrapper because that is all it reads — which is what
-   *  lets the `Routine.optimized` hook skip the candidate stage entirely. */
+  /** ==============================================================================================
+   *  THE ANALYSIS-DRIVEN REWRITES, driven by the decorated analysis.
+   *
+   *  It takes the DECORATED analysis rather than the `RoutineAnalysis` wrapper because that is all it
+   *  reads — which is what lets the `Routine.optimized` hook skip the candidate stage entirely.
+   *
+   *  ==WHAT THIS USED TO BE, AND WHY THAT WAS THE COMPLAINT==
+   *  Two rewrites: `provablyEmpty` -> `Empty`, and `SpatialFacts.exactValue` -> `Literal`.  Both read
+   *  the SIZE of a node's type and nothing else.  Meanwhile the analysis derives, at every node, a
+   *  `SpatialType` with a four-channel `Shape`, a per-node `Fact` vector, and — for every binary ring
+   *  node — a `SpatialFrontier` summary that is the analysis-side mirror of `Trie.AlgebraicResult`.
+   *  A census of the consumers was blunt: of the eleven `Fact` cases, exactly ONE (`ExactHeadSet`)
+   *  was read anywhere outside `SpatialTypeSystem`, and that read was inside a Trie-backend-only
+   *  candidate.  The rest — `DefinitelyNonEmpty`, `MinimumCardinality`, `MaximumCardinality`,
+   *  `AllPathsHaveAtLeast`, `MaximumPathLength`, `HeadSetWithin`, `MinimumHeadCount`,
+   *  `MaximumHeadCount`, `PrefixAbsent` — had NO consumer at all, and neither did the whole
+   *  relational layer: `SpatialFrontier` was used to PRICE a node, never to REPLACE it.
+   *
+   *  ==THE FIVE ADDED, EACH WITH THE FACT IT READS AND WHY IT IS SOUND==
+   *  R1 [[frontierEdits]]  — the relational frontier's SINGLETON case sets.
+   *  R2 [[iterationEdits]] — a one-head source turns an `Iteration` into a substitution.
+   *  R3 [[iterationEdits]] — a headless source, or a provably-empty body, makes it `∅`.
+   *  R4 [[prefixEdits]]    — `Fact.PrefixAbsent` makes an `Unwrap` `∅`.
+   *  R5 [[windowEdits]]    — a pinned cardinality makes a `Range` window the identity.
+   *
+   *  EVERY ONE IS GATED BY THE SAME DIFFERENTIAL AS THE OLD TWO: `SpatialPipelineCheck`'s
+   *  "the hooked `Routine.optimized` agrees with `eval` on the fuzzed corpus" runs the whole hook
+   *  over the 1000-program corpus and compares against the reference evaluator.  A rewrite that
+   *  reads a fact wrongly fails there, not in review. */
+  /** the rewrite set and the rewritten body, for diagnostics and for the size-contract test */
+  private[morkl] def rewriteNodesFor(body: Space, d: SpatialAnalysis,
+                                     ann: SpatialAnnotations): (Space, Vector[Rewrite]) =
+    rewriteNodes(body, d, ann)
+
   private def rewriteNodes(body: Space, d: SpatialAnalysis,
                            ann: SpatialAnnotations): (Space, Vector[Rewrite]) =
     val empties = d.provablyEmpty.iterator
@@ -875,7 +978,166 @@ object SpatialPipeline:
       .map(n => (n.id, Space.Empty: Space,
                  Rewrite.EliminateEmpty(n.id, show(n.expression), nodeCount(n.expression)))).toVector
     val exacts = exactEdits(d, ann)
-    apply(body, dropNested(empties ++ exacts))
+    apply(body, dropNested(empties ++ frontierEdits(d, ann) ++ exacts ++
+                           iterationEdits(d, ann) ++ prefixEdits(d) ++ windowEdits(d)))
+
+  /** R1 — THE RELATIONAL FRONTIER, CONSUMED AS A REWRITE.
+   *
+   *  `SpatialFrontier.atNode` returns, for every binary ring node, the SET of
+   *  `Trie.AlgebraicResult` cases that MAY hold, computed from the two children's decorated types.
+   *  A SINGLETON set is not an estimate — it is a proof:
+   *
+   *    `{Empty}`        the result is `∅`            (an empty operand, or head-disjointness, or a
+   *                                                   covering prefix set on a raffination)
+   *    `{Left}`         the result IS the left operand   (an empty right operand, `ε ∈ right` on a
+   *                                                   restriction, `covers(l, r)`, …)
+   *    `{Right}`        the result IS the right operand
+   *    `{Left, Right}`  `Identity(BOTH)` — the two operands denote the SAME set, so either will do
+   *
+   *  ==THE TWO THINGS THIS DELIBERATELY DOES NOT DO==
+   *  It does NOT use `FrontierCase.isIdentity`, which is `cs.nonEmpty && !cs.contains(Bespoke)` and
+   *  therefore true of `{Empty, Left}` — "∅ or L", which for a head-disjoint `Intersection` is a
+   *  genuine disjunction and not a rewrite.  And it does NOT act on any set containing `Bespoke`.
+   *  Only the four sets above fire.
+   *
+   *  ==WHY IT IS SOUND AT AN OCCURRENCE, NOT JUST AT A VALUE==
+   *  `atNode` reads the two children's DECORATED types, which are the JOIN over every observation of
+   *  that occurrence — every binder environment the analysis saw it in.  γ of each observation is
+   *  contained in γ of the join, so a case proved from the join holds under all of them, which is
+   *  exactly what rewriting inside a binder body requires (the same argument [[exactEdits]] uses).
+   *
+   *  NOTE FOR THE WIDTH SPILL: `headDisjoint` goes through `Shape.possibleHeads`, so this rewrite's
+   *  yield is bounded by whether the head set is enumerable — which is what the `otherKeys`
+   *  certificate restored past `Shape.MaxHeads`. */
+  private def frontierEdits(d: SpatialAnalysis, ann: SpatialAnnotations)
+      : Vector[(NodeId, Space, Rewrite)] =
+    import FrontierCase.*
+    d.nodes.iterator.flatMap { n =>
+      SpatialFrontier.opOf(n.expression).flatMap { op =>
+        SpatialFrontier.atNode(d, n.id, FrontierConfig(facts = ann.factConfig)).flatMap { s =>
+          def child(i: Int): Option[Space] = n.expression match
+            case Space.Union(a, b) => Some(if i == 0 then a else b)
+            case Space.Intersection(a, b) => Some(if i == 0 then a else b)
+            case Space.Subtraction(a, b) => Some(if i == 0 then a else b)
+            case Space.Restriction(a, b) => Some(if i == 0 then a else b)
+            case Space.Raffination(a, b) => Some(if i == 0 then a else b)
+            case Space.Composition(a, b) => Some(if i == 0 then a else b)
+            case _ => None
+          val repl: Option[(Space, String)] =
+            if s.cases == Set(Empty) then Some((Space.Empty, "∅"))
+            else if s.cases == Set(Left) || s.cases == Set(Left, Right) then child(0).map(_ -> "L")
+            else if s.cases == Set(Right) then child(1).map(_ -> "R")
+            else None
+          repl.filter((r, _) => r != n.expression)
+              .map((r, side) => (n.id, r, Rewrite.FrontierIdentity(n.id, op.toString, side)))
+        }
+      }
+    }.toVector
+
+  /** R2/R3 — WHAT THE HEAD FACTS SAY ABOUT A LOOP.
+   *
+   *  `eval`'s `Iteration(src, sym, rest, body)` groups `src`'s paths by head (dropping the headless
+   *  `ε` path) and unions `body` over the groups with `sym` bound to the head and `rest` to that
+   *  head's tail set (MORKL.scala).  Two facts about the SOURCE decide the loop outright:
+   *
+   *  R2  `Fact.ExactHeadSet(hs)` with `|hs| = 1`.  The union has exactly ONE term, so the loop is a
+   *      substitution: `body[sym := h][rest := TailsUnion(src)]`.  `tails(src, h) = TailsUnion(src)`
+   *      because every headed path of `src` starts with `h`.  Unlike [[unrollProvedHeads]] this needs
+   *      only the head SET, not a pinned source value — and it duplicates nothing, so the measurement
+   *      that killed the `rest := Unwrap(src, h)` form (work 16 -> 25, graph slots 6 -> 11) does not
+   *      apply.  It is REFUSED when the body rebinds either name (the same hygiene check the unroller
+   *      uses) or mentions `rest` more than once, which would duplicate `src`.
+   *
+   *  R3  `Fact.MaximumHeadCount(0)`: no path of `src` has a head, so there are no groups and the
+   *      union is empty.  Also when the BODY's joined result is provably empty — the join is `∅` only
+   *      if every observation is, so the join test suffices.  This is the semantic form of the two
+   *      syntactic identities `Lower` already has for `Iteration(Empty, …)`. */
+  private def iterationEdits(d: SpatialAnalysis, ann: SpatialAnnotations)
+      : Vector[(NodeId, Space, Rewrite)] =
+    d.nodes.iterator.flatMap { n =>
+      n.expression match
+        case Space.Iteration(src, sym, rest, tmpl) =>
+          val srcNode = d.at(n.id.child(0))
+          val bodyNode = d.at(n.id.child(1))
+          val facts = srcNode.toVector.flatMap(_.facts)
+          val headless = facts.exists { case Fact.MaximumHeadCount(0) => true; case _ => false }
+          val emptyBody = bodyNode.exists(_.result.isProvablyEmpty)
+          if headless then
+            Some((n.id, Space.Empty: Space,
+                  Rewrite.IterationDrop(n.id, "the source has no headed path, so no group runs")))
+          else if emptyBody then
+            Some((n.id, Space.Empty: Space,
+                  Rewrite.IterationDrop(n.id, "the body is provably ∅ in every observed environment")))
+          else
+            facts.collectFirst { case Fact.ExactHeadSet(hs) if hs.size == 1 => hs.head }
+              .filter(_ => !rebinds(tmpl, sym, rest))
+              .map { h =>
+                val c = Path.Constant(PathValue(List(h)))
+                val sub = subs(tmpl)(spost = { case Space.Mention(`rest`) => Space.TailsUnion(src) },
+                                     ppost = { case Path.Deref(pr) if pr == sym => c })
+                (n.id, sub, Rewrite.IterationSubstitute(n.id, h))
+              }
+              // AND IT MUST NOT GROW THE TERM.  When the body never mentions `rest` the substitution
+              // deletes the source outright and this is free; when it does, `rest := TailsUnion(src)`
+              // puts a copy of `src` back, and one copy of a large source is bigger than the loop it
+              // replaced.  `Routine.optimized`'s contract is that the hooked body is never larger
+              // than the plain one (`SpatialPipelineCheck`'s corpus gate asserts it), so the size
+              // test is the gate, not a mention count: a two-node `src` under two mentions is still
+              // a win and a fifty-node `src` under one is not.
+              .filter((_, sub, _) => nodeCount(sub) <= nodeCount(n.expression))
+        case _ => None
+    }.toVector
+
+  /** how many times does `s` mention `m`? — the guard that keeps R2 from duplicating its source */
+  private def mentionCount(s: Space, m: SpaceMention): Int =
+    collect(s)({ case Space.Mention(`m`) => () }, PartialFunction.empty)._1.size
+
+  /** R4 — `Fact.PrefixAbsent` FINALLY HAS A CONSUMER.
+   *
+   *  `SpatialAnalysis.constantPrefixes` probes exactly the constant paths the term itself mentions
+   *  and emits `Fact.PrefixAbsent(p)` when `Shape.mayHavePrefix(p)` is FALSE — which is a PROOF of
+   *  absence, not an estimate (a closed head set with no `p` head, or a tracked child that rejects
+   *  the rest).  `Unwrap(src, p)` keeps exactly the paths of `src` that start with `p`, so an absent
+   *  prefix makes it `∅`.  Until now nothing read the fact: it was manufactured at every node and
+   *  consumed nowhere. */
+  private def prefixEdits(d: SpatialAnalysis): Vector[(NodeId, Space, Rewrite)] =
+    d.nodes.iterator.flatMap { n =>
+      n.expression match
+        case Space.Unwrap(_, Path.Constant(PathValue(items))) if items.nonEmpty =>
+          d.at(n.id.child(0)).toVector.flatMap(_.facts)
+            .collectFirst { case Fact.PrefixAbsent(p) if p == items => p }
+            .map(p => (n.id, Space.Empty: Space, Rewrite.UnwrapAbsent(n.id, p)))
+        case _ => None
+    }.toVector
+
+  /** R5 — A PINNED CARDINALITY MAKES A WINDOW THE IDENTITY.
+   *
+   *  `RangeBounds.normalize(size, lo, hi)` clamps the window to `[0, size)`, and `sliceRange` /
+   *  `ITrie.range` return their input unchanged when it covers everything.  Two ways to know it does
+   *  without knowing the size: the window is syntactically full (`(lo == 0 || lo == 1) && hi == 0`,
+   *  which `SpatialCost.rangeIsIdentity` already decides and prices), or the operand's cardinality is
+   *  PINNED (`MinimumCardinality(k)` and `MaximumCardinality(k)` agree) and the normalised window
+   *  covers `[0, k)`.  The second reads two facts that had no consumer at all. */
+  private def windowEdits(d: SpatialAnalysis): Vector[(NodeId, Space, Rewrite)] =
+    d.nodes.iterator.flatMap { n =>
+      n.expression match
+        case Space.Range(x, lo, hi) =>
+          val whole =
+            if SpatialCost.rangeIsIdentity(lo, hi) then Some("the window is syntactically full")
+            else
+              val fs = d.at(n.id.child(0)).toVector.flatMap(_.facts)
+              val kLo = fs.collectFirst { case Fact.MinimumCardinality(k) => k }
+              val kHi = fs.collectFirst { case Fact.MaximumCardinality(k) => k }
+              (kLo, kHi) match
+                case (Some(a), Some(b)) if a == b && a <= Int.MaxValue.toLong =>
+                  val (l, h) = RangeBounds.normalize(a.toInt, lo, hi)
+                  if l == 0 && h.toLong == a then
+                    Some(s"the operand holds exactly $a paths and the window covers all of them")
+                  else None
+                case _ => None
+          whole.map(w => (n.id, x, Rewrite.RangeIdentity(n.id, w)))
+        case _ => None
+    }.toVector
 
   /** ONLY the exact-value folding (what the graph lowering consumes) */
   private def foldExactNodes(body: Space, d: SpatialAnalysis,
@@ -1039,6 +1301,14 @@ object SpatialPipeline:
   // SMALL SHARED HELPERS
   // ------------------------------------------------------------------------------------------------
 
+  /** THE ONE `Space` NODE COUNTER, over [[SizeZ3.children]] — which is TOTAL on the `Space` enum.
+   *
+   *  Four test files used to carry their own hand-written copy, each missing a different set of
+   *  constructors (`Raffination`, `TailsIntersection`, `Fixpoint`, `Fold`, `Range`, `TailsUnion`).  A
+   *  missing arm does not fail: it falls into `case _ => 0`, so the whole subtree below that node is
+   *  counted as a LEAF.  Since the corpus generator's accept filter is `nodeCount(prog) >= 12`, a
+   *  miscount silently changes which programs are in the corpus.  One implementation, driven by the
+   *  same total child enumerator the SMT encoder uses, is the fix. */
   def nodeCount(s: Space): Int = 1 + SizeZ3.children(s).map(nodeCount).sum
   def isCallFree(s: Space): Boolean =
     var free = true
@@ -1070,7 +1340,7 @@ end SpatialPipeline
 // 7.  THE HOOK INSTALLED IN `Routine.optimized` — its policy, its switch, and its meter
 // ==================================================================================================
 
-/** THE SPATIAL TIER, ON THE ORDINARY COMPILATION PATH (review.md finding 3).
+/** THE SPATIAL TIER, ON THE ORDINARY COMPILATION PATH.
  *
  *  `Routine.optimized` (MORKL.scala:248-251) runs [[rewrite]] on the body before `Lower.inline` and
  *  the ordinary rule list.  Only UNCONDITIONAL facts are available there — `optimized` takes no

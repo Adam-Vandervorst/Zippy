@@ -452,7 +452,7 @@ REG = [
     ("restriction-singleton-unwrap", "FILE", "laws/law_restrict_set.smt2", "restriction by a singleton = wrap of unwrap"),
     ("iter-tails", "FILE", "laws/law_tailsu_set.smt2,keyfolds.smt2", "iteration realizing tails-union"),
     ("tailsunion-singleton", "FILE", "laws/law_tailsu_set.smt2", "tails of singleton sources"),
-    ("range-singleton", "GROUND", "-", "trusted positional boundary (fallbacks.md); executor-evaluated"),
+    ("range-singleton", "GROUND", "-", "trusted positional boundary; executor-evaluated"),
     ("unwrap-wrap", "FILE", "laws/law_unwrap_set.smt2", "unwrap of a wrap (all comparability cases)"),
     # formal.egg set-algebra family
     ("union-idem", "FILE", "laws/law_union_idem.smt2", "formal.egg"),
