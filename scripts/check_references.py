@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""EVERY FILE REFERENCE IN THE TREE MUST RESOLVE.
+"""EVERY FILE REFERENCE IN EVERY TRACKED TEXT FILE MUST RESOLVE.
 
 Two failure modes this catches, both of which the repository had:
 
@@ -14,20 +14,56 @@ A reference resolves if it is found relative to the repo root, to the citing fil
 or to one of the SEARCH_ROOTS (so `MORKL.scala` in a doc, or `laws/law_union_idem.smt2` in a proof header,
 both resolve without spelling the full path).
 
-Run: python3 scripts/check_references.py        # exit 1 on any dangling reference
+==WHAT IS SCANNED, AND WHY THAT CHANGED==
+
+EVERY TRACKED TEXT FILE, and the file list comes from `git ls-files` — not from a glob plus an
+extension allow-list.  It used to be the other way round: `SCAN_EXT` named eight extensions and
+`SKIP_FILES` excluded `build.log`, the generated CSV/TSV results and `MINED.tsv` wholesale, so a
+zero from this checker meant "zero in its selected subset" and `laws.diff` could sit in the tree
+containing an absolute macOS prover path while the header claimed every reference resolved.
+Now:
+
+  * the candidate set is every tracked file (so a new `.rst`, `.toml` or extensionless script is
+    covered the day it is added, without editing this script);
+  * BINARY files are skipped by CONTENT (a NUL byte in the first 8 KiB), never by name;
+  * there is NO whole-file exception.  A file that legitimately contains an unresolvable token
+    declares that token in `TOKEN_EXCEPTIONS` below, one entry per token, each with the file it
+    applies to and the reason.  A blanket skip cannot come back by accident: `--strict` fails if a
+    declared exception is never used, so a stale one is a failure rather than a widening.
+
+==FRESH-CHECKOUT MODE==
+
+`--fresh` copies every TRACKED file into a temporary directory and scans THAT.  It is the check
+that ignored local files — a `.tools/` directory, an un-committed data file, a generated CSV that
+happens to be lying around — cannot make a reference look valid.  It is what the ordinary run
+cannot tell you, because the ordinary run sees the working tree.
+
+Run: python3 scripts/check_references.py            # the working tree
+     python3 scripts/check_references.py --fresh    # a tracked-files-only copy
+     python3 scripts/check_references.py --fresh --strict   # ...and fail on an UNUSED exception
+
+`--strict` fails on a declared exception that matched nothing, but only together with `--fresh`:
+in the working tree a token can resolve because of an untracked local file, and the exception is
+then legitimately never consulted. The tracked-files-only view is the authoritative one.
 """
 import os
 import re
 import sys
 import pathlib
 
+import subprocess
+import tempfile
+import shutil
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+DECLARING_FILE = "scripts/check_references.py"      # where TOKEN_EXCEPTIONS below is written
 
 # Directories a bare filename may be relative to.  Order is irrelevant: any hit resolves.
 SEARCH_ROOTS = [
     "", "docs", "scripts", "proofs", "proofs/laws", "proofs/spatial", "proofs/spatial-semantic",
-    "proofs/pipeline", "src/main/scala", "src/test/scala", "src/test/resources", "terminating",
-    "zipper-egg-tests", "zipper-egg-tests/generated", "zipper-egg-tests/pipeline",
+    "proofs/pipeline", "proofs/unbounded", "proofs/unbounded/negative",
+    "proofs/pipeline/fixpoint-gate", "src/main/scala", "src/test/scala", "src/test/resources",
+    "terminating", "zipper-egg-tests", "zipper-egg-tests/generated", "zipper-egg-tests/pipeline",
 ]
 
 # Extensions that make a token a file reference.  `.sh` and `.p` are only honoured when the token
@@ -70,11 +106,87 @@ IGNORE_RE = re.compile(
     re.X,
 )
 
-SKIP_FILES = {"build.log", "laws.diff", "corpus_1000.txt", "corpus_1000.ser", "expressivity.csv",
-              "corpus_runtimes.csv", "MINED.tsv"}
-SKIP_DIRS = {".git", ".tools", "target", ".bsp", ".idea", ".scala-build", ".bloop"}
+SKIP_DIRS = {".git", ".tools", "target", ".bsp", ".idea", ".scala-build", ".bloop", "__pycache__"}
 
-SCAN_EXT = {".md", ".scala", ".py", ".sh", ".egg", ".smt2", ".tsv", ".sbt", ".p"}
+# PER-TOKEN EXCEPTIONS.  `(file-suffix-or-"*", token) -> reason`.  Each entry excuses ONE token in
+# ONE place; there is no whole-file skip.  `--strict` fails on an entry that matched nothing, so an
+# exception that outlives its cause is a failure and not a silent widening.
+#
+# The four kinds that legitimately occur, and nothing else qualifies:
+#   (a) an EXTERNAL project cited by its own repo-relative path (carac's Datalog fixtures);
+#   (b) a file the historical narrative in build.log records as HAVING EXISTED and then removed —
+#       the narrative is the artifact, so the citation is a fact about the past, not a pointer;
+#   (c) a token that is a MEASUREMENT or an identifier and only looks like a filename;
+#   (d) a tool binary named with an extension-like suffix.
+TOKEN_EXCEPTIONS = {
+    # (a) carac is an EXTERNAL Datalog benchmark whose fixtures these programs were derived from.
+    # The citation is `carac:<its own repo-relative path>`; the scanner sees the path part, since
+    # `carac:` is not a token character.  Nothing in this tree resolves it, by design.
+    ("terminating/datalog_a.txt", "src/test/scala/test/graphs/SingleCycle.scala"):
+        "(a) external: carac's own test fixture, cited repo-relative; carac is not vendored here",
+    ("terminating/datalog_a.txt", "src/test/scala/test/graphs/MultiIsolatedCycle.scala"): "(a) as above",
+    ("terminating/datalog_a.txt", "src/test/scala/test/graphs/TopSort.scala"): "(a) as above",
+
+    # (b) build.log is an APPEND-ONLY NARRATIVE.  These entries record documents that existed at the
+    # time of the entry and have since been removed; the sentence around each one is the artifact,
+    # so the name is a fact about the past and not a live pointer.  Rewriting them would falsify the
+    # log; deleting them would lose the experiment narrative the entry exists for.
+    ("build.log", "critique_on_b.md"): "(b) a review document that existed at that entry's date and was removed",
+    ("build.log", "learned_from_a.md"): "(b) as above",
+    ("build.log", "fallbacks.md"): "(b) as above",
+    ("build.log", "whispers.md"): "(b) as above",
+    ("build.log", "locality-schedule.egg"): "(b) an egg experiment that existed at that entry's date and was removed",
+    ("build.log", "project.scala"): "(b) the scala-cli project file the tree used before build.sbt",
+
+    # (c) SLASH-ABBREVIATED GROUPS: one token standing for several real files, e.g.
+    # `impl_wrap/unwrap/head.smt2` means impl_wrap.smt2 + impl_unwrap.smt2 + impl_head.smt2.  Each
+    # of the named files DOES exist; the token is prose shorthand, not a path.
+    ("build.log", "gol/nqueens/puzzle15/temperature-space.egg"):
+        "(c) shorthand for gol-space.egg, nqueens-space.egg, puzzle15-space.egg, temperature-space.egg",
+    ("build.log", "impl_wrap/unwrap/head.smt2"):
+        "(c) shorthand for impl_wrap.smt2, impl_unwrap.smt2, impl_head.smt2",
+    # `review.md` is a REVIEW INPUT and is deliberately untracked (see .gitignore): a review
+    # document quotes the state it reviewed, several of whose files no longer exist by design.
+    # `RESOLUTION.md` is the tracked response to it and cites it by name once; `build.log`'s
+    # narrative cites it throughout.
+    ("RESOLUTION.md", "aunt-space-lit.egg"):
+        "(b) an artifact this change DELETED (a budget marker that existed only because "
+        "bridge-prelude.egg did not load); the paragraph is about its removal",
+    ("RESOLUTION.md", "nqueens-space-lit.egg"): "(b) as above",
+    ("RESOLUTION.md", "review.md"):
+        "(b) the untracked review input this document answers; see .gitignore",
+    ("build.log", "review.md"): "(b) as above, cited by the narrative entries that acted on it",
+    ("build.log", ".tools/env.sh"):
+        "(b) a gitignored local tool directory that entry created; README.md now documents the "
+        "ordinary installation and `toolchain.conf` is the resolution policy, so nothing in the "
+        "tree depends on it any more",
+    ("build.log", "attic-formal.egg"):
+        "(b) the archived copy of formal.egg from the scala-cli era; removed when the port finished",
+    ("build.log", "IntegrationLadderProbe.scala"):
+        "(b) a throwaway probe suite, and the entry itself says `DELETED before this entry`",
+    ("build.log", ".test.scala"):
+        "(c) the scala-cli test-scope SUFFIX `*.test.scala` / `<Name>.test.scala`, not a filename",
+    ("build.log", "keys_intersection/subtraction/composition/restriction/filter_exact.smt2"):
+        "(c) shorthand for keys_intersection.smt2, keys_subtraction.smt2, keys_composition.smt2, "
+        "keys_restriction.smt2, keys_filter_exact.smt2",
+}
+
+# Files whose CONTENT is data rather than prose, and whose tokens are therefore values.  These are
+# still SCANNED for markdown links and for absolute paths; only the bare-filename token sweep is
+# skipped, and the reason is per file.
+DATA_FILES = {
+    "corpus_1000.txt": "one serialised program per line; every token is a program term",
+    "expressivity.csv": "generated measurement rows",
+    "corpus_runtimes.csv": "generated measurement rows",
+    "prog_matrix.tsv": "generated measurement rows",
+    "proofs/laws/MINED.tsv": "mined law candidates; the `file` column names files that resolve, the rest are terms",
+    "datalog-morkl.txt": "generated program dump",
+}
+
+# ABSOLUTE PATHS ARE A HARD FAILURE EVERYWHERE, including in the data files above and in build.log.
+# This is the check that `laws.diff` (removed) and the personal paths in `build.log` and
+# `terminating/datalog_a.txt` (rewritten) used to fail while the reference sweep passed.
+ABS_RE = re.compile(r"(?<![\w./$-])(/Users/[\w.-]+|/home/[\w.-]+|/Applications/[\w.-]+|[A-Za-z]:\\[\w.-]+\\)")
 
 # `(?<![\w./$-])` also rules out `$name-space.egg` / `"$1.smt2"`: a token whose first character is
 # preceded by `$` is an interpolation, and the file it names exists only at run time.
@@ -82,29 +194,54 @@ TOKEN_RE = re.compile(r"(?<![\w./$-])((?:[\w.@-]+/)*[\w.@-]+\.[A-Za-z0-9]+)(?![\
 MDLINK_RE = re.compile(r"\[([^\]]*)\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
 
-def resolves(ref: str, origin: pathlib.Path) -> bool:
+def resolves(ref: str, origin: pathlib.Path, root: pathlib.Path) -> bool:
     base = ref.split("/")[-1]
     if base in GENERATED or base in EXTERNAL_DATA:
         return True
     if (origin.parent / ref).exists():
         return True
-    return any((ROOT / r / ref).exists() for r in SEARCH_ROOTS)
+    return any((root / r / ref).exists() for r in SEARCH_ROOTS)
 
 
-def scan():
+def tracked_files():
+    """Every tracked path, from git.  Falls back to a walk when git is unavailable."""
+    try:
+        out = subprocess.run(["git", "-C", str(ROOT), "ls-files", "-z"],
+                             capture_output=True, check=True).stdout
+        return [ROOT / n for n in out.decode().split("\0") if n]
+    except (OSError, subprocess.CalledProcessError):
+        return [f for f in sorted(ROOT.rglob("*"))
+                if f.is_file() and not any(part in SKIP_DIRS for part in f.relative_to(ROOT).parts)]
+
+
+def is_text(f: pathlib.Path) -> bool:
+    """BY CONTENT, never by name: a NUL byte in the first 8 KiB means binary."""
+    try:
+        with open(f, "rb") as fh:
+            return b"\0" not in fh.read(8192)
+    except OSError:
+        return False
+
+
+def scan(root: pathlib.Path, files, used_exceptions):
     problems = []
-    for f in sorted(ROOT.rglob("*")):
-        if not f.is_file():
+    for f in files:
+        if not f.is_file() or not is_text(f):
             continue
-        if any(part in SKIP_DIRS for part in f.relative_to(ROOT).parts):
-            continue
-        if f.name in SKIP_FILES or f.suffix not in SCAN_EXT:
+        if any(part in SKIP_DIRS for part in f.relative_to(root).parts):
             continue
         try:
-            text = f.read_text()
-        except (UnicodeDecodeError, OSError):
+            text = f.read_text(errors="replace")
+        except OSError:
             continue
-        rel = f.relative_to(ROOT)
+        rel = f.relative_to(root)
+        relstr = str(rel)
+
+        # (0) ABSOLUTE PATHS — everywhere, data files and logs included.  A committed absolute path
+        # is either dead on every other machine or a personal directory; neither belongs in the tree.
+        for m in ABS_RE.finditer(text):
+            line = text[: m.start()].count("\n") + 1
+            problems.append(f"{rel}:{line}: ABSOLUTE PATH in a tracked file: {m.group(1)}")
 
         # (1) markdown links
         if f.suffix == ".md":
@@ -112,11 +249,14 @@ def scan():
                 tgt = m.group(2).split("#")[0]
                 if not tgt or tgt.startswith(("http://", "https://", "mailto:")):
                     continue
-                if not (f.parent / tgt).exists() and not (ROOT / tgt).exists():
+                if not (f.parent / tgt).exists() and not (root / tgt).exists():
                     line = text[: m.start()].count("\n") + 1
                     problems.append(f"{rel}:{line}: broken markdown link [{m.group(1)}]({m.group(2)})")
 
-        # (2) prose / comment citations
+        # (2) prose / comment citations.  DATA_FILES are exempt from this sweep only — their tokens
+        # are values, and each one says so in the table above.
+        if relstr in DATA_FILES:
+            continue
         seen = {}
         for m in TOKEN_RE.finditer(text):
             ref = m.group(1)
@@ -127,7 +267,17 @@ def scan():
                 continue
             if IGNORE_RE.search(ref):
                 continue
-            if resolves(ref, f):
+            if resolves(ref, f, root):
+                continue
+            key = (relstr, ref)
+            if key in TOKEN_EXCEPTIONS:
+                used_exceptions.add(key)
+                continue
+            # THE DECLARATION FILE.  `TOKEN_EXCEPTIONS` above necessarily SPELLS every excused
+            # token, so the sweep finds each one here as well.  A token declared anywhere in the
+            # table is excused in the file that declares it — and only there.  This is not a
+            # whole-file skip: a token this file mentions WITHOUT declaring it still fails.
+            if relstr == DECLARING_FILE and any(ref == k[1] for k in TOKEN_EXCEPTIONS):
                 continue
             line = text[: m.start()].count("\n") + 1
             seen.setdefault(ref, []).append(line)
@@ -138,10 +288,56 @@ def scan():
     return problems
 
 
+def fresh_copy(files):
+    """A directory containing ONLY the tracked files, so an ignored local file cannot make a
+    reference resolve.  This is the difference between "the reference is valid" and "the reference
+    is valid on this machine"."""
+    tmp = pathlib.Path(tempfile.mkdtemp(prefix="zippy-fresh-"))
+    for f in files:
+        if not f.is_file():
+            continue
+        dst = tmp / f.relative_to(ROOT)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(f, dst)
+    return tmp
+
+
 if __name__ == "__main__":
-    ps = scan()
-    for p in ps:
-        print(p)
+    strict = "--strict" in sys.argv
+    fresh = "--fresh" in sys.argv
+    files = tracked_files()
+    used = set()
+    if fresh:
+        tmp = fresh_copy(files)
+        try:
+            scan_files = [p for p in sorted(tmp.rglob("*")) if p.is_file()]
+            ps = scan(tmp, scan_files, used)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+        where = f"a tracked-files-only copy of {len(files)} files"
+    else:
+        ps = scan(ROOT, files, used)
+        where = f"the working tree ({len(files)} tracked files)"
+
+    for pr in ps:
+        print(pr)
+    # UNUSED EXCEPTIONS ARE ONLY AUTHORITATIVE UNDER `--fresh`.  In the working tree a token can
+    # resolve for a reason a fresh checkout would not have — an untracked review document, a
+    # generated file lying around — and the exception is then legitimately never consulted.  The
+    # tracked-files-only view is the one in which "unused" means "the cause is gone".
+    unused = sorted(k for k in TOKEN_EXCEPTIONS if k not in used)
+    hard = strict and fresh
+    if unused:
+        msg = ("unused TOKEN_EXCEPTIONS (the cause is gone — delete the entry):" if fresh else
+               "TOKEN_EXCEPTIONS not consulted in the WORKING TREE (re-run with --fresh, where "
+               "this is authoritative — a local untracked file may be resolving the token):")
+        print()
+        print(("ERROR: " if hard else "note: ") + msg)
+        for k in unused:
+            print(f"    {k[0]}: {k[1]}")
     print()
+    print(f"scanned: {where}")
+    print(f"declared token exceptions: {len(TOKEN_EXCEPTIONS)} ({len(used)} used)"
+          f"   data files exempt from the token sweep only: {len(DATA_FILES)}")
     print(f"dangling references: {len(ps)}")
-    sys.exit(1 if ps else 0)
+    sys.exit(1 if ps or (hard and unused) else 0)

@@ -1439,18 +1439,26 @@ trait CostModel:
     collect(groups, body)
   /** one fixpoint round's union + equality check, EXCLUDING the body.
    *
-   *  CHARGED `R - 1` TIMES, NOT `R`.  Every executable's loop is
-   *  `{ round; nxt := body; if converged then stop else { acc := acc ∪ nxt; cur := nxt } }` —
-   *  `MORKL.scala`'s `if nxt == cur then stop = true else { acc = acc union nxt; cur = nxt }`,
-   *  `IntTrie.scala`'s `if ITrie.equalT(nxt, cur) then stop = true else { acc = ITrie.union(acc, nxt)
-   *  ; cur = nxt }` and `GraphExec.scala`'s `if nxt == cur then done = true else { cur = nxt; acc =
-   *  ITrie.union(acc, nxt) }` — so the accumulating merge is skipped in the round that DETECTS
-   *  convergence and runs exactly `R - 1` times.  Whatever else a round does UNCONDITIONALLY belongs
-   *  in [[fixRound]], which is charged `R` times. */
+   *  CHARGED `R` TIMES.  Every executable's loop is now
+   *  `{ round; step := body; nxt := cur ∪ step; if nxt = cur then stop else cur := nxt }` —
+   *  `MORKL.scala`'s `val nxt = cur union eval(body)…; if nxt == cur then stop = true else cur = nxt`,
+   *  and the same shape in `IntTrie.scala` (`ITrie.union` + `equalT`), `Trie.scala` (`Trie.union`) and
+   *  `GraphExec.scala` (`ITrie.union` + `equalT`).  The union is what makes the iterated operator
+   *  `X ↦ X ∪ F(X)` INFLATIONARY, which is the premise
+   *  `terminating/fixpoint_is_lfp.smt2` (O1) needs on top of monotonicity — so it is UNCONDITIONAL
+   *  and happens in the convergence-detecting round too.
+   *
+   *  IT USED TO BE `R - 1`.  The old loop kept a side accumulator and merged only in the `else`
+   *  branch (`if nxt == cur then stop = true else { acc = acc union nxt; cur = nxt }`), so the merge
+   *  really was skipped in the last round.  Moving the union into the iteration moved it into every
+   *  round; a model that still charged `R - 1` would under-price every fixpoint by one merge.
+   *  Whatever else a round does UNCONDITIONALLY belongs in [[fixRound]], also charged `R` times —
+   *  the two stay separate because they scale off different `Meas`. */
   def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval
   /** THE PER-ROUND OVERHEAD OF THE LOOP ITSELF — everything a round performs whether or not it
    *  merges, and excluding both the body and the accumulating merge [[fixStep]] prices.  Charged
-   *  `R` times where `fixStep` is charged `R - 1`, so the two may not be folded together: on the
+   *  `R` times, as `fixStep` now is; the two still may not be folded together because they scale off
+   *  different `Meas` (the accumulator+iterate vs the loop's own bookkeeping).  On the
    *  graph executable the round re-runs the whole fixpoint subgraph (its `ExtractSpaceMention(rec)`
    *  slot included) on the terminating round too, while `ITrie.union` is not called at all. */
   def fixRound(acc: Meas, body: Meas): CostInterval = CostInterval.zero
@@ -1570,10 +1578,10 @@ final class ReferenceCost(val phase: ExecutionPhase) extends CostModel:
                  Cost.of(work = groups * (Sym.one + updNodes), alloc = Sym.c(2) * groups,
                          touch = groups * updLen))
   /** THE ACCUMULATE, NOT THE CONVERGENCE TEST.  `eval`'s loop is
-   *  `if nxt == cur then stop = true else { acc = acc union nxt; cur = nxt }` (MORKL.scala): the
-   *  `Set` union is in the `else` branch and runs `R - 1` times, while the `==` runs `R` times and is
-   *  now charged by [[fixRound]].  Charging ONE per-round term for both — which is what this was —
-   *  priced the test `R` times and the accumulate not at all. */
+   *  `val nxt = cur union eval(body)…; if nxt == cur then stop = true else cur = nxt` (MORKL.scala):
+   *  the `Set` union is now UNCONDITIONAL and runs `R` times, exactly as the `==` does — the union is
+   *  what makes the iterated operator inflationary, so it cannot be skipped in the last round.  The
+   *  two terms stay separate because they measure different sets ([[fixRound]] prices the `==`). */
   def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval =
     CostInterval.exact(Cost.of(touch = acc.size + body.size))            // `acc union nxt`
   /** THE CONVERGENCE TEST, every round.  `scala.collection.immutable.Set.equals` is a size check plus
@@ -4120,24 +4128,22 @@ object SpatialCost:
         // `[1, 73]` round interval and a `[1, 2]` one, and the interval WIDTH of a fixpoint is the
         // width of its round bound on every one of the four components.
         //
-        // `fixStep` scales from `roundsLo - 1`: the round that DETECTS convergence runs `equalT` and
-        // stops WITHOUT the accumulating union, so `R` rounds perform at most `R - 1` merges.
-        //
-        // AND ITS UPPER ENDPOINT SCALES BY `rounds - 1`, WHICH IS THE SAME SENTENCE.  It read
-        // `.scale(stepLo, rounds)`: the lower endpoint honoured "at most `R - 1` merges" and the upper
-        // endpoint charged `R` of them, so every fixpoint paid one whole accumulating merge that no
-        // executable performs.  `R ≤ rounds` and `R ≥ 1` (the loop is a `while !stop` entered
-        // unconditionally), hence `merges = R - 1 ≤ rounds - 1`; `Sym.monus` saturates at zero and
-        // returns a symbolic `rounds` unchanged, so an unbounded round count keeps its old bound.
+        // `fixStep` NOW SCALES BY THE FULL `[roundsLo, rounds]`.  The loop used to keep a side
+        // accumulator and merge only in the `else` branch, so the convergence-detecting round did no
+        // merge and `R` rounds performed `R - 1` of them.  The loop now iterates `cur := cur ∪ F(cur)`
+        // — the union IS the iteration step, which is what makes the operator inflationary and the
+        // limit the least post-fixpoint (terminating/fixpoint_is_lfp.smt2, O1) — so the merge happens
+        // in EVERY round, the last one included.  Charging `R - 1` here would under-price every
+        // fixpoint by one whole accumulating merge.
         //
         // The BODY still scales by the full `[roundsLo, rounds]` — it is evaluated on the terminating
         // round too — with round 1 taken out and priced against the seed (`cbFirst`), so the remaining
         // `self`-priced rounds are `R - 1` of them.  `model.fixRound` is what a round performs
-        // unconditionally and is the one term that keeps the full `[roundsLo, rounds]` multiplicity.
+        // unconditionally and keeps the full `[roundsLo, rounds]` multiplicity, as `fixStep` now does.
         val stepLo = Sym.monus(roundsLo, Sym.one)
         val stepHi = Sym.monus(rounds, Sym.one)
         val cost = d + model.fixPrologue + ci + cbFirst + cb.scale(stepLo, stepHi) +
-                   model.fixStep(self, mb, fixRel).scale(stepLo, stepHi) +
+                   model.fixStep(self, mb, fixRel).scale(roundsLo, rounds) +
                    model.fixRound(self, mb).scale(roundsLo, rounds) +
                    CostInterval(Cost.r(roundsLo), Cost.r(rounds))
         (cost, m)

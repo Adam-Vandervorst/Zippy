@@ -491,14 +491,15 @@ def evalT(s: Space)(using pc: PathContext = PathContextMap(Map.empty),
       })
     case Space.Fixpoint(init, rec, body) =>
       var cur = evalT(init)
-      var acc = cur
       var stop = false
       while !stop do
-        val nxt = evalT(body)(using pc, tc.updated(rec, cur), rc)
+        // `X |-> X u F(X)`, not `F` — MORKL.scala's `eval` Fixpoint arm and
+        // terminating/fixpoint_is_lfp.smt2 (O1) carry the argument.
+        val nxt = Trie.union(cur, evalT(body)(using pc, tc.updated(rec, cur), rc))
         // identity-preserving ops make `eq` the common convergence signal — check it before
         // the structural comparison
-        if (nxt eq cur) || nxt == cur then stop = true else { acc = Trie.union(acc, nxt); cur = nxt }
-      acc
+        if (nxt eq cur) || nxt == cur then stop = true else cur = nxt
+      cur
     case Space.Fold(src, initial, acc, symbol, rest, body, update) =>
       val t = evalT(src)
       var accv = PathValue(pathItemsT(initial))

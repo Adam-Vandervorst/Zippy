@@ -206,15 +206,31 @@
 ;
 ; MONOTONICITY IS A SIDE CONDITION, NOT A THEOREM HERE.  `Fix` is INTRODUCED by this file and the
 ; three rules ARE its definition (post-fixpoint above init + leastness), so they are definitional.
-; What they do NOT establish is that a given program's `Space.Fixpoint` — whose executor computes
-; ⋃ₙ Fⁿ(init) and stops at the first repeat (EquivPipeline.expand) — denotes this least
-; post-fixpoint: that holds exactly when F is MONOTONE in its recursion variable, which is FALSE
-; when the variable occurs under the right operand of Subtraction/Raffination or under
-; TailsIntersection.  The emitter checks that syntactically before it may write a `Fix`
-; (AgnosticPipeline.monotoneInMention, src/main/scala/EquivPipeline.scala) and falls back to an
-; honest marker otherwise.  Park's premises are proof OBLIGATIONS the e-graph must discharge, so
-; the rule cannot make an obligation vacuous — the FALSE-fixpoint gate in build.log records the
-; z3/vampire check of the matching FOL axioms.
+; What they do NOT establish is that a given program's `Space.Fixpoint` denotes this least post-
+; fixpoint.  Two premises are needed for that, and BOTH are now discharged — this is the point the
+; earlier text got wrong by naming only the first:
+;
+;   MONOTONE F  and  init ⊆ F(init)  ⟹  the Kleene chain ascends, the accumulator is redundant,
+;   and the stationary value IS lfp_{⊇init} F      (terminating/fixpoint_is_lfp.smt2, O1, parts i-iii)
+;
+; Monotonicity ALONE is insufficient, and fixpoint_is_lfp.smt2:47-50 carries the machine-checked
+; counterexample: F(X) = {b if a∈X} ∪ {c if a∈X and b∈X} with init = {a} is monotone, and the
+; accumulator ⋃_{j≤2} C_j = {a,b} while the least post-fixpoint is {a,b,c}.
+;
+; THE SECOND PREMISE IS SATISFIED BY CONSTRUCTION, because the executor does not iterate F.  Every
+; executor in the tree (MORKL.scala `eval`/`exec`, GraphExec.scala `execT`, Trie.scala `evalT`,
+; IntTrie.scala `evalI`) iterates the INFLATIONARY operator
+;
+;   cur := cur ∪ F(cur)      until it stops changing
+;
+; whose chain ascends whatever F is, and whose limit is the least X ⊇ init with F(X) ⊆ X — exactly
+; the three rules below.  Monotonicity of F is then the ONE remaining side condition and it is what
+; buys LEASTNESS: it is FALSE when the recursion variable occurs under the right operand of
+; Subtraction/Raffination or under TailsIntersection, so the emitter checks it syntactically before
+; it may write a `Fix` (AgnosticPipeline.monotoneInMention, src/main/scala/EquivPipeline.scala) and
+; falls back to an honest marker otherwise.  src/test/scala/FixpointSemantics.scala regression-tests
+; the counterexample above against all five executors and against this encoding.  Park's premises
+; are proof OBLIGATIONS the e-graph must discharge, so the rule cannot make an obligation vacuous.
 ;
 ; PARK IS DEMAND-DRIVEN.  A first attempt stated leastness as
 ;   (rule ((= f (Fix i b)) (= (Union i c) c) (= (Union (FApp b c) c) c)) ((union (Union f c) c)))

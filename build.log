@@ -36,10 +36,10 @@ n-queens). Run often; keep improving until publication-worthy.
        guarantee termination.
     4. RESIDUALIZATION of the process tree back into MORKL Routines.
 - Data files confirmed present:
-    * /Users/michaelpolyntsov/Zippy/lot.metta (419 lines, MeTTa s-exprs: hasName, ...)
-    * /Users/michaelpolyntsov/Zippy/NOAAGlobalTemp_...nc (21 MB NetCDF)
-    * /Users/michaelpolyntsov/hashlife/tests/fred.rle (Conway RLE)
-    * /Users/michaelpolyntsov/carac (datalog benchmark repo)
+    * $ZIPPY_DATA/lot.metta (419 lines, MeTTa s-exprs: hasName, ...)
+    * $ZIPPY_DATA/NOAAGlobalTemp_...nc (21 MB NetCDF)
+    * $ZIPPY_DATA/fred.rle (Conway RLE, from a hashlife checkout)
+    * $ZIPPY_DATA/carac (datalog benchmark repo, external checkout)
 - Plan: build SC core as new file src/main/scala/Supercompiler.scala (driving / whistle
   / folding / generalization / residualization over Space), validate on pure-MORKL
   examples first (graph, datalog, puzzles, n-queens), then data-ingestion examples.
@@ -4386,7 +4386,7 @@ diff rewrote 148 lines of a ledger that differs from this tree's and is not merg
 ================================================================================================
 
 ================================================================================================
-## 2026-08-31 — plan.md resolution pass, round 1: environment, tool paths, the corpus gate, and a
+## 2026-08-31 — acceptance-review resolution pass, round 1: environment, tool paths, the corpus gate, and a
 ## soundness bug the widened fuzzer found
 
 TOOLCHAIN, FROM NOTHING.  This machine had no JVM, no sbt, no z3, no vampire and no egglog.  All of
@@ -4396,15 +4396,15 @@ egglog 3.0.0 built from source at tag v3.0.0 (needed `apt-get install build-esse
 was no C linker either).  `egglog formal.egg` passes on that build, so the egg models are green
 against the current upstream, not only against whatever was installed when they were written.
 
-ITEM 4 — TOOL PATHS.  `/Applications/vampire` was hardcoded in `proofs/run.sh`,
+ITEM 4 — TOOL PATHS.  An absolute macOS prover path (under /Applications) was hardcoded in `proofs/run.sh`,
 `proofs/spatial-semantic/run.sh`, `scripts/mine_laws.py` and `EquivPipelineTest`; `z3` and
-`~/.cargo/bin/egglog` were assumed in five more places.  There is now ONE policy in three twins —
+a cargo-bin egglog were assumed in five more places.  There is now ONE policy in three twins —
 `src/main/scala/Tools.scala`, `scripts/toolpath.sh`, `scripts/toolpath.py` — reading `$Z3`,
 `$VAMPIRE`, `$EGGLOG`, then PATH, then a short conventional-location list, and every call site goes
 through it.  A missing tool is a NAMED error that says which variable to set, never a silent skip
 (`docs/traps.md` §3).  Verified end to end: `proofs/run.sh` and `terminating/run.sh` both run on
-this machine with no absolute path anywhere.  Four personal absolute paths
-(`/Users/michaelpolyntsov/...`) in the example loaders were replaced by `$ZIPPY_DATA`.
+this machine with no absolute path anywhere.  Four personal absolute paths under a
+developer home directory, in the example loaders, were replaced by `$ZIPPY_DATA`.
 
 THE TEST JVM NOW FORKS, AND THAT REVIVED SEVENTEEN DEAD GATES.  Every corpus-wide soundness gate was
 failing with
@@ -4497,7 +4497,7 @@ stay green with the new channel enforced.
 ================================================================================================
 
 ================================================================================================
-## 2026-08-31 — plan.md resolution pass, round 2: the cost gate, the citation sweep, and the
+## 2026-08-31 — acceptance-review resolution pass, round 2: the cost gate, the citation sweep, and the
 ## benchmark artifacts
 
 ITEM 11 — THE COST GATE.  `SpatialCostCheck`'s WIDTH requirement went from 51 red rows to 41, every
@@ -4593,7 +4593,7 @@ read from there and skip the provenance line.
 ================================================================================================
 
 ================================================================================================
-## 2026-08-31 — plan.md resolution pass, round 3: the analysis becomes a rewrite consumer, and it
+## 2026-08-31 — acceptance-review resolution pass, round 3: the analysis becomes a rewrite consumer, and it
 ## immediately finds a soundness bug in the frontier
 
 ITEM 14 — `rewriteNodes` READ TWO THINGS.  A census of the consumers was blunt: of the eleven `Fact`

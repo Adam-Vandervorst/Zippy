@@ -5,6 +5,7 @@ Component names are the symbols to grep for; line numbers are deliberately omitt
 
 Theory and operator semantics: [ALGEBRA.md](ALGEBRA.md). Supercompiler design:
 [SUPERCOMPILER.md](SUPERCOMPILER.md). Run recipes and CI checkers: [README.md](../README.md).
+Trusted base (every assumption a `PROVED` verdict rests on): [TRUSTED.md](TRUSTED.md).
 Invariants: [design_plan.md](design_plan.md). Analysis designs:
 [design_size_constraints.md](design_size_constraints.md),
 [design_spatial_lattice.md](design_spatial_lattice.md).

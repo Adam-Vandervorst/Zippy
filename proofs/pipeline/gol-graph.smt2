@@ -1,5 +1,5 @@
 ; PROVER LOG (both provers are run on every obligation; verdicts also in STATUS.tsv)
-; ∀-path goal            z3 unsat           8 ms   vampire refutation     13 ms (budget 60s each)
+; ∀-path goal            z3 unsat           9 ms   vampire refutation     13 ms (budget 60s each)
 ; AUTO-GENERATED — pipeline stage 3 (gol): graph vs space (∀ paths)
 ; Both sides compiled to their denotational membership formulas over the same inputs;
 ; the goal (negated): the programs produce the SAME OUTPUT — equal membership at EVERY path.

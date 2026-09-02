@@ -15,6 +15,20 @@
 # twin could not be cross-checked by the prover that actually discharges this tier.  The negative
 # controls and run.sh's vacuity probe are the compensating checks.
 #
+# THE TRUSTED BASE OF THIS TIER IS ONE FILE: `_path_induction.p`.
+# It is the STRUCTURAL INDUCTION SCHEMA for the free term algebra `path`, instantiated at one
+# predicate.  A schema quantifies over formulas, so first-order logic cannot state it and a
+# saturation prover has no rule for it; the instance is therefore asserted.  It says NOTHING about
+# what `app` computes — the same instance is valid for any property of paths — and BOTH of its
+# premises remain obligations, discharged as `mon_cancel_base` and `mon_cancel_step`.  It has no
+# registry row because rows name CONJECTURE files and this is an axiom module; it is named here, in
+# `run.sh`'s EXPECTED_OPEN comment, and in docs/atlas.md's acceptance contract.
+#
+# WHAT IT REPLACED.  `_cancel.p` used to ADMIT left cancellation of append itself — a domain fact
+# about `app` — and `wrap_roundtrip` and `card_wrap` were reported PROVED while resting on it, with
+# `mon_cancel` OPEN in EXPECTED_OPEN.  `mon_cancel` is now PROVED and `_cancel.p` is a re-asserted
+# PROVED LEMMA (that file's header carries the measurement for why it is still re-asserted).
+#
 # id	file	operator	statement	generalises
 U01	lattice_union.p	union	u is idempotent/commutative/associative with unit {} and is the JOIN of the inclusion order	tier-1 Lower.sizeBounds Union arm; SC.reduce union normalisation; formal.egg union laws
 U02	lattice_inter.p	intersection	n is idempotent/commutative/associative, annihilated by {}, and is the MEET of the inclusion order	tier-1 Lower.sizeBounds Intersection arm; the trie meet fast paths in AlgebraicResult
@@ -68,10 +82,21 @@ U49	length_wrap.p	wrap	every path of wrap(A,W) is |W| items longer than a path o
 U50	length_tails.p	tails-union / unwrap	a bound of N+1 on the source gives N on the tails; a bound of |W|+N gives N after unwrap	tier-1 Lower.lenBounds TailsUnion/Unwrap arms (lo-1 / lo-|p|, clamped at 0)
 U51	mon_cancel_base.p	paths	base case of left cancellation of append	the (= q nil) arm of proofs/lemma_append_cons.smt2
 U52	mon_cancel_step.p	paths	step case of left cancellation of append	the (?q2. q = cons(k2,q2)) arm of proofs/lemma_append_cons.smt2
-U53	mon_cancel.p	paths	app(P,Q) = app(P,R) => Q = R, DIRECTLY (no staging) — OPEN: needs induction on P	proofs/lemma_append_cons.smt2's finite-depth split, of which this is the unbounded form
+U53	mon_cancel.p	paths	app(P,Q) = app(P,R) => Q = R.  PROVED from _path_induction.p (the path induction schema at this predicate — the tier's one trusted item) plus _paths.p; the schema's two premises are U51/U52, both PROVED.  Was OPEN and admitted as the axiom _cancel.p.	proofs/lemma_append_cons.smt2's finite-depth split, of which this is the unbounded form
 U54	composition_head_split.p	composition / tails-union	pointwise: every tail of a product is a tail of the left factor times the right, or (only if eps is in the left) a tail of the right	proofs/composition.smt2 / composition_norm.smt2 for one concrete literal pair
 U55	composition_head_sup.p	composition / tails-union	the two reverse inclusions of the tails-of-a-product decomposition	the same instance-tier obligations
 U56	composition_head.p	composition / tails-union	tu(A.B) = tu(A).B u tu(B) when eps in A, and tu(A).B otherwise — one trie level down through a product	tier-1's TailsUnion-of-Composition path, which simply widens to [0, hi]
+U57	fold_empty.p	fold	a fold over a source with NO HEADS is empty — the empty source and {eps}, which has a member but no head	tier-1 Lower.sizeBounds Fold arm (lo = 0); eval's groups.isEmpty short-circuit; the {eps} trap proofs/laws/law_iterc_set.smt2 caught for IterC
+U58	fold_support.p	fold	every path of a fold comes from the body applied at SOME present head to that head's group, whatever accumulator was reached and whatever order the walk used	tier-1's Fold arm, which widens to [0, inf) for want of exactly this; the per-group join in the Fold arm of SpatialTypes.infer
+U59	fold_iter_const.p	fold / iteration	constU(U) => fold(A,F,U,I) = iter(A, F-at-I): THE ONE CONDITION under which a Fold is an Iteration	the Fold->iteration identification src/test/scala/UnboundedTier.scala's coverage map used to make UNCONDITIONALLY; N09 is the witness that it is false without constU
+U60	mono_fold.p	fold	a fold body monotone in the tails it is handed is monotone there at the reached accumulator; NO claim of monotonicity in the SOURCE	the Fold arm of SpatialTypes.infer; why AgnosticPipeline.monotoneInMention treats Fold as unknown variance and MORKL.mono forbids an SCC call under one
+U61	range_window.p	range	a window is inside its source, a full window is the identity, and a window of the empty space is empty	tier-1 Lower.sizeBounds Range arm (lo = 0, hi = hi_src); IntTrie.range's O(1) full-window fast path, which returns the operand BY POINTER
+U62	range_interval.p	range	THE LOAD-BEARING PROPERTY: a window is an INTERVAL of the canonical order, for ANY strict total order — which is why the four backends agree on a non-pointwise operator	pathValueOrdering ('every backend slices Range by THIS order, so they agree'); eval/evalT/evalI/execT's Range arms
+U63	call_unfold.p	call	call(R,S) = ap1(rbody(R),S), and equal arguments give equal results	eval's Call rule and the licence Lower.inline needs to splice a non-recursive routine body.  NOT the substitution theorem — that is O6a in terminating/REGISTRY.tsv, OPEN
+U64	call_fix_least.p	call / fixpoint	the Fix node is BELOW every solution of the union-saturating recursion it replaced; no monotonicity needed	asFixpoint / asFixpointGeneral (MORKL.scala) rewrite a recursive routine into Space.Fixpoint; terminating/asfixpoint_sound.smt2 (O2) is the one-recurrence instance
+U65	call_fix_solves_sup.p	call / fixpoint	union(I, ap1(G,fix)) subset fix — the hypothesis-free half of 'the Fix node IS a solution'	as U64
+U66	call_fix_solves_sub.p	call / fixpoint	fix subset union(I, ap1(G,fix)) when the step is MONOTONE — the half where monotonicity is used, and it is used for LEASTNESS	as U64; the same place monotonicity earns its keep in terminating/fixpoint_is_lfp.smt2 (O1), and what AgnosticPipeline.monotoneInMention checks
+U67	grounded_functional.p	grounded	THE ONLY CONTRACT a grounded node carries: equal inputs give equal outputs.  No algebraic law about an arbitrary Scala function can be stated, and none is	transpile's hash-consing, Interner sharing, e-graph merging and the cost model pricing a shared node ONCE — all four are wrong without determinism.  Grounded is OUTSIDE the schematic tier; N11 pins that monotonicity is not assumed
 N01	negative/not_wrap_nest_reversed.p	wrap [NEGATIVE]	wrap(wrap(A,U),V) = wrap(A, U++V) — FALSE, the order is V++U	near-miss of U19; the exact inversion docs/traps.md 4 records
 N02	negative/not_unwrap_nest_reversed.p	unwrap [NEGATIVE]	unwrap(unwrap(A,U),V) = unwrap(A, V++U) — FALSE, the order is U++V	near-miss of U19
 N03	negative/not_ti_eq_tu.p	tails-intersection [NEGATIVE]	ti(A) = tu(A) unconditionally — FALSE, only with exactly one head	near-miss of U24
@@ -80,3 +105,6 @@ N05	negative/not_iter_split.p	iteration [NEGATIVE]	iteration splits over an ARBI
 N06	negative/not_card_additive.p	union [NEGATIVE]	|A u B| = |A| + |B| unconditionally — FALSE without disjointness	near-miss of U42/U44
 N07	negative/not_tu_cap_equality.p	tails-union [NEGATIVE]	tu(A n B) = tu(A) n tu(B) — FALSE, only subset holds	near-miss of U22
 N08	negative/not_restr_identity.p	restriction [NEGATIVE]	restr(X,Y) = X — FALSE, only when Y contains eps	near-miss of U08
+N09	negative/not_fold_eq_iter.p	fold [NEGATIVE]	fold = iter UNCONDITIONALLY — FALSE; the accumulator makes the groups interdependent and the group order observable	the exact near-miss that shipped: UnboundedTier.operators mapped a Fold node to the string 'iteration'
+N10	negative/not_range_monotone.p	range [NEGATIVE]	sub(A,B) => sub(rng(A,..),rng(B,..)) — FALSE for a positional window; a bigger source shifts every later rank	near-miss of U61/U62; the control behind monotoneInMention's and mono/monoIn's refusal of a recursion variable under a Range
+N11	negative/not_grounded_monotone.p	grounded [NEGATIVE]	a grounded function is monotone — FALSE; f is arbitrary	near-miss of U67; the control behind monotoneInMention's and mono/monoIn's refusal of a recursion variable under a grounded node

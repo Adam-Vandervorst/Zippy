@@ -138,7 +138,28 @@ class UnboundedTier extends FunSuite:
   }
 
   // ---------------------------------------------------------------------------- 3. the joint table
-  /** the algebra constructors a term actually uses — the key into the tier-3 registry */
+  /** THE OPERATOR KEY OF EVERY CONSTRUCTOR, exactly once, with no alias and no omission.
+   *
+   *  This map used to lie in four places, each of which made a program look better covered than it
+   *  was — the printed cornerstone table showed a row for every operator it listed, so anything it
+   *  did not list simply had no row and read as "nothing missing":
+   *
+   *    * `Fold` was keyed to `"iteration"`.  A fold body sees an ACCUMULATOR that depends on every
+   *      earlier group, so the groups are interdependent and the group ORDER is observable, while an
+   *      iteration body sees only `(head, tails)`.  The identification is sound only under a
+   *      constant update — now `proofs/unbounded/fold_iter_const.p` (U59), with
+   *      `negative/not_fold_eq_iter.p` (N09) as the witness that it is false without that premise.
+   *    * `Range` fell through into its OPERAND, so a window reported its operand's coverage.  Range
+   *      is the one non-pointwise operator in the algebra; U61/U62 are its obligations.
+   *    * `Call` itself was dropped and only its ARGUMENTS were visited, so a program built out of
+   *      routine calls reported nothing about the calls.  U63-U66 are their obligations.
+   *    * `GroundedPS`/`GroundedSS` were omitted entirely.  U67 is the one contract they carry
+   *      (determinism) and N11 pins that monotonicity is NOT assumed.
+   *
+   *  THE MATCH IS EXHAUSTIVE AND EVERY ARM NAMES ITS OWN KEY.  A new `Space` constructor makes this
+   *  method fail to compile rather than silently contribute nothing, and [[allOperatorKeys]] below
+   *  turns "the registry has an obligation for every key" into its own test — so a key can neither
+   *  be invented here without a proof nor proved without appearing here. */
   private def operators(s: Space): Set[String] = s match
     case Empty | Literal(_) | Mention(_) | Singleton(_) => Set.empty
     case Union(a, b) => Set("union") ++ operators(a) ++ operators(b)
@@ -153,11 +174,52 @@ class UnboundedTier extends FunSuite:
     case TailsIntersection(a) => Set("tails-intersection") ++ operators(a)
     case Iteration(src, _, _, t) => Set("iteration") ++ operators(src) ++ operators(t)
     case Fixpoint(i, _, b) => Set("fixpoint") ++ operators(i) ++ operators(b)
-    case Fold(src, _, _, _, _, t, _) => Set("iteration") ++ operators(src) ++ operators(t)
-    case Range(x, _, _) => operators(x)
-    case Call(_, _, ms) => ms.iterator.flatMap(operators).toSet
-    case GroundedPS(_, _) => Set.empty
-    case GroundedSS(p, _) => operators(p)
+    case Fold(src, _, _, _, _, t, _) => Set("fold") ++ operators(src) ++ operators(t)
+    case Range(x, _, _) => Set("range") ++ operators(x)
+    case Call(_, _, ms) => Set("call") ++ ms.iterator.flatMap(operators).toSet
+    case GroundedPS(_, _) => Set("grounded")
+    case GroundedSS(p, _) => Set("grounded") ++ operators(p)
+
+  /** EVERY key [[operators]] can produce, built by running it over ONE term per constructor.  This
+   *  is the closure the coverage test needs: without it the registry could be missing an obligation
+   *  for a constructor no cornerstone happens to use, and no test would notice. */
+  private lazy val allOperatorKeys: Set[String] =
+    val e = Empty
+    val p0 = Path.Constant(PathValue(List("k")))
+    val probes: Vector[Space] = Vector(
+      Union(e, e), Intersection(e, e), Subtraction(e, e), Restriction(e, e), Raffination(e, e),
+      Composition(e, e), Wrap(e, p0), Unwrap(e, p0), TailsUnion(e), TailsIntersection(e),
+      Iteration(e, PathRef("h").known(1), SpaceMention("t"), e),
+      Fixpoint(e, SpaceMention("r"), e),
+      Fold(e, p0, PathRef("a"), PathRef("h").known(1), SpaceMention("t"), e, p0),
+      Range(e, 0, 1), Call(RoutinePtr("r"), Vector.empty, Vector(e)),
+      GroundedPS(p0, _ => SpaceValue(Set.empty)), GroundedSS(e, identity))
+    probes.iterator.flatMap(operators).toSet
+
+  test("tier-3 covers EVERY algebra constructor, not just the ones a cornerstone uses") {
+    if !statusFile.exists then
+      loud("SKIPPED — proofs/unbounded/STATUS.tsv is missing; run `sh proofs/unbounded/run.sh`.")
+      assume(false, "no STATUS.tsv")
+    // 1. every key `operators` can emit has at least one registry obligation
+    val missing = allOperatorKeys.toVector.sorted.filter(k => byOperator.getOrElse(k, Vector.empty).isEmpty)
+    assertEquals(missing, Vector.empty[String],
+      s"these `Space` constructors reach the coverage table with NO tier-3 obligation behind them: " +
+      s"${missing.mkString(", ")}.  Add the obligation, or classify the constructor as outside the " +
+      s"schematic tier in proofs/unbounded/REGISTRY.tsv — do not drop it from `operators`, which is " +
+      s"what made the printed table look complete.")
+    // 2. and no registry row invents an operator key `operators` never produces (the reverse
+    //    desync: an obligation filed against a name nothing in the algebra is keyed to)
+    val orphan = (byOperator.keySet -- allOperatorKeys -- Set("inclusion", "paths")).toVector.sorted
+    assertEquals(orphan, Vector.empty[String],
+      s"REGISTRY.tsv files obligations against operator key(s) `operators` never emits: " +
+      s"${orphan.mkString(", ")} — the coverage table would never consult them")
+    println(s"\n### tier-3 operator coverage: ${allOperatorKeys.size} constructor keys, " +
+            s"all with obligations; ${byOperator.size} keys in the registry")
+    for k <- allOperatorKeys.toVector.sorted do
+      val hits = byOperator.getOrElse(k, Vector.empty)
+      val open = hits.count(!_._2.startsWith("PROVED"))
+      println(f"    $k%-20s ${hits.size}%2d obligation(s)" + (if open == 0 then "" else s", $open OPEN"))
+  }
 
   private lazy val byOperator: Map[String, Vector[(String, String)]] =
     if !registryFile.exists then Map.empty
@@ -241,7 +303,7 @@ class UnboundedTier extends FunSuite:
       tierRow("fixpoint-iter", prog, PartialFunction.empty)
     }
 
-    // 5. the raffination/tails pair the fuzzer used to omit (plan.md item 6) — the operators with
+    // 5. the raffination/tails pair the Fuzzer generator arms used to omit — the operators with
     //    the fewest instance-tier obligations and therefore the most to gain from a schematic law.
     locally {
       val x = Mention(SpaceMention("x")); val y = Mention(SpaceMention("y"))

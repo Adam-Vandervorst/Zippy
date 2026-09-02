@@ -40,7 +40,74 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--run", action="store_true",
                 help="actually invoke egglog/z3 on every non-marker artifact and fail on rejection")
 ap.add_argument("--timeout", type=int, default=60, help="per-file prover/egglog budget in seconds")
+ap.add_argument("--declare", action="store_true",
+                help="rewrite proofs/pipeline/DECLARED.tsv from the OBSERVED state, then exit.  "
+                     "Changing what the matrix claims should be a deliberate diff, so this is a "
+                     "separate command and never happens as a side effect of an audit run.")
 args = ap.parse_args()
+
+# ==================================================================================================
+# THE DECLARED MATRIX.  `proofs/pipeline/DECLARED.tsv` is the CLAIM: one row per artifact, naming
+# what that cell IS.  The audit fails on any drift in either direction —
+#
+#   * an artifact whose observed kind differs from its declared kind.  A cell declared REAL that
+#     becomes a TRIVIAL / IDENT / SINGLE-SIDE / BUDGET marker is a cell that STOPPED CARRYING AN
+#     OBLIGATION, which is the regression this gate exists for; and a cell that improves fails too,
+#     until the claim is updated, because the matrix is a published claim and changing a claim
+#     belongs in a diff.
+#   * an artifact with NO declaration — a new cell cannot arrive unclaimed;
+#   * a declaration with NO artifact — the MISSING-cell case: a stone that stopped emitting a file
+#     used to leave no trace at all, since the audit only ever walked what was on disk.
+#
+# This is the honest half of the acceptance review's item 3: the pipeline matrix is NOT a
+# full-support table, and rather than let a reader infer its shape from marker vocabulary the shape
+# is written down and checked.  Discharging the cells is the other half and is open — see
+# RESOLUTION.md item 3.
+DECLARED_FILE = root / "proofs" / "pipeline" / "DECLARED.tsv"
+
+
+def read_declared():
+    """-> {artifact -> declared kind}, or None when the file is absent."""
+    if not DECLARED_FILE.exists():
+        return None
+    out = {}
+    for line in DECLARED_FILE.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) >= 2:
+            out[parts[0]] = parts[1]
+    return out
+
+
+def write_declared(observed):
+    """The claim, regenerated from the observed state.  Sorted, so a diff is readable."""
+    body = ["# THE DECLARED PIPELINE MATRIX — what each emitted artifact IS.",
+            "#",
+            "# Regenerate with `python3 scripts/audit_pipeline_markers.py --declare`, and READ THE DIFF:",
+            "# every line that changes is a change to what this tree claims about that cell.",
+            "# `scripts/audit_pipeline_markers.py` fails on any artifact whose observed kind differs",
+            "# from its declaration, on an artifact with no declaration, and on a declaration whose",
+            "# artifact is MISSING.",
+            "#",
+            "# The kinds, and what each is worth:",
+            "#   REAL           a prover/egglog obligation with actual checks or a real goal.  The only",
+            "#                  kind that is a certified equivalence for that cell.",
+            "#   TRIVIAL        the two sides are the same term after alpha-normalisation; there is NO",
+            "#                  obligation to discharge.",
+            "#   IDENT          both sides materialised to byte-equal terms (IDENTICAL-LITERAL /",
+            "#                  IDENTICAL-STRUCTURE); no equivalence obligation exists here either.",
+            "#   SINGLE-SIDE    ONE side observed against the reference output.  A real computation,",
+            "#                  NOT an equivalence.",
+            "#   LAW-JUSTIFIED  every differing pair replayed as an instance of a certified law, so the",
+            "#                  universal certificates in proofs/ are the proof; not proved per program.",
+            "#   BUDGET         neither prover / no rounds rung reached it; the attempt log is in the",
+            "#                  file header.  An OPEN obligation, not an acceptance.",
+            "#",
+            "# artifact\tdeclared-kind"]
+    body += [f"{k}\t{v}" for k, v in sorted(observed.items())]
+    DECLARED_FILE.write_text("\n".join(body) + "\n")
 
 counts = {"REAL": 0, "TRIVIAL": 0, "LAW-JUSTIFIED": 0, "BUDGET": 0, "IDENT": 0, "SINGLE-SIDE": 0}
 problems = []
@@ -259,10 +326,17 @@ for d in dirs:
             # `runEggFileOpt` wrote the file before each attempt and left the last, failed one
             # there.  The emitter no longer does that — a failed ladder is now rewritten with an
             # explicit BUDGET-EXCEEDED header and its attempt log — so the syntactic rule has
-            # flipped meaning: MEASURED on the 2026-08-31 regeneration, `aunt-space-lit.egg` sits
-            # at 120 and egglog ACCEPTS it, i.e. 120 is the rung that worked.  Failing on it would
-            # be a false positive, so this is now a COST signal, reported and not fatal; the
-            # correctness question is settled by `--run`, which executes the file.
+            # flipped meaning: a rung-120 file today is one where 120 is the rung that WORKED.
+            # Failing on it would be a false positive, so this is now a COST signal, reported and
+            # not fatal; the correctness question is settled by `--run`, which executes the file.
+            #
+            # THE MEASUREMENT THAT USED TO BE QUOTED HERE NAMED A FILE THAT NO LONGER EXISTS.  It
+            # cited a `-space-lit` fallback sitting at rung 120 and being accepted — but that file
+            # was a BUDGET marker whose attempt log read `Unbound function SelfBody`, i.e. it
+            # existed only because `bridge-prelude.egg` did not load at all.  With that fixed the
+            # `-impl` fallback works, the `-lit` degradation is never reached, and the file is gone.
+            # MEASURED 2026-09-02 with all three tools present: `--run` accepts every non-marker
+            # artifact in both directories, which is the check that comment was standing in for.
             costly.append(f"{f.relative_to(root)}: converged only at the TOP rounds rung "
                           f"({TOP_RUNG}) — the most expensive cell in the ladder")
         if args.run:
@@ -288,6 +362,46 @@ if expected_open:
           "— plan item 3 STEP 3):")
     for e in expected_open:
         print(f"  {e}")
+# ---- the declared matrix ------------------------------------------------------------------------
+observed = dict(rows)
+if args.declare:
+    write_declared(observed)
+    print(f"\nwrote {DECLARED_FILE.relative_to(root)} with {len(observed)} declarations — READ THE DIFF")
+    sys.exit(0)
+
+declared = read_declared()
+if declared is None:
+    problems.append(f"{DECLARED_FILE.relative_to(root)} is missing — the pipeline matrix has no "
+                    "declared shape, so nothing can detect a cell that stops carrying an obligation. "
+                    "Create it with `--declare`.")
+else:
+    drift = sorted((a, declared[a], observed[a]) for a in observed.keys() & declared.keys()
+                   if declared[a] != observed[a])
+    undeclared = sorted(observed.keys() - declared.keys())
+    missing = sorted(declared.keys() - observed.keys())
+    if drift:
+        print(f"\nDRIFT ({len(drift)} cell(s) whose kind changed):")
+        for a, d, o in drift:
+            print(f"  {a}: declared {d}, observed {o}")
+    for a, d, o in drift:
+        problems.append(f"{a}: declared {d} but is {o}. " +
+                        ("A cell that STOPPED carrying an obligation." if d == "REAL" else
+                         "Update DECLARED.tsv with `--declare` and put the change in the diff."))
+    for a in undeclared:
+        problems.append(f"{a}: emitted but NOT DECLARED — a new cell may not arrive unclaimed "
+                        f"(observed {observed[a]}); run `--declare`")
+    for a in missing:
+        problems.append(f"{a}: DECLARED {declared[a]} but NOT EMITTED — the missing-cell case; the "
+                        "stone stopped producing this artifact")
+    print(f"\ndeclared matrix: {len(declared)} cell(s), {len(drift)} drifted, "
+          f"{len(undeclared)} undeclared, {len(missing)} missing")
+    kinds = {}
+    for k in declared.values():
+        kinds[k] = kinds.get(k, 0) + 1
+    print("  declared kinds: " + "  ".join(f"{k}={v}" for k, v in sorted(kinds.items())) +
+          f"   (REAL is the only kind that is a certified equivalence: "
+          f"{kinds.get('REAL', 0)}/{len(declared)})")
+
 if len(expected_open) > MAX_MARKER_CHAINS:
     problems.append(f"{len(expected_open)} marker-to-marker chains, above the pinned ratchet of "
                     f"{MAX_MARKER_CHAINS} — a cell that used to carry an obligation stopped carrying "

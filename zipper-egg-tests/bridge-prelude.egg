@@ -23,9 +23,18 @@
      (TailsUnion Z) (TailsIntersection Z) (Head Z)
      (Unwrap i64 Z) (Iter Z Body) (Guard B Z) (Sub i64 Z)
      (KFoldU KL Z) (KFoldI KL Z) (HFold KL) (IFold KL Z Body) (App Body i64 Z)
+     (Fix Z Body)                              ; LEAST post-fixpoint of F above init — FIRST-CLASS
+     (FApp Body Z)                             ; fixpoint step application, F(x)
      (FocusOf C)
      (Reflect Tr))
-  (Body (ConstBody Z) (JoinBody Z) (InvBody) (InvBody2 i64))
+  ; `SelfBody`, `Fix` and `FApp` are USED by the park block below and were MISSING here — the
+  ; block was ported from prelude.egg (which declares all three) and its declarations were not.
+  ; egglog rejected the whole file with `Unbound function SelfBody` at load time, so EVERY artifact
+  ; that includes this prelude failed outright: the seven `-lit`/`-impl` fallbacks in
+  ; zipper-egg-tests/pipeline/ could not run at any rounds budget.  The four `-space-lit` files
+  ; were nevertheless on disk WITHOUT a BUDGET marker, i.e. indistinguishable from verified ones.
+  (Body (SelfBody)                             ; fixpoint step F(X) = X
+        (ConstBody Z) (JoinBody Z) (InvBody) (InvBody2 i64))
   (C (Root Z) (Descend i64 C) (Ascend C))
   (Tr (TNode B CL)
       (TrU Tr Tr) (TrI Tr Tr) (TrS Tr Tr) (TrC Tr Tr)
@@ -202,10 +211,15 @@
 ; if the e-graph actually reduces both to c.
 ;
 ; MONOTONICITY IS A SIDE CONDITION.  These rules DEFINE Fix; they do not prove that a program's
-; `Space.Fixpoint` (executor: ⋃ₙ Fⁿ(init), stop at the first repeat) denotes it.  That holds exactly
-; when F is monotone in its recursion variable — false when the variable sits under the right
-; operand of Subtraction/Raffination or under TailsIntersection.  The emitter checks it
-; syntactically (AgnosticPipeline.monotoneInMention) and refuses to write a Fix otherwise.
+; `Space.Fixpoint` denotes it.  THAT NEEDS TWO PREMISES — monotone F *and* init ⊆ F(init)
+; (terminating/fixpoint_is_lfp.smt2, O1); monotonicity alone is refuted there at lines 47-50.  The
+; second premise holds BY CONSTRUCTION because no executor in the tree iterates F: they all iterate
+; `cur := cur ∪ F(cur)` to stationarity, an inflationary operator whose limit is the least X ⊇ init
+; with F(X) ⊆ X — the three rules below.  Monotonicity is then the one remaining side condition and
+; it is what buys LEASTNESS; it is false when the recursion variable sits under the right operand of
+; Subtraction/Raffination or under TailsIntersection, so the emitter checks it syntactically
+; (AgnosticPipeline.monotoneInMention) and refuses to write a Fix otherwise.
+; Regression: src/test/scala/FixpointSemantics.scala.
 (ruleset park)
 (relation FixCand (Z Z))                       ; "check Fix ⊑ c" — the declared candidate post-fixpoint
 ; Park needs union ACI to recognise its own premises (`(Union i c) = c` etc.), and this file's

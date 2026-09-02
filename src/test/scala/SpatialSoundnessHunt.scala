@@ -140,10 +140,22 @@ class SpatialSoundnessHunt extends FunSuite:
 
   /** WITNESS 1 — `Fixpoint` whose body deletes members through a MUST channel.
    *
-   *  `Literal({a.b}).fix(k){TailsIntersection($k)}` really evaluates to `{a.b, b, ε}`: the concrete
-   *  operator accumulates the UNION of the iterates `{a.b}`, `TI({a.b}) = {b}`, `TI({b}) = {ε}`,
-   *  `TI({ε}) = ∅`.  The analysis infers `{a·{b·{ε!}}, b·{ε?}}` — ε=No, a CLOSED head set, and
-   *  `size.hi = 2` — so it excludes ε and one whole path, and licenses the FALSE facts
+   *  `Literal({a.b}).fix(k){TailsIntersection($k)}` evaluates to `{a.b, b}`: the concrete operator
+   *  iterates the INFLATIONARY step `cur := cur ∪ TI(cur)` (terminating/fixpoint_is_lfp.smt2, O1;
+   *  src/test/scala/FixpointSemantics.scala), so `{a.b}` becomes `{a.b} ∪ TI({a.b}) = {a.b, b}`,
+   *  and the next round adds nothing — `TI({a.b, b})` groups by head and INTERSECTS the tail sets
+   *  (`{b} ∩ {ε} = ∅`).  `{a.b, b}` is also the LEAST post-fixpoint above the seed, checked by hand:
+   *  `{a.b}` is not one (`TI` yields `b`), and every post-fixpoint above the seed contains it.
+   *
+   *  THE GROUND TRUTH USED TO BE `{a.b, b, ε}` — the value the OLD loop shape produced by iterating
+   *  `TI` alone (`{a.b}`, `{b}`, `{ε}`, `∅`) and accumulating on the side.  That is a post-fixpoint
+   *  but not the least one, and it is not what any emitted certificate states.  The witness is
+   *  unaffected: the analysis is still asked to make no false claim about whatever the executor
+   *  really returns, and the bound it produces (`unionTransfer(i0, openCounts(c))` for a certified
+   *  post-fixpoint `c`) over-approximates the smaller value just as it did the larger one.
+   *
+   *  The historical defect: the analysis inferred `{a·{b·{ε!}}, b·{ε?}}` — ε=No, a CLOSED head set,
+   *  and `size.hi = 2` — so it excluded ε and one whole path, and licensed the FALSE facts
    *  `MaximumCardinality(2)` and `AllPathsHaveAtLeast(1)`.
    *
    *  Why: the Kleene chain joins iterates with `Shape.union`, the UNION TRANSFER, which keeps MUST
@@ -163,7 +175,7 @@ class SpatialSoundnessHunt extends FunSuite:
     val k = SpaceMention("k")
     val term = Space.Fixpoint(src, k, Space.TailsIntersection(Space.Mention(k)))
     val v = eval(term)
-    assertEquals(Hunt.showSV(v), "{a.b,b,ε}", "ground truth: the union of the iterates")
+    assertEquals(Hunt.showSV(v), "{a.b,b}", "ground truth: the least post-fixpoint above the seed")
     val t = SpatialTyping.infer(term)
     val bad = Hunt.checkClaims(v, t)
     assertEquals(bad, Vector.empty[String],
@@ -171,18 +183,25 @@ class SpatialSoundnessHunt extends FunSuite:
       s"  facts=${Fact.from(t).map(_.show).mkString(", ")}")
   }
 
-  /** WITNESS 1b — THE CONSUMER CONSEQUENCE of witness 1.  The wrong shape says ε ∉ result, so
-   *  meeting the same `Fixpoint` with `{ε}` is inferred DEFINITELY EMPTY while it really evaluates
-   *  to `{ε}`.  `Fact.DefinitelyEmpty` and `isProvablyEmpty` are exactly what `Lower.eliminate`
-   *  consumes, so this is the shape of an optimizer replacing a live subterm by `Empty`.  Observed by
-   *  the hunts as the broken-claim keys `isProvablyEmpty @Restriction` / `Fact.DefinitelyEmpty
-   *  @Restriction` (HUNT 1 and HUNT 5); reproduced here in two nodes. */
+  /** WITNESS 1b — THE CONSUMER CONSEQUENCE of witness 1.  The wrong shape excluded a whole path of
+   *  the fixpoint's own result, so meeting the same `Fixpoint` with that path was inferred
+   *  DEFINITELY EMPTY while it really evaluates to that path.  `Fact.DefinitelyEmpty` and
+   *  `isProvablyEmpty` are exactly what `Lower.eliminate` consumes, so this is the shape of an
+   *  optimizer replacing a live subterm by `Empty`.  Observed by the hunts as the broken-claim keys
+   *  `isProvablyEmpty @Restriction` / `Fact.DefinitelyEmpty @Restriction` (HUNT 1 and HUNT 5);
+   *  reproduced here in two nodes.
+   *
+   *  THE PROBE IS `{b}`, NOT `{ε}`.  It used to be `{ε}`, which the fixpoint result contained only
+   *  under the OLD loop shape (iterate `TI`, accumulate on the side).  The executor now iterates
+   *  `cur := cur ∪ TI(cur)` and returns the LEAST post-fixpoint `{a.b, b}` (see witness 1), which
+   *  genuinely does NOT contain ε — so meeting with `{ε}` really is empty and the old probe would
+   *  test nothing.  `{b}` is in the result, so the consumer question is the same one. */
   test("WITNESS 1b: a non-empty term is inferred DEFINITELY EMPTY (what eliminate acts on)") {
     val src = Space.Literal(SpaceValue(Set(PathValue(List("a", "b")))))
     val k = SpaceMention("k")
     val fx = Space.Fixpoint(src, k, Space.TailsIntersection(Space.Mention(k)))
-    val term = Space.Intersection(fx, Space.Literal(SpaceValue(Set(PathValue(Nil)))))
-    assertEquals(Hunt.showSV(eval(term)), "{ε}", "ground truth: the fixpoint result contains ε")
+    val term = Space.Intersection(fx, Space.Literal(SpaceValue(Set(PathValue(List("b"))))))
+    assertEquals(Hunt.showSV(eval(term)), "{b}", "ground truth: the fixpoint result contains b")
     val t = SpatialTyping.infer(term)
     assert(!t.isProvablyEmpty, s"inferred provably empty: ${t.show}")
     assert(!Fact.from(t).contains(Fact.DefinitelyEmpty), s"facts: ${Fact.from(t).map(_.show)}")

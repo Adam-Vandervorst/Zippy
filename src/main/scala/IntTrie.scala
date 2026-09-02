@@ -766,15 +766,16 @@ def evalI(s: Space)(using pc: PathContext = PathContextMap(Map.empty),
       }.toSeq)
     case Space.Fixpoint(init, rec, body) =>
       var cur = evalI(init)
-      var acc = cur
       var stop = false
       while !stop do
         effort(EffortEvent.FixpointRound)                   // counts the terminating round too
-        val nxt = evalI(body)(using pc, ic.updated(rec, cur), rc)
+        // `X |-> X u F(X)`, not `F` — MORKL.scala's `eval` Fixpoint arm and
+        // terminating/fixpoint_is_lfp.smt2 (O1) carry the argument.
+        val nxt = ITrie.union(cur, evalI(body)(using pc, ic.updated(rec, cur), rc))
         // identity-preserving ops make pointer equality the common convergence signal; `equalT`
         // checks it FIRST and then walks only the equality frontier
-        if ITrie.equalT(nxt, cur) then stop = true else { acc = ITrie.union(acc, nxt); cur = nxt }
-      acc
+        if ITrie.equalT(nxt, cur) then stop = true else cur = nxt
+      cur
     case Space.Fold(src, initial, acc, symbol, rest, body, update) =>
       val t = evalI(src)
       var accv = PathValue(Interner.uninternPath(pathItemsI(initial)))

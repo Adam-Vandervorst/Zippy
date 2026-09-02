@@ -341,8 +341,26 @@ $body
 object AgnosticPipeline:
   import Space.*
 
+  /** THE ONE CAPTURE-AVOIDING SPACE-MENTION SUBSTITUTION.  `Lower.inline` (MORKL.scala) delegates
+   *  to it, so there is a single implementation of the binder rules for the whole tree — see the
+   *  note at that call site for what the alternative cost.
+   *
+   *  THE MATCH IS TOTAL, AND IT HAS TO BE.  `Fold` and `GroundedSS` used to fall through to
+   *  `case other => other`, which meant substitution SILENTLY DID NOTHING under them — including
+   *  in `Fold`'s SOURCE, which is not a binder position at all, so a `Fold` whose source mentioned
+   *  the substituted name kept an unbound mention and `eval` then failed to resolve it.
+   *  `src/test/scala/SubstConformance.scala` is the differential that found it, and the arms are
+   *  spelled out one per constructor so a new `Space` case cannot repeat the omission.
+   *
+   *  THE BINDER RULES, stated once:
+   *    * `Iteration`  — `rest` binds in `templates` only; `src` is outside;
+   *    * `Fixpoint`   — `rec` binds in `body` only; `init` is outside;
+   *    * `Fold`       — `rest` binds in `templates` only; `src`, `initial` and `update` are not
+   *                     space-mention scopes at all (`update` is a Path);
+   *    * `GroundedSS` — an ordinary space operand, no binder.  `GroundedPS` takes a Path only. */
   def substMention(s: Space, m: SpaceMention, r: Space): Space = s match
     case Mention(`m`) => r
+    case Mention(_) | Empty | Literal(_) | Singleton(_) | GroundedPS(_, _) => s
     case Union(a, b) => Union(substMention(a, m, r), substMention(b, m, r))
     case Intersection(a, b) => Intersection(substMention(a, m, r), substMention(b, m, r))
     case Subtraction(a, b) => Subtraction(substMention(a, m, r), substMention(b, m, r))
@@ -357,9 +375,12 @@ object AgnosticPipeline:
       Iteration(substMention(src, m, r), sym, rest, if rest == m then body else substMention(body, m, r))
     case Fixpoint(init, rec, body) =>
       Fixpoint(substMention(init, m, r), rec, if rec == m then body else substMention(body, m, r))
+    case Fold(src, initial, acc, sym, rest, body, upd) =>
+      Fold(substMention(src, m, r), initial, acc, sym, rest,
+           if rest == m then body else substMention(body, m, r), upd)
+    case GroundedSS(src, f) => GroundedSS(substMention(src, m, r), f)
     case Call(rp, refs, ms) => Call(rp, refs, ms.map(substMention(_, m, r)))
     case Range(x, lo, hi) => Range(substMention(x, m, r), lo, hi)
-    case other => other
 
   /** MONOTONICITY of `s` in the space mention `m`: does `X ⊑ Y` imply `s[m↦X] ⊑ s[m↦Y]`?
    *
@@ -400,6 +421,109 @@ object AgnosticPipeline:
       case other => !free(other)                            // Range / Call / grounded: unknown variance
     go(s)
 
+  // ==============================================================================================
+  // RESIDUAL CUTS — a residual is a FUNCTION OF ITS ARGUMENTS, not of its name
+  // ==============================================================================================
+  /** ONE residual cut: the routine, the depth at which `unrollControl` stopped unrolling it, and
+   *  THE ARGUMENTS IT WAS CUT WITH.
+   *
+   *  WHY THE ARGUMENTS ARE PART OF IT (terminating/REGISTRY.tsv O10c).  The cut replaces
+   *  `r(refs; mentions)` past depth `k` with a fresh FREE INPUT, and the obligation the emitters
+   *  then state is "the two k-unrollings agree FOR ALL values of that input".  That is sound only
+   *  if both sides cut THE SAME THING.  Naming the residual `residual_<routine>_<depth>` and
+   *  discarding `refs`/`mentions` — which is what this used to do — makes two cuts of the same
+   *  routine at the same depth share one opaque set even when their ARGUMENTS differ, and a
+   *  rewrite that changed a recursive argument would then be hidden behind the shared symbol
+   *  instead of showing up as a difference.  Comparing the two sides' residual NAME SETS could not
+   *  catch that either, because the names carried no argument information to compare.
+   *
+   *  So the symbol is now keyed by the arguments: `residual_<routine>_<depth>_<digest>`, where the
+   *  digest is over the ALPHA-NORMALISED argument terms.  Consequences:
+   *    * equal arguments  ⇒ one symbol, and the ∀-quantified obligation is exactly as before;
+   *    * differing arguments ⇒ DIFFERENT symbols, so the goal openly compares two unrelated free
+   *      inputs and is refutable rather than silently provable.  That is the conservative
+   *      direction: a bad rewrite can no longer hide, at the price of an obligation that needs the
+   *      argument equivalence proved first ([[residualPairings]] states it as its own obligation).
+   *  The full descriptor of every symbol is kept in [[residualCuts]] so emitters can print it and
+   *  gates can compare arguments rather than names. */
+  final case class ResidualCut(routine: String, depth: Int, refs: Vector[Path], mentions: Vector[Space]):
+    /** the alpha-invariant rendering the digest is taken over — also what the emitters print */
+    def canonical: String =
+      s"$routine@$depth(" + refs.map(_.show).mkString(", ") + "; " +
+        mentions.map(m => SmtDiff.alphaNorm(m).show).mkString(", ") + ")"
+    /** a stable, collision-resistant digest (SHA-256, first 8 hex digits) of [[canonical]] */
+    def digest: String =
+      val md = java.security.MessageDigest.getInstance("SHA-256")
+      md.digest(canonical.getBytes("UTF-8")).take(4).map(b => f"${b & 0xff}%02x").mkString
+    /** the free-input name the cut is replaced by */
+    def symbol: String = s"residual_${routine}_${depth}_$digest"
+
+  /** symbol → descriptor, for every cut this JVM has made.  A residual symbol is meaningless
+   *  without its arguments, and the emitters/gates need them; the map is append-only and keyed by
+   *  a digest of the descriptor, so a symbol never denotes two different cuts. */
+  val residualCuts: scala.collection.concurrent.Map[String, ResidualCut] =
+    scala.collection.concurrent.TrieMap.empty[String, ResidualCut]
+
+  private def cutSymbol(c: ResidualCut): String =
+    val s = c.symbol
+    residualCuts.putIfAbsent(s, c) match
+      case Some(prev) if prev.canonical != c.canonical =>
+        throw IllegalStateException(
+          s"residual digest collision: $s already denotes ${prev.canonical}, now asked for ${c.canonical}")
+      case _ => s
+
+  /** The residual free inputs of a term, WITH their descriptors. */
+  def residualsOf(s: Space): Map[String, ResidualCut] =
+    val out = scala.collection.mutable.Map.empty[String, ResidualCut]
+    def go(x: Space): Unit = x match
+      case Mention(m) if m.s.startsWith("residual_") => residualCuts.get(m.s).foreach(out(m.s) = _)
+      case Union(a, b) => go(a); go(b)
+      case Intersection(a, b) => go(a); go(b)
+      case Subtraction(a, b) => go(a); go(b)
+      case Restriction(a, b) => go(a); go(b)
+      case Raffination(a, b) => go(a); go(b)
+      case Composition(a, b) => go(a); go(b)
+      case Wrap(src, _) => go(src)
+      case Unwrap(src, _) => go(src)
+      case TailsUnion(src) => go(src)
+      case TailsIntersection(src) => go(src)
+      case Iteration(src, _, _, b) => go(src); go(b)
+      case Fixpoint(i, _, b) => go(i); go(b)
+      case Fold(src, _, _, _, _, b, _) => go(src); go(b)
+      case Range(x, _, _) => go(x)
+      case GroundedSS(src, _) => go(src)
+      case Call(_, _, ms) => ms.foreach(go)
+      case Empty | Literal(_) | Mention(_) | Singleton(_) | GroundedPS(_, _) => ()
+    go(s); out.toMap
+
+  /** THE CUT-ALIGNMENT VERDICT for one obligation.  Returns, for the two sides' residual sets:
+   *    - `shared`     symbols both sides cut identically (same routine, depth AND arguments) —
+   *                   these need nothing further: the ∀-quantified free input is genuinely shared;
+   *    - `unmatched`  cuts that appear on one side only.  Each is a REAL gap: either the sides cut
+   *                   at different depths/routines, or they cut the same routine with arguments
+   *                   that are not alpha-equal.  For the second case the emitters state the
+   *                   ARGUMENT EQUIVALENCE as its own obligation (`<name>-residual-args.smt2`);
+   *                   only a discharged one licenses treating the two symbols as the same input.
+   *  A name-set equality is deliberately NOT offered here: it is the check this replaces. */
+  final case class CutAlignment(shared: Set[String], leftOnly: Map[String, ResidualCut],
+                                rightOnly: Map[String, ResidualCut]):
+    def aligned: Boolean = leftOnly.isEmpty && rightOnly.isEmpty
+    /** the (left, right) pairs whose routine and depth agree but whose ARGUMENTS do not — the ones
+     *  an argument-equivalence obligation could still align */
+    def argumentPairs: List[(ResidualCut, ResidualCut)] =
+      for l <- leftOnly.values.toList.sortBy(_.canonical);
+          r <- rightOnly.values.toList.sortBy(_.canonical)
+          if l.routine == r.routine && l.depth == r.depth
+      yield (l, r)
+    def report: String =
+      if aligned then s"aligned (${shared.size} shared cut(s))"
+      else s"MISALIGNED — left-only ${leftOnly.values.map(_.canonical).mkString("{", "; ", "}")}, " +
+           s"right-only ${rightOnly.values.map(_.canonical).mkString("{", "; ", "}")}"
+
+  def alignCuts(a: Space, b: Space): CutAlignment =
+    val (ra, rb) = (residualsOf(a), residualsOf(b))
+    CutAlignment(ra.keySet intersect rb.keySet, ra -- rb.keySet, rb -- ra.keySet)
+
   /** k-unroll recursive Calls; inline acyclic Calls; keep Fixpoint and everything else INTACT.
    *
    *  FIXPOINT IS NO LONGER UNROLLED (plan item 1).  It used to become
@@ -409,7 +533,8 @@ object AgnosticPipeline:
    *  `AgSmt.denRaw` emits an uninterpreted predicate with the two post-fixpoint axioms plus Park
    *  induction — so the binder survives to the provers.  Recursive `Call`s that no `asFixpoint`
    *  lowering turns into a `Fixpoint` are still k-unrolled and cut with a fresh shared free input;
-   *  that residual is the honest remaining approximation and it is named in the emitted files. */
+   *  that residual is the honest remaining approximation, it is PARAMETERIZED BY ITS ARGUMENTS
+   *  ([[ResidualCut]]) and it is named with its full descriptor in the emitted files. */
   def unrollControl(s: Space, k: Int)(using rc: PartialFunction[RoutinePtr, Routine]): Space = s match
     case Union(a, b) => Union(unrollControl(a, k), unrollControl(b, k))
     case Intersection(a, b) => Intersection(unrollControl(a, k), unrollControl(b, k))
@@ -445,7 +570,10 @@ object AgnosticPipeline:
         expandCalls(b, depth)
       def expandCalls(b: Space, depth: Int): Space = b match
         case Call(`rp`, rs, ms) =>
-          if depth >= k then Mention(SpaceMention(s"residual_${rp.s}_$depth"))
+          // THE CUT.  The residual is keyed by (routine, depth, ARGUMENTS) — see [[ResidualCut]];
+          // the arguments are recursed into first so a residual nested inside one is named too.
+          if depth >= k then
+            Mention(SpaceMention(cutSymbol(ResidualCut(rp.s, depth, rs, ms.map(expandCalls(_, depth))))))
           else inlineOnce(depth + 1, ms.map(expandCalls(_, depth)))
         case Union(a, c) => Union(expandCalls(a, depth), expandCalls(c, depth))
         case Intersection(a, c) => Intersection(expandCalls(a, depth), expandCalls(c, depth))
@@ -472,6 +600,8 @@ object AgnosticPipeline:
       unrollControl(b, k)
     case other => other
 
+  /** THE ONE CAPTURE-AVOIDING PATH-REF SUBSTITUTION; see [[substMention]] for why both live here
+   *  and what used to fall through `case other => other`.  `Lower.inline` delegates to it. */
   def substPathRef(s: Space, pr: PathRef, arg: Path): Space =
     def sp(p: Path): Path = p match
       case Path.Deref(`pr`) => arg
@@ -491,9 +621,22 @@ object AgnosticPipeline:
       case TailsIntersection(src) => TailsIntersection(substPathRef(src, pr, arg))
       case Iteration(src, sym, rest, body) =>
         Iteration(substPathRef(src, pr, arg), sym, rest, if sym.s == pr.s then body else substPathRef(body, pr, arg))
+      // `rec` is a SPACE mention, so it shadows nothing for a path ref: BOTH arms are substituted.
+      // This arm was MISSING and `Fixpoint` fell through to `case other => other`, so a path ref
+      // inside a fixpoint was never substituted at all.
+      case Fixpoint(init, rec, body) =>
+        Fixpoint(substPathRef(init, pr, arg), rec, substPathRef(body, pr, arg))
+      // `acc` AND `symbol` are path-ref binders, scoping over `templates` and `update`.  `initial`
+      // is evaluated OUTSIDE them and is substituted.  This arm was missing too.
+      case Fold(src, initial, acc, sym, rest, body, upd) =>
+        val bound = acc.s == pr.s || sym.s == pr.s
+        Fold(substPathRef(src, pr, arg), sp(initial), acc, sym, rest,
+             if bound then body else substPathRef(body, pr, arg), if bound then upd else sp(upd))
+      case GroundedPS(p, f) => GroundedPS(sp(p), f)
+      case GroundedSS(src, f) => GroundedSS(substPathRef(src, pr, arg), f)
       case Call(rp, refs, ms) => Call(rp, refs.map(sp), ms.map(substPathRef(_, pr, arg)))
       case Range(x, lo, hi) => Range(substPathRef(x, pr, arg), lo, hi)
-      case other => other
+      case Empty | Literal(_) | Mention(_) => s
 
   /** ground = no free mentions, no bound-variable references. */
   def isGround(s: Space, boundP: Set[String], boundM: Set[String]): Boolean =
@@ -632,11 +775,17 @@ object AgnosticPipeline:
         // exactly like an Iteration body, and an `FApp` rule instead of an `App` rule.  The three
         // Fix rules in the egg preludes only MERGE e-classes (no unrolling rewrite), so
         // the run still saturates; leastness has to be ASKED for with `(FixCand f c)`.
+        // MONOTONICITY IS THE WHOLE SIDE CONDITION *because the executor is inflationary*: every
+        // executor iterates `cur := cur ∪ F(cur)`, so the second premise of
+        // terminating/fixpoint_is_lfp.smt2 (`init ⊆ F(init)`) holds by construction and
+        // monotonicity is what remains — it is exactly what buys LEASTNESS (part iii).  Were the
+        // executor to iterate `F` alone, monotonicity would NOT be enough: fixpoint_is_lfp.smt2:47-50
+        // is the machine-checked monotone-but-non-inflationary counterexample.
         if !monotoneInMention(body, rec) then
           throw IllegalStateException(
             s"agnostic renderer: Fixpoint body is NOT monotone in ${rec.s} — the recursion variable " +
             "sits under a complement (Subtraction/Raffination right operand, or TailsIntersection), " +
-            "so the least-post-fixpoint model would not denote the executor's iterate union")
+            "so the least-post-fixpoint model would not denote the executor's limit")
         val pUsed = penv.keys.toList.sorted.filter(n => usesPathRef(body, n))
         val sUsed = senv.keys.toList.sorted.filter(n => usesMention(body, n) && n != rec.s)
         val patP = pUsed.indices.map(i => s"ci$i").toList; val patS = sUsed.indices.map(i => s"cz$i").toList
@@ -787,9 +936,17 @@ object AgnosticPipeline:
     // obligations the prover still has to discharge, so it cannot make a goal vacuous.  Mutual
     // containment then yields equality in plain FOL with no new quantifier alternation.
     //
-    // SOUNDNESS SIDE CONDITION: the axioms hold of ⋃ₙ Fⁿ(init) only when F is MONOTONE in `rec`;
-    // [[AgnosticPipeline.monotoneInMention]] decides that syntactically and this method REFUSES to
-    // emit rather than assert something unsound.
+    // SOUNDNESS SIDE CONDITION, STATED EXACTLY.  The two axioms above say `fix` is a post-fixpoint
+    // of the operator `X ↦ init ∪ F(X)`, and Park says it is the LEAST one.  The executors compute
+    // the limit of `cur := cur ∪ F(cur)` — the Kleene chain of that same inflationary operator —
+    // so `init ⊆ (init ∪ F(init))` is automatic and the only remaining premise of
+    // terminating/fixpoint_is_lfp.smt2 (O1) is MONOTONICITY of F, which is what makes the limit the
+    // LEAST post-fixpoint rather than merely one of them.  It is decided syntactically by
+    // [[AgnosticPipeline.monotoneInMention]] and this method REFUSES to emit rather than assert
+    // something unsound.  NOTE what would break if an executor went back to iterating `F` alone:
+    // monotonicity would stop being sufficient (fixpoint_is_lfp.smt2:47-50 is the counterexample)
+    // and these axioms would be false of the executor's output.  Regression:
+    // src/test/scala/FixpointSemantics.scala.
     private val fixMemo = scala.collection.mutable.HashMap.empty[(Space, Map[String, String], Map[String, String]), String]
     private val fixes = scala.collection.mutable.ArrayBuffer.empty[(String, Space, Space, SpaceMention, Map[String, String], Map[String, String])]
     def fixSym(fx: Space, init: Space, rec: SpaceMention, body: Space,
@@ -799,7 +956,7 @@ object AgnosticPipeline:
           throw IllegalStateException(
             s"agnostic smt: Fixpoint body is NOT monotone in ${rec.s} — the recursion variable sits " +
             "under a complement (Subtraction/Raffination right operand, or TailsIntersection).  The " +
-            "least-post-fixpoint axioms would then be false of the executor's iterate union, so no " +
+            "least-post-fixpoint axioms would then be false of the executor's limit, so no " +
             "first-class denotation is emitted (the caller must record an honest marker)")
         val f = fresh("fix")
         decls += s"(declare-fun $f (Path) Bool)"

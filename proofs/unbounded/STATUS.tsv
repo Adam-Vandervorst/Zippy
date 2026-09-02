@@ -1,3 +1,7 @@
+call_fix_least	Theorem	ok	PROVED
+call_fix_solves_sub	Theorem	ok	PROVED
+call_fix_solves_sup	Theorem	ok	PROVED
+call_unfold	Theorem	ok	PROVED
 card_incl_excl	Theorem	ok	PROVED
 card_meet	Theorem	ok	PROVED
 card_partition	Theorem	ok	PROVED
@@ -11,6 +15,10 @@ composition_head_sup	Theorem	ok	PROVED
 composition_unit	Theorem	ok	PROVED
 fixpoint	Theorem	ok	PROVED
 fixpoint_unfold	Theorem	ok	PROVED
+fold_empty	Theorem	ok	PROVED
+fold_iter_const	Theorem	ok	PROVED
+fold_support	Theorem	ok	PROVED
+grounded_functional	Theorem	ok	PROVED
 grp_union	Theorem	ok	PROVED
 iteration	Theorem	ok	PROVED
 iteration_split	Theorem	ok	PROVED
@@ -32,17 +40,20 @@ length_compose	Theorem	ok	PROVED
 length_setops	Theorem	ok	PROVED
 length_tails	Theorem	ok	PROVED
 length_wrap	Theorem	ok	PROVED
-mon_cancel	Timeout	ok	OPEN (expected; see header attempt log)
+mon_cancel	Theorem	ok	PROVED
 mon_cancel_base	Theorem	ok	PROVED
 mon_cancel_step	Theorem	ok	PROVED
 mono_compose	Theorem	ok	PROVED
 mono_concat	Theorem	ok	PROVED
 mono_control	Theorem	ok	PROVED
+mono_fold	Theorem	ok	PROVED
 mono_prefix	Theorem	ok	PROVED
 mono_setops	Theorem	ok	PROVED
 mono_tails	Theorem	ok	PROVED
 prefix_disjoint	Theorem	ok	PROVED
 raffination	Theorem	ok	PROVED
+range_interval	Theorem	ok	PROVED
+range_window	Theorem	ok	PROVED
 restriction	Theorem	ok	PROVED
 set_partitions	Theorem	ok	PROVED
 subtraction	Theorem	ok	PROVED
@@ -55,7 +66,10 @@ wrap_nest	Theorem	ok	PROVED
 wrap_restriction	Theorem	ok	PROVED
 wrap_roundtrip	Theorem	ok	PROVED
 negative/not_card_additive	Timeout	-	NOT-PROVED (expected)
+negative/not_fold_eq_iter		-	NOT-PROVED (expected)
+negative/not_grounded_monotone		-	NOT-PROVED (expected)
 negative/not_iter_split	Timeout	-	NOT-PROVED (expected)
+negative/not_range_monotone		-	NOT-PROVED (expected)
 negative/not_restr_identity	Timeout	-	NOT-PROVED (expected)
 negative/not_ti_eq_tu	Timeout	-	NOT-PROVED (expected)
 negative/not_ti_monotone	Timeout	-	NOT-PROVED (expected)

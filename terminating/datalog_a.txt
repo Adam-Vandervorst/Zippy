@@ -1,4 +1,8 @@
-// Fully expanded MORKL Datalog programs derived from ~/carac graph fixtures.
+// Fully expanded MORKL Datalog programs derived from the `carac` Datalog benchmark's graph
+// fixtures (https://github.com/OlivierBlanvillain/carac, `src/test/scala/test/graphs/`).
+// The fixtures are cited by their REPO-RELATIVE path below; carac is an external project and is
+// not vendored here, so nothing in this tree resolves those paths (scripts/check_references.py
+// knows them as external-dataset tokens).
 // The ASTs below use Scala constructors directly: no MORKL string interpolators, no /\, no \/, no x DSL.
 // Each pair computes the same transitive closure over edge(x, y) as bare path x.y results.
 
@@ -7,7 +11,7 @@ import morkl.*
 object CaracDatalogMorklPrints:
 
   // === 1/6: carac test.graphs.SingleCycle naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/SingleCycle.scala
+  // Source: carac:src/test/scala/test/graphs/SingleCycle.scala
   object SingleCycleNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
@@ -116,7 +120,7 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 2/6: carac test.graphs.SingleCycle semi-naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/SingleCycle.scala
+  // Source: carac:src/test/scala/test/graphs/SingleCycle.scala
   object SingleCycleSemiNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
@@ -371,7 +375,7 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 3/6: carac test.graphs.MultiIsolatedCycle naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/MultiIsolatedCycle.scala
+  // Source: carac:src/test/scala/test/graphs/MultiIsolatedCycle.scala
   object MultiIsolatedCycleNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
@@ -486,7 +490,7 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 4/6: carac test.graphs.MultiIsolatedCycle semi-naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/MultiIsolatedCycle.scala
+  // Source: carac:src/test/scala/test/graphs/MultiIsolatedCycle.scala
   object MultiIsolatedCycleSemiNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
@@ -750,7 +754,7 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 5/6: carac test.graphs.TopSort naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/TopSort.scala
+  // Source: carac:src/test/scala/test/graphs/TopSort.scala
   object TopSortNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
@@ -887,7 +891,7 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 6/6: carac test.graphs.TopSort semi-naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/TopSort.scala
+  // Source: carac:src/test/scala/test/graphs/TopSort.scala
   object TopSortSemiNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(

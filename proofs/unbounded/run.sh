@@ -56,13 +56,19 @@ NLIMIT=${NLIMIT:-45}
 PLIMIT=${PLIMIT:-10}
 VACUITY=${VACUITY:-1}
 
-# admitted-unproved, each with its attempt log in its own header:
-#   mon_cancel  left cancellation of append.  TRUE, needs induction on the prefix; `path` is an
-#               opaque TFF sort so vampire has no structural-induction rule for it.  The two
-#               halves of that induction ARE proved (mon_cancel_base, mon_cancel_step); only the
-#               induction principle is unmechanised.  Admitted as the axiom _cancel.p, imported by
-#               exactly two theorems (wrap_roundtrip, card_wrap).
-EXPECTED_OPEN=" mon_cancel "
+# admitted-unproved, each with its attempt log in its own header.
+#
+# EMPTY.  `mon_cancel` (left cancellation of append) was the one entry: it needs induction on the
+# prefix, `path` is an opaque TFF sort so vampire has no structural-induction rule for it, and the
+# conclusion was admitted as the axiom `_cancel.p`, imported by `wrap_roundtrip` and `card_wrap` —
+# which were therefore reported PROVED while resting on an admitted domain fact.  It is now PROVED,
+# from `_path_induction.p`: the structural-induction SCHEMA for the free term algebra `path`,
+# instantiated at that one predicate.  That axiom says nothing about `app`, and both of its
+# premises stay obligations (they are `mon_cancel_base` and `mon_cancel_step`, both PROVED).  The
+# schema instance is THE trusted item in this tier and it is named as such in REGISTRY.tsv's header
+# (it has no row of its own: rows name conjecture files, and it is an axiom module) and in
+# docs/atlas.md's acceptance contract.
+EXPECTED_OPEN=" "
 
 pass=0; fail=0; open_exp=0; cm=0; neg_ok=0; neg_bad=0; vac_bad=0
 

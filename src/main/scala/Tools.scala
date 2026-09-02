@@ -1,66 +1,118 @@
 package morkl
 
 /** ==============================================================================================
- *  EXTERNAL TOOL RESOLUTION — one policy, one implementation, no absolute paths in the tree.
+ *  EXTERNAL TOOL RESOLUTION — one policy, three thin adapters, no absolute path anywhere.
  *
- *  The provers and the e-graph engine are found the same way everywhere (Scala, `sh`, Python):
+ *  `toolchain.conf` at the repo root IS the policy.  This file, `scripts/toolpath.sh` and
+ *  `scripts/toolpath.py` all READ it: none of the three contains a tool name, an environment
+ *  variable name, or an install location of its own, so there are no "twins" to drift apart and no
+ *  generated file to go stale.
  *
- *    1. the explicit environment override — `Z3`, `VAMPIRE`, `EGGLOG` — which may name an
- *       executable on `PATH` or an absolute path;
- *    2. `PATH`;
- *    3. a short list of CONVENTIONAL install locations for that tool, tried in order;
- *    4. otherwise ABSENT — and every caller says so out loud rather than silently degrading
- *       (`docs/traps.md` §3: a semantics-critical path must never quietly become a no-op).
+ *  Resolution steps, in the order `toolchain.conf`'s `search` key gives:
  *
- *  The `sh` twin is `scripts/toolpath.sh` and the Python twin is `scripts/toolpath.py`; all three
- *  read the same environment variables and the same conventional-location lists, so a machine
- *  configured for one is configured for all.
+ *    `env`          the tool's declared environment override (`Z3`, `VAMPIRE`, `EGGLOG`), which may
+ *                   be an absolute path or a bare name looked up on `PATH`;
+ *    `zippy-tools`  `$ZIPPY_TOOLS/<binary>` — the ONE place a machine says where it keeps provers
+ *                   that are not on `PATH`.  This replaced the former hardcoded
+ *                   `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`, `~/.cargo/bin` lists;
+ *    `path`         `PATH`.
+ *
+ *  Otherwise ABSENT — and every caller says so out loud rather than silently degrading
+ *  (`docs/traps.md` §3: a semantics-critical path must never quietly become a no-op).
+ *
+ *  With `toolchain.conf` missing (or `$ZIPPY_TOOLCHAIN` pointing elsewhere) the policy degrades to
+ *  `env, path` for a tool whose binary and env var follow the default naming — i.e. to the two
+ *  LOCATION-FREE steps, never to a compiled-in path.
  *  ============================================================================================== */
 object Tools:
   import java.io.File
+  import java.nio.file.{Files, Path as JPath, Paths}
 
-  /** one external tool: the binary name, its env override, and where it conventionally lives */
-  final case class Tool(name: String, envVar: String, conventional: List[String]):
+  /** one external tool, exactly as `toolchain.conf` declares it */
+  final case class Tool(name: String, binary: String, envVar: String, versionFlag: String):
     /** the resolved executable, or `None`.  Probed once per JVM. */
     lazy val path: Option[String] = Tools.locate(this)
     def isAvailable: Boolean = path.isDefined
-    /** the resolved executable, or a diagnostic that names the override */
+    /** the resolved executable, or a diagnostic that names every way to supply it */
     def require(): String = path.getOrElse(throw new IllegalStateException(missing))
     def missing: String =
-      s"$name not found: set $$$envVar to its path, or put `$name` on PATH " +
-      s"(also tried: ${conventional.mkString(", ")})"
+      s"$name not found: set $$$envVar to its path, put `$binary` on PATH, or point $$ZIPPY_TOOLS " +
+      s"at the directory holding it (policy: ${policyFile.map(_.getFileName.toString).getOrElse("toolchain.conf (ABSENT)")}, " +
+      s"search order: ${search.mkString(", ")})"
 
-  private def home: String = System.getProperty("user.home")
+  // ---------------------------------------------------------------------------------------------
+  // the policy file
+  // ---------------------------------------------------------------------------------------------
+  private val defaultSearch = List("env", "path")   // the location-free fallback
 
-  val z3: Tool = Tool("z3", "Z3",
-    List("/usr/local/bin/z3", "/opt/homebrew/bin/z3", s"$home/.local/bin/z3"))
-  val vampire: Tool = Tool("vampire", "VAMPIRE",
-    List("/usr/local/bin/vampire", "/opt/homebrew/bin/vampire", s"$home/.local/bin/vampire"))
-  val egglog: Tool = Tool("egglog", "EGGLOG",
-    List(s"$home/.cargo/bin/egglog", "/usr/local/bin/egglog", "/opt/homebrew/bin/egglog"))
+  /** `$ZIPPY_TOOLCHAIN`, else the nearest `toolchain.conf` at or above the working directory. */
+  private lazy val policyFile: Option[JPath] =
+    sys.env.get("ZIPPY_TOOLCHAIN").map(_.trim).filter(_.nonEmpty).map(Paths.get(_))
+      .filter(Files.isReadable)
+      .orElse {
+        Iterator.iterate(Paths.get("").toAbsolutePath.normalize)(_.getParent)
+          .takeWhile(_ != null).map(_.resolve("toolchain.conf")).find(Files.isReadable)
+      }
 
-  val all: List[Tool] = List(z3, vampire, egglog)
+  /** (search order, tool name → declared keys).  A three-line ini reader; no dependency. */
+  private lazy val policy: (List[String], Map[String, Map[String, String]]) =
+    policyFile.map { f =>
+      var order = defaultSearch
+      val tools = scala.collection.mutable.LinkedHashMap.empty[String, Map[String, String]]
+      var cur: Option[String] = None
+      for raw <- scala.io.Source.fromFile(f.toFile).getLines() do
+        val line = raw.takeWhile(_ != '#').trim
+        if line.isEmpty then ()
+        else if line.startsWith("[") && line.endsWith("]") then
+          cur = Some(line.drop(1).dropRight(1).trim); tools.getOrElseUpdate(cur.get, Map.empty)
+        else line.split("=", 2) match
+          case Array(k, v) =>
+            val (key, value) = (k.trim, v.trim)
+            cur match
+              case None => if key == "search" then order = value.split(",").map(_.trim).filter(_.nonEmpty).toList
+              case Some(t) => tools(t) = tools(t) + (key -> value)
+          case _ => ()
+      (order, tools.toMap)
+    }.getOrElse((defaultSearch, Map.empty))
 
-  /** step 1-3 of the policy above. */
+  def search: List[String] = policy._1
+
+  /** the tool named `n`, with the documented defaults for anything the policy leaves out */
+  def tool(n: String): Tool =
+    val d = policy._2.getOrElse(n, Map.empty)
+    Tool(n, d.getOrElse("binary", n), d.getOrElse("env", n.toUpperCase), d.getOrElse("version-flag", "-version"))
+
+  /** every tool the policy declares, in file order (the three below when it is absent) */
+  lazy val all: List[Tool] =
+    (if policy._2.nonEmpty then policy._2.keys.toList else List("z3", "vampire", "egglog")).map(tool)
+
+  lazy val z3: Tool = tool("z3")
+  lazy val vampire: Tool = tool("vampire")
+  lazy val egglog: Tool = tool("egglog")
+
+  // ---------------------------------------------------------------------------------------------
+  // resolution
+  // ---------------------------------------------------------------------------------------------
   private def locate(t: Tool): Option[String] =
     def runs(cmd: String): Boolean =
       try
-        val p = new ProcessBuilder(cmd, versionFlag(t)).redirectErrorStream(true).start()
+        val p = new ProcessBuilder(cmd, t.versionFlag).redirectErrorStream(true).start()
         p.getInputStream.readAllBytes()          // drain, or the child can block on a full pipe
         p.waitFor(); true                        // an exit code of any value means it EXECUTED
       catch case _: Throwable => false
-    val fromEnv = sys.env.get(t.envVar).map(_.trim).filter(_.nonEmpty)
-    val candidates =
-      fromEnv.toList ++ List(t.name) ++ t.conventional      // bare name = the PATH lookup
-    candidates.iterator
-      .filter(c => !c.contains(File.separator) || new File(c).canExecute)
-      .find(runs)
+    def executable(c: String): Boolean = !c.contains(File.separator) || new File(c).canExecute
+    search.iterator.flatMap {
+      case "env" =>
+        sys.env.get(t.envVar).map(_.trim).filter(_.nonEmpty).iterator
+      case "zippy-tools" =>
+        sys.env.get("ZIPPY_TOOLS").map(_.trim).filter(_.nonEmpty)
+          .map(r => new File(expandHome(r), t.binary).getPath).iterator
+      case "path" => Iterator(t.binary)          // bare name = the PATH lookup
+      case _ => Iterator.empty
+    }.filter(executable).find(runs)
 
-  /** the flag that makes the tool print something and exit without reading a problem file */
-  private def versionFlag(t: Tool): String = t.name match
-    case "vampire" => "--version"
-    case "egglog" => "--version"
-    case _ => "-version"
+  private def expandHome(s: String): String =
+    if s == "~" || s.startsWith("~/") then System.getProperty("user.home") + s.drop(1) else s
 
   /** a one-line report of what is and is not available — printed by the suites that need a tool,
    *  so a skipped obligation is visible instead of implied. */

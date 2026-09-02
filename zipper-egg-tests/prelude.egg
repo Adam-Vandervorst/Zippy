@@ -276,10 +276,15 @@
 ; if the e-graph actually reduces both to c.
 ;
 ; MONOTONICITY IS A SIDE CONDITION.  These rules DEFINE Fix; they do not prove that a program's
-; `Space.Fixpoint` (executor: ⋃ₙ Fⁿ(init), stop at the first repeat) denotes it.  That holds exactly
-; when F is monotone in its recursion variable — false when the variable sits under the right
-; operand of Subtraction/Raffination or under TailsIntersection.  The emitter checks it
-; syntactically (AgnosticPipeline.monotoneInMention) and refuses to write a Fix otherwise.
+; `Space.Fixpoint` denotes it.  THAT NEEDS TWO PREMISES — monotone F *and* init ⊆ F(init)
+; (terminating/fixpoint_is_lfp.smt2, O1); monotonicity alone is refuted there at lines 47-50.  The
+; second premise holds BY CONSTRUCTION because no executor in the tree iterates F: they all iterate
+; `cur := cur ∪ F(cur)` to stationarity, an inflationary operator whose limit is the least X ⊇ init
+; with F(X) ⊆ X — the three rules below.  Monotonicity is then the one remaining side condition and
+; it is what buys LEASTNESS; it is false when the recursion variable sits under the right operand of
+; Subtraction/Raffination or under TailsIntersection, so the emitter checks it syntactically
+; (AgnosticPipeline.monotoneInMention) and refuses to write a Fix otherwise.
+; Regression: src/test/scala/FixpointSemantics.scala.
 (ruleset park)
 (relation FixCand (Z Z))                       ; "check Fix ⊑ c" — the declared candidate post-fixpoint
 ; Park needs union ACI to recognise its own premises (`(Union i c) = c` etc.), and this file's

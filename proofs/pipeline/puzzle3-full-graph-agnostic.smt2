@@ -5,7 +5,7 @@
 ; Scala executor gates (assertEquals against the reference on this input) and by the
 ; data-agnostic twin; this file records the open obligation and the attempt log.
 ; ATTEMPT LOG:
-; goal                   z3 timeout    242647 ms   vampire none       240053 ms (budget 240s each)
+; goal                   z3 timeout    242556 ms   vampire none       240045 ms (budget 240s each)
 ; AUTO-GENERATED — pipeline graph (puzzle3-full), data-agnostic
 ; STRUCTURAL-DIFF decomposition: 1 REAL obligation(s) of 3 candidate pair(s)
 ; (0 reflexive-after-freeing skipped, 2 law-justified — see below);

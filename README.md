@@ -26,22 +26,56 @@ executable and machine-checked counterpart of that paper.
 | [`docs/SUPERCOMPILER.md`](docs/SUPERCOMPILER.md) | Design, guiding examples, and limitations of the supercompiler. |
 | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | Executor, op-graph and zipper benchmark results, each stamped with the machine, toolchain and configuration it was produced on. |
 | [`docs/residuals.md`](docs/residuals.md) | Why the residuated-division operators are omitted from the algebra. |
+| [`docs/TRUSTED.md`](docs/TRUSTED.md) | **The complete trusted base**: every assumption a `PROVED` verdict rests on, and the three open obligations that are gaps rather than assumptions. |
+| [`RESOLUTION.md`](RESOLUTION.md) | Item-by-item response to the acceptance review of `f6832fc`, with what is resolved, partial and open. |
 
 ## Requirements
 
-- Scala 3.8 with [sbt](https://www.scala-sbt.org) (or `scala-cli`); dependencies: munit,
-  scala-collection-contrib.
-- [egglog](https://github.com/egraphs-good/egglog) for the equational models and differentials.
-- [z3](https://github.com/Z3Prover/z3) and [Vampire](https://vprover.github.io) for the proof
-  obligations (every pipeline obligation must be discharged by *both*).
+| tool | version this tree is verified against | how it is found |
+|---|---|---|
+| JDK | 21 (`openjdk-21-jdk-headless`) | `JAVA_HOME` / `PATH` |
+| sbt | 2.0.8 (pinned in `project/build.properties`; any 1.x/2.x launcher bootstraps it) | `PATH` |
+| Scala | 3.8.1 (pinned in `build.sbt`; fetched by sbt) | — |
+| [z3](https://github.com/Z3Prover/z3) | 5.1.0 | `$Z3`, then `$ZIPPY_TOOLS`, then `PATH` |
+| [Vampire](https://vprover.github.io) | 5.1.0 | `$VAMPIRE`, then `$ZIPPY_TOOLS`, then `PATH` |
+| [egglog](https://github.com/egraphs-good/egglog) | 3.0.0 | `$EGGLOG`, then `$ZIPPY_TOOLS`, then `PATH` |
+
+Library dependencies (munit, scala-collection-contrib) are resolved by sbt from `build.sbt`.
+Every pipeline proof obligation must be discharged by **both** provers.
+
+**Installing the three external tools.** There is nothing to bootstrap and no lock file to
+check out — z3 and Vampire ship prebuilt Linux/macOS binaries and egglog builds from source:
+
+```sh
+# z3 5.1.0 and Vampire 5.1.0 — prebuilt release archives
+curl -fsSLO https://github.com/Z3Prover/z3/releases/download/z3-5.1.0/z3-5.1.0-x64-glibc-2.39.zip
+curl -fsSLO https://github.com/vprover/vampire/releases/download/v5.1.0/vampire-Linux-X64.zip
+# egglog 3.0.0 — needs a Rust toolchain and a C linker (`apt-get install build-essential`)
+cargo install --locked --git https://github.com/egraphs-good/egglog egglog
+```
+
+Then point the tree at them, EITHER per tool or with one directory:
+
+```sh
+export Z3=/path/to/z3  VAMPIRE=/path/to/vampire  EGGLOG=/path/to/egglog
+# or, if all three live in one directory:
+export ZIPPY_TOOLS=/path/to/prover-bin
+```
+
+`toolchain.conf` at the repo root is the single resolution policy — the search order above, one
+entry per tool — and `src/main/scala/Tools.scala`, `scripts/toolpath.sh` and `scripts/toolpath.py`
+all read it, so a machine configured for one is configured for all. No install location is
+hardcoded anywhere in the tree. To see what resolves:
+
+```sh
+python3 scripts/toolpath.py        # z3 / vampire / egglog -> resolved path, or ABSENT
+```
+
+A missing tool is a **named error** that says which variable to set, never a silent skip.
 
 ## Running
 
 ```sh
-source .tools/env.sh               # JDK 21, sbt, scala-cli, z3, Vampire, egglog on PATH.
-                                  # Nothing below assumes a system install; every tool is also
-                                  # resolvable from $Z3/$VAMPIRE/$EGGLOG (see src/main/scala/Tools.scala)
-
 sbt 'testOnly morkl.*'            # full suite: executors, laws, corpus, case studies, and the
                                   # SEVEN-cornerstone equivalence pipeline.  ~1 h: EquivPipelineTest
                                   # runs z3 and Vampire on every emitted obligation and is most of
@@ -78,13 +112,24 @@ set-of-paths denotation, proved by z3 and Vampire, with structural induction alw
 schema instances (`proofs/laws/`). Every rewrite rule in the three egglog systems is annotated
 with its certificate, and checkers keep that mapping total and honest — admitted-open
 obligations are machine-visible in `proofs/STATUS.tsv`, and a prover countermodel fails the
-build. On top of the law corpus, an automated pipeline proves per program that the optimised
-term, the zipper program, and the compiled operation graph are observationally equivalent to
-the reference semantics (equationally in egglog, denotationally in both provers), on seven
-cornerstone programs with data-agnostic variants — `puzzle3-full` being the one whose recursion is an
-unbounded `Space.Fixpoint`. A cell no prover discharges is recorded as `PROVER-BUDGET-EXCEEDED` with
-its attempt log and does NOT count as certified; optimiser rewrites are justified as instances
-of the certified laws by syntactic replay. `proofs/unbounded/` is a third tier: the same operator
+build. On top of the law corpus, an automated pipeline emits, for each of seven cornerstone
+programs, three stages (the optimised term, the zipper program, the compiled operation graph)
+against the reference semantics, in two tiers (equationally in egglog, denotationally in both
+provers) and in two variants (this instance, and data-agnostic over free inputs) —
+`puzzle3-full` being the one whose recursion is an unbounded `Space.Fixpoint`.
+
+**Read `proofs/pipeline/STATUS.tsv` before believing anything about that matrix.** It is not a
+full-support table, and the marker vocabulary is the point: a cell is `PROVED` only when a prover
+discharged an actual equivalence goal. A `TRIVIAL` or `IDENTICAL-STRUCTURE` cell means the two
+sides came out as the same term and there was **no obligation to discharge**; `LAW-JUSTIFIED`
+means every differing pair was replayed as an instance of a certified law rather than proved per
+program; `OPEN (prover budget exceeded)` means neither prover reached it, with the attempt log in
+the file. Only the first counts as certified equivalence for that cell. As of this commit a
+minority of the 42 cells are `PROVED`, and the reason most of the instance cells are markers is
+recorded rather than hidden: `EquivPipeline.expand` evaluates control flow on **both** sides, so
+the two renderings are literal-vs-literal — see `RESOLUTION.md` items 1 and 3 for what that costs
+and what fixing it requires. `scripts/audit_pipeline_markers.py` classifies every artifact,
+executes them under `--run`, and fails on a marker that defers to another marker. `proofs/unbounded/` is a third tier: the same operator
 laws stated SCHEMATICALLY, over all spaces and all paths, which neither the interval propagation nor
 the ground SMT tier can express at all. The recursive case studies are certified in `terminating/` — what a `Fixpoint` computes, what each
 lowering pass preserves, and why each recursion terminates — with every goal discharged by z3 and

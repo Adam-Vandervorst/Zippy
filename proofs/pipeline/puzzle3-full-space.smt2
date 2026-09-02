@@ -1,5 +1,5 @@
 ; PROVER LOG (both provers are run on every obligation; verdicts also in STATUS.tsv)
-; ∀-path goal            z3 unsat        1731 ms   vampire none        60060 ms (budget 60s each)
+; ∀-path goal            z3 unsat        1668 ms   vampire none        60052 ms (budget 60s each)
 ; AUTO-GENERATED — pipeline stage 1 (puzzle3-full): original vs optimised (∀ paths)
 ; Both sides compiled to their denotational membership formulas over the same inputs;
 ; the goal (negated): the programs produce the SAME OUTPUT — equal membership at EVERY path.

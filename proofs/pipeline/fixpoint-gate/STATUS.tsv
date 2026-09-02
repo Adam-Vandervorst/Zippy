@@ -1,0 +1,6 @@
+file	z3	vampire	expected	verdict
+accumulator_refuted.smt2	timeout	no-verdict	NOT unsat/refuted	SEPARATED
+bv_accumulator_refuted.smt2	unsat	-	unsat	REFUTED
+bv_lfp_pinned.smt2	unsat	-	unsat	PROVED
+bv_nonvacuity.smt2	sat	-	sat	NON-VACUOUS
+lfp_agrees.smt2	unsat	refuted	unsat/refuted	PROVED

@@ -81,16 +81,17 @@ def execT(rog: RecursiveOpGraph, stack: Stack[Array[Any | Null]],
             val last = sg.nodes.length - 1
             stack.push(frame)
             var cur = sg.root.inputs(0).sget
-            var acc = cur
             var done = false
             while !done do
               effort(EffortEvent.FixpointRound)            // counts the terminating round too
               frame(0) = cur
               execT(sg, stack, index)
-              val nxt = frame(last).asInstanceOf[ITrie]
-              if nxt == cur then done = true else { cur = nxt; acc = ITrie.union(acc, nxt) }
+              // `X |-> X u F(X)`, not `F` — MORKL.scala's `eval` Fixpoint arm and
+              // terminating/fixpoint_is_lfp.smt2 (O1) carry the argument.
+              val nxt = ITrie.union(cur, frame(last).asInstanceOf[ITrie])
+              if ITrie.equalT(nxt, cur) then done = true else cur = nxt
             stack.pop()
-            s(c) = acc
+            s(c) = cur
           case other => throw IllegalStateException(s"execT: unsupported subgraph root $other")
     c += 1
   end while

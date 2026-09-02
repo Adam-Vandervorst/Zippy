@@ -148,10 +148,21 @@ enum Space:
   case Raffination(x: Space, y: Space)
   case Composition(x: Space, y: Space)
   case Iteration(src: Space, symbol: PathRef, rest: SpaceMention, templates: Space)
-  /** Union-saturating least fixpoint: bind `rec` to the accumulator, iterate `rec := body` from
-   *  `init`, accumulating the union of every iterate, until the argument stabilises.  `rec` binds in
-   *  `body`.  Denotes `init ∪ body[init] ∪ body[body[init]] ∪ …` — the value the union-saturating
-   *  recursion `r(m) = m \/ r(next(m))` computes (see [[eval]] / SCC lowering). */
+  /** THE LEAST POST-FIXPOINT ABOVE `init`.  With `F := λX. body[rec := X]`, this denotes the least
+   *  `Y` with `init ⊆ Y` and `F(Y) ⊆ Y` — equivalently `lfp (λX. init ∪ F(X))`.  `rec` binds in
+   *  `body`.  Every executor computes it by iterating the INFLATIONARY operator
+   *  `cur := cur ∪ F(cur)` from `init` to stationarity.
+   *
+   *  WHY THAT SHAPE AND NOT `cur := F(cur)` WITH A SIDE ACCUMULATOR.
+   *  `terminating/fixpoint_is_lfp.smt2` (O1) proves the iteration reaches the least post-fixpoint
+   *  under TWO premises — monotone `F` AND `init ⊆ F(init)` — and carries a machine-checked
+   *  monotone-but-non-inflationary counterexample at :47-50 where accumulating the iterates of `F`
+   *  gives `{a,b}` while the least post-fixpoint is `{a,b,c}`.  Folding the union into the iteration
+   *  makes the second premise hold BY CONSTRUCTION, leaving MONOTONICITY as the one side condition —
+   *  which is exactly what buys leastness, and exactly what the emitters check
+   *  (`AgnosticPipeline.monotoneInMention`) before they may write a first-class `Fix`.  It also makes
+   *  the loop terminate over a finite universe where iterating `F` alone can cycle forever.
+   *  Regression: src/test/scala/FixpointSemantics.scala. */
   case Fixpoint(init: Space, rec: SpaceMention, body: Space)
   case Fold(src: Space, initial: Path, acc: PathRef, symbol: PathRef, rest: SpaceMention, templates: Space, update: Path)
   case Wrap(src: Space, p: Path)
@@ -330,15 +341,25 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
           p <- { effort(EffortEvent.LoopBodyEntry)
                  eval(templates)(using pc.grown(Map(symbol -> h)), sc.grown(Map(rest -> SpaceValue(Set.from(r)))), rc) }.paths
       yield p)
-    case Space.Fixpoint(init, rec, body) => // union-saturating least fixpoint (the datalog shape)
+    case Space.Fixpoint(init, rec, body) => // the LEAST post-fixpoint above `init` (the datalog shape)
+      // THE ITERATED OPERATOR IS `X |-> X u F(X)`, NOT `F` (terminating/fixpoint_is_lfp.smt2, O1).
+      // Iterating `F` alone and keeping a side accumulator returns U_{j<=n} C_j, which equals the
+      // least post-fixpoint ONLY when the Kleene chain ascends — and that needs `init subset= F(init)`
+      // ON TOP of monotonicity, a premise nothing in this tree checks.  The counterexample is
+      // machine-checked in fixpoint_is_lfp.smt2:47-50 and regression-tested in
+      // src/test/scala/FixpointSemantics.scala.  Unioning `cur` back in makes the operator
+      // INFLATIONARY BY CONSTRUCTION, so the chain ascends for free; MONOTONICITY of `F` is then the
+      // one remaining side condition, and it is exactly what buys LEASTNESS (part (iii)).  Two
+      // consequences, both wanted: the accumulator becomes redundant (part (ii)) and the loop
+      // TERMINATES over a finite universe (part (iv)) where iterating `F` alone can cycle forever —
+      // `transitive` over a 2-cycle is the smallest instance.
       var cur = recs(init)
-      var acc = cur
       var stop = false
       while !stop do
         effort(EffortEvent.FixpointRound)                 // counts the terminating round too
-        val nxt = eval(body)(using pc, sc.grown(Map(rec -> SpaceValue(cur))), rc).paths
-        if nxt == cur then stop = true else { acc = acc union nxt; cur = nxt }
-      acc
+        val nxt = cur union eval(body)(using pc, sc.grown(Map(rec -> SpaceValue(cur))), rc).paths
+        if nxt == cur then stop = true else cur = nxt
+      cur
     case Space.Fold(src_e, initial, acc, symbol, rest, templates, update) => // deterministic left fold over head-groups
       var accValue = PathValue(recp(initial))
       val groups = recs(src_e).collect { case PathValue(h::tail) => effortN(EffortEvent.FreshPath, 2L); PathValue(h::Nil) -> PathValue(tail) }.groupMap(_._1)(_._2)
@@ -650,11 +671,11 @@ def exec(rog: RecursiveOpGraph,
             stack.pop()
             s(c) = SpaceValue(acc)
           case "Fixpoint" =>
-            // union-saturating recursion `r(m) = m ∪ r(next(m))`: union `m` over every iterate and
-            // stop when the argument stabilises — faithful to eval for any `next`, not only extensive.
+            // the LEAST POST-FIXPOINT above the seed, by iterating `X |-> X u F(X)` — see `eval`'s
+            // Fixpoint arm and terminating/fixpoint_is_lfp.smt2 (O1) for why the union must be
+            // FED BACK rather than kept in a side accumulator.
             // ONE reused frame across iterations (no per-step Array allocation).
             var cur = inputs(0).sget
-            var acc = cur
             val frame = new Array[PathValue | SpaceValue | Null](sg.nodes.length)
             val last = sg.nodes.length - 1
             stack.push(frame)
@@ -662,10 +683,11 @@ def exec(rog: RecursiveOpGraph,
             while !done do
               frame(0) = cur
               exec(sg, stack, index)
-              val nxt = frame(last).asInstanceOf[SpaceValue]
-              if nxt.paths == cur.paths then done = true else { cur = nxt; acc = SpaceValue(acc.paths union nxt.paths) }
+              val step = frame(last).asInstanceOf[SpaceValue]
+              val nxt = SpaceValue(cur.paths union step.paths)
+              if nxt.paths == cur.paths then done = true else cur = nxt
             stack.pop()
-            s(c) = acc
+            s(c) = cur
     c += 1
   end while
 
@@ -2613,13 +2635,28 @@ object Lower:
       else Space.Empty
   })
 
+  /** INLINE ONE CALL: splice the routine's body with its arguments substituted for its parameters.
+   *
+   *  IT USED TO CAPTURE.  The substitution was `subs(r.body)(spost = { case Mention(mentionmap(x))
+   *  => x }, ppost = ...)`, and `subs` is a BLIND congruence — it rewrites every occurrence,
+   *  including occurrences a binder inside the body has re-bound.  A routine whose parameter shares
+   *  a name with one of its own `Iteration`/`Fold`/`Fixpoint` binders therefore had its SHADOWED
+   *  occurrences replaced by the argument, which changes what the routine means.  This is exactly
+   *  the beta-soundness obligation `terminating/REGISTRY.tsv` files as O6a, and
+   *  `src/test/scala/SubstConformance.scala` found it: a random 2-deep routine body whose parameter
+   *  `m` was also the `rest` binder of an `Iteration` inside it disagreed with `eval`'s Call rule
+   *  (which binds the parameter in a FRESH context, so the inner binder correctly shadows it).
+   *
+   *  It now delegates to [[AgnosticPipeline.substMention]] / [[AgnosticPipeline.substPathRef]],
+   *  which are the ONE implementation of the binder rules in the tree.  One parameter at a time is
+   *  correct here because a routine's parameter names are distinct, so no substitution can capture
+   *  a name a later substitution still has to find. */
   val inline = (ctx: PartialFunction[RoutinePtr, Routine]) ?=> subs(_: Space)(spost = {
     case Space.Call(ctx(r), refs, mentions) =>
-      val refmap = (r.refs zip refs).toMap
-      val mentionmap = (r.mentions zip mentions).toMap
-      subs(r.body)(PartialFunction.empty,
-        spost = { case Space.Mention(mentionmap(rhs)) => rhs },
-        ppost = { case Path.Deref(refmap(rhs)) => rhs })
+      var b = r.body
+      for (pr, arg) <- r.refs zip refs do b = AgnosticPipeline.substPathRef(b, pr, arg)
+      for (m, arg) <- r.mentions zip mentions do b = AgnosticPipeline.substMention(b, m, arg)
+      b
   })
 
   /** THE RULE LIST `Routine.optimized` RUNS TO A FIXED POINT, in one place so that `optimized` and

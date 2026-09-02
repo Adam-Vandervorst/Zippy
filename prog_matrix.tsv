@@ -1,4 +1,4 @@
-# prog_matrix.tsv — ts=2026-08-31T15:01:42Z; git=789b26d-dirty; cpu=Intel(R) Xeon(R) 6975P-C; cores=16; mem=247GiB; os=Linux 6.17.0-1019-aws; jvm=OpenJDK 64-Bit Server VM 21.0.12.1 (Eclipse Adoptium); heap=24.0GiB; scala=3.8.1; literalByRef=true patriciaOps=true; programs=1000000; min-nodes=12
+# prog_matrix.tsv — ts=2026-09-02T16:48:09Z; git=f6832fc-dirty; cpu=Intel(R) Xeon(R) 6975P-C; cores=16; mem=247GiB; os=Linux 6.17.0-1019-aws; jvm=OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu); heap=24.0GiB; scala=3.8.1; literalByRef=true patriciaOps=true; programs=1000000; min-nodes=12
 row	Mention	Literal	Singleton	Union	Intersection	Subtraction	Restriction	Raffination	Composition	Wrap	Unwrap	TailsUnion	TailsIntersection	Range	Iteration	Constant	Deref	Concat
 Singleton.path	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	2206575	928095	532689
 Union.l	320061	77809	107909	82425	84418	84077	84632	84113	317684	85739	84830	42954	41961	42998	175213	0	0	0

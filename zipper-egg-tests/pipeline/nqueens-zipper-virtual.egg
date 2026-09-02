@@ -6,7 +6,7 @@
 ; rules walk it (Keys enumeration, per-head App, Guard pruning); every member of the
 ; reference output must be reachable, every boundary non-member not.
 (include "prelude.egg")
-(let $glit0 (Union (Union (Union (Wrap1 31 (Union (Union (Union (Wrap1 31 (Wrap1 35 (Eps))) (Wrap1 33 (Wrap1 37 (Eps)))) (Wrap1 35 (Wrap1 40 (Eps)))) (Wrap1 37 (Wrap1 34 (Eps))))) (Wrap1 33 (Union (Union (Union (Wrap1 31 (Wrap1 37 (Eps))) (Wrap1 33 (Wrap1 31 (Eps)))) (Wrap1 35 (Wrap1 34 (Eps)))) (Wrap1 37 (Wrap1 35 (Eps)))))) (Wrap1 35 (Union (Union (Union (Wrap1 31 (Wrap1 40 (Eps))) (Wrap1 33 (Wrap1 34 (Eps)))) (Wrap1 35 (Wrap1 42 (Eps)))) (Wrap1 37 (Wrap1 43 (Eps)))))) (Wrap1 37 (Union (Union (Union (Wrap1 31 (Wrap1 34 (Eps))) (Wrap1 33 (Wrap1 35 (Eps)))) (Wrap1 35 (Wrap1 43 (Eps)))) (Wrap1 37 (Wrap1 40 (Eps)))))))
+(let $glit0 (Union (Union (Union (Wrap1 31 (Union (Union (Union (Wrap1 31 (Wrap1 35 (Eps))) (Wrap1 33 (Wrap1 37 (Eps)))) (Wrap1 35 (Wrap1 39 (Eps)))) (Wrap1 37 (Wrap1 34 (Eps))))) (Wrap1 33 (Union (Union (Union (Wrap1 31 (Wrap1 37 (Eps))) (Wrap1 33 (Wrap1 31 (Eps)))) (Wrap1 35 (Wrap1 34 (Eps)))) (Wrap1 37 (Wrap1 35 (Eps)))))) (Wrap1 35 (Union (Union (Union (Wrap1 31 (Wrap1 39 (Eps))) (Wrap1 33 (Wrap1 34 (Eps)))) (Wrap1 35 (Wrap1 41 (Eps)))) (Wrap1 37 (Wrap1 42 (Eps)))))) (Wrap1 37 (Union (Union (Union (Wrap1 31 (Wrap1 34 (Eps))) (Wrap1 33 (Wrap1 35 (Eps)))) (Wrap1 35 (Wrap1 42 (Eps)))) (Wrap1 37 (Wrap1 39 (Eps)))))))
 (let $glit1 (Union (Union (Union (Wrap1 31 (Union (Wrap1 31 (Wrap1 32 (Eps))) (Wrap1 33 (Wrap1 33 (Eps))))) (Wrap1 33 (Wrap1 33 (Wrap1 32 (Eps))))) (Wrap1 35 (Union (Union (Union (Wrap1 31 (Wrap1 31 (Eps))) (Wrap1 33 (Wrap1 37 (Eps)))) (Wrap1 35 (Wrap1 32 (Eps)))) (Wrap1 37 (Wrap1 33 (Eps)))))) (Wrap1 37 (Union (Union (Wrap1 31 (Wrap1 33 (Eps))) (Wrap1 33 (Wrap1 31 (Eps)))) (Wrap1 37 (Wrap1 32 (Eps)))))))
 (let $glit2 (Union (Union (Union (Wrap1 31 (Union (Wrap1 31 (Eps)) (Wrap1 33 (Eps)))) (Wrap1 33 (Wrap1 33 (Eps)))) (Wrap1 35 (Union (Union (Union (Wrap1 31 (Eps)) (Wrap1 33 (Eps))) (Wrap1 35 (Eps))) (Wrap1 37 (Eps))))) (Wrap1 37 (Union (Union (Wrap1 31 (Eps)) (Wrap1 33 (Eps))) (Wrap1 37 (Eps))))))
 (rewrite (App (BodyK 0 (ICons ci0 (INil)) (ZNil)) h4 t) (Union (Union (Union (Union (Union (Wrap1 35 (Wrap1 h4 (Eps))) (Wrap1 h4 (Wrap1 ci0 (Eps)))) (Composition (Sub h4 (Sub 35 $glit0)) (Sub h4 (Sub ci0 $glit0)))) (Composition (Sub h4 (Sub 35 $glit0)) (Sub h4 (Sub ci0 $glit1)))) (Composition (Sub h4 (Sub 35 $glit1)) (Sub h4 (Sub ci0 $glit0)))) (Composition (Sub h4 (Sub 35 $glit1)) (Sub h4 (Sub ci0 $glit1)))))
@@ -40,9 +40,9 @@
 (let $vn1 (Term (Sub 33 $virt)))
 (let $vn2 (Term (Sub 34 $virt)))
 (let $vn3 (Term (Sub 35 $virt)))
-(let $vn4 (Term (Sub 40 $virt)))
-(let $vn5 (Term (Sub 42 $virt)))
-(let $vn6 (Term (Sub 43 $virt)))
+(let $vn4 (Term (Sub 39 $virt)))
+(let $vn5 (Term (Sub 41 $virt)))
+(let $vn6 (Term (Sub 42 $virt)))
 (let $vn7 (Term (Sub 31 (Sub 31 $virt))))
 (let $vn8 (Term (Sub 32 (Sub 31 $virt))))
 (let $vn9 (Term (Sub 33 (Sub 31 $virt))))

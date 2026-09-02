@@ -21,7 +21,7 @@ nqueens-graph.smt2	-	-	IDENTICAL-STRUCTURE
 nqueens-space-agnostic.smt2	-	-	LAW-JUSTIFIED
 nqueens-space.smt2	-	-	IDENTICAL-STRUCTURE
 nqueens-zipper-agnostic.smt2	-	-	TRIVIAL
-nqueens-zipper.smt2	-	-	OPEN (prover budget exceeded — see header)
+nqueens-zipper.smt2	unsat	-	PROVED
 puzzle15-graph-agnostic.smt2	-	-	OPEN (prover budget exceeded — see header)
 puzzle15-graph.smt2	-	-	IDENTICAL-STRUCTURE
 puzzle15-space-agnostic.smt2	-	-	LAW-JUSTIFIED

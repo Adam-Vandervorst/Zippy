@@ -400,19 +400,58 @@ class EquivPipelineTest extends FunSuite:
     val uOnf1 = SmtDiff.alphaNorm(AgnosticPipeline.unrollControl(prog, 1))
     val uPnf1 = SmtDiff.alphaNorm(AgnosticPipeline.unrollControl(SC.reduce(prog), 1))
     // obligation: terminating/REGISTRY.tsv O10c — THE RESIDUAL CUT IS ONLY SOUND IF BOTH SIDES CUT
-    // THE SAME THING.  `unrollControl` replaces the call past depth `k` with a FRESH FREE INPUT
-    // `Mention("residual_<routine>_<depth>")`, and the obligation it then states is "the two
-    // k-unrollings agree FOR ALL values of that input".  If the optimised side reached the cut at a
-    // different depth, or cut a different routine, the two sides would carry DIFFERENT free inputs
-    // and the goal would be comparing two unrelated programs — provable or refutable for reasons
-    // that have nothing to do with the optimisation.  Pinned here, at both k, before anything is
-    // emitted; the registry row stays OPEN because this is a differential and not a theorem.
-    def residualMentions(x: Space): Set[String] =
-      collect(x)({ case Space.Mention(SpaceMention(n)) if n.startsWith("residual_") => n },
-                 PartialFunction.empty)._1.map(_._2).toSet
+    // THE SAME THING, ARGUMENTS INCLUDED.  `unrollControl` replaces the call past depth `k` with a
+    // FRESH FREE INPUT and the obligation it then states is "the two k-unrollings agree FOR ALL
+    // values of that input"; that is sound only when both sides cut the same routine, at the same
+    // depth, WITH THE SAME ARGUMENTS.
+    //
+    // This used to compare the two sides' residual NAME SETS, which could not decide the argument
+    // part at all: the symbol was `residual_<routine>_<depth>` and the arguments were discarded, so
+    // two cuts with DIFFERENT recursive arguments shared one opaque set and a rewrite that changed
+    // an argument was hidden behind it.  A residual symbol is now keyed by its arguments
+    // (`AgnosticPipeline.ResidualCut`), so:
+    //   * equal arguments   ⇒ the same symbol, and `alignCuts` reports it as shared;
+    //   * differing arguments ⇒ different symbols, and the misalignment is REPORTED with both
+    //     descriptors instead of being absorbed.  Where routine and depth agree but the arguments
+    //     differ, the ARGUMENT EQUIVALENCE is emitted as its own obligation
+    //     (`<name>-residual-args-k<k>.smt2`) — a discharged one is what would license treating the
+    //     two cuts as the same input, and it is a real prover run, not an assumption.
     for (l, r, kk) <- Vector((uOnf, uPnf, 2), (uOnf1, uPnf1, 1)) do
-      assertEquals(residualMentions(l), residualMentions(r),
-                   s"$name: the k=$kk agnostic certificate would compare DIFFERENT residual inputs")
+      val al = AgnosticPipeline.alignCuts(l, r)
+      Loaders.note(s"[pipeline] $name k=$kk residual cuts: ${al.report}")
+      if !al.aligned then
+        // state the argument equivalences the alignment would need, and require them
+        val pairs = al.argumentPairs
+        assert(pairs.nonEmpty,
+               s"$name: the k=$kk certificate cuts DIFFERENT routines or depths on the two sides — " +
+               s"there is no argument obligation that could align them. ${al.report}")
+        val argFiles = scala.collection.mutable.ArrayBuffer.empty[String]
+        for ((lc, rc2), i) <- pairs.zipWithIndex do
+          val fn = s"$name-residual-args-k$kk-$i.smt2"
+          argFiles += fn
+          val hdr = s"""; RESIDUAL CUT ARGUMENT EQUIVALENCE — terminating/REGISTRY.tsv O10c.
+; The two sides of `$name` (k=$kk) both cut `${lc.routine}` at depth ${lc.depth}, but with
+; arguments that are not alpha-equal:
+;   left  ${lc.canonical}
+;   right ${rc2.canonical}
+; Sharing one residual free input between them is sound ONLY if these arguments denote the same
+; set for all inputs.  That is the goal below.  Until it is discharged the two cuts keep DISTINCT
+; free inputs and the enclosing equivalence is honestly open — nothing is assumed here.
+"""
+          val gA = if lc.mentions.length == 1 then lc.mentions.head else lc.mentions.foldLeft(Space.Empty: Space)(Union.apply)
+          val gB = if rc2.mentions.length == 1 then rc2.mentions.head else rc2.mentions.foldLeft(Space.Empty: Space)(Union.apply)
+          runSmtFile(fn, hdr + AgnosticPipeline.smtAgnostic(s"residual cut arguments ($name k=$kk #$i)", gA, gB))
+        // EVERY emitted argument obligation must be discharged, checked PER FILE.  Only a `PROVED`
+        // row licenses treating two differently-argued cuts as the same free input; a `TRIVIAL` or
+        // `IDENTICAL-STRUCTURE` marker would mean the two argument terms are the same term, which
+        // contradicts the alignment having failed, and an `OPEN` row means exactly the gap this
+        // gate exists to refuse.
+        val undischarged = argFiles.filterNot(fn =>
+          statusRows.exists(row => row.startsWith(fn + "\t") && row.endsWith("PROVED"))).toList
+        assert(undischarged.isEmpty,
+               s"$name: the k=$kk residual cuts are misaligned and the argument equivalence is NOT " +
+               s"discharged for ${undischarged.mkString(", ")} — the certificate would compare two " +
+               s"unrelated free inputs. ${al.report}")
     agnosticLegs(name, "space", uPnf, uOnf, uPnf1, uOnf1)
     // stage-2 agnostic compares `uO` against `zipCollapse(uO)` — the zipper transpiler's three
     // smart-constructor identities (x∪x, x∩x, x\x) replayed in Scala.  THIS IS WEAK and it is the
