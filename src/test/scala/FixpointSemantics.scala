@@ -192,12 +192,11 @@ class FixpointSemantics extends FunSuite:
     val dir = new java.io.File(Loaders.repoRoot, "proofs/pipeline/fixpoint-gate")
     dir.mkdirs()
 
+    // THROUGH THE SINK (0.3).  The returned file is the one the provers are pointed at, so in
+    // VERIFY mode they check exactly the bytes that were compared against the committed artifact.
     def emit(name: String, other: Space, header: String): java.io.File =
-      val f = new java.io.File(dir, name)
-      val w = new java.io.FileWriter(f)
-      try w.write(header + AgnosticPipeline.smtAgnostic(s"fixpoint_is_lfp counterexample — $name", prog, other))
-      finally w.close()
-      f
+      ArtifactSink.write(new java.io.File(dir, name),
+        header + AgnosticPipeline.smtAgnostic(s"fixpoint_is_lfp counterexample — $name", prog, other))
 
     def z3Says(f: java.io.File): String =
       z3.map { bin =>
@@ -299,9 +298,7 @@ class FixpointSemantics extends FunSuite:
         |""".stripMargin
 
     def ask(name: String, goal: String, header: String): String =
-      val f = new java.io.File(dir, name)
-      val w = new java.io.FileWriter(f)
-      try w.write(header + common + goal) finally w.close()
+      val f = ArtifactSink.write(new java.io.File(dir, name), header + common + goal)
       val p = new ProcessBuilder(z3.get, "-T:30", f.getPath).redirectErrorStream(true).start()
       val out = new String(p.getInputStream.readAllBytes()); p.waitFor()
       out.linesIterator.map(_.trim).filter(l => Set("sat", "unsat", "unknown", "timeout")(l))
@@ -336,10 +333,14 @@ class FixpointSemantics extends FunSuite:
     writeGateStatus()
   }
 
+  // 0.3 — THE GOLDEN-FILE GATE, last so both prover legs above have written.
+  test("every committed fixpoint-gate artifact matches what this suite produces") {
+    ArtifactSink.assertClean("morkl.FixpointSemantics")
+  }
+
   // the gate's own status table, appended to by both prover legs above
   private val statusRows = scala.collection.mutable.ArrayBuffer.empty[String]
   private def writeGateStatus(): Unit =
     val dir = new java.io.File(Loaders.repoRoot, "proofs/pipeline/fixpoint-gate")
-    val w = new java.io.FileWriter(new java.io.File(dir, "STATUS.tsv"))
-    try w.write("file\tz3\tvampire\texpected\tverdict\n" + statusRows.sorted.mkString("\n") + "\n")
-    finally w.close()
+    ArtifactSink.write(new java.io.File(dir, "STATUS.tsv"),
+      "file\tz3\tvampire\texpected\tverdict\n" + statusRows.sorted.mkString("\n") + "\n")

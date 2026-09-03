@@ -113,6 +113,56 @@ TRUSTED = {
 ASSUMED_BLOCK = re.compile(r"^%\s*ASSUMED\b", re.M)
 TRUSTED_ENTRY = re.compile(r"^%\s*TRUSTED-ENTRY:\s*(T\d+)", re.M)
 
+# ==================================================================================================
+# THE MARKER THAT DISCHARGES A TRUSTED ENTRY, RATHER THAN DECLARING ONE (plan.md 0.5).
+#
+# `TRUSTED-ENTRY` above says "this file asserts something the corpus does not derive".  Its converse
+# is `% MECHANIZED-IN: <lean file>#<fully qualified theorem>`: "the principle this file's closure
+# reaches is a THEOREM, checked by Lean's kernel, over there".  That is what items 3 and 8 are for --
+# T1 is structural induction over `path`, which first-order logic cannot state and a dependently
+# typed system gives for free from the inductive declaration -- and it is the only honest way a row
+# reported `PROVED-MODULO T1` ever becomes an unqualified `PROVED`.
+#
+# THE LIFT IS NOT TAKEN ON THE MARKER'S WORD.  A marker is a claim about a file in `proofs/lean`, and
+# a claim in a comment is exactly what this script exists to stop being believed.  So a lift requires
+# a WITNESS: `scripts/check_lean.sh` builds the package, refuses any `sorry`, resolves every marker,
+# runs `#print axioms` on each named theorem, and writes `target/lean-mechanized.tsv`.  This script
+# reads that table.  It is under `target/` and NOT committed on purpose: it records what the LOCAL
+# toolchain checked, so a reader who has not run the gate gets NO lift rather than inheriting someone
+# else's build, and the failure direction is always the conservative one.
+# ==================================================================================================
+# THE SAME MARKER GRAMMAR AS `scripts/check_lean.sh`, character for character.  The two readers
+# must agree on what a marker IS: a marker this script honoured and that one did not witness
+# would lift nothing (harmless), but the reverse -- witnessed there, invisible here -- would
+# leave a discharged entry reported as still conditional and nobody would know why.  Anchored
+# at line start, and `<`, `>`, backtick and `|` are excluded because prose ABOUT the marker is
+# made of them: `docs/TRUSTED.md`'s specification table contains the literal placeholder
+# `<file>#<thm>` inside a markdown row, and a scan without those exclusions failed the Lean
+# gate on a marker nobody had written.
+MECHANIZED_IN = re.compile(r"^\s*[%;]\s*MECHANIZED-IN:\s*([^\s`<>|]+)#([^\s`<>|]+)", re.M)
+LEAN_WITNESS = ROOT / "target" / "lean-mechanized.tsv"
+
+
+_witness_cache = {}
+
+
+def read_lean_witness():
+    """{marker -> (theorem, axioms)} for every marker `scripts/check_lean.sh` resolved locally.
+
+    An absent witness is an EMPTY mapping, not an error: the Lean gate has simply not been run here,
+    and every marked row stays reported as conditional."""
+    if "v" in _witness_cache:
+        return _witness_cache["v"]
+    out = {}
+    _witness_cache["v"] = out
+    if not LEAN_WITNESS.is_file():
+        return out
+    for line in LEAN_WITNESS.read_text().splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 4 and parts[3].strip() == "MECHANIZED":
+            out[parts[0].strip()] = (parts[1].strip(), parts[2].strip())
+    return out
+
 
 def read_trusted_ids():
     """cross-check the table above against docs/TRUSTED.md, so the two cannot drift apart"""
@@ -201,16 +251,67 @@ def classify(status_file: pathlib.Path, corpus: str, kind: str = "tptp"):
             cl, missing, fragile, reasserted = closure(p, status_file.parent)
         else:
             cl, missing, fragile, reasserted = set(), set(), set(), set()
+        # ------------------------------------------------------------------------------------------
+        # `% MECHANIZED-IN:` MARKERS, ATTRIBUTED PER TRUSTED ENTRY.
+        #
+        # A MARKER DISCHARGES THE ENTRY ITS OWN FILE ASSERTS, AND NOTHING ELSE.  The first version of
+        # this dropped EVERY reached entry as soon as any marker in the closure was witnessed, and the
+        # self-test caught it immediately: one marker naming the wrap-roundtrip theorem reported
+        # `card_wrap  discharges T1,T7`, when T7 is the counting axiom module `_card.p` and the Lean
+        # theorem says nothing whatever about counting.  That is precisely the lenient direction this
+        # script exists to close, arriving through the mechanism meant to close it.
+        #
+        # So attribution is by FILE: a marker in the file that IS a trusted entry's axiom module
+        # (`TRUSTED[T]["axiom"]`) discharges that entry; a marker in the obligation file itself
+        # discharges an entry whose `rows` name that obligation (T2's four induction principles are
+        # asserted inside `fixpoint_is_lfp.smt2`, so that is where its marker belongs).  A marker
+        # anywhere else discharges nothing and is reported as ORPHANED -- `_cancel.p`, for instance,
+        # only RE-ASSERTS a lemma and already carries a `% DISCHARGED-BY:` edge; the schema it
+        # ultimately rests on lives in `_path_induction.p`, and that is the file a lift must mark.
+        # ------------------------------------------------------------------------------------------
+        mech_for = {}        # trusted entry -> the markers whose file asserts it
+        orphan_mech = []     # markers in files that assert no trusted entry
+        for f in ([p] + sorted(cl, key=lambda x: x.name)):
+            try:
+                markers = [f"{a}#{b}" for a, b in MECHANIZED_IN.findall(f.read_text())]
+            except OSError:
+                continue
+            if not markers:
+                continue
+            owned = [k for k, v in TRUSTED.items() if v["axiom"] and v["axiom"] == f.name]
+            if f == p:
+                owned += [k for k, v in TRUSTED.items()
+                          if name in v.get("rows", ()) or name.removesuffix(ext) in v.get("rows", ())]
+            if not owned:
+                orphan_mech += [f"{m} (in {f.name}, which asserts no trusted entry)" for m in markers]
+            for k in sorted(set(owned)):
+                mech_for.setdefault(k, []).extend(markers)
         names = {c.name for c in cl}
         reached = sorted(k for k, v in TRUSTED.items() if v["axiom"] and v["axiom"] in names)
         # the DIRECT, file-scoped entries: a trusted principle asserted inside this very obligation
         direct = sorted(k for k, v in TRUSTED.items()
                         if name in v.get("rows", ()) or name.removesuffix(".smt2") in v.get("rows", ()))
         reached = sorted(set(reached) | set(direct))
+        # THE LIFT, per entry.  An entry is dropped from `reached` only when EVERY marker offered for
+        # it is WITNESSED as built and sorry-free by `scripts/check_lean.sh`.  With no witness (the
+        # Lean gate was not run on this machine) nothing is dropped.
+        witness = read_lean_witness()
+        lifted, mechanized, claimed = [], [], []
+        for k in sorted(set(reached)):
+            ms = sorted(set(mech_for.get(k, ())))
+            if not ms:
+                continue
+            claimed += [f"{k} via {m}" for m in ms]
+            if all(m in witness for m in ms):
+                lifted.append(k)
+                mechanized += ms
+        reached = sorted(set(reached) - set(lifted))
+        mechanized = sorted(set(mechanized))
         rows.append(dict(name=name, verdict=verdict, negative=negative, reached=reached,
                          corpus=corpus_wide, deps=len(cl), missing=sorted(missing),
                          fragile=sorted(fragile), reasserted=sorted(reasserted),
-                         exists=p.is_file()))
+                         exists=p.is_file(), mechanized=mechanized, lifted=sorted(lifted),
+                         mech_claimed=sorted(set(claimed)), orphan_mech=sorted(set(orphan_mech))))
     return rows
 
 
@@ -250,7 +351,14 @@ def annotate():
             # could never be CORRECTED -- and `card_wrap` needed correcting from `T1` to `T1,T7`
             # the moment T7 was declared.  This still only ever weakens: `reached` is what the
             # closure found, and a row with nothing reached is left alone.
-            want = "PROVED-MODULO " + ",".join(r["reached"]) if r and r["reached"] else None
+            # A LIFTED ROW SAYS WHAT LIFTED IT.  Writing a bare `PROVED` would erase the only
+            # trace of why the qualification went away, and the next reader could not tell a row
+            # that never needed one from a row a Lean theorem discharged.
+            if r and r.get("mechanized") and r.get("lifted"):
+                want = ("PROVED (MECHANIZED " + ",".join(r["mechanized"]) +
+                        " discharges " + ",".join(r["lifted"]) + ")")
+            else:
+                want = "PROVED-MODULO " + ",".join(r["reached"]) if r and r["reached"] else None
             if (r and not r["negative"] and want
                     and parts[-1].strip().startswith("PROVED")
                     and parts[-1].strip() != want):
@@ -258,7 +366,14 @@ def annotate():
                 changed += 1
             out.append("\t".join(parts))
         if changed:
-            status.write_text("\n".join(out) + "\n")
+            # ATOMIC, for the same reason the run.sh drivers stage their tables: this rewrite is the
+            # LAST writer of a file four other tools read, and a `write_text` that is interrupted
+            # between truncate and write leaves the committed table empty -- losing a corpus that
+            # took tens of minutes of prover time to produce, with no way to tell an emptied table
+            # from a corpus that certifies nothing.
+            tmp = status.with_suffix(status.suffix + ".tmp")
+            tmp.write_text("\n".join(out) + "\n")
+            tmp.replace(status)
             print(f"annotated {changed} conditional verdict(s) in {status.relative_to(ROOT)}")
 
 
@@ -339,6 +454,33 @@ def main():
             elif r["verdict"] != want:
                 problems.append(f"{r['name']}: reported as `{r['verdict']}` but its closure says "
                                 f"`{want}`")
+        # --- the Lean lifts, and the markers that could not be honoured (plan.md 0.5) ------------
+        mech = [r for r in rows if r.get("mechanized")]
+        unwitnessed = [r for r in rows
+                       if r.get("mech_claimed") and not r.get("mechanized")]
+        if mech:
+            print(f"  {len(mech)} claim(s) LIFTED to unqualified PROVED by a witnessed Lean theorem:")
+            for r in mech:
+                print(f"    {r['name']:34s} discharges {','.join(r['lifted']) or '-'} "
+                      f"via {','.join(r['mechanized'])}")
+        orphans = sorted({o for r in rows for o in r.get("orphan_mech", ())})
+        if orphans:
+            print(f"  {len(orphans)} ORPHANED `% MECHANIZED-IN:` marker(s) -- they discharge NOTHING, "
+                  "because a marker only discharges the trusted entry its own file asserts:")
+            for o in orphans:
+                print(f"    {o}")
+            problems += [f"orphaned `% MECHANIZED-IN:` marker: {o} -- move it to the file that "
+                         "asserts the entry it is meant to discharge, or delete it" for o in orphans]
+        if unwitnessed:
+            # NOT A PROBLEM, AND SAYING WHY MATTERS.  A marker with no witness means the Lean gate
+            # was not run on this machine, so the row stays reported as CONDITIONAL -- the
+            # conservative direction.  It is printed because a reader looking at a
+            # `PROVED-MODULO T1` row that carries a marker deserves to know the lift exists and
+            # what to run for it, rather than concluding the marker was ignored.
+            print(f"  {len(unwitnessed)} claim(s) carry a `% MECHANIZED-IN:` marker with NO local "
+                  "witness, so they stay CONDITIONAL (run `scripts/check_lean.sh`):")
+            for r in unwitnessed:
+                print(f"    {r['name']:34s} claims {','.join(r['mech_claimed'])}")
         unresolved = [r for r in rows if not r["exists"]]
         if unresolved:
             print(f"  {len(unresolved)} reported status(es) have no proof file: "

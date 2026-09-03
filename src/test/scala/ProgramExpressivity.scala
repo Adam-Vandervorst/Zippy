@@ -118,12 +118,24 @@ class ProgramExpressivity extends FunSuite:
     txt.append("# free args: s0,s1,.. = space (trie) inputs;  p0,p1,.. = path inputs.  bound iteration vars are h.../t...\n")
     txt.append("# columns: idx <TAB> nSpace <TAB> nPath <TAB> uniqueOut(of 100) <TAB> program(.show)\n")
     for (r, i) <- kept.zipWithIndex do txt.append(s"$i\t${r.nSpace}\t${r.nPath}\t${r.uniqueOut}\t${show1(r.prog)}\n")
-    val tf = new java.io.File(Loaders.repoRoot, "corpus_1000.txt")
-    locally { val w = new java.io.FileWriter(tf); try w.write(txt.toString) finally w.close() }
-    // reloadable binary + round-trip verification
-    val bf = new java.io.File(Loaders.repoRoot, "corpus_1000.ser"); var serOk = false
+    // 0.3 — THROUGH THE SINK.  These two are TRACKED files that this suite rewrote unconditionally
+    // on every run.  The generator is seeded (`Random(12345)`), so the content is stable and the
+    // tree did not usually change — which is exactly why nobody noticed that ANY drift in
+    // `SpaceFuzzer` would have been committed on the next `git add` with nothing comparing it to
+    // what the corpus-consuming suites had been validated against.  They are not benchmark outputs
+    // (those go through `BenchmarkArtifact`/`PublishManifest`, and `expressivity.csv` still does);
+    // they are derived data, so they belong to `ArtifactSink` and to `ZIPPY_REGENERATE=1`.
+    val tf = ArtifactSink.write(new java.io.File(Loaders.repoRoot, "corpus_1000.txt"), txt.toString)
+    // reloadable binary + round-trip verification.  The round trip reads back the file the sink
+    // actually wrote, so in VERIFY mode it verifies the bytes that were compared against the tree.
+    var serOk = false
     try
-      locally { val oos = new java.io.ObjectOutputStream(new java.io.FileOutputStream(bf)); try oos.writeObject(kept.toVector) finally oos.close() }
+      val bytes =
+        val bos = new java.io.ByteArrayOutputStream()
+        val oos = new java.io.ObjectOutputStream(bos)
+        try oos.writeObject(kept.toVector) finally oos.close()
+        bos.toByteArray
+      val bf = ArtifactSink.writeBytes(new java.io.File(Loaders.repoRoot, "corpus_1000.ser"), bytes)
       val back = locally { val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(bf)); try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close() }
       val i = rng.nextInt(kept.size)
       val ok = back.size == kept.size && (0 until K).forall(k =>
@@ -131,7 +143,8 @@ class ProgramExpressivity extends FunSuite:
       assert(ok, "deserialized program did not re-evaluate identically"); serOk = true
     catch case e: Throwable => System.out.println(s"CORPUS: binary serialization unavailable (${e.getClass.getSimpleName}); text corpus written")
     System.out.println(f"CORPUS: kept=${kept.size} of $draws draws (${100.0 * kept.size / draws}%.1f%% accepted), ${secs}%.1fs")
-    System.out.println(s"CORPUS: text=${tf.getPath}  binary=${if serOk then bf.getPath + " (round-trip verified)" else "n/a"}")
+    System.out.println(s"CORPUS: text=${tf.getPath}  binary=${if serOk then "written (round-trip verified)" else "n/a"}")
+    ArtifactSink.assertClean("morkl.ProgramExpressivity")
 
     // ============================================================================================
     // THE CONSTRUCTOR CENSUS — the gate that keeps the corpus HONEST about its coverage.

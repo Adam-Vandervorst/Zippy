@@ -30,6 +30,13 @@
 # compensating differential coverage).  A file going OPEN that is NOT in this list fails the run;
 # an EXPECTED_OPEN file getting PROVED is reported so the list can be shrunk.
 #
+# STATUS.tsv IS WRITTEN ATOMICALLY.  Rows accumulate in `$TMPTAB` and ONE rename() replaces the
+# committed file once all twenty files have been checked.  The old shape truncated the committed
+# table as its first act and appended for the next several minutes (240 s per file of z3 budget), so
+# for the length of the run proof_closure.py and check_obligations.py read a prefix of the corpus and
+# the tree reported obligations it certifies as absent.  A killed run now leaves the committed table
+# byte-identical, and the rename precedes the --annotate call that rewrites the committed path.
+#
 # Env: $Z3 / $VAMPIRE pick the binaries (see scripts/toolpath.sh); $Z3_T / $VAMPIRE_T (seconds)
 # override the per-goal budgets; VAMPIRE_T=0 skips the vampire leg entirely (z3-only smoke run).
 cd "$(dirname "$0")"
@@ -45,7 +52,24 @@ VAMPIRE_T=${VAMPIRE_T:-10}
 EXPECTED_OPEN=" "
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/terminating.XXXXXX") || exit 1
-trap 'rm -rf "$TMP"' EXIT INT TERM
+
+# The staging table and the rename; `.tmp` sits beside the target so rename() is same-filesystem and
+# atomic.  One trap owns both temporaries: the per-goal scratch directory and the staged table.
+STATUSTAB=STATUS.tsv
+TMPTAB=$STATUSTAB.tmp
+# A SIGNAL TRAP THAT RETURNS IS NOT A CLEANUP.  The first version of this staging installed one
+# `trap 'rm -f "$TMPTAB"' EXIT INT TERM HUP` and was MEASURED to make things worse: POSIX sh runs a
+# signal handler and then RESUMES the script, so a SIGTERM two files into the corpus deleted the
+# staging table, the remaining files re-created it by appending, and the final rename() published a
+# table holding only the rows scored AFTER the signal.  The interrupted run therefore replaced the
+# committed corpus with a fragment -- exactly the defect the staging exists to prevent, now arriving
+# through the cleanup path.  So the signal handlers CLEAN UP AND EXIT, and only the EXIT handler
+# returns; `rm -f` on the already-renamed path is a no-op, so no handler has to be uninstalled.
+_cleanup() { rm -rf "$TMP"; rm -f "$TMPTAB"; }
+trap '_cleanup' EXIT
+trap '_cleanup; exit 130' INT
+trap '_cleanup; exit 143' TERM
+trap '_cleanup; exit 129' HUP
 
 # Emit the incremental context of the `goal`-th (1-based) push/pop block: every depth-0 line in
 # order (minus its own check-sat), plus the lines of that one block.  That is exactly the
@@ -56,7 +80,7 @@ SPLIT='BEGIN { depth = 0; idx = 0 }
 { if (depth == 0) { if ($0 !~ /^[ \t]*\(check-sat\)/) print } else if (idx == goal) print }'
 
 pass=0; fail=0; open_exp=0; cm=0
-: > STATUS.tsv
+: > "$TMPTAB"
 
 check() {  # file  expected-goal-count
   f=$1; want=$2
@@ -96,7 +120,7 @@ check() {  # file  expected-goal-count
       *) st="OPEN (NEW — unexpected)"; fail=$((fail+1));;
     esac
   fi
-  printf "%s\t%s\t%s\t%s\n" "$f" "$z3col" "$vcol" "$st" >> STATUS.tsv
+  printf "%s\t%s\t%s\t%s\n" "$f" "$z3col" "$vcol" "$st" >> "$TMPTAB"
   printf "%-34s z3: %-16s vampire: %-14s => %s\n" "$f" "$z3col" "$vcol" "$st"
 }
 
@@ -122,6 +146,10 @@ check reachable_decrease              6
 check reachable_value                 1
 check scc_decrease                    7
 check transitive_equiv                1
+
+# PUBLISH.  One rename, after every pinned file has been checked: until this line the committed
+# table is untouched, and after it it is complete.
+mv "$TMPTAB" "$STATUSTAB"
 
 # ANNOTATE THE CONDITIONAL VERDICTS.  This harness writes the verdict the PROVER reached, which is
 # right.  Whether that verdict is UNQUALIFIED is a separate question, decided by the trusted base in

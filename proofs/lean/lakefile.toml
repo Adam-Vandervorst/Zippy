@@ -1,0 +1,30 @@
+# ==================================================================================================
+# THE LEAN DEVELOPMENT.  plan.md items 3 and 8 make a Lean-checked theorem a PRECONDITION of any
+# unqualified `PROVED` for the substitution and fixpoint claims, so this package is where every
+# mechanized theorem lands.  Phase 0 (task 0.5) builds the scaffold ONCE, so that Phase 1's `1E.*`
+# and Phase 2's `2E.*` add theorems to a package that already builds inside `sbt check`.
+#
+# THE TOOLCHAIN IS PINNED TO WHAT IS INSTALLED, NOT TO MATHLIB'S HEAD.  `lean-toolchain` beside this
+# file reads `leanprover/lean4:v4.33.1`, which is the toolchain `~/.elan/toolchains` actually holds;
+# Mathlib's `master` is on `v4.34.0-rc2` today, so `require mathlib` without a `rev` would silently
+# pull a package that needs a toolchain this machine does not have and elan would download a second
+# one.  The `rev` below is Mathlib's `v4.33.1` release tag -- the same version string, which is what
+# "pinned to the installed toolchain" means -- and `lake-manifest.json` records the resolved commit,
+# so a reader who checks out this tree gets the same Mathlib.
+#
+# WHY MATHLIB AT ALL, at this stage.  `2E.3` needs Kruskal's tree theorem (or Higman's lemma, from
+# which it is provable) for the whistle's termination, and `docs/TRUSTED.md` T3 admits exactly that
+# statement today.  Whether Mathlib carries Kruskal is a TOOLCHAIN RISK the plan names and requires
+# to be verified before 2E.3 starts, and it cannot be verified against a package that is not wired
+# up.  `scripts/check_lean.sh --probe-kruskal` answers it.
+name = "zippy"
+version = "0.1.0"
+defaultTargets = ["Zippy"]
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.33.1"
+
+[[lean_lib]]
+name = "Zippy"

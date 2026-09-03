@@ -91,6 +91,13 @@ def resolve(name):
             found = shutil.which(binary)
             if found:
                 return found
+        elif step == "elan":
+            # elan's own root, from its documented $ELAN_HOME override or its documented default.
+            # See toolchain.conf's header for why `lake` cannot be found the way a prover is.
+            root = os.environ.get("ELAN_HOME") or os.path.join(os.path.expanduser("~"), ".elan")
+            cand = os.path.join(root, "bin", binary)
+            if os.access(cand, os.X_OK):
+                return cand
     return None
 
 

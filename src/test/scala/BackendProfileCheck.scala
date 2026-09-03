@@ -20,7 +20,7 @@ import scala.collection.immutable.IntMap
  *
  *  A measurement quoted in a comment is a claim. This file is the measurement.
  */
-class BackendProfileCheck extends FunSuite:
+class BackendProfileCheck extends FunSuite, CalibrationProbe:
   import Space.*
 
   private val p2 = BackendProfile.intMapPatricia2

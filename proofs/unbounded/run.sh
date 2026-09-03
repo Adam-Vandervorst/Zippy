@@ -41,7 +41,13 @@
 # than left implicit.
 #
 # STATUS.tsv (file <TAB> vampire <TAB> probe <TAB> verdict) is the machine-readable source of
-# truth, consumed by src/test/scala/UnboundedTier.scala.
+# truth, consumed by src/test/scala/UnboundedTier.scala.  It is written ATOMICALLY: rows accumulate
+# in `$TMPTAB` and ONE rename() replaces the committed file once the theorems, the negative controls
+# and the vacuity probes have all been scored.  This tier is the slowest in the repo (180 s per
+# theorem, 45 s per control, 10 s per probe over ~90 files), so the old `: > STATUS.tsv`-then-append
+# shape left the committed table truncated for the whole run — and `UnboundedTier.scala` reads it,
+# so a concurrent `sbt test` scored the tier against a prefix.  A killed run now leaves the
+# committed table byte-identical.
 cd "$(dirname "$0")" || exit 1
 . ../../scripts/toolpath.sh                    # $VAMPIRE -> PATH -> conventional locations
 VAMPIRE_BIN=$(resolve_tool vampire) || { echo "$(tool_missing vampire)" >&2; exit 1; }
@@ -72,6 +78,24 @@ EXPECTED_OPEN=" "
 
 pass=0; fail=0; open_exp=0; cm=0; neg_ok=0; neg_bad=0; vac_bad=0
 
+# The staging table and the rename; `.tmp` sits beside the target so rename() is same-filesystem
+# and atomic.  The trap also covers `.probe.p`, which the probe loop writes into this directory.
+STATUSTAB=STATUS.tsv
+TMPTAB=$STATUSTAB.tmp
+# A SIGNAL TRAP THAT RETURNS IS NOT A CLEANUP.  The first version of this staging installed one
+# `trap 'rm -f "$TMPTAB"' EXIT INT TERM HUP` and was MEASURED to make things worse: POSIX sh runs a
+# signal handler and then RESUMES the script, so a SIGTERM two files into the corpus deleted the
+# staging table, the remaining files re-created it by appending, and the final rename() published a
+# table holding only the rows scored AFTER the signal.  The interrupted run therefore replaced the
+# committed corpus with a fragment -- exactly the defect the staging exists to prevent, now arriving
+# through the cleanup path.  So the signal handlers CLEAN UP AND EXIT, and only the EXIT handler
+# returns; `rm -f` on the already-renamed path is a no-op, so no handler has to be uninstalled.
+_cleanup() { rm -f "$TMPTAB" .probe.p; }
+trap '_cleanup' EXIT
+trap '_cleanup; exit 130' INT
+trap '_cleanup; exit 143' TERM
+trap '_cleanup; exit 129' HUP
+
 szs() {  # last SZS status word, or "none"
   printf '%s\n' "$1" | grep '^% SZS status' | tail -1 | awk '{print $4}'
 }
@@ -100,7 +124,7 @@ probe_one() {  # $1 = file, $2 = conjecture name -> "ok" | "VACUOUS"
   esac
 }
 
-: > STATUS.tsv
+: > "$TMPTAB"
 
 for path in *.p; do
   case "$path" in _*) continue;; esac
@@ -112,7 +136,7 @@ for path in *.p; do
   # be indistinguishable from a hard obligation.
   if user_error "$out"; then
     printf "%s\t%s\t%s\t%s\n" "$f" "${st:-none}" "-" \
-      "UNREADABLE — the prover could not load this file" >> STATUS.tsv
+      "UNREADABLE — the prover could not load this file" >> "$TMPTAB"
     printf "%-26s vampire: %-20s probe: %-8s => %s\n" "$f" "${st:-none}" "-" \
       "UNREADABLE — the prover could not load this file"
     fail=$((fail+1))
@@ -141,7 +165,7 @@ for path in *.p; do
       *) verdict="OPEN (NEW — unexpected)"; fail=$((fail+1));;
     esac
   fi
-  printf "%s\t%s\t%s\t%s\n" "$f" "$st" "$probe" "$verdict" >> STATUS.tsv
+  printf "%s\t%s\t%s\t%s\n" "$f" "$st" "$probe" "$verdict" >> "$TMPTAB"
   printf "%-26s vampire: %-20s probe: %-8s => %s\n" "$f" "$st" "$probe" "$verdict"
 done
 
@@ -161,11 +185,15 @@ for path in negative/*.p; do
     *) verdict="NOT-PROVED (expected)"; neg_ok=$((neg_ok+1)) ;;
   esac
   fi
-  printf "%s\t%s\t%s\t%s\n" "negative/$f" "$st" "-" "$verdict" >> STATUS.tsv
+  printf "%s\t%s\t%s\t%s\n" "negative/$f" "$st" "-" "$verdict" >> "$TMPTAB"
   printf "%-26s vampire: %-20s          => %s\n" "negative/$f" "$st" "$verdict"
 done
 
 rm -f .probe.p
+
+# PUBLISH.  One rename, after theorems, controls and probes are all scored: until this line the
+# committed table is untouched, and after it it is complete.
+mv "$TMPTAB" "$STATUSTAB"
 
 # ANNOTATE THE CONDITIONAL VERDICTS.  This loop writes the verdict THE PROVER REACHED, which is
 # right -- the prover is what ran.  But `PROVED` in a table is read as unqualified, and for a result

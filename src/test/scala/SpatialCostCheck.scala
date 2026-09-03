@@ -16,7 +16,7 @@ import scala.language.implicitConversions
  *     monotone, and that the two backends genuinely disagree where they should;
  *   - the runtime check is a WEAK rank-correlation sanity check against measured `eval` time, not a
  *     calibration.  `eval` is only ever used as ground truth in tests, never by the analysis. */
-class SpatialCostCheck extends FunSuite:
+class SpatialCostCheck extends FunSuite, CalibrationProbe:
   override val munitTimeout = scala.concurrent.duration.Duration(20, "min")
 
   def lit(ps: PathValue*): Space = Space.Literal(SpaceValue(ps.toSet))

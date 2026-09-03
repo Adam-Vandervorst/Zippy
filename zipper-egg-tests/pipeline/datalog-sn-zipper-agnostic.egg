@@ -1,45 +1,45 @@
 ; AUTO-GENERATED pipeline zipper (datalog-sn) — DATA-AGNOSTIC.
 ; BOUNDED-UNROLLING (k=2): the sides carry 1 residual cut(s):
-;   sn_tc@2(; S"edges", (((S"edges" \/ (S"edges".iter(P"av1", S"ar1", 
- (P"av1" x TailsUnion((S"edges" <| S"ar1")))
-) \ S"edges")) \/ ((S"edges".iter(P"av3", S"ar3", 
- (P"av3" x TailsUnion((S"edges" <| S"ar3")))
-) \ S"edges").iter(P"av2", S"ar2", 
- (P"av2" x TailsUnion((S"edges" <| S"ar2")))
-) \ (S"edges" \/ (S"edges".iter(P"av4", S"ar4", 
- (P"av4" x TailsUnion((S"edges" <| S"ar4")))
-) \ S"edges")))) \/ (((S"edges".iter(P"av7", S"ar7", 
- (P"av7" x TailsUnion((S"edges" <| S"ar7")))
-) \ S"edges").iter(P"av6", S"ar6", 
- (P"av6" x TailsUnion((S"edges" <| S"ar6")))
-) \ (S"edges" \/ (S"edges".iter(P"av8", S"ar8", 
- (P"av8" x TailsUnion((S"edges" <| S"ar8")))
-) \ S"edges"))).iter(P"av5", S"ar5", 
- (P"av5" x TailsUnion((S"edges" <| S"ar5")))
-) \ ((S"edges" \/ (S"edges".iter(P"av9", S"ar9", 
- (P"av9" x TailsUnion((S"edges" <| S"ar9")))
-) \ S"edges")) \/ ((S"edges".iter(P"av11", S"ar11", 
- (P"av11" x TailsUnion((S"edges" <| S"ar11")))
-) \ S"edges").iter(P"av10", S"ar10", 
- (P"av10" x TailsUnion((S"edges" <| S"ar10")))
-) \ (S"edges" \/ (S"edges".iter(P"av12", S"ar12", 
- (P"av12" x TailsUnion((S"edges" <| S"ar12")))
-) \ S"edges")))))), (((S"edges".iter(P"av3", S"ar3", 
- (P"av3" x TailsUnion((S"edges" <| S"ar3")))
-) \ S"edges").iter(P"av2", S"ar2", 
- (P"av2" x TailsUnion((S"edges" <| S"ar2")))
-) \ (S"edges" \/ (S"edges".iter(P"av4", S"ar4", 
- (P"av4" x TailsUnion((S"edges" <| S"ar4")))
-) \ S"edges"))).iter(P"av1", S"ar1", 
- (P"av1" x TailsUnion((S"edges" <| S"ar1")))
-) \ ((S"edges" \/ (S"edges".iter(P"av5", S"ar5", 
- (P"av5" x TailsUnion((S"edges" <| S"ar5")))
-) \ S"edges")) \/ ((S"edges".iter(P"av7", S"ar7", 
- (P"av7" x TailsUnion((S"edges" <| S"ar7")))
-) \ S"edges").iter(P"av6", S"ar6", 
- (P"av6" x TailsUnion((S"edges" <| S"ar6")))
-) \ (S"edges" \/ (S"edges".iter(P"av8", S"ar8", 
- (P"av8" x TailsUnion((S"edges" <| S"ar8")))
+;   sn_tc@2(; S"edges", (((S"edges" \/ (S"edges".iter(P"av1", S"ar2", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar2")))
+) \ S"edges")) \/ ((S"edges".iter(P"av5", S"ar6", 
+ (P"av5" x TailsUnion((S"edges" <| S"ar6")))
+) \ S"edges").iter(P"av3", S"ar4", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar4")))
+) \ (S"edges" \/ (S"edges".iter(P"av7", S"ar8", 
+ (P"av7" x TailsUnion((S"edges" <| S"ar8")))
+) \ S"edges")))) \/ (((S"edges".iter(P"av13", S"ar14", 
+ (P"av13" x TailsUnion((S"edges" <| S"ar14")))
+) \ S"edges").iter(P"av11", S"ar12", 
+ (P"av11" x TailsUnion((S"edges" <| S"ar12")))
+) \ (S"edges" \/ (S"edges".iter(P"av15", S"ar16", 
+ (P"av15" x TailsUnion((S"edges" <| S"ar16")))
+) \ S"edges"))).iter(P"av9", S"ar10", 
+ (P"av9" x TailsUnion((S"edges" <| S"ar10")))
+) \ ((S"edges" \/ (S"edges".iter(P"av17", S"ar18", 
+ (P"av17" x TailsUnion((S"edges" <| S"ar18")))
+) \ S"edges")) \/ ((S"edges".iter(P"av21", S"ar22", 
+ (P"av21" x TailsUnion((S"edges" <| S"ar22")))
+) \ S"edges").iter(P"av19", S"ar20", 
+ (P"av19" x TailsUnion((S"edges" <| S"ar20")))
+) \ (S"edges" \/ (S"edges".iter(P"av23", S"ar24", 
+ (P"av23" x TailsUnion((S"edges" <| S"ar24")))
+) \ S"edges")))))), (((S"edges".iter(P"av5", S"ar6", 
+ (P"av5" x TailsUnion((S"edges" <| S"ar6")))
+) \ S"edges").iter(P"av3", S"ar4", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar4")))
+) \ (S"edges" \/ (S"edges".iter(P"av7", S"ar8", 
+ (P"av7" x TailsUnion((S"edges" <| S"ar8")))
+) \ S"edges"))).iter(P"av1", S"ar2", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar2")))
+) \ ((S"edges" \/ (S"edges".iter(P"av9", S"ar10", 
+ (P"av9" x TailsUnion((S"edges" <| S"ar10")))
+) \ S"edges")) \/ ((S"edges".iter(P"av13", S"ar14", 
+ (P"av13" x TailsUnion((S"edges" <| S"ar14")))
+) \ S"edges").iter(P"av11", S"ar12", 
+ (P"av11" x TailsUnion((S"edges" <| S"ar12")))
+) \ (S"edges" \/ (S"edges".iter(P"av15", S"ar16", 
+ (P"av15" x TailsUnion((S"edges" <| S"ar16")))
 ) \ S"edges"))))))
 ; so this cell's claim is about the k-UNROLLINGS at those depths, quantified over the cuts'
 ; free inputs, and NOT about the recursion.  Lifting it to the recursion needs k-unrolling

@@ -430,17 +430,18 @@ class TierThreeConformance extends FunSuite:
     lines.foreach(l => println("  " + l))
 
     // record it next to the prover's own verdicts, so a reader of STATUS.tsv sees the distinction
+    // THROUGH THE SINK (0.3): built as one string and handed over, so a VERIFY run compares it
+    // against the committed table instead of overwriting it.
     val f = new java.io.File(Loaders.repoRoot, "proofs/unbounded/COUNTERMODELS.tsv")
-    val w = new java.io.FileWriter(f)
-    try
-      w.write("# Negative controls REFUTED BY EXECUTION against the reference executor.\n" +
-              "# proofs/unbounded/run.sh can only report `NOT-PROVED (expected)` for these: the\n" +
-              "# statements are false, but their countermodels are infinite path sets and vampire\n" +
-              "# returns a TIMEOUT, which is the absence of a proof and not a semantic separation.\n" +
-              "# This table is the separation.  Written by src/test/scala/TierThreeConformance.scala.\n" +
-              "#\n# file\tfalse claim\tcountermodel\n")
-      for c <- counters do w.write(s"${c.file}\t${c.claim}\t${c.witness()}\n")
-    finally w.close()
-    println(s"\nwritten: proofs/unbounded/COUNTERMODELS.tsv (${counters.size} executed countermodels)")
+    val body = "# Negative controls REFUTED BY EXECUTION against the reference executor.\n" +
+               "# proofs/unbounded/run.sh can only report `NOT-PROVED (expected)` for these: the\n" +
+               "# statements are false, but their countermodels are infinite path sets and vampire\n" +
+               "# returns a TIMEOUT, which is the absence of a proof and not a semantic separation.\n" +
+               "# This table is the separation.  Written by src/test/scala/TierThreeConformance.scala.\n" +
+               "#\n# file\tfalse claim\tcountermodel\n" +
+               counters.map(c => s"${c.file}\t${c.claim}\t${c.witness()}\n").mkString
+    ArtifactSink.write(f, body)
+    println(s"\nproduced: proofs/unbounded/COUNTERMODELS.tsv (${counters.size} executed countermodels)")
+    ArtifactSink.assertClean("morkl.TierThreeConformance")
   }
 end TierThreeConformance

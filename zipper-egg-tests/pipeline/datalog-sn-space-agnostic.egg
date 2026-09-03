@@ -1,19 +1,19 @@
 ; AUTO-GENERATED pipeline space (datalog-sn) — DATA-AGNOSTIC.
 ; BOUNDED-UNROLLING (k=1): the sides carry 1 residual cut(s):
-;   sn_tc@1(; S"edges", ((S"edges" \/ (S"edges".iter(P"av1", S"ar1", 
- (P"av1" x TailsUnion((S"edges" <| S"ar1")))
-) \ S"edges")) \/ ((S"edges".iter(P"av3", S"ar3", 
- (P"av3" x TailsUnion((S"edges" <| S"ar3")))
-) \ S"edges").iter(P"av2", S"ar2", 
- (P"av2" x TailsUnion((S"edges" <| S"ar2")))
-) \ (S"edges" \/ (S"edges".iter(P"av4", S"ar4", 
- (P"av4" x TailsUnion((S"edges" <| S"ar4")))
-) \ S"edges")))), ((S"edges".iter(P"av2", S"ar2", 
- (P"av2" x TailsUnion((S"edges" <| S"ar2")))
-) \ S"edges").iter(P"av1", S"ar1", 
- (P"av1" x TailsUnion((S"edges" <| S"ar1")))
-) \ (S"edges" \/ (S"edges".iter(P"av3", S"ar3", 
- (P"av3" x TailsUnion((S"edges" <| S"ar3")))
+;   sn_tc@1(; S"edges", ((S"edges" \/ (S"edges".iter(P"av1", S"ar2", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar2")))
+) \ S"edges")) \/ ((S"edges".iter(P"av5", S"ar6", 
+ (P"av5" x TailsUnion((S"edges" <| S"ar6")))
+) \ S"edges").iter(P"av3", S"ar4", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar4")))
+) \ (S"edges" \/ (S"edges".iter(P"av7", S"ar8", 
+ (P"av7" x TailsUnion((S"edges" <| S"ar8")))
+) \ S"edges")))), ((S"edges".iter(P"av3", S"ar4", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar4")))
+) \ S"edges").iter(P"av1", S"ar2", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar2")))
+) \ (S"edges" \/ (S"edges".iter(P"av5", S"ar6", 
+ (P"av5" x TailsUnion((S"edges" <| S"ar6")))
 ) \ S"edges"))))
 ; so this cell's claim is about the k-UNROLLINGS at those depths, quantified over the cuts'
 ; free inputs, and NOT about the recursion.  Lifting it to the recursion needs k-unrolling

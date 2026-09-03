@@ -38,7 +38,7 @@ import scala.language.implicitConversions
  *   - the cornerstones whose predicted interval is genuinely UNBOUNDED, listed by name with their
  *     reason in `unboundedCornerstones`, which the cornerstone test checks for exact agreement with
  *     what the analysis actually produces (an unexpected unbounded FAILS, and so does a fixed one). */
-class SpatialEventsCheck extends FunSuite:
+class SpatialEventsCheck extends FunSuite, CalibrationProbe:
   override val munitTimeout = scala.concurrent.duration.Duration(30, "min")
 
   def p(items: String*): PathValue = PathValue(items.toList)
@@ -1030,7 +1030,18 @@ class SpatialEventsCheck extends FunSuite:
       assertEquals(trieV.toSpaceValue, refV, s"${c.label}: evalI disagrees with eval on the OPTIMIZED body")
       assertEquals(refE.touch, 0L, s"${c.label}: eval counted trie touches")
       println("-" * 116)
-      println(f"CALIBRATION: ${c.label}%-12s |out|=${refV.paths.size}%5d   OPTIMIZED in $optMs%.0f ms, " +
+      // THE WALL CLOCK IS ON ITS OWN LINE, and the prefix says so.
+      //
+      // `scripts/check_determinism.sh` diffs every `CALIBRATION:` line across two runs of this suite
+      // and demands they be byte-identical, because every published number is read off exactly those
+      // lines.  MEASURED: with `$optMs` inside the `CALIBRATION:` line, 156 of 161 lines matched and
+      // the five that did not were these -- `OPTIMIZED in 820 ms` against `824 ms`, `3385` against
+      // `3522`.  A wall clock is non-deterministic by construction, so a gate that includes it can
+      // only ever be satisfied by loosening the comparison, which would also stop it seeing a
+      // counted column move.  The fix belongs HERE rather than in a filter in the script: the
+      // channel is renamed so it is visibly a timing, and the counted channel is left exact.
+      println(f"CALIBRATION-WALLCLOCK: ${c.label}%-12s OPTIMIZED in $optMs%.0f ms")
+      println(f"CALIBRATION: ${c.label}%-12s |out|=${refV.paths.size}%5d   " +
               f"$defNodes%d -> $optNodes%d Space nodes" + (if optNodes <= 2 then "  [COMPILE-TIME EVALUATED]" else ""))
       println(f"CALIBRATION:   counted evalI [${trieE.showComponents}]")
       println(f"CALIBRATION:   counted execZ [${zipE.showComponents}]  " +

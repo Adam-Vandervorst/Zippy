@@ -21,6 +21,74 @@ block must also carry a `% TRUSTED-ENTRY: T<n>` marker naming its entry here, an
 was added because the claim was already false: `_card.p` declared six assumed counting axioms, in
 its own header, and none of them was a T entry — see **T7**.
 
+## The three markers, and which direction each points
+
+There are now **three** machine-read markers about this list, and they are deliberately separate
+because they make three different claims. Conflating any two of them would make one of the
+directions unfalsifiable.
+
+| marker | in | says | read by |
+|---|---|---|---|
+| `% TRUSTED-ENTRY: T<n>` | an axiom file with an `% ASSUMED` block | *this file asserts* entry T\<n\> | `proof_closure.py --check` |
+| `; TRUSTS: <list>` | an **emitted artifact** (SMT, egglog, TPTP) | *this artifact's claim rests on* these entries | `proof_closure.py`, `audit_pipeline_markers.py` |
+| `% MECHANIZED-IN: <file>#<thm>` | the file that *asserts* an entry | *that entry is a Lean-checked theorem*, so it is no longer assumed | `check_lean.sh`, then `proof_closure.py` |
+
+The first two **declare** a dependency; the third **discharges** one. A discharge that silently
+deleted a declaration would leave nothing to audit, which is why `% MECHANIZED-IN:` never edits a
+`; TRUSTS:` line — the closure computes the difference, and `proof_closure.py` prints both halves.
+
+### `; TRUSTS:` — the artifact header
+
+`src/main/scala/Certified.scala` is the single specification: `Certified.trustsHeader` writes the
+line, `Certified.readTrusts` reads it, `Certified.HeaderPattern` is the one regex, and
+`Certified.Trust` is the vocabulary. It exists because review items 4 and 8 each need the other's
+output — item 4 must record what each cornerstone cell's claim rests on, item 8 must know what each
+artifact claims in order to decide whether any unqualified `PROVED` is honest — and that is the only
+real cycle in `plan.md`'s dependency graph. Fixing the format first, with no consumer, breaks it.
+
+    ; TRUSTS: -
+    ; TRUSTS: T4, law:unwrap-merge
+    ; TRUSTS: O10b, outside:Range
+
+The vocabulary is exactly four forms plus `-`:
+
+* **`T<n>`** — an entry of this file.
+* **`O<n><letter?>`** — an **open** obligation row of `terminating/REGISTRY.tsv` or
+  `proofs/unbounded/REGISTRY.tsv`. An open row is *not* a trusted assumption; it is a gap (see *Open
+  obligations* below), and an artifact leaning on one is reporting something strictly worse than an
+  assumption. It is in the vocabulary so that it can be **said**, not to make it acceptable.
+* **`law:<name>`** — a law of the optimiser's ∀-certified set (`proofs/laws/REGISTRY.tsv`). This is
+  the `LAW-JUSTIFIED` case: the universal certificate *is* the proof for that pair.
+* **`outside:<construct>`** — a term outside the certified path-set algebra, named by the construct
+  that put it there. `Certified.boundary` is the one decision procedure, and every case it reports is
+  a boundary already declared here or in a registry: `Range` → **T5**, the four `Grounded*` families
+  → **T6**, `Call` → **O6a**, `Fixpoint` → **O10b**.
+* **`-`** — trusts nothing.
+
+**`-` is required, and a missing header is a failure.** Those are not the same thing, and the
+difference is the whole point: *"this cell depends on nothing"* is a claim someone made, and
+*"nobody said"* is a claim nobody made. A reader that returned "trusts nothing" for a file with no
+header would let an emitter bug read as the strongest claim in the tree. `Certified.readTrusts`
+returns `Left` for both a missing header and an unparseable token, and every reader must treat that
+as a hard failure rather than skipping the line — a token silently dropped is a dependency silently
+dropped.
+
+### The `trusts` column
+
+`proofs/pipeline/CLAIMS.tsv` carries the same vocabulary in a `trusts` column, so a declaration and
+an emission are comparable without a translation step. It is the **permitted** set per cornerstone ×
+boundary, declared *before* the artifact is built (task 2A.1); the emitted artifact's own
+`; TRUSTS:` must be a **subset**, and trusting something the declaration does not permit is a
+failure. Its column order is `Certified.ClaimsColumns` — declared in code rather than only in the
+file's header, so the emitter and the two readers cannot disagree about it.
+
+The `O<n><letter?>` ids the column may name are the **open** rows of `terminating/REGISTRY.tsv` and
+`proofs/unbounded/REGISTRY.tsv`. Those two tables do **not** themselves carry a `trusts` column
+today: their `kind` and per-row statements already say what each obligation is, and a column
+duplicating this file's ids into 200-odd rows would be a second copy to drift. If a row's dependency
+turns out not to be recoverable from its file (which is what `proof_closure.py`'s closure reads), the
+column belongs there too — but it is not being added speculatively.
+
 Two things are deliberately *not* on this list, because they are checked rather than trusted:
 
 * the **executors** — `eval`, `exec`, `execT`, `evalT`, `evalI` — which are differentially tested

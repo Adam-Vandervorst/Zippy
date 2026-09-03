@@ -95,9 +95,13 @@ class DatalogShowTest extends FunSuite:
     show("REVERSE SAME-GENERATION — SEMI-NAIVE", rsgSemi, rsgEntryS)
     show("ANDERSEN POINTS-TO — NAIVE", andNaive, ptEntry)
     show("ANDERSEN POINTS-TO — SEMI-NAIVE", andSemi, ptEntryS)
+    // THROUGH THE SINK (0.3): a VERIFY run writes the twin under target/artifact-scratch and
+    // compares it against the committed `datalog-morkl.txt`, so a drifted renderer FAILS instead of
+    // silently rewriting the tracked file.  `ZIPPY_REGENERATE=1` is the only way it changes.
     val out = new java.io.File(Loaders.repoRoot, "datalog-morkl.txt")
-    val w = new java.io.FileWriter(out); try w.write(sb.toString) finally w.close()
+    ArtifactSink.write(out, sb.toString)
     System.out.println(sb.toString)
+    ArtifactSink.assertClean("morkl.DatalogShowTest")
   }
 end DatalogShowTest
 

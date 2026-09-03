@@ -53,12 +53,17 @@ class EquivPipelineTest extends FunSuite:
     // eager reference, explosive) work — try ascending budgets and stop at the first all-green run.
     val ladder = (if content.contains("ROUNDS") then List(8, 12, 14, 20, 32, 48, 80, 120) else List(0))
       .filter(_ <= roundsCap)
-    val f = new java.io.File(pipeDir, name)
+    val committed = new java.io.File(pipeDir, name)
     var last = ""
     val log = scala.collection.mutable.ArrayBuffer.empty[String]
     val ok = ladder.exists { r =>
-      val w = new java.io.FileWriter(f); try w.write(content.replace("ROUNDS", r.toString)) finally w.close()
-      val (code, out) = sh(Seq("/bin/sh", "-c", s"ulimit -v 4000000; exec '$eggBin' 'pipeline/$name'"), eggDir, 60)
+      // 0.3 — THROUGH THE SINK.  Each rung's bytes go to the sink's path (the committed file only
+      // under ZIPPY_REGENERATE=1, a scratch twin otherwise) and egglog is pointed at THAT path while
+      // still running FROM `eggDir`, because it resolves `(include "prelude.egg")` against its
+      // WORKING DIRECTORY rather than the file's directory (measured).  Only the rung the ladder
+      // settles on is the artifact, and the sink keeps the last write per path for that reason.
+      val f = ArtifactSink.write(committed, content.replace("ROUNDS", r.toString))
+      val (code, out) = sh(Seq("/bin/sh", "-c", s"ulimit -v 4000000; exec '$eggBin' '${f.getAbsolutePath}'"), eggDir, 60)
       last = out
       log += s";   rounds=$r -> exit $code" + (if code == 0 then "" else s" (${out.linesIterator.toList.lastOption.getOrElse("").take(90)})")
       code == 0
@@ -69,13 +74,12 @@ class EquivPipelineTest extends FunSuite:
       // failed ladder used to leave a rung-120 file that still greps as REAL — the on-disk
       // signature of "no budget succeeded", and how six artifacts stayed REAL while egglog
       // rejected them.  Rewrite it as an explicit BUDGET marker carrying the attempt log.
-      val w = new java.io.FileWriter(f)
-      try w.write(s"; BUDGET-EXCEEDED: egglog did not accept this file at ANY rounds rung.\n" +
-                  s"; ATTEMPT LOG (each rung is a full run; the ladder stops at the first exit 0):\n" +
-                  log.mkString("\n") + "\n; The equivalence for this cell is carried by the certificates named by the caller\n" +
-                  "; (the Scala executor gates, the data-agnostic twin, and the smt twin).\n" +
-                  content.replace("ROUNDS", ladder.headOption.getOrElse(0).toString))
-      finally w.close()
+      ArtifactSink.write(committed,
+        s"; BUDGET-EXCEEDED: egglog did not accept this file at ANY rounds rung.\n" +
+        s"; ATTEMPT LOG (each rung is a full run; the ladder stops at the first exit 0):\n" +
+        log.mkString("\n") + "\n; The equivalence for this cell is carried by the certificates named by the caller\n" +
+        "; (the Scala executor gates, the data-agnostic twin, and the smt twin).\n" +
+        content.replace("ROUNDS", ladder.headOption.getOrElse(0).toString))
     ok
 
   /** Drop a stale `-impl`/`-lit` fallback: once the principal file goes green the fallback is a
@@ -84,13 +88,16 @@ class EquivPipelineTest extends FunSuite:
   def dropFallback(names: String*): Unit =
     for n <- names do
       val f = new java.io.File(pipeDir, n)
-      if f.exists() then { f.delete(); Loaders.note(s"[pipeline] removed stale fallback $n (principal is green)") }
+      // 0.3 — THROUGH THE SINK.  "this committed file should not exist" is exactly as much of an
+      // artifact change as a content edit, so in VERIFY mode nothing is removed and the intent is
+      // recorded as a finding; only ZIPPY_REGENERATE=1 actually deletes.
+      if ArtifactSink.delete(f) then Loaders.note(s"[pipeline] removed stale fallback $n (principal is green)")
+      else if f.exists() then Loaders.note(s"[pipeline] stale fallback $n would be removed (principal is green)")
 
   def runEggFile(name: String, content: String): Unit =
     if content.contains("TRIVIAL-NO-OBLIGATION") then
       trivialCount += 1
-      val f = new java.io.File(pipeDir, name)
-      val w = new java.io.FileWriter(f); try w.write(content) finally w.close()
+      ArtifactSink.write(new java.io.File(pipeDir, name), content)
       return
     if content.contains("IDENTICAL-LITERAL-NO-EQUIVALENCE-OBLIGATION") then
       // both sides materialised to byte-equal terms: no equivalence obligation exists here, but
@@ -121,17 +128,16 @@ class EquivPipelineTest extends FunSuite:
    *  to proofs/pipeline/STATUS.tsv so a SINGLE-prover result stays VISIBLE instead of implied. */
   val statusRows = scala.collection.mutable.ArrayBuffer.empty[String]
   def writeStatus(): Unit =
-    val f = new java.io.File(smtDir, "STATUS.tsv")
-    val w = new java.io.FileWriter(f)
-    try w.write(statusRows.sorted.mkString("\n") + "\n") finally w.close()
+    ArtifactSink.write(new java.io.File(smtDir, "STATUS.tsv"), statusRows.sorted.mkString("\n") + "\n")
 
-  def write(dir: java.io.File, name: String, content: String): Unit =
-    val w = new java.io.FileWriter(new java.io.File(dir, name)); try w.write(content) finally w.close()
+  /** every `.smt2` this suite emits goes through the sink; the returned file is what the provers are
+   *  pointed at, so in VERIFY mode they check exactly the bytes that were compared against the tree */
+  def write(dir: java.io.File, name: String, content: String): java.io.File =
+    ArtifactSink.write(new java.io.File(dir, name), content)
 
   /** Run BOTH provers on one candidate file; returns (z3 ok, vampire ok, a header attempt log). */
   def provers(name: String, content: String, budget: Int, form: String): (Boolean, Boolean, String) =
-    val f = new java.io.File(smtDir, name)
-    write(smtDir, name, content)
+    val f = write(smtDir, name, content)
     val t0 = System.nanoTime()
     val (_, zout) = sh(Seq(z3Bin, s"-T:$budget", f.getPath), smtDir, budget + 30)
     val zok = zout.linesIterator.exists(_.trim == "unsat")
@@ -142,8 +148,27 @@ class EquivPipelineTest extends FunSuite:
     val vok = vout.contains("Refutation found")
     val vs = (System.nanoTime() - t1) / 1000000
     assert(!zsat, s"$name: z3 answered SAT on the $form goal — the stated equivalence is FALSE")
-    (zok, vok, f"; $form%-22s z3 ${if zok then "unsat" else zout.linesIterator.toList.lastOption.getOrElse("?").trim}%-10s ${zs}%6d ms   " +
-                f"vampire ${if vok then "refutation" else "none"}%-10s ${vs}%6d ms (budget ${budget}s each)")
+    // THE VERDICT GOES IN THE FILE; THE WALL CLOCK GOES TO THE LOG.
+    //
+    // This line used to read `z3 unsat  9 ms  vampire refutation  6 ms`, and the milliseconds were
+    // written into a COMMITTED artifact.  0.3's golden-file gate made the consequence unmissable:
+    // 12 of the 42 `proofs/pipeline` artifacts came back CHANGED on every run with `6 ms` against
+    // `7 ms`, `60012 ms` against `60491 ms`.  A wall clock cannot live in a file whose content is
+    // supposed to be a function of the tree — it makes the artifact unstable by construction, and a
+    // golden-file gate over it could never be green, which turns the gate into noise a reader learns
+    // to ignore.  (The same defect, in the same shape, as the `OPTIMIZED in 836 ms` figure that was
+    // inside `SpatialEventsCheck`'s `CALIBRATION:` channel; see `scripts/check_determinism.sh`.)
+    //
+    // NOTHING A READER NEEDS IS LOST.  The header keeps both VERDICTS and the BUDGET, which are the
+    // two facts a reader of a proof artifact acts on: `timeout` already says the budget was
+    // exhausted, and the budget says what it was.  The timings are PRINTED, so the run log — which
+    // is where a performance question belongs — still has them per obligation.
+    println(f"[pipeline] $name%-40s $form%-22s z3 ${if zok then "unsat" else "-"}%-6s ${zs}%7d ms   " +
+            f"vampire ${if vok then "refutation" else "-"}%-11s ${vs}%7d ms (budget ${budget}s each)")
+    (zok, vok, f"; $form%-22s z3 ${if zok then "unsat" else zout.linesIterator.toList.lastOption.getOrElse("?").trim}%-10s " +
+                f"vampire ${if vok then "refutation" else "none"}%-10s (budget ${budget}s each; " +
+                "timings are in the run log, not here — a wall clock in a committed artifact makes " +
+                "it differ from itself on every run)")
 
   def runSmtFile(name: String, content: String): Unit =
     if content.contains("TRIVIAL-NO-OBLIGATION") then
@@ -416,9 +441,7 @@ class EquivPipelineTest extends FunSuite:
             else
               budgetCount += 1
               s"; BUDGET-EXCEEDED: the diff pairs' movement observations did not converge within\n; the rounds ladder (deep ground iteration towers).  The data-agnostic equivalence is carried\n; by the pairs' law-justification certificates (headers below), the smt twin, and the\n; randomized Scala gate.\n"
-          val f = new java.io.File(pipeDir, s"$name-$stage-agnostic.egg")
-          val w = new java.io.FileWriter(f)
-          try w.write(marker + sb.toString) finally w.close()
+          ArtifactSink.write(new java.io.File(pipeDir, s"$name-$stage-agnostic.egg"), marker + sb.toString)
     runSmtFile(s"$name-$stage-agnostic.smt2", SmtDiff.obligationsFile(s"pipeline $stage ($name), data-agnostic", smtA, smtB))
 
   /** Run the whole three-stage pipeline for one cornerstone. */
@@ -687,9 +710,8 @@ class EquivPipelineTest extends FunSuite:
       for i <- vn.indices do sbV.append(s"(check (= $$vn$i (F)))\n")
       if !runEggFileOpt(s"$name-zipper-virtual.egg", sbV.toString) then
         Loaders.note(s"[pipeline] $name-zipper-virtual: exceeds movement-observation budget (recorded)")
-        val f = new java.io.File(pipeDir, s"$name-zipper-virtual.egg")
-        val w = new java.io.FileWriter(f)
-        try w.write(s"; BUDGET-EXCEEDED: the virtual program's movement observations did not converge\n; within the rounds ladder for this instance; carried by the Scala executor gate + smaller\n; instances of the same machinery (see datalog-sn / temperature virtual files).\n" + sbV.toString) finally w.close()
+        ArtifactSink.write(new java.io.File(pipeDir, s"$name-zipper-virtual.egg"),
+          s"; BUDGET-EXCEEDED: the virtual program's movement observations did not converge\n; within the rounds ladder for this instance; carried by the Scala executor gate + smaller\n; instances of the same machinery (see datalog-sn / temperature virtual files).\n" + sbV.toString)
     }
     val sb2 = new StringBuilder
     val zipStr = s"(Reflect ${ZipperEgg.implOf(zProg).replace("(Node ", "(TNode ")})"
@@ -922,5 +944,16 @@ class EquivPipelineTest extends FunSuite:
 
   test("pipeline: 3-puzzle FULL reachable space (the unbounded Fixpoint cornerstone)") {
     pipeline("puzzle3-full", puzzleFixpoint(2, 2), SpaceContextMap(Map.empty), PartialFunction.empty)
+  }
+
+  // 0.3 — THE GOLDEN-FILE GATE, declared last so every cornerstone above has emitted.  This suite is
+  // the largest artifact producer in the tree (55 `.egg` under zipper-egg-tests/pipeline, 42 `.smt2`
+  // plus a STATUS.tsv under proofs/pipeline), and until now every one of them was OVERWRITTEN by the
+  // run that should have checked it: `sbt test` dirtied a hundred tracked files and a drifted emitter
+  // could never fail.  A VERIFY run now compares each produced artifact against the committed one and
+  // fails here on any difference; `ZIPPY_REGENERATE=1 sbt 'testOnly morkl.EquivPipelineTest'` is the
+  // only thing that rewrites them.
+  test("every committed pipeline artifact matches what this suite produces") {
+    ArtifactSink.assertClean("morkl.EquivPipelineTest")
   }
 end EquivPipelineTest

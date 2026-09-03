@@ -186,6 +186,13 @@ object HeadAtoms:
   def contains(id: Int, h: PathItem): Boolean = synchronized(byId(id).contains(h))
   def count: Int = synchronized(byId.length)
 
+  /** the two memo tables' occupancies, for [[GlobalState.probe]].  Neither can change an ANSWER —
+   *  both memoise a decidable predicate over frozen sets — but both are append-only for the life of
+   *  the JVM, and this suite set has wall-clock budgets as well as counted ones, so they belong in
+   *  the probe rather than being assumed harmless. */
+  def disjointDecided: Int = synchronized(disjCache.size)
+  def subsetDecided: Int = synchronized(subCache.size)
+
   /** are the two atoms' sets disjoint?  Decided once per pair, then O(1) forever. */
   def disjoint(a: Int, b: Int): Boolean =
     if a == b then setOf(a).isEmpty

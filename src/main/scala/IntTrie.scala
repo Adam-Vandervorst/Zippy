@@ -720,6 +720,13 @@ private val iConstStrCache = new java.util.concurrent.ConcurrentHashMap[String, 
 def internConstStr(constant: String): List[Int] =
   iConstStrCache.computeIfAbsent(constant, c => Interner.internPath(LiteralCodec.decodeConst(c).items))
 
+/** The three caches' occupancies, for [[GlobalState.probe]].  They are declared `private` at file
+ *  scope, so the accessor has to live here; it exists because all three are APPEND-ONLY FOR THE LIFE
+ *  OF THE JVM and are therefore candidate explanations for a counted column that moves when another
+ *  suite runs first (see GlobalState.scala's header and build.sbt's `testGrouping`).  Reading them
+ *  costs one `size` each and mutates nothing. */
+def iCacheSizes: (Int, Int, Int) = (iLiteralCache.size, iLiteralStrCache.size, iConstStrCache.size)
+
 def pathItemsI(x: Path)(using pc: PathContext, ic: Map[SpaceMention, ITrie],
                         rc: PartialFunction[RoutinePtr, Routine]): List[Int] =
   effort(EffortEvent.TriePathDispatch)                     // one Path subterm, `Deref` included

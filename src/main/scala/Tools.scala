@@ -15,7 +15,13 @@ package morkl
  *    `zippy-tools`  `$ZIPPY_TOOLS/<binary>` — the ONE place a machine says where it keeps provers
  *                   that are not on `PATH`.  This replaced the former hardcoded
  *                   `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`, `~/.cargo/bin` lists;
- *    `path`         `PATH`.
+ *    `path`         `PATH`;
+ *    `elan`         `$ELAN_HOME/bin/<binary>`, else `~/.elan/bin/<binary>` — elan's own root, from
+ *                   its DOCUMENTED override and its DOCUMENTED default.  This step exists for
+ *                   `lake` and only for `lake`: it is a toolchain SHIM that dispatches on the
+ *                   `lean-toolchain` file beside the package, so a copy of it under `$ZIPPY_TOOLS`
+ *                   would break the dispatch.  It is LAST, so `$LAKE` or a `PATH` entry always wins.
+ *                   See `toolchain.conf`'s header.
  *
  *  Otherwise ABSENT — and every caller says so out loud rather than silently degrading
  *  (`docs/traps.md` §3: a semantics-critical path must never quietly become a no-op).
@@ -108,6 +114,9 @@ object Tools:
         sys.env.get("ZIPPY_TOOLS").map(_.trim).filter(_.nonEmpty)
           .map(r => new File(expandHome(r), t.binary).getPath).iterator
       case "path" => Iterator(t.binary)          // bare name = the PATH lookup
+      case "elan" =>
+        Iterator(new File(new File(sys.env.get("ELAN_HOME").map(_.trim).filter(_.nonEmpty)
+                                     .getOrElse(expandHome("~/.elan")), "bin"), t.binary).getPath)
       case _ => Iterator.empty
     }.filter(executable).find(runs)
 

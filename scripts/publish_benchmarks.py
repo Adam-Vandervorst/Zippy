@@ -78,23 +78,15 @@ GENERATORS = ["morkl.CorpusRuntimes", "morkl.ProgramExpressivity", "morkl.Progra
 
 # The acceptance gates that must be green before anything is regenerated.
 #
-# BOTH KINDS, because an earlier revision listed only the Scala suites -- and those are exactly the
-# four that review item 1 owns.  `plan.md` declares item 7's gate as
-# `scripts/check_references.py --strict` and item 8's as `scripts/proof_closure.py --check`; neither
-# was here, so a publication could have proceeded with a dangling reference in a tracked file or an
-# unqualified `PROVED` resting on an admitted schema.  A gate an item declares for itself and the
-# publisher does not run is not a gate.
-GATE_SUITES = ["morkl.SpatialCostCheck", "morkl.SpatialEventsCheck", "morkl.SpatialScaleCheck",
-               "morkl.SpatialPipelineCheck"]
-GATE_SCRIPTS = [
-    ("reference checking on one snapshot (item 7)",
-     ["check_references.py", "--snapshot=index", "--strict"]),
-    ("reference-checker self-test (item 7)", ["check_references.py", "--selftest"]),
-    ("proof status vs the trusted base (item 8)", ["proof_closure.py", "--check"]),
-    ("pipeline marker/declaration audit (item 4)", ["audit_pipeline_markers.py"]),
-    ("law certificates discharged (item 3/4)", ["check_laws.py"]),
-    ("cited obligations discharged (item 3/4)", ["check_obligations.py"]),
-]
+# IMPORTED, NOT LISTED.  `scripts/gates.py` holds the ONE gate list and `sbt check` runs the same
+# module, so a gate cannot be in one entry point and missing from the other.  It was: an earlier
+# revision of THIS file listed only the Scala suites -- exactly the four that review item 1 owns --
+# so item 7's declared gate (`check_references.py --strict`) and item 8's (`proof_closure.py
+# --check`) were never run by the thing that gates publication, and a publication could have
+# proceeded with a dangling reference in a tracked file or an unqualified `PROVED` resting on an
+# admitted schema.  A gate an item declares for itself and the publisher does not run is not a gate.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from gates import GATE_SUITES, GATE_SCRIPTS, script_argv, resolve_runner   # noqa: E402
 
 # Inputs whose modification would invalidate the numbers.  An untracked file here is as bad as a
 # modified one: it may be what the run picked up.
@@ -154,8 +146,9 @@ def run_gates(runner):
     # the STATIC checkers first: they take seconds, and failing fast on a dangling reference beats
     # discovering it after four prover-backed suites have run
     for label, argv in GATE_SCRIPTS:
-        r = subprocess.run([sys.executable, str(ROOT / "scripts" / argv[0])] + argv[1:],
-                           capture_output=True, text=True, cwd=ROOT)
+        # `script_argv` comes from gates.py with the list, because the list now contains `.sh`
+        # gates as well as `.py` ones and `[sys.executable, ...]` silently mis-invokes those.
+        r = subprocess.run(script_argv(argv), capture_output=True, text=True, cwd=ROOT)
         print(f"  {'PASS' if r.returncode == 0 else 'FAIL'}  {label}")
         if r.returncode != 0:
             tail = [l.strip() for l in (r.stdout + r.stderr).splitlines() if l.strip()][-6:]
@@ -351,13 +344,20 @@ def main():
     ap.add_argument("--dry-run", action="store_true",
                     help="preflight and gates only; report what blocks publication and stop")
     ap.add_argument("--runner", default=os.environ.get("ZIPPY_RUNNER", ""),
-                    help="command that runs one JUnit suite (default $ZIPPY_RUNNER)")
+                    help="command that runs one JUnit suite; defaults to the IN-TREE runner "
+                         "target/test-runtime/run-suite.sh written by `sbt exportTestRuntime`, "
+                         "then to $ZIPPY_RUNNER")
     a = ap.parse_args()
-    if not a.runner:
-        die("no suite runner: pass --runner or set $ZIPPY_RUNNER to a command that takes one "
-            "JUnit class name (e.g. a wrapper around `java -cp <test classpath> "
-            "org.junit.runner.JUnitCore`)")
-    runner = a.runner.split()
+    # THE IN-TREE RUNNER IS THE DEFAULT, and $ZIPPY_RUNNER is now only an override.  Requiring an
+    # environment variable put a variable between the repository and its own acceptance gates: a
+    # reader who checked out this commit could not run them, and two runs could disagree because
+    # they were handed different runners.  `resolve_runner` is gates.py's, so `sbt check` and this
+    # script resolve it identically.
+    runner = resolve_runner(a.runner.split() if a.runner else None)
+    if runner is None:
+        die("no suite runner: run `sbt exportTestRuntime` (which writes "
+            "target/test-runtime/run-suite.sh), or pass --runner / set $ZIPPY_RUNNER to a command "
+            "that takes one JUnit class name")
 
     head = preflight()
     run_gates(runner)

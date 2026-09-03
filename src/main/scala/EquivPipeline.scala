@@ -1449,40 +1449,111 @@ ${smt.defsText}
 (check-sat)
 """
 
-  /** Canonical alpha-normalisation of binder names (traversal order), so optimiser-induced binder
+  /** ============================================================================================
+   *  CANONICAL ALPHA-NORMALISATION OF BINDER NAMES (traversal order), so optimiser-induced binder
    *  renamings do not masquerade as structural differences (they previously produced REFLEXIVE
-   *  diff obligations: both sides' differing name mapped to the same freed symbol). */
+   *  diff obligations: both sides' differing name mapped to the same freed symbol).
+   *
+   *  ==IT IS TOTAL OVER EVERY CONSTRUCTOR, AND THAT IS A CORRECTNESS PROPERTY, NOT TIDINESS==
+   *  An earlier revision ended both matches in `case other => other`, which swallowed `Call`,
+   *  `Fold`, `GroundedPS`, `GroundedSS` on the space side and `Path.GroundedPP`, `Path.GroundedSP`
+   *  on the path side.  For a CLOSED constructor (`Empty`, `Literal`, `Path.Constant`) that identity
+   *  is right.  For the other six it is WRONG IN BOTH DIRECTIONS:
+   *
+   *    * INCOMPLETE -- `Fold` binds three names (`acc`, `symbol`, `rest`) and they were left as the
+   *      optimiser wrote them, so two alpha-equivalent folds compared UNEQUAL and the pair became a
+   *      residual prover obligation instead of being recognised as the same term;
+   *    * UNSOUND -- worse, and this is the real defect.  A `Mention` or `Deref` inside an
+   *      un-descended `Call`/`Fold`/grounded subterm kept the name the ENCLOSING binder had already
+   *      renamed, so the result could carry ONE variable under TWO names.  Two terms could then
+   *      compare EQUAL after normalisation (both mis-normalised the same way) and a cell be
+   *      classified `IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION` -- i.e. no obligation emitted at
+   *      all -- on the strength of a renaming that was never applied.  `alphaNorm` is the decision
+   *      procedure behind that classification (`SmtDiff.alphaNorm(a) == SmtDiff.alphaNorm(b)`), and
+   *      behind `CanonicalId.ofCut`'s residual-cut identity, so its totality is load-bearing.
+   *
+   *  So BOTH matches are now EXHAUSTIVE, with no catch-all: a new `Space` or `Path` constructor is a
+   *  COMPILE ERROR here rather than a silent identity.  Every closed case is listed by name with
+   *  the reason it needs no descent.
+   *
+   *  ==THE ONE RENAMING, AND WHERE IT IS GOING==
+   *  Renaming happens in exactly one place per sort -- `pm`/`mm` lookup at `Deref` and `Mention` --
+   *  and binder introduction in exactly one helper, `bind`.  plan.md 1A.1 replaces that with
+   *  `Subst.apply`, the single simultaneous capture-avoiding substitution every other site delegates
+   *  to; until then this is deliberately the ONLY renamer in this file, so 1A.1 has one call site to
+   *  redirect rather than four implementations to reconcile.
+   *
+   *  ==WHY IT IS STILL CAPTURE-FREE TODAY==
+   *  Every name it introduces is minted from a monotone counter with a prefix (`av`/`ar`/`af`/`fa`/
+   *  `fv`/`fr`) that no source program uses, and each is fresh across the whole traversal, so no
+   *  introduced name can capture a free occurrence.  That is a property of the FRESHNESS SUPPLY, not
+   *  of the traversal, which is why the traversal may be a plain rename; it is not a substitution
+   *  and must not become one here.
+   *  ============================================================================================ */
   def alphaNorm(s: Space): Space =
     var n = 0
     def fresh(): Int = { n += 1; n }
+    /** one canonical name per binder occurrence, from the shared counter */
+    def bind(prefix: String): String = s"$prefix${fresh()}"
     def go(s: Space, pm: Map[String, String], mm: Map[String, String]): Space = s match
+      // ---- closed: nothing to rename, and each is named so the match stays exhaustive ----------
+      case Empty => Empty
+      case Literal(v) => Literal(v)                 // a SpaceValue is ground; it holds no binders
+      // ---- pointwise, non-binding -------------------------------------------------------------
       case Union(a, b) => Union(go(a, pm, mm), go(b, pm, mm))
       case Intersection(a, b) => Intersection(go(a, pm, mm), go(b, pm, mm))
       case Subtraction(a, b) => Subtraction(go(a, pm, mm), go(b, pm, mm))
       case Restriction(a, b) => Restriction(go(a, pm, mm), go(b, pm, mm))
       case Raffination(a, b) => Raffination(go(a, pm, mm), go(b, pm, mm))
       case Composition(a, b) => Composition(go(a, pm, mm), go(b, pm, mm))
-      case Wrap(src, p) => Wrap(go(src, pm, mm), rp(p, pm))
-      case Unwrap(src, p) => Unwrap(go(src, pm, mm), rp(p, pm))
+      case Wrap(src, p) => Wrap(go(src, pm, mm), rp(p, pm, mm))
+      case Unwrap(src, p) => Unwrap(go(src, pm, mm), rp(p, pm, mm))
       case TailsUnion(src) => TailsUnion(go(src, pm, mm))
       case TailsIntersection(src) => TailsIntersection(go(src, pm, mm))
       case Range(x, lo, hi) => Range(go(x, pm, mm), lo, hi)
-      case Singleton(p) => Singleton(rp(p, pm))
+      case Singleton(p) => Singleton(rp(p, pm, mm))
+      // ---- the two variable occurrences: THE ONLY renaming sites -------------------------------
       case Mention(m) => Mention(SpaceMention(mm.getOrElse(m.s, m.s)))
+      // ---- calls: `r` is a GLOBAL routine name, not a binder, so it is preserved verbatim.
+      //      Its arguments are ordinary subterms of the enclosing scope and are descended.  Leaving
+      //      them un-descended was the unsoundness above: a `Call`'s `mentions` are exactly where a
+      //      renamed outer binder is passed in.
+      case Call(r, refs, mentions) =>
+        Call(r, refs.map(rp(_, pm, mm)), mentions.map(go(_, pm, mm)))
+      // ---- binding forms ----------------------------------------------------------------------
       case Iteration(src, sym, rest, body) =>
-        val i = fresh()
-        val (ns, nr) = (s"av$i", s"ar$i")
+        val (ns, nr) = (bind("av"), bind("ar"))
         Iteration(go(src, pm, mm), PathRef(ns).known(1), SpaceMention(nr),
                   go(body, pm + (sym.s -> ns), mm + (rest.s -> nr)))
       case Fixpoint(init, rec, body) =>
-        val i = fresh()
-        val nr = s"af$i"
+        val nr = bind("af")
         Fixpoint(go(init, pm, mm), SpaceMention(nr), go(body, pm, mm + (rec.s -> nr)))
-      case other => other
-    def rp(p: Path, pm: Map[String, String]): Path = p match
+      // `Fold` BINDS THREE NAMES, and this is the case the catch-all lost entirely.  `src` and
+      // `initial` are evaluated OUTSIDE the binder (the accumulator's seed cannot mention the
+      // accumulator), so they are normalised in the outer scope; `templates` and `update` are the
+      // body and see all three.  Order of minting follows the field order so the canonical names are
+      // a function of the term, which is what makes two alpha-equivalent folds compare equal.
+      case Fold(src, initial, acc, symbol, rest, templates, update) =>
+        val (na, nv, nr) = (bind("fa"), bind("fv"), bind("fr"))
+        val pm2 = pm + (acc.s -> na) + (symbol.s -> nv)
+        val mm2 = mm + (rest.s -> nr)
+        Fold(go(src, pm, mm), rp(initial, pm, mm),
+             PathRef(na).known(1), PathRef(nv).known(1), SpaceMention(nr),
+             go(templates, pm2, mm2), rp(update, pm2, mm2))
+      // ---- grounded: the CLOSURE is opaque (docs/TRUSTED.md T6 assumes only determinism) but its
+      //      ARGUMENT is an ordinary subterm and must be descended.
+      case GroundedPS(p, f) => GroundedPS(rp(p, pm, mm), f)
+      case GroundedSS(p, f) => GroundedSS(go(p, pm, mm), f)
+
+    def rp(p: Path, pm: Map[String, String], mm: Map[String, String]): Path = p match
       case Path.Deref(pr) => Path.Deref(PathRef(pm.getOrElse(pr.s, pr.s)).known(1))
-      case Path.Concat(l, r) => Path.Concat(rp(l, pm), rp(r, pm))
-      case other => other
+      case Path.Concat(l, r) => Path.Concat(rp(l, pm, mm), rp(r, pm, mm))
+      case Path.Constant(pi) => Path.Constant(pi)   // a PathValue is ground
+      // `GroundedSP` carries a SPACE, so the path side cannot be normalised without the space
+      // environment -- which is why `rp` takes `mm` even though only this one case reads it.
+      case Path.GroundedPP(q, f) => Path.GroundedPP(rp(q, pm, mm), f)
+      case Path.GroundedSP(q, f) => Path.GroundedSP(go(q, pm, mm), f)
+
     go(s, Map.empty, Map.empty)
 
   /** PROOF-CARRYING JUSTIFICATION: try to match a differing pair as an instance of one of the

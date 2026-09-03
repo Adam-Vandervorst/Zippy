@@ -5360,3 +5360,165 @@ five long-standing product-requirement/invariant reports (ladders 101, cornersto
 latency flake.  `SpatialEventsCheck`'s CALIBRATION over the fuzzer corpus — the authoritative
 soundness gate — PASSES: 100.00% containment on all sixteen (backend, component) channels.
 ================================================================================================
+
+====================================================================================================
+## 2026-09-03 — PHASE 0 (plan.md).  THE ORDER-DEPENDENT COLUMN: HYPOTHESIS CONFIRMED, AND IT WAS
+## ALSO IN THE COMMITTED ARTIFACTS.
+
+Round 7 left this open: "`testOnly morkl.SpatialScaleCheck` reports a counted column FAILING and
+UNDIAGNOSED where `sbt test` reports it passing ... the fix is a JVM whose global state is known for
+the measuring suites (an sbt `testGrouping` fork, or a deterministic pre-intern of the ladder's
+alphabet).  NOT DONE."  Phase 0 did the first of those, and the diagnosis is now CHECKED rather than
+asserted.  Three findings, in the order they came out:
+
+1. `Test / testGrouping` (build.sbt) gives every test CLASS its own forked JVM.  `CalibrationProbe`
+   (src/test/scala) prints `GlobalState.probe` — the whole list of process-wide append-only tables,
+   `Interner`, `HeadAtoms` and its two memos, `LiteralStore`, the three trie decode caches, plus both
+   armed flags — on suite entry and at JVM exit.  MEASURED, `sbt "Test/testOnly morkl.SpatialEventsCheck
+   morkl.BackendProfileCheck morkl.SpatialCostCheck"`: all three ENTRY probes read every field 0 and
+   both flags false, and SpatialEventsCheck's EXIT probe reads `Interner.size=1479 LiteralStore.size=105
+   iLiteralCache.size=463 iLiteralStrCache.size=103 iConstStrCache.size=76` — state that no longer
+   reaches the next suite.  `testOnly X` is now X's slice of `sbt test` by construction.
+
+2. `scripts/check_determinism.sh` runs one gate suite twice and diffs every `CALIBRATION:` line.
+   First run: 156 of 161 lines identical, and the five that differed were ALL the wall clock
+   (`gol ... OPTIMIZED in 820 ms` vs `824 ms`; `puzzle15 ... 3385 ms` vs `3522 ms`).  A wall clock
+   inside the counted channel can only be accommodated by loosening the comparison, which would also
+   stop it seeing a counted column move, so the timing was moved to its own
+   `CALIBRATION-WALLCLOCK:` line at the emitting `println` in SpatialEventsCheck rather than filtered
+   in the script.  Now: **159 of 159 counted lines byte-identical across two runs.**
+
+3. THE HYPOTHESIS WAS RIGHT, AND ITS REACH WAS WIDER THAN THE COUNTED COLUMNS.  With
+   `ArtifactSink`'s golden-file gate in place (0.3), `ZipperEggTest` run alone reported ALL TWENTY of
+   its committed `zipper-egg-tests/*.egg` artifacts as stale, and the difference is the interner ids
+   verbatim:
+
+       committed:  (let $impl (TrR (Node (F) (CC 12304 (Node (T) (CNil)) (CC 12305 ...
+       produced:   (let $impl (TrR (Node (F) (CC 1 (Node (F) (CC 2 (Node (T) (CNil)) ...
+
+   The committed artifacts were emitted from a JVM in which ~12 290 path items had ALREADY been
+   interned by whichever suites sorted before `ZipperEggTest` in a shared-JVM `sbt test`.  So the
+   ids were never a property of the program; they were a property of the run order — and they were
+   being COMMITTED.  14 of the 20 diffs are pure renumbering; the other 6 additionally REORDER
+   emitted children, because `ITrie`'s children live in an `IntMap` (a big-endian Patricia trie)
+   whose iteration order follows the integer key.  Every egglog check still passes on the new
+   content (`OK (8 tests)` with the artifact gate green), so the two serialisations denote the same
+   trie — which is exactly why nothing had ever caught this.
+
+   The artifacts were regenerated once, deliberately, with `ZIPPY_REGENERATE=1`, and two consecutive
+   verify runs now report `20 artifact(s) produced, 0 differing from the tree`.
+
+THE SMOKING GUN FOR THE SUITE THAT ACTUALLY REPORTED IT.  `SpatialScaleCheck`'s EXIT probe reads
+`Interner.size=65574  HeadAtoms.count=13`.  Under the old single-JVM `sbt test`, every suite that
+sorted after it inherited those 65 574 interned ids; run alone it inherited none.  That is a 65
+574-id difference in the starting state of the exact suite whose counted column disagreed between
+`sbt test` and `testOnly`, and nothing in the process could report it until now.
+
+WHAT THIS RETIRES.  The second option offered in round 7 — "a deterministic pre-intern of the
+ladder's alphabet" — would have pinned one symptom in one suite and left the committed egg corpus
+carrying another run's interner offsets.  The 32-bit key-width claim that round 7 deferred
+("shrinking the 32-bit key width is a claim about how the `Interner` lays out ids that a fixture must
+PIN first") now has its fixture: the ENTRY probe is the pin.
+====================================================================================================
+
+---- PHASE 0, CONTINUED: THE LEAN SCAFFOLD, AND A TOOLCHAIN RISK THAT RESOLVED TO THE HARD BRANCH ---
+
+`proofs/lean` exists and `lake build` is green inside `sbt check` (`scripts/check_lean.sh`, one of the
+twelve gates `scripts/gates.py` now holds).  Lean is pinned to `leanprover/lean4:v4.33.1` — the
+toolchain elan actually has — and Mathlib to its `v4.33.1` release tag, so `lake update` reported
+"toolchain not updated; already up-to-date" and no second toolchain was downloaded.  Mathlib's
+`master` is on `v4.34.0-rc2`, so an unpinned `require` would have pulled a package needing a Lean
+this machine does not have.  528 build jobs, ~1 s warm from `lake exe cache get`.
+
+THE FIRST THEOREM IS `Zippy.Space.unwrap_wrap`, and it was chosen to make one point:
+`#print axioms` reports `[propext, Quot.sound]` — Lean's own, no `sorryAx`, not even
+`Classical.choice`.  Its TPTP twin `wrap_roundtrip.p` is `PROVED-MODULO T1` because it needs left
+cancellation of append, which is asserted in `_cancel.p`, discharged by `mon_cancel.p`, and proved
+from the induction SCHEMA `_path_induction.p` — a principle first-order logic cannot state.  In Lean
+it is `List.append_cancel_left`, a core theorem from the recursor.  That is the whole argument for
+the directory, made once on the smallest statement that carries it.
+
+THE `% MECHANIZED-IN:` MARKER IS DEFINED AND SELF-TESTED, AND ITS FIRST VERSION WAS TOO LENIENT.
+`scripts/proof_closure.py` lifts a row from `PROVED-MODULO Tn` to unqualified `PROVED` only for a
+marker `check_lean.sh` has WITNESSED (built, `sorry`-free, axioms printed) in
+`target/lean-mechanized.tsv` — untracked, so a reader who has not run the gate inherits no lift.
+The self-test caught a real defect immediately: attributing the lift to the whole ROW reported
+`card_wrap  discharges T1,T7` off one marker naming the wrap-roundtrip theorem, when T7 is the
+counting axiom module and that theorem says nothing about counting.  Attribution is now per FILE — a
+marker discharges the entry its own file ASSERTS (`TRUSTED[T]["axiom"]`, or an entry whose `rows`
+name the obligation) — and a marker anywhere else is reported as ORPHANED and fails `--check`.
+Verified both ways: in `_path_induction.p` it lifts exactly T1 on `mon_cancel`, `wrap_roundtrip` and
+`card_wrap`; in `_cancel.p` (which asserts no entry, only re-asserts a lemma) it is an orphan.
+
+TOOLCHAIN RISK, ANSWERED — `scripts/check_lean.sh --probe-kruskal`.  plan.md names this as a risk to
+verify before 2E.3 and it resolves to the HARDER branch:
+
+  * HIGMAN'S LEMMA IS PRESENT: `Set.PartiallyWellOrderedOn.partiallyWellOrderedOn_sublistForall2`
+    (Mathlib/Order/WellFoundedSet.lean:836), with `WellQuasiOrdered` and the Nash-Williams
+    minimal-bad-sequence vocabulary around it.
+  * KRUSKAL'S TREE THEOREM IS ABSENT.  Every `Kruskal` hit in Mathlib is KRUSKAL-KATONA — a
+    shadow/set-family theorem with no bearing on tree embeddings — and `SubtreeEmbedding`,
+    `treeEmbedding`, `minimalBad` and "minimal bad" match ZERO files.
+
+So `docs/TRUSTED.md` T3 ("the whistle terminates") cannot be discharged by citation, and 2E.3 must
+prove Kruskal from Higman as plan.md's fallback says.  That is a real addition to 2E.3's size and it
+is known now rather than after the work starts, which is the point of verifying at task start.
+
+---- PHASE 0, CONTINUED: 29 LEDGER FIGURES WERE WRONG, IN BOTH DIRECTIONS ----------------------------
+
+0.7 turned `ProductRequirement.Limitation`'s `worstErr`/`worstWidth` from a printed comment into a
+gate: a red row whose entry records a figure for that statistic must record the CURRENT one, within
+2%, compared against the worst measurement over the entry's own subjects (the field is documented as
+a WORST value, and one entry spans several subjects, so per-row comparison would demand two values of
+one field — the first version did exactly that and had to be regrouped by field).
+
+FIRST RUN: 29 stale figures across 24 of the 51 entries.  Understated by up to 27x
+(LIM-6az width 6 500 -> 178 049), overstated by up to 760x (LIM-1 error 3 100 -> 4.08).  The full
+table is in `SpatialScaleCheck.limitations`' header.  Both directions are failures: an understated
+figure hides how far a channel is from its requirement, and an overstated one reads as a defect the
+work has already cleared — and `plan.md`, this log and the acceptance review all quote these numbers
+as the state of the work.
+
+RE-DERIVING A FIGURE IS NOT FIXING A DEFECT.  Every row these entries describe is still RED against
+its product requirement; what changed is that the evidence beside it is true, and that it cannot
+drift again silently.  1B.8 is the task that retires the ledger and re-derives what remains.
+====================================================================================================
+
+---- PHASE 0, CONTINUED: THE GOLDEN-FILE GATE FOUND A SECOND, STRUCTURAL INSTABILITY -----------------
+
+`EquivPipelineTest` is the tree's largest artifact producer: 98 files (55 egg under
+`zipper-egg-tests/pipeline`, 42 SMT plus a STATUS.tsv under `proofs/pipeline`).  Its first VERIFY run
+under 0.3's sink reported 54 of the 98 as CHANGED, from TWO causes, and only one of them is staleness:
+
+  1. THE INTERNER IDS, again, and this time inside the SMT goals themselves:
+
+         committed:  (define-fun s_2 ((p Path)) Bool (or (= p (cons 12302 (cons 12303 nil))) ...
+         produced:   (define-fun s_2 ((p Path)) Bool (or (= p (cons 15 (cons 16 nil))) ...
+
+     Five-digit ids where a suite that owns its JVM produces two-digit ones — which is also the whole
+     of the size difference (2410 B -> 2206 B on datalog-sn-graph.smt2).  Same root cause as the 20
+     egg artifacts above, now shown to reach the PROVER OBLIGATIONS as well as the egg programs.
+     Regenerating fixes it, and 0.2's per-suite JVM is what keeps it fixed.
+
+  2. PROVER WALL-CLOCK IN A COMMITTED ARTIFACT, which no regeneration can fix.  The header line read
+
+         ; forall-path goal   z3 unsat   9 ms   vampire refutation   6 ms (budget 60s each)
+
+     and the milliseconds differ on every run (`6 ms` vs `7 ms`; `60012 ms` vs `60491 ms` on the
+     timeouts).  Twelve of the 42 SMT artifacts were therefore UNSTABLE BY CONSTRUCTION: a
+     golden-file gate over them could never be green, and a gate that can never be green is a gate a
+     reader learns to ignore.  This is the same defect, in the same shape, as the `OPTIMIZED in
+     836 ms` figure that sat inside `SpatialEventsCheck`'s `CALIBRATION:` channel.
+
+     FIXED AT THE EMITTER, not by a filter in the comparator.  The header now carries both VERDICTS
+     and the BUDGET — the two facts a reader of a proof artifact acts on, and `timeout` already says
+     the budget was exhausted — and the timings are PRINTED per obligation, so the run log, which is
+     where a performance question belongs, still has them.  A filter list in the comparator was the
+     alternative and it is the wrong one: it grows silently until the gate compares nothing.
+
+WHAT THE SINK IS WORTH, stated as a measurement rather than a claim.  Across six suites it found:
+20 egg artifacts carrying another run's interner offsets, 2 fixpoint-gate SMT goals doing the same,
+42 pipeline egg artifacts and 12 pipeline SMT goals doing the same, and one whole class of artifact
+that could not be stable at all.  Every one of those was previously OVERWRITTEN by the run that
+should have checked it, and would have been committed by the next `git add`.
+====================================================================================================

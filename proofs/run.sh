@@ -14,6 +14,18 @@
 # the MACHINE-READABLE source of truth consumed by scripts/check_obligations.py, so an
 # admitted-unproved obligation is distinguishable from a proved one by every tool in the repo.
 #
+# THE TABLE IS WRITTEN ATOMICALLY, and that is not a nicety.  This run takes tens of minutes (120 s
+# per prover per file), and it used to `: > STATUS.tsv` as its FIRST act and append as it went — so
+# the instant it started, the committed table was truncated, and every tool that reads it
+# (check_obligations.py, proof_closure.py, UnboundedTier.scala, the marker audit) saw a partial
+# corpus.  Interrupt the run, or read the tree while it is in flight, and the tree reports
+# obligations it certifies as absent: MEASURED — `git diff proofs/STATUS.tsv` against a live run
+# showed the committed 111-row table replaced by whatever prefix had completed.  A partial status
+# table is worse than a stale one, because a stale one is at least a table that was true of some
+# commit.  So rows accumulate in `$TMPTAB` and the committed file is replaced by ONE rename() when
+# the corpus is complete; a killed run leaves the committed table byte-identical.  The rename
+# happens BEFORE proof_closure.py --annotate, which reads and rewrites the committed path.
+#
 # EXPECTED_OPEN lists the admitted-unproved files (see their headers for the attempt log and the
 # compensating differential coverage).  A file going OPEN that is NOT in this list fails the run;
 # an EXPECTED_OPEN file getting PROVED is reported so the list can be shrunk.
@@ -29,7 +41,27 @@ Z3_BIN=$(resolve_tool z3)           || { echo "$(tool_missing z3)" >&2; exit 1; 
 VAMPIRE_BIN=$(resolve_tool vampire) || { echo "$(tool_missing vampire)" >&2; exit 1; }
 EXPECTED_OPEN=" refine_cli refine_cls "
 pass=0; fail=0; open_exp=0; cm=0
-: > STATUS.tsv
+
+# The staging table and the rename.  `.tmp` sits beside the target so rename() is same-filesystem
+# and therefore atomic; the trap removes it on every abnormal exit so an interrupted run leaves no
+# partial artifact behind either (a stray `STATUS.tsv.tmp` in the corpus directory is a registry
+# desync of exactly the kind proofs/unbounded/run.sh's `.probe.p` cleanup exists to prevent).
+STATUSTAB=STATUS.tsv
+TMPTAB=$STATUSTAB.tmp
+# A SIGNAL TRAP THAT RETURNS IS NOT A CLEANUP.  The first version of this staging installed one
+# `trap 'rm -f "$TMPTAB"' EXIT INT TERM HUP` and was MEASURED to make things worse: POSIX sh runs a
+# signal handler and then RESUMES the script, so a SIGTERM two files into the corpus deleted the
+# staging table, the remaining files re-created it by appending, and the final rename() published a
+# table holding only the rows scored AFTER the signal.  The interrupted run therefore replaced the
+# committed corpus with a fragment -- exactly the defect the staging exists to prevent, now arriving
+# through the cleanup path.  So the signal handlers CLEAN UP AND EXIT, and only the EXIT handler
+# returns; `rm -f` on the already-renamed path is a no-op, so no handler has to be uninstalled.
+_cleanup() { rm -f "$TMPTAB"; }
+trap '_cleanup' EXIT
+trap '_cleanup; exit 130' INT
+trap '_cleanup; exit 143' TERM
+trap '_cleanup; exit 129' HUP
+: > "$TMPTAB"
 run_family() {
   dir="$1"; shift
   for f in "$@"; do
@@ -47,7 +79,7 @@ run_family() {
         *) st="OPEN (NEW — unexpected)"; fail=$((fail+1));;
       esac
     fi
-    printf "%s\t%s\t%s\t%s\n" "$dir$f" "$z3r" "$vr" "$st" >> STATUS.tsv
+    printf "%s\t%s\t%s\t%s\n" "$dir$f" "$z3r" "$vr" "$st" >> "$TMPTAB"
     printf "%-32s z3: %-8s vampire: %-8s => %s\n" "$dir$f" "$z3r" "$vr" "$st"
   done
 }
@@ -85,13 +117,18 @@ if [ -d pipeline ]; then
     f=$(basename "$path" .smt2)
     if grep -q "$MARKERS" "$path"; then
       st=$(grep -o "$MARKERS" "$path" | head -1)
-      printf "%s\t%s\t%s\t%s\n" "pipeline/$f" "-" "-" "$st" >> STATUS.tsv
+      printf "%s\t%s\t%s\t%s\n" "pipeline/$f" "-" "-" "$st" >> "$TMPTAB"
       printf "%-32s z3: %-8s vampire: %-8s => %s\n" "pipeline/$f" "-" "-" "$st"
     else
       run_family "pipeline/" "$f"
     fi
   done
 fi
+# PUBLISH.  One rename, after the whole corpus has been discharged: until this line the committed
+# table is untouched, and after it the committed table is complete.  There is no window in which it
+# is neither.
+mv "$TMPTAB" "$STATUSTAB"
+
 # ANNOTATE THE CONDITIONAL VERDICTS.  This harness writes the verdict the PROVER reached, which is
 # right.  Whether that verdict is UNQUALIFIED is a separate question, decided by the trusted base in
 # docs/TRUSTED.md, and `PROVED` in a table is read as unqualified.  One tool owns that decision so

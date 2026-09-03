@@ -71,6 +71,11 @@ resolve_tool() {
         fi ;;
       path)
         command -v "$_tp_bin" >/dev/null 2>&1 && { command -v "$_tp_bin"; return 0; } ;;
+      elan)
+        # elan's own root, from its documented $ELAN_HOME override or its documented default.  See
+        # toolchain.conf's header for why `lake` cannot be found the way a prover is.
+        _tp_elan="${ELAN_HOME:-$HOME/.elan}/bin/$_tp_bin"
+        [ -x "$_tp_elan" ] && { echo "$_tp_elan"; return 0; } ;;
     esac
   done
   return 1

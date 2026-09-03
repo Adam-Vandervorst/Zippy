@@ -450,6 +450,9 @@ object LiteralStore:
     }
     prefix + id
   def isRef(c: String): Boolean = c.startsWith(prefix)
+  /** how many distinct literals this process has minted a by-ref id for.  Append-only for the life
+   *  of the JVM, hence a candidate in [[GlobalState.probe]]. */
+  def size: Int = byId.size
   /** the SpaceValue for a Literal node constant (a by-ref id, or a legacy encoded string) */
   def resolve(c: String): SpaceValue =
     if isRef(c) then byId.get(Integer.parseInt(c.substring(prefix.length))) else LiteralCodec.decode(c)

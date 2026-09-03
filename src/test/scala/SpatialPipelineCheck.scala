@@ -10,7 +10,7 @@ import scala.language.implicitConversions
  *  instrumented (SpatialEvents.scala), so the strongest possible no-evaluation gate is available and
  *  used: run a pipeline stage inside `EffortSink.count` and assert the event vector is EMPTY.  A single
  *  interpreter dispatch anywhere under the analysis would show up. */
-class SpatialPipelineCheck extends FunSuite:
+class SpatialPipelineCheck extends FunSuite, CalibrationProbe:
   override val munitTimeout = scala.concurrent.duration.Duration(30, "min")
 
   // ================================================================================================

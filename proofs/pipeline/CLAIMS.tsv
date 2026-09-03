@@ -1,0 +1,53 @@
+# THE DECLARED CLAIMS OF THE PIPELINE — one row per cornerstone x boundary, WRITTEN BEFORE THE
+# ARTIFACT IS BUILT.
+#
+# ==WHY A SECOND TABLE, WHEN `DECLARED.tsv` ALREADY EXISTS==
+# `DECLARED.tsv` records WHAT AN ARTIFACT IS (`REAL`/`IDENT`/`TRIVIAL`/`LAW-JUSTIFIED`/
+# `SINGLE-SIDE`/`BUDGET`) and is REGENERATED FROM THE OBSERVED STATE (`--declare`), which makes it a
+# regression guard: it catches a cell whose kind changed.  It cannot catch a cell that was never
+# meant to be `TRIVIAL` in the first place, because it learns the expectation from the emission.
+#
+# plan.md's fourth correction is the reason that matters: "Item 4's honest baseline is ~8 REAL cells,
+# not 19.  Eleven of the twelve REAL `.egg` cells compare one program against
+# `Reflect(tnodeOf(resT))` -- the executor's own output."  A table derived from what was emitted
+# cannot report that, because the emission is exactly what is in question.  So THIS table is the
+# CLAIM, written first, by hand, and 2A.1 is the task that fills it in; the audit then measures the
+# artifacts against it (`scripts/audit_pipeline_markers.py`) and a cell that came out weaker than
+# its declaration is a failure rather than a new declaration.
+#
+# ==THE SCHEMA==
+# The column list is `Certified.ClaimsColumns` (src/main/scala/Certified.scala), declared in code so
+# the emitter and the two readers cannot disagree about the order.  Tab-separated, `#` comments.
+#
+#   cornerstone    aunt | datalog-sn | gol | puzzle15 | temperature | nqueens | puzzle3-full
+#                  (CornerstoneTypes.scala is the authoritative list -- seven, not six)
+#   boundary       space | zipper | graph, i.e. which of the three stages this cell crosses:
+#                    space   SPACE/TERM vs its optimisation (`SC.reduce`)
+#                    zipper  the Scala `transpileZ` observation vs SPACE/TERM
+#                    graph   `optimize(transpile(...))` vs SPACE
+#   form           instance | agnostic.  `instance` is one ground input; `agnostic` quantifies the
+#                  inputs and is the strictly stronger claim.  BOTH are declared per cell, because
+#                  "the agnostic leg is TRIVIAL" is a fact about the emitter that a reader needs.
+#   claim          one line, in words, of the equivalence this cell asserts.  It is prose on purpose:
+#                  the machine-readable part is the other columns, and this is the part a reader
+#                  checks the other columns AGAINST.
+#   trusts         the `; TRUSTS:` list this cell is PERMITTED to carry, in `Certified.Trust`'s
+#                  vocabulary: `T<n>` (docs/TRUSTED.md), `O<n><letter?>` (a registry's OPEN row),
+#                  `law:<name>` (proofs/laws/REGISTRY.tsv), `outside:<construct>`, or `-` for
+#                  nothing.  The emitted artifact's own `; TRUSTS:` header must be a SUBSET of this;
+#                  a cell that trusts something its declaration does not permit is a failure.
+#   artifact       repo-relative path of the emitted obligation.
+#   expected-kind  REAL | LAW-JUSTIFIED | IDENT | TRIVIAL -- the `DECLARED.tsv` vocabulary.
+#                  `SINGLE-SIDE` and `BUDGET` are deliberately ABSENT from what may be DECLARED:
+#                  2A.2 deletes the single-side emission at its source and 2A.5 requires a BUDGET
+#                  cell to be closed by decomposition rather than by budget, so declaring either
+#                  would be declaring an outcome the plan forbids.  An artifact that comes out as one
+#                  of them therefore fails against every possible declaration, which is the intent.
+#
+# ==STATE: FORMAT ONLY==
+# 0.8 fixes the format; 2A.1 declares the rows.  There are deliberately NO data rows yet: a row
+# invented here, before the independent-construction work of 2A.2, would be a guess at what the
+# emitter will produce -- which is the very thing this table exists not to be.  The audit treats an
+# EMPTY claims table as "no cell is declared yet" and says so, rather than as "every cell passes".
+#
+# cornerstone	boundary	form	claim	trusts	artifact	expected-kind
