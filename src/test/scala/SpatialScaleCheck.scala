@@ -235,6 +235,11 @@ object ProductRequirement:
   /** the whole-program scopes report a p95 alongside the worst; both names carry the same requirement */
   private val ErrAll = Set("error", "error-p95")
   private val WidthAll = Set("width", "width-p95")
+  /** `error` and the two PREDICTED-slope statistics, WITHOUT `width` — for a defect that shows in
+   *  the accuracy and the growth class of a prediction whose width is already owned by another
+   *  entry.  `slope-measured-vs-declared` is deliberately absent: it does not involve the
+   *  prediction at all, so an entry about a prediction must not claim it. */
+  private val ErrSlopeOnly = Set("error", "slope-vs-measured", "slope-predicted-vs-declared")
   private val ErrWidth = ErrAll ++ WidthAll
   /** `error`/`width` PLUS `magnitude`: for a channel whose recorded failure IS the astronomical
    *  endpoint, leaving `magnitude` out would make the loudest statistic the entry exists to describe
@@ -268,7 +273,11 @@ object ProductRequirement:
 
     // ============================ LIM-1/2: the demand analysis, one component short ================
     Limitation("LIM-1", "ladder", "zipper", EffortComponent.Work, ErrAndSlope,
-      Vector("select/fixed-consumer", "union/disjoint-keys"),
+      // `union/disjoint-keys` LEFT: it meets the Work/budget requirement (width 5.00, error 1.11,
+      // both slopes 0.00) and was already doing so at `01a5864`, before any of the n-ary work in
+      // this change — so listing it was LEDGER DRIFT, and the stale-evidence check is what caught
+      // it.  `select/fixed-consumer` remains and the note below is about that family.
+      Vector("select/fixed-consumer"),
       3100.0, 9000.0, "SpatialCost.scala (ZipperCost) / SpatialDemand.scala",
       "THE DEMAND ANALYSIS LOWERS `Touch` AND NOT `Work`.  `execZ`'s counted cursor reads are CONSTANT on " +
       "every one of these terms (9-105, flat across the ladder) and the predicted `Touch` is correctly " +
@@ -284,14 +293,29 @@ object ProductRequirement:
       "`compose/epsilon` (3.50, 1.17) are inside the budget tier with slope 0.00 predicted against 0.00 " +
       "measured.  What is left is the three families where the demand region is NOT the whole term."),
 
-    Limitation("LIM-2", "ladder", "zipper", EffortComponent.Alloc, ErrAndSlope,
-      Vector("union/disjoint-keys"),
-      1600.0, 1600.0, "SpatialCost.scala (ZipperCost) / SpatialDemand.scala",
-      "the same gap in `Alloc`.  `(A ∪ B) ∩ C` with a FIXED C was the review's own example and it LEFT " +
-      "THIS ENTRY IN THIS SESSION (width 61.00, error 5.55, slope 0.00 predicted against 0.00 measured), " +
-      "because the demand price now reaches `Alloc` where the consumer bounds the materialised frontier.  " +
-      "What remains is a full `Range` — 0 fresh nodes measured against a linear result-node envelope — and " +
-      "the key-disjoint union, where the envelope is the whole input and the rebuild is O(1)."),
+    // ==============================================================================================
+    // LIM-2 IS RETIRED — `union/disjoint-keys` was its last subject and it now MEETS its requirement.
+    //
+    // WHAT CLOSED IT is not recorded here as a model improvement, because it is not one: the entry was
+    // ALREADY STALE at `01a5864`, before any of the n-ary work in this change — the baseline
+    // `sbt test` at that commit reports all four of `LIM-1`, `LIM-2`, `LIM-5` and `LIM-5g` claiming
+    // this subject and the subject passing.  So this is LEDGER DRIFT: whatever fixed the family was
+    // committed without updating the entries that named it, and the stale-evidence check is what
+    // caught it.  IT IS FOUR OF SEVENTY-THREE, AND NOT MORE: the `01a5864` baseline reports
+    // "1607 of 1680 checks MET; 73 FAILED ... 33 are UNDIAGNOSED" for this suite, so retiring these
+    // entries fixes the BOOKKEEPING and leaves the 69 measured failures exactly where they were.
+    // The largest of those is the `rest-chain/nest` family, whose `lower-error` rows run to four
+    // figures and which has no evidence entry at all.
+    // An entry with no measured subject is itself a ledger failure, which is why this is a comment.
+    // ==============================================================================================
+    // Limitation("LIM-2", "ladder", "zipper", EffortComponent.Alloc, ErrAndSlope,
+    //   Vector("union/disjoint-keys"),
+    //   1600.0, 1600.0, "SpatialCost.scala (ZipperCost) / SpatialDemand.scala",
+    //   "the same gap in `Alloc`.  `(A ∪ B) ∩ C` with a FIXED C was the review's own example and it LEFT " +
+    //   "THIS ENTRY IN THIS SESSION (width 61.00, error 5.55, slope 0.00 predicted against 0.00 measured), " +
+    //   "because the demand price now reaches `Alloc` where the consumer bounds the materialised frontier.  " +
+    //   "What remains is a full `Range` — 0 fresh nodes measured against a linear result-node envelope — and " +
+    //   "the key-disjoint union, where the envelope is the whole input and the rebuild is O(1).")
 
     // ============================ LIM-3: a model left behind by its backend =======================
     // LIM-3 / LIM-3g / LIM-3z ARE RETIRED.  They said "the model is stale after a backend improvement":
@@ -351,69 +375,100 @@ object ProductRequirement:
       "this entry with LIM-4's (error 6.93 on `execT` as well)."),
 
     // ============================ LIM-5: rebuilt-vs-envelope allocation ===========================
-    Limitation("LIM-5", "ladder", "trie", EffortComponent.Alloc, ErrAndSlope,
-      // `absorption` LEFT THIS ENTRY, AND THE REASON IS A HARNESS DEFECT WORTH NAMING RATHER THAN A
-      // MODEL IMPROVEMENT.  Its `Alloc` PREDICTION is unchanged (`[0, 20]`, width 21.00 exactly as
-      // recorded); what moved is the COUNTED value, from 0 to 2, and it moves with WHICH OTHER SUITES
-      // RAN FIRST IN THIS JVM.  Measured three ways on one unchanged tree: `testOnly
-      // morkl.SpatialScaleCheck` alone reads `err=21.00 loErr=1.00` (counted 0); `testOnly
-      // morkl.SpatialDemandCheck morkl.SpatialScaleCheck` reads `err=7.00 loErr=3.00` (counted 2);
-      // `testOnly morkl.SpatialFactsCheck morkl.SpatialScaleCheck` reads 21.00 again.  Only the
-      // measured column moves — every predicted endpoint and every `width` on every family is
-      // byte-identical across the three — so this is process-global executable state (the `Interner`'s
-      // id assignment and the per-node count memos are the candidates), not analysis nondeterminism.
-      //
-      // THE LEDGER IS MAINTAINED AGAINST `sbt test`, where `SpatialDemandCheck` sorts before
-      // `SpatialScaleCheck`, so `absorption` does not fail here and listing it would be STALE EVIDENCE.
-      // A single-suite `testOnly morkl.SpatialScaleCheck` will therefore report it as newly FAILING and
-      // UNDIAGNOSED; that is the defect, not a reason to keep a stale subject.  Fixing it properly means
-      // giving the measuring suites a JVM whose global state is known (an sbt `testGrouping` fork, or a
-      // deterministic pre-intern of the ladder's own alphabet), which is a harness change and is not one.
-      Vector("union/disjoint-keys"),
-      5462.33, 16387.0, "SpatialShape.scala (`mk`, the width spill) / SpatialTypeSystem.scala (`constrainShape`)",
-      "`alloc := rebuilt` is MET against the result's node envelope, and for a union whose branches are " +
-      "attached whole the rebuilt count is O(1) while the envelope is O(n): 2 fresh `ITrie` nodes measured " +
-      "at EVERY rung of the 64 -> 16384 ladder of key-disjoint operands under a shared prefix, against " +
-      "66 -> 16386 predicted (error 5462, per-doubling slope 1.00 against a measured 0.00).  The " +
-      "`IntMap` spine allocation this misses is the SECOND declared oracle gap in SpatialEvents.scala and " +
-      "is bounded by 2x the counted total, so it does not explain it.  The CONTRAST that makes this a " +
-      "defect and not a modelling limit: on `union/paired-keys`, where every key is genuinely paired, the " +
-      "same transfer is accurate to 1.01x.  " +
-      "THE CROSSOVER IS NOW A GATE, NOT A STORY: `SpatialFrontierCheck`'s `KEY-DISJOINT union` sweep " +
-      "runs n = 4, 8, 12, 13, 16, 24, 64, 256, 1024 against the HAND-DERIVED frontier (which reads the " +
-      "real tries and says `|Q| = 2` at every n) and asserts the model is EXACT — `rebuilt = [2,2]` — " +
-      "for every n at or below `Shape.MaxHeads = 12`.  Above the cap it prints the count-only pairing " +
-      "the spill leaves behind.  So the defect is localised to ONE line of the carrier: " +
-      "`Shape.mk`'s width spill keeps the untracked COUNT and the per-head tail summary and throws the " +
-      "head NAMES away, and `Shape.possibleHeads` — the single query `SpatialFrontier.headDisjoint` and " +
-      "the relational walk go through — therefore answers `None` for every open shape.  " +
-      "TWO WAYS TO CARRY THE NAMES, BOTH PROTOTYPED AND MEASURED, AND WHY NEITHER IS IN THIS COMMIT.  " +
-      "(1) A FIFTH γ CHANNEL `otherKeys: Option[Set[PathItem]]` (`U(V) ⊆ ks`).  It works: with it the " +
-      "frontier reports `rebuilt = [2,2]` and `|Q| = [2,2]` FLAT from n = 4 to n = 4096, source " +
-      "`Relational`, and `SpatialLawCheck`/`SpatialShapeCheck`/`SpatialSoundnessHunt` stay green (the " +
-      "hunt did catch one real bug in the prototype — `Shape.isTop` has to test the new channel or " +
-      "`leqStrong`'s ⊤ short circuit accepts values γ rejects).  But it is INERT unless " +
-      "`SpatialTypeSystem.constrainShape` also passes it through its four-argument `Shape(...)`: " +
-      "`SpatialType.reduce` runs on every decorated node, so MEASURED, `SpatialType.of(v)` carries the " +
-      "52 spilled keys, `reduce(SpatialType.of(v))` carries `None`, and every node the cost model reads " +
-      "carries `None`.  And a new γ channel is a new obligation for every γ CONSUMER: with it enforced, " +
-      "`SpatialCheck`'s membership mirror reports `channels=` (nothing) on a value γ rejects and its " +
-      "bounded search enumerates candidate spaces with head names the channel forbids — three " +
-      "`SpatialCheckCheck` failures, in files this entry does not own.  " +
-      "(2) SPILL THE TAIL DEPTH INSTEAD OF THE KEY: keep every key in `heads` and cap the excess keys' " +
-      "tails (`capDepth(t, 0)` keeps their ε and head count) rather than merging them into an anonymous " +
-      "bucket.  `MaxHeads` then bounds the number of tracked TAIL STRUCTURES, which is the budget that " +
-      "actually costs memory, and the head set stays CLOSED — so γ, the order, the mirror and " +
-      "`constrainShape` (which maps over `heads`) all keep working unchanged and the fact reaches " +
-      "`priced` with no further plumbing.  Its price is that `Shape.of` on a wide value stops spilling " +
-      "at all, which two suites assert as a precondition (`SpatialLawCheck`'s over-cap summary " +
-      "regression asserts `others.hi == 2` after a 14-head value; `SpatialShapeCheck`'s WIDE matrix " +
-      "counts spilled operands).  (2) IS THE RECOMMENDED FIX: one carrier change, no new γ channel, no " +
-      "new obligation for any consumer.  Raising `shapeWidth` remains not-a-fix either way."),
-    Limitation("LIM-5g", "ladder", "graph", EffortComponent.Alloc, ErrAndSlope,
-      Vector("union/disjoint-keys"),          // `absorption` left for the reason recorded in LIM-5
-      4097.0, 8194.0, "SpatialTypeSystem.scala (`constrainShape`) / SpatialCost.scala (`TrieAlgebraCost.priced`)",
-      "as LIM-5, at execT's magnitudes."),
+    // ==============================================================================================
+    // LIM-5 IS RETIRED — `union/disjoint-keys` was its last subject and it now MEETS its requirement.
+    //
+    // WHAT CLOSED IT is not recorded here as a model improvement, because it is not one: the entry was
+    // ALREADY STALE at `01a5864`, before any of the n-ary work in this change — the baseline
+    // `sbt test` at that commit reports all four of `LIM-1`, `LIM-2`, `LIM-5` and `LIM-5g` claiming
+    // this subject and the subject passing.  So this is LEDGER DRIFT: whatever fixed the family was
+    // committed without updating the entries that named it, and the stale-evidence check is what
+    // caught it.  IT IS FOUR OF SEVENTY-THREE, AND NOT MORE: the `01a5864` baseline reports
+    // "1607 of 1680 checks MET; 73 FAILED ... 33 are UNDIAGNOSED" for this suite, so retiring these
+    // entries fixes the BOOKKEEPING and leaves the 69 measured failures exactly where they were.
+    // The largest of those is the `rest-chain/nest` family, whose `lower-error` rows run to four
+    // figures and which has no evidence entry at all.
+    // An entry with no measured subject is itself a ledger failure, which is why this is a comment.
+    // ==============================================================================================
+    // Limitation("LIM-5", "ladder", "trie", EffortComponent.Alloc, ErrAndSlope,
+    //   // `absorption` LEFT THIS ENTRY, AND THE REASON IS A HARNESS DEFECT WORTH NAMING RATHER THAN A
+    //   // MODEL IMPROVEMENT.  Its `Alloc` PREDICTION is unchanged (`[0, 20]`, width 21.00 exactly as
+    //   // recorded); what moved is the COUNTED value, from 0 to 2, and it moves with WHICH OTHER SUITES
+    //   // RAN FIRST IN THIS JVM.  Measured three ways on one unchanged tree: `testOnly
+    //   // morkl.SpatialScaleCheck` alone reads `err=21.00 loErr=1.00` (counted 0); `testOnly
+    //   // morkl.SpatialDemandCheck morkl.SpatialScaleCheck` reads `err=7.00 loErr=3.00` (counted 2);
+    //   // `testOnly morkl.SpatialFactsCheck morkl.SpatialScaleCheck` reads 21.00 again.  Only the
+    //   // measured column moves — every predicted endpoint and every `width` on every family is
+    //   // byte-identical across the three — so this is process-global executable state (the `Interner`'s
+    //   // id assignment and the per-node count memos are the candidates), not analysis nondeterminism.
+    //   //
+    //   // THE LEDGER IS MAINTAINED AGAINST `sbt test`, where `SpatialDemandCheck` sorts before
+    //   // `SpatialScaleCheck`, so `absorption` does not fail here and listing it would be STALE EVIDENCE.
+    //   // A single-suite `testOnly morkl.SpatialScaleCheck` will therefore report it as newly FAILING and
+    //   // UNDIAGNOSED; that is the defect, not a reason to keep a stale subject.  Fixing it properly means
+    //   // giving the measuring suites a JVM whose global state is known (an sbt `testGrouping` fork, or a
+    //   // deterministic pre-intern of the ladder's own alphabet), which is a harness change and is not one.
+    //   Vector("union/disjoint-keys"),
+    //   5462.33, 16387.0, "SpatialShape.scala (`mk`, the width spill) / SpatialTypeSystem.scala (`constrainShape`)",
+    //   "`alloc := rebuilt` is MET against the result's node envelope, and for a union whose branches are " +
+    //   "attached whole the rebuilt count is O(1) while the envelope is O(n): 2 fresh `ITrie` nodes measured " +
+    //   "at EVERY rung of the 64 -> 16384 ladder of key-disjoint operands under a shared prefix, against " +
+    //   "66 -> 16386 predicted (error 5462, per-doubling slope 1.00 against a measured 0.00).  The " +
+    //   "`IntMap` spine allocation this misses is the SECOND declared oracle gap in SpatialEvents.scala and " +
+    //   "is bounded by 2x the counted total, so it does not explain it.  The CONTRAST that makes this a " +
+    //   "defect and not a modelling limit: on `union/paired-keys`, where every key is genuinely paired, the " +
+    //   "same transfer is accurate to 1.01x.  " +
+    //   "THE CROSSOVER IS NOW A GATE, NOT A STORY: `SpatialFrontierCheck`'s `KEY-DISJOINT union` sweep " +
+    //   "runs n = 4, 8, 12, 13, 16, 24, 64, 256, 1024 against the HAND-DERIVED frontier (which reads the " +
+    //   "real tries and says `|Q| = 2` at every n) and asserts the model is EXACT — `rebuilt = [2,2]` — " +
+    //   "for every n at or below `Shape.MaxHeads = 12`.  Above the cap it prints the count-only pairing " +
+    //   "the spill leaves behind.  So the defect is localised to ONE line of the carrier: " +
+    //   "`Shape.mk`'s width spill keeps the untracked COUNT and the per-head tail summary and throws the " +
+    //   "head NAMES away, and `Shape.possibleHeads` — the single query `SpatialFrontier.headDisjoint` and " +
+    //   "the relational walk go through — therefore answers `None` for every open shape.  " +
+    //   "TWO WAYS TO CARRY THE NAMES, BOTH PROTOTYPED AND MEASURED, AND WHY NEITHER IS IN THIS COMMIT.  " +
+    //   "(1) A FIFTH γ CHANNEL `otherKeys: Option[Set[PathItem]]` (`U(V) ⊆ ks`).  It works: with it the " +
+    //   "frontier reports `rebuilt = [2,2]` and `|Q| = [2,2]` FLAT from n = 4 to n = 4096, source " +
+    //   "`Relational`, and `SpatialLawCheck`/`SpatialShapeCheck`/`SpatialSoundnessHunt` stay green (the " +
+    //   "hunt did catch one real bug in the prototype — `Shape.isTop` has to test the new channel or " +
+    //   "`leqStrong`'s ⊤ short circuit accepts values γ rejects).  But it is INERT unless " +
+    //   "`SpatialTypeSystem.constrainShape` also passes it through its four-argument `Shape(...)`: " +
+    //   "`SpatialType.reduce` runs on every decorated node, so MEASURED, `SpatialType.of(v)` carries the " +
+    //   "52 spilled keys, `reduce(SpatialType.of(v))` carries `None`, and every node the cost model reads " +
+    //   "carries `None`.  And a new γ channel is a new obligation for every γ CONSUMER: with it enforced, " +
+    //   "`SpatialCheck`'s membership mirror reports `channels=` (nothing) on a value γ rejects and its " +
+    //   "bounded search enumerates candidate spaces with head names the channel forbids — three " +
+    //   "`SpatialCheckCheck` failures, in files this entry does not own.  " +
+    //   "(2) SPILL THE TAIL DEPTH INSTEAD OF THE KEY: keep every key in `heads` and cap the excess keys' " +
+    //   "tails (`capDepth(t, 0)` keeps their ε and head count) rather than merging them into an anonymous " +
+    //   "bucket.  `MaxHeads` then bounds the number of tracked TAIL STRUCTURES, which is the budget that " +
+    //   "actually costs memory, and the head set stays CLOSED — so γ, the order, the mirror and " +
+    //   "`constrainShape` (which maps over `heads`) all keep working unchanged and the fact reaches " +
+    //   "`priced` with no further plumbing.  Its price is that `Shape.of` on a wide value stops spilling " +
+    //   "at all, which two suites assert as a precondition (`SpatialLawCheck`'s over-cap summary " +
+    //   "regression asserts `others.hi == 2` after a 14-head value; `SpatialShapeCheck`'s WIDE matrix " +
+    //   "counts spilled operands).  (2) IS THE RECOMMENDED FIX: one carrier change, no new γ channel, no " +
+    //   "new obligation for any consumer.  Raising `shapeWidth` remains not-a-fix either way.")
+
+    // ==============================================================================================
+    // LIM-5g IS RETIRED — `union/disjoint-keys` was its last subject and it now MEETS its requirement.
+    //
+    // WHAT CLOSED IT is not recorded here as a model improvement, because it is not one: the entry was
+    // ALREADY STALE at `01a5864`, before any of the n-ary work in this change — the baseline
+    // `sbt test` at that commit reports all four of `LIM-1`, `LIM-2`, `LIM-5` and `LIM-5g` claiming
+    // this subject and the subject passing.  So this is LEDGER DRIFT: whatever fixed the family was
+    // committed without updating the entries that named it, and the stale-evidence check is what
+    // caught it.  IT IS FOUR OF SEVENTY-THREE, AND NOT MORE: the `01a5864` baseline reports
+    // "1607 of 1680 checks MET; 73 FAILED ... 33 are UNDIAGNOSED" for this suite, so retiring these
+    // entries fixes the BOOKKEEPING and leaves the 69 measured failures exactly where they were.
+    // The largest of those is the `rest-chain/nest` family, whose `lower-error` rows run to four
+    // figures and which has no evidence entry at all.
+    // An entry with no measured subject is itself a ledger failure, which is why this is a comment.
+    // ==============================================================================================
+    // Limitation("LIM-5g", "ladder", "graph", EffortComponent.Alloc, ErrAndSlope,
+    //   Vector("union/disjoint-keys"),          // `absorption` left for the reason recorded in LIM-5
+    //   4097.0, 8194.0, "SpatialTypeSystem.scala (`constrainShape`) / SpatialCost.scala (`TrieAlgebraCost.priced`)",
+    //   "as LIM-5, at execT's magnitudes.")
 
     // ============================ LIM-6: there is no lower endpoint ===============================
     Limitation("LIM-6", "ladder", "trie", EffortComponent.Touch, WidthOnly,
@@ -438,7 +493,7 @@ object ProductRequirement:
       Double.PositiveInfinity, 18000.0, "SpatialCost.scala", "as LIM-6."),
     Limitation("LIM-6a", "ladder", "trie", EffortComponent.Alloc, WidthOnly,
       Vector("select/fixed-consumer", "union/paired-keys", "rest-chain/nest"),
-      Double.PositiveInfinity, 6500.0, "SpatialCost.scala",
+      Double.PositiveInfinity, 178049.40, "SpatialCost.scala",
       "as LIM-6, for `alloc`: no MUST-ALLOCATE count is derived, although a union of two operands with " +
       "`k` provably paired keys must rebuild at least `k` nodes."),
     Limitation("LIM-6ag", "ladder", "graph", EffortComponent.Alloc, WidthOnly,
@@ -467,12 +522,71 @@ object ProductRequirement:
     Limitation("LIM-7z", "ladder", "zipper", EffortComponent.Rounds, WidthOnly, Vector("rest-chain/nest"),
       Double.PositiveInfinity, 180.0, "SpatialCost.scala (`CostModel.chainNest`)", "as LIM-7."),
     Limitation("LIM-7w", "ladder", "trie", EffortComponent.Work, WidthOnly, Vector("rest-chain/nest"),
-      Double.PositiveInfinity, 100.0, "SpatialCost.scala (`CostModel.chainNest`)",
-      "as LIM-7 for `work`, whose upper endpoint is likewise EXACT on this family (error 1.00 at every " +
-      "rung).  This channel is on the SELECTION tier, so its width budget is 8 and the gap is starker."),
+      Double.PositiveInfinity, 1.20e6, "SpatialCost.scala (`CostModel.chainNest`)",
+      "as LIM-7 for `work`.  THE EXACTNESS THIS NOTE USED TO CLAIM IS GONE: it read \"whose upper " +
+      "endpoint is likewise EXACT on this family (error 1.00 at every rung)\", and the measured " +
+      "error is 41.91.  What removed it was making the n-ary ceiling SOUND (see LIM-12): the " +
+      "previous endpoint was exact on THIS family and did not contain the run on another, so the " +
+      "exactness was a property of a bound that excluded real runs.  This channel is on the " +
+      "SELECTION tier, so its width budget is 8 and the gap is starker."),
     Limitation("LIM-7wg", "ladder", "graph", EffortComponent.Work, WidthOnly, Vector("rest-chain/nest"),
       Double.PositiveInfinity, 450.0, "SpatialCost.scala (`CostModel.chainNest`)", "as LIM-7w."),
 
+    // ==============================================================================================
+    // LIM-12 / LIM-12z / LIM-13 / LIM-13z ARE NEW AND THEY ARE A REGRESSION I INTRODUCED, recorded
+    // as one.  Correcting an UNSOUND n-ary ceiling raised the upper endpoint on this family and moved
+    // its predicted growth class; the slope gate caught the class change, which is what that gate is
+    // for.  These entries own `error` and the two PREDICTED-slope statistics; `width` on the same
+    // rows stays with LIM-6a / LIM-7w, whose recorded figures the note below updates.
+    // ==============================================================================================
+    Limitation("LIM-12", "ladder", "trie", EffortComponent.Work, ErrSlopeOnly,
+      Vector("rest-chain/nest"),
+      41.91, 1.20e6, "SpatialCost.scala (`CostModel.liveTotal` / `chainNest`)",
+      "THE COST OF MAKING THE N-ARY CEILING SOUND, ON THE FAMILY THAT PAYS MOST FOR IT.  `naryProbes` " +
+      "and `naryScratch` both read `CostModel.liveTotal`, whose previous `2*nodes + k` arm was " +
+      "REFUTED BY MEASUREMENT (see OP-6: counted 4399 against a predicted upper of 792 at k = 26 " +
+      "on `ITrie.tailsUnion`, because an operand whose mask is below the split bit is carried down " +
+      "UNCHANGED and re-charged at every intervening level).  Removing that arm leaves the two " +
+      "DERIVED ceilings, met: `k*(spineNodes+1)` (calls x arity) and " +
+      "`carryDepth*(spineNodes+k)` (entries x carry depth).  " +
+      "WHAT THAT COSTS HERE IS NOT A CONSTANT, AND THE SLOPE GATE IS WHAT SAYS SO.  On this ladder " +
+      "the nest is priced through `collectJoin(ch.leaves, ...)`, so BOTH factors grow with the " +
+      "rung: `k = leaves` and `nodes = leaves * nd(leaf)`.  The `k*(spineNodes+1)` arm is then " +
+      "QUADRATIC in the rung where the deleted arm was linear, and it is the arm the meet selects " +
+      "while `k` is below `carryDepth` -- so the predicted growth CLASS changes partway up the " +
+      "ladder.  MEASURED (the 625-test whole-suite run, which is the ordering this ledger is " +
+      "maintained against), trie `Work`: width 21564.66 -> 1.20e+06, `error` 1.00 -> 41.91, " +
+      "`slope-predicted-vs-declared` 1.60 and `slope-vs-measured` 0.89 both newly red, while " +
+      "`slope-measured-vs-declared` is UNCHANGED at 0.71 -- which is the discriminating " +
+      "observation, because that statistic does not read the prediction.  trie `Alloc`: width " +
+      "44817.29 -> 178049.40, `error` -> 17.33, the two predicted slopes -> 0.94 and 0.45.  " +
+      "AND IT DESTROYED A DOCUMENTED EXACTNESS.  `LIM-7w` records this channel's upper endpoint as " +
+      "\"EXACT on this family (error 1.00 at every rung)\"; it is 41.91 now.  That is the honest " +
+      "shape of the trade: the old endpoint was exact ON THIS FAMILY and did not contain the run on " +
+      "another, and an interval that excludes the run is a wrong answer where a wide one is only a " +
+      "weak one.  " +
+      "WHAT WOULD RECOVER IT, and it is the same route as OP-6's: a STRUCTURAL fact about the " +
+      "operand set, not a better generic ceiling.  `OperandShape.DistinctSingleKey` did exactly " +
+      "this for the operator table's `iteration` row (46.58 -> 6.47 on `Work`, 138.62 -> 24.54 on " +
+      "`Alloc`, from the ceiling alone), and the nest's operands are the per-frame `joinAll` " +
+      "results, so the analogous fact is about what `chainNest` hands its accumulate.  Deriving it " +
+      "needs the closed shape's key layout, which is review item 5's certificate tier -- which is " +
+      "the route plan.md task 1B.2 takes -- without item 5, since TailsFacts.of already has the sets."),
+    Limitation("LIM-12z", "ladder", "zipper", EffortComponent.Work, ErrSlopeOnly,
+      Vector("rest-chain/nest"),
+      41.91, 1.17e6, "SpatialCost.scala (`ZipperCost`) / `CostModel.liveTotal`",
+      "as LIM-12, inherited through the control-flow fallback: `execZ` hands the nest to `evalI`, so " +
+      "the corrected ceiling arrives here with it."),
+    Limitation("LIM-13", "ladder", "trie", EffortComponent.Alloc, ErrSlopeOnly,
+      Vector("rest-chain/nest"),
+      17.33, 178049.40, "SpatialCost.scala (`CostModel.liveTotal` / `naryScratch`)",
+      "as LIM-12, on `alloc`: `naryScratch` reads the same `Sigma_calls |live|` factor, because the " +
+      "split arrays are allocated PER CALL over that call's live count and a carried entry is " +
+      "allocated for again."),
+    Limitation("LIM-13z", "ladder", "zipper", EffortComponent.Alloc, ErrSlopeOnly,
+      Vector("rest-chain/nest"),
+      17.33, 178049.40, "SpatialCost.scala (`ZipperCost`) / `CostModel.liveTotal`",
+      "as LIM-13, through the control-flow fallback."),
     Limitation("LIM-9", "ladder", "trie", EffortComponent.Touch, LowerErrOnly, Vector("absorption"),
       12.17, Double.NaN, "SpatialCost.scala (`TrieAlgebraCost.priced` / `Shares`)",
       "THE PRICE OF REFUSING A FLOOR THAT WAS NEVER JUSTIFIED, and the one family on this table that " +
@@ -581,6 +695,41 @@ object ProductRequirement:
     // CS-14 IS GONE with CS-7 — see the note above.
 
     // ---- puzzle15: FINITE AND USELESS.  Its own entries, because the magnitude is its own statement --
+    // ==============================================================================================
+    // CS-10 / CS-10z — the cornerstone `Work` channel, which was UNDIAGNOSED on six rows before this
+    // change and on nine after it.  Every one of the nine MOVED when the n-ary ceiling was corrected,
+    // so the entry owns the current figures; it also says which part of each predates the change,
+    // because attributing a pre-existing failure to a fix that only made it louder would be wrong.
+    // ==============================================================================================
+    Limitation("CS-10", "cornerstone", "trie", EffortComponent.Work, ErrWidth,
+      Vector("aunt", "datalog-sn", "puzzle15"),
+      255.50, 885.43, "SpatialCost.scala (`CostModel.liveTotal`) + SpatialShape.scala (puzzle15)",
+      "THE N-ARY CEILING REACHING WHOLE PROGRAMS.  Every cornerstone loop accumulates with " +
+      "`ITrie.joinAll`, so `CostModel.liveTotal` is in each of these totals, and correcting its " +
+      "REFUTED `2*nodes + k` arm (OP-6: counted 4399 against a predicted 792 at k = 26) moved all " +
+      "nine rows at once.  Measured, before -> after: `aunt trie Work` error 5.15 -> 8.82 and width " +
+      "(not failing) -> 10.05; `datalog-sn trie Work` error 9.20 -> 19.20, width 15.89 -> 33.16; " +
+      "`puzzle15 trie Work` error 16.71 -> 255.50, width 57.63 -> 885.43.  " +
+      "WHAT PREDATES THIS CHANGE, stated separately because the entry must not take credit for it: " +
+      "six of the nine were ALREADY red and undiagnosed at `01a5864` (`aunt trie Work error`, " +
+      "`datalog-sn trie Work error`/`width`, `datalog-sn zipper Work error`, `puzzle15 trie Work " +
+      "error`/`width`), so the ceiling is A cause of the current figure and not the whole cause of " +
+      "the failure.  " +
+      "AND THE THREE PROGRAMS DO NOT SHARE ONE RESIDUAL.  `puzzle15`'s is dominated by the same " +
+      "cardinality blow-up CS-P1/CS-P2 attribute to `SpatialShape.scala` / `SpatialTypes.scala` — " +
+      "its `Alloc` and `Touch` reach 1e+55 there, which no cost transfer can cause — so its `Work` " +
+      "residual belongs with those and not here.  `aunt` and `datalog-sn` are within one order of " +
+      "magnitude of their budgets and are the two the operand-structure route (`OperandShape`, see " +
+      "the retired OP-2) should be tried on first: `datalog-sn`'s `sn_tc` is the one self-recursive " +
+      "routine no `asFixpoint` lowering recognises, so its accumulate is exactly the shape that " +
+      "route addresses."),
+    Limitation("CS-10z", "cornerstone", "zipper", EffortComponent.Work, ErrWidth,
+      Vector("datalog-sn", "puzzle15"),
+      255.45, 884.89, "SpatialCost.scala (`ZipperCost`) / `CostModel.liveTotal`",
+      "as CS-10, through the control-flow fallback: `execZ` hands every loop to `evalI`, so the " +
+      "corrected ceiling is in the zipper's total too.  `aunt` is NOT a subject here — its zipper " +
+      "`Work` meets its budget, because that channel is on the Budget tier (64) where the trie's is " +
+      "on Selection (8), and 8.82/10.05 clears the looser one."),
     Limitation("CS-P1", "cornerstone", "trie", EffortComponent.Alloc, ErrWidthMag, Vector("puzzle15"),
       1.0e54, 1.0e57, "SpatialShape.scala / SpatialTypes.scala / SpatialAnalysis.scala (NOT the loop transfer)",
       "THE HEADLINE FAILURE, AND THE ONE THE OLD GATE HID BEHIND AN ALLOW-LIST — WITH ITS ROOT CAUSE " +
@@ -752,90 +901,114 @@ object ProductRequirement:
     //   "is handed back BY POINTER (a bare `Mention` — an ITrie the caller already owns) from the wider " +
     //   "`liftsToLit` class, whose `Singleton`/`Range`/`Unwrap` members BUILD their trie during the lift; " +
     //   "the materialisation walk is charged only to the latter.  `iteration` left for the SUBJECT CHANGE recorded in OP-1, not for a model improvement."),
-    Limitation("OP-2", "operator", "trie", EffortComponent.Alloc, WidthAll,
-      Vector("iteration"),
-      Inf, 12000.0, "SpatialCost.scala (`CostInterval.upperOnly`)",
-      "no MUST-ALLOCATE count is derived for THESE, so their intervals still start at 0.  The two `tails` " +
-      "operators LEFT: `IntTrie.liveDistinct` allocates `max(4, 4·live.length)` scratch slots and probes " +
-      "`kd(kd-1)/2` times unconditionally, and `Meas.tails.distinctLo` is the live-operand count that " +
-      "makes `kd` a NUMBER rather than the head count — which is the distinction that refuted the two " +
-      "earlier attempts (`{a·x, b·x}` has two heads and ONE child object).  Widths 1344.00 -> 23.58.  " +
-      "`composition`, `fixpoint` and `iteration` remain: the ring operators' widths are 7-15 and inside " +
-      "the budget tier.  " +
-      "COMPOSITION AND FIXPOINT LEFT.  `composition` (75.00 -> 7.50) because `ITrie.compositionR`'s one " +
-      "allocation site is reached at exactly the left operand's INTERIOR nodes: a LEAF terminal takes " +
-      "`rIdent(RIGHT)` and grafts `b` by POINTER, allocating nothing, so the floor is `I(a)` and not " +
-      "`N(a)` — claiming `N(a)` here would predict 73 against a counted 9, which is LESSON 9's own " +
-      "shape.  `SpatialFacts.interiorNodes` derives `I_d >= K_d.lo - E_d.hi + E_{d+1}.lo` from the " +
-      "existing prefix profile, every input read in the direction that weakens it; on this table the " +
-      "floor is 9 against a counted 9.  `fixpoint` (205.00 -> 46.00) left with the `R - 1` merge count " +
-      "described in OP-1.  " +
-      "ITERATION REMAINS, AND ITS FLOOR HAS NOW BEEN REFUSED THREE TIMES.  The third attempt derived it " +
-      "from a live-operand count for the GROUP RESULTS and from `liveDistinct`'s `max(4, 4k)` scratch, " +
-      "and the counted oracle put ten corpus points outside `zipper Alloc`.  The mechanism is now known " +
-      "and it is not a may/must slip: THE ZIPPER REPRICES A LOOP WITH THE TRIE MODEL " +
-      "(`controlFlowFallback`), so a trie-side `alloc` floor lands in the zipper's total, and `execZ` " +
-      "can allocate strictly less than `evalI` for the same term because `materialize` hands a `Lit` " +
-      "back by pointer.  Any future attempt has to make the floor conditional on which backend the " +
-      "trie model is pricing FOR, which is a change to `SpatialCost.go`'s fallback and not to this " +
-      "transfer."),
-    // OP-2g IS RETIRED — `execT`'s `Alloc` meets the BUDGET tier on every operator of this table.  It
-    // was OP-2 on the graph and lost its subjects in three steps: the two `tails` operators to the
-    // live-operand floor (`execT` calls `ITrie.tailsUnion`/`tailsIntersection` directly, so the two
-    // models move together there); `composition` to the INTERIOR-node floor `I(a)`, because
-    // `compositionR` grafts `b` by pointer at a LEAF terminal and allocates only where the left operand
-    // has a child (75.00 -> 7.50, floor 9 against a counted 10); and `fixpoint` to the `R - 1` merge
-    // count (69.00 -> 23.50).  `iteration` never was a subject here — `GraphExec`'s loop accumulates
-    // with a pairwise `ITrie.union` left fold and allocates trie nodes rather than n-ary scratch.
-    // An entry with no measured subject is itself a ledger failure, which is why this is a comment.
-    Limitation("OP-2z", "operator", "zipper", EffortComponent.Alloc, WidthAll,
-      Vector("iteration"),
-      Inf, 12000.0, "SpatialCost.scala", "as OP-2.  BOTH `Range` FORMS LEFT: the zipper was charged a " +
-      "materialisation walk `x.nodes` for an operand it does not walk at all, and `Meas.pointerLit` (see " +
-      "OP-1z) is the channel that says so — `range-part` 81.00 -> 8.00, `range-full` 2.00.  The live-" +
-      "operand floor does NOT help here: the zipper's `TailsUnion` is a fused cursor reduce that never " +
-      "enters `ITrie.joinAll`.  WHAT DID HELP IS THE `forced` SIDE CONDITION (see OP-1z): at depth 0 " +
-      "`materialize`'s non-`Lit` arm is unconditional, so the fused reduce's own traffic IS a floor — " +
-      "`tails-union` 74.00 -> 1.00 (an EXACT interval: one `FreshNode` for the one forced node, against " +
-      "a counted 1) and `tails-inter` 1344.00 -> 23.17.  `composition` left with the same reasoning " +
-      "(542.00 -> 7.32): `materialize` allocates one node per FORCED cursor and a `Composition` hands " +
-      "every `Lit` child straight back, which `Meas.nodesLo` turns into a floor.  `fixpoint` left with " +
-      "the `R - 1` merge count.  ONLY `iteration` REMAINS, and its floor is the thrice-refused one " +
-      "OP-2's note describes."),
-
     // ==============================================================================================
-    // OP-3 IS RETIRED — and it is retired by the very fix its own last paragraph described and
-    // declined to ship.  It said the binding endpoint was the whole-region DEMAND price (700 against a
-    // per-operator sum of 1472), that moving it needed `Layers.termsAt(d)` to be `E_d - E_{d+1}` — the
-    // paths that STOP at depth `d` — rather than `min(K_d, E_d)`, which on a uniform-length value says
-    // every node of every level may be terminal, and that the correct fact "cannot be landed alone: it
-    // removes the slack that was masking a pre-existing under-prediction in `SpatialDemand`'s `CRes`
-    // arm, and four corpus points move outside their intervals when it does.  Recorded, measured, not
-    // shipped."
+    // OP-2 / OP-2z ARE RETIRED — `iteration` was their last subject on both trie-shaped executables,
+    // and it left at 24.54, inside the 64 `Alloc` budget.  IT DID NOT LEAVE BY THE FLOOR THESE ENTRIES
+    // SPENT THREE ATTEMPTS ON.  Their own note says "no MUST-ALLOCATE count is derived for THESE, so
+    // their intervals still start at 0", and names a live-operand count for the GROUP RESULTS as the
+    // fourth attempt — gated on making the floor conditional on which backend the trie model is
+    // pricing for, because `execZ` reprices loops through `evalI` and can allocate strictly less.
     //
-    // IT IS SHIPPED NOW, WITH THE TWO `CRes` DEFECTS THE SLACK WAS HIDING:
-    //   * `Pairing` IS A FACT ABOUT VALUES AND WAS SPENT ON CURSORS.  `pairedAt(d)` counts the depth-`d`
-    //     prefixes carrying a path in both operands' VALUES; the demand walk spent it as the paired
-    //     KEYS of the two operands' cursor child maps, and those agree only for a cursor whose nodes
-    //     are its value's prefixes.  `Intersection.children` and `RestrictionNode.children` merge KEYS,
-    //     `Subtraction.children` and `Composition.children` keep every left key, and `Prefix` builds
-    //     its whole spine over an empty source — `Intersection(Lit{a.b}, Lit{a.c})` denotes the
-    //     one-node empty trie and still has a child at `a`, because `materialize` prunes it only on the
-    //     way OUT.  `SpatialDemand.faithful` is the side condition; where it fails, the
-    //     `min(arity, arity)` ceiling — a statement about the CURSORS — is all that may be read.
-    //   * `descend1`'s `CRes` arm ignored the SMART CONSTRUCTOR.  `RestrictionNode.descend(k)` is
-    //     `restriction(x.descend(k), prefixes.descend(k))`, which returns the X-CURSOR ITSELF once the
-    //     descended prefix is terminal.  Keeping the node was not the conservative choice: a prefix
-    //     that has run out has an empty child map, so `shared` is 0 and the whole frontier below dies
-    //     while the run walks the unwrapped `x` in full.
-    // `raffination` `zipper` `Work` went `[3, 700]` (width 175.25) to `[3, 178]` (width 44.75), inside
-    // the 64 budget, and `composition` `zipper` `Work` 20.30 -> 2.57 and `Alloc` 7.32 -> 1.00 (exact,
-    // `[73, 73]` against a counted 73) came with it, because `CComp`'s `t = terminalCount(a, n)` is now
-    // 0 at a root whose paths all have one length — which is what `Composition.children`'s
-    // `if a.terminal` really does.  The 3000-point corpus CALIBRATION stays at 100% containment on all
-    // sixteen channels, which is the measurement the "four corpus points move outside" sentence was
-    // waiting for.  An entry with no measured subject is itself a ledger failure, hence the comment.
+    // NONE OF THAT WAS NEEDED.  91% of the width was the CEILING, not the missing floor:
+    // `naryScratch(groups, groups·nd(body))` multiplies in the body's node count, and under a
+    // HEAD-RETAGGING loop body the operand set `ITrie.joinAll` receives is `k` SINGLE-KEY tries on
+    // pairwise DISTINCT keys (`ITrie.wrap` builds `node(false, IntMap.Tip(k_g, ·))`), so
+    // `joinAllTries` never takes the `br == 0` arm, never recurses into a child join, and places
+    // every subtrie by pointer — THE DESCENT NEVER ENTERS THE OPERAND VALUES and `nd(body)` does not
+    // belong in the formula at all.  `OperandShape.DistinctSingleKey` is that fact and
+    // `CostModel.tipJoinScratch` is the arity-only price; `Alloc` went 138.62 -> 24.54 and `Work`
+    // 46.58 -> 6.47 on both, with NO must-count added and the interval met against the old ceiling so
+    // it could only tighten.
+    //
+    // THE FAN IS THE CONTROL, and it is measured rather than argued: counting `NaryOperandProbe` and
+    // `NaryScratchSlot` of `ITrie.joinAll` over `k` such operands carrying `fan` grandchildren each,
+    // THE COUNTS ARE IDENTICAL AT `fan = 1` AND `fan = 8` for every `k` from 3 to 256.
+    // An entry with no measured subject is itself a ledger failure, which is why these are comments.
     // ==============================================================================================
+    // Limitation("OP-2", "operator", "trie", EffortComponent.Alloc, WidthAll,
+    //   Vector("iteration"),
+    //   Inf, 12000.0, "SpatialCost.scala (`CostInterval.upperOnly`)",
+    //   "no MUST-ALLOCATE count is derived for THESE, so their intervals still start at 0.  The two `tails` " +
+    //   "operators LEFT: `IntTrie.liveDistinct` allocates `max(4, 4·live.length)` scratch slots and probes " +
+    //   "`kd(kd-1)/2` times unconditionally, and `Meas.tails.distinctLo` is the live-operand count that " +
+    //   "makes `kd` a NUMBER rather than the head count — which is the distinction that refuted the two " +
+    //   "earlier attempts (`{a·x, b·x}` has two heads and ONE child object).  Widths 1344.00 -> 23.58.  " +
+    //   "`composition`, `fixpoint` and `iteration` remain: the ring operators' widths are 7-15 and inside " +
+    //   "the budget tier.  " +
+    //   "COMPOSITION AND FIXPOINT LEFT.  `composition` (75.00 -> 7.50) because `ITrie.compositionR`'s one " +
+    //   "allocation site is reached at exactly the left operand's INTERIOR nodes: a LEAF terminal takes " +
+    //   "`rIdent(RIGHT)` and grafts `b` by POINTER, allocating nothing, so the floor is `I(a)` and not " +
+    //   "`N(a)` — claiming `N(a)` here would predict 73 against a counted 9, which is LESSON 9's own " +
+    //   "shape.  `SpatialFacts.interiorNodes` derives `I_d >= K_d.lo - E_d.hi + E_{d+1}.lo` from the " +
+    //   "existing prefix profile, every input read in the direction that weakens it; on this table the " +
+    //   "floor is 9 against a counted 9.  `fixpoint` (205.00 -> 46.00) left with the `R - 1` merge count " +
+    //   "described in OP-1.  " +
+    //   "ITERATION REMAINS, AND ITS FLOOR HAS NOW BEEN REFUSED THREE TIMES.  The third attempt derived it " +
+    //   "from a live-operand count for the GROUP RESULTS and from `liveDistinct`'s `max(4, 4k)` scratch, " +
+    //   "and the counted oracle put ten corpus points outside `zipper Alloc`.  The mechanism is now known " +
+    //   "and it is not a may/must slip: THE ZIPPER REPRICES A LOOP WITH THE TRIE MODEL " +
+    //   "(`controlFlowFallback`), so a trie-side `alloc` floor lands in the zipper's total, and `execZ` " +
+    //   "can allocate strictly less than `evalI` for the same term because `materialize` hands a `Lit` " +
+    //   "back by pointer.  Any future attempt has to make the floor conditional on which backend the " +
+    //   "trie model is pricing FOR, which is a change to `SpatialCost.go`'s fallback and not to this " +
+    //   "transfer."),
+    // // OP-2g IS RETIRED — `execT`'s `Alloc` meets the BUDGET tier on every operator of this table.  It
+    // // was OP-2 on the graph and lost its subjects in three steps: the two `tails` operators to the
+    // // live-operand floor (`execT` calls `ITrie.tailsUnion`/`tailsIntersection` directly, so the two
+    // // models move together there); `composition` to the INTERIOR-node floor `I(a)`, because
+    // // `compositionR` grafts `b` by pointer at a LEAF terminal and allocates only where the left operand
+    // // has a child (75.00 -> 7.50, floor 9 against a counted 10); and `fixpoint` to the `R - 1` merge
+    // // count (69.00 -> 23.50).  `iteration` never was a subject here — `GraphExec`'s loop accumulates
+    // // with a pairwise `ITrie.union` left fold and allocates trie nodes rather than n-ary scratch.
+    // // An entry with no measured subject is itself a ledger failure, which is why this is a comment.
+    // Limitation("OP-2z", "operator", "zipper", EffortComponent.Alloc, WidthAll,
+    //   Vector("iteration"),
+    //   Inf, 12000.0, "SpatialCost.scala", "as OP-2.  BOTH `Range` FORMS LEFT: the zipper was charged a " +
+    //   "materialisation walk `x.nodes` for an operand it does not walk at all, and `Meas.pointerLit` (see " +
+    //   "OP-1z) is the channel that says so — `range-part` 81.00 -> 8.00, `range-full` 2.00.  The live-" +
+    //   "operand floor does NOT help here: the zipper's `TailsUnion` is a fused cursor reduce that never " +
+    //   "enters `ITrie.joinAll`.  WHAT DID HELP IS THE `forced` SIDE CONDITION (see OP-1z): at depth 0 " +
+    //   "`materialize`'s non-`Lit` arm is unconditional, so the fused reduce's own traffic IS a floor — " +
+    //   "`tails-union` 74.00 -> 1.00 (an EXACT interval: one `FreshNode` for the one forced node, against " +
+    //   "a counted 1) and `tails-inter` 1344.00 -> 23.17.  `composition` left with the same reasoning " +
+    //   "(542.00 -> 7.32): `materialize` allocates one node per FORCED cursor and a `Composition` hands " +
+    //   "every `Lit` child straight back, which `Meas.nodesLo` turns into a floor.  `fixpoint` left with " +
+    //   "the `R - 1` merge count.  ONLY `iteration` REMAINS, and its floor is the thrice-refused one " +
+    //   "OP-2's note describes."),
+    // 
+    // // ==============================================================================================
+    // // OP-3 IS RETIRED — and it is retired by the very fix its own last paragraph described and
+    // // declined to ship.  It said the binding endpoint was the whole-region DEMAND price (700 against a
+    // // per-operator sum of 1472), that moving it needed `Layers.termsAt(d)` to be `E_d - E_{d+1}` — the
+    // // paths that STOP at depth `d` — rather than `min(K_d, E_d)`, which on a uniform-length value says
+    // // every node of every level may be terminal, and that the correct fact "cannot be landed alone: it
+    // // removes the slack that was masking a pre-existing under-prediction in `SpatialDemand`'s `CRes`
+    // // arm, and four corpus points move outside their intervals when it does.  Recorded, measured, not
+    // // shipped."
+    // //
+    // // IT IS SHIPPED NOW, WITH THE TWO `CRes` DEFECTS THE SLACK WAS HIDING:
+    // //   * `Pairing` IS A FACT ABOUT VALUES AND WAS SPENT ON CURSORS.  `pairedAt(d)` counts the depth-`d`
+    // //     prefixes carrying a path in both operands' VALUES; the demand walk spent it as the paired
+    // //     KEYS of the two operands' cursor child maps, and those agree only for a cursor whose nodes
+    // //     are its value's prefixes.  `Intersection.children` and `RestrictionNode.children` merge KEYS,
+    // //     `Subtraction.children` and `Composition.children` keep every left key, and `Prefix` builds
+    // //     its whole spine over an empty source — `Intersection(Lit{a.b}, Lit{a.c})` denotes the
+    // //     one-node empty trie and still has a child at `a`, because `materialize` prunes it only on the
+    // //     way OUT.  `SpatialDemand.faithful` is the side condition; where it fails, the
+    // //     `min(arity, arity)` ceiling — a statement about the CURSORS — is all that may be read.
+    // //   * `descend1`'s `CRes` arm ignored the SMART CONSTRUCTOR.  `RestrictionNode.descend(k)` is
+    // //     `restriction(x.descend(k), prefixes.descend(k))`, which returns the X-CURSOR ITSELF once the
+    // //     descended prefix is terminal.  Keeping the node was not the conservative choice: a prefix
+    // //     that has run out has an empty child map, so `shared` is 0 and the whole frontier below dies
+    // //     while the run walks the unwrapped `x` in full.
+    // // `raffination` `zipper` `Work` went `[3, 700]` (width 175.25) to `[3, 178]` (width 44.75), inside
+    // // the 64 budget, and `composition` `zipper` `Work` 20.30 -> 2.57 and `Alloc` 7.32 -> 1.00 (exact,
+    // // `[73, 73]` against a counted 73) came with it, because `CComp`'s `t = terminalCount(a, n)` is now
+    // // 0 at a root whose paths all have one length — which is what `Composition.children`'s
+    // // `if a.terminal` really does.  The 3000-point corpus CALIBRATION stays at 100% containment on all
+    // // sixteen channels, which is the measurement the "four corpus points move outside" sentence was
+    // // waiting for.  An entry with no measured subject is itself a ledger failure, hence the comment.
+    // // ==============================================================================================
 
     // Limitation("OP-3", "operator", "zipper", EffortComponent.Work, WidthAll,
     //   Vector("raffination"),
@@ -890,8 +1063,75 @@ object ProductRequirement:
     // backends; trie `Work` 37.00 -> 1.50; graph `Work` 128.25 -> 4.00; zipper `Work` -> 1.43.
     // What is LEFT on `fixpoint` is `Alloc`/`Touch` (205 / 558.5), which is OP-1/OP-2's cause — the
     // accumulator-against-iterate union's envelope — reaching a loop, not a round-count problem.
+    // ==============================================================================================
+    // OP-7 / OP-7g / OP-7z / OP-9 / OP-9g / OP-9z ARE NEW, AND EVERY ONE OF THEM IS THE PRICE OF A
+    // SOUNDNESS FIX.  Making the n-ary ceiling and the fixpoint step-multiplicity correct RAISED
+    // upper endpoints, so rows that met their budget against a bound that did not contain the run no
+    // longer meet it against one that does.  That trade is not a regression to be excused and not an
+    // improvement to be claimed: an interval that excludes the run is a WRONG answer, a wide one is a
+    // WEAK answer, and this ledger's job is to say which of the two each row currently is.
+    // ==============================================================================================
+    Limitation("OP-7", "operator", "trie", EffortComponent.Alloc, WidthAll,
+      Vector("tails-union", "tails-inter"),
+      Inf, 64.32, "SpatialCost.scala (`CostModel.liveTotal`)",
+      "as OP-6, on the `alloc` channel: `naryScratch` reads the SAME `Sigma_calls |live|` factor, " +
+      "because the split arrays are allocated PER CALL over that call's live count, so an entry that " +
+      "is carried down is allocated for again.  64.32 against a budget of 64.00 -- it misses by " +
+      "0.32, worth stating precisely because it means the SOUND ceiling is already within 0.5% of " +
+      "the requirement and the measured route in OP-6's note clears it by 5x."),
+    Limitation("OP-7g", "operator", "graph", EffortComponent.Alloc, WidthAll,
+      Vector("tails-union", "tails-inter"),
+      Inf, 64.32, "SpatialCost.scala (`CostModel.liveTotal`)",
+      "as OP-7.  `execT` calls the SAME `ITrie.tailsUnion`/`tailsIntersection` that `evalI` does, so " +
+      "the ceiling and its correction are identical here."),
+    Limitation("OP-7z", "operator", "zipper", EffortComponent.Work, WidthAll,
+      Vector("tails-inter"),
+      Inf, 92.89, "SpatialCost.scala (`ZipperCost`) / `CostModel.liveTotal`",
+      "as OP-6, inherited through the control-flow fallback: `execZ` hands the operand loop to " +
+      "`evalI`, so the corrected ceiling arrives here too.  `tails-union` is NOT a subject: the " +
+      "zipper's is a fused cursor reduce that never enters `ITrie.joinAll` at all and reads an exact " +
+      "1.00 -- the same asymmetry the retired OP-2z note describes, from the other side."),
+    Limitation("OP-9", "operator", "trie", EffortComponent.Touch, WidthAll,
+      Vector("fixpoint"),
+      Inf, 72.87, "SpatialCost.scala (`TrieAlgebraCost.fixStep` / `fixpointRel`)",
+      "THIS ROW WAS GREEN AT 49.43 AND A SOUNDNESS FIX RE-OPENED IT -- see the retired OP-1 header, " +
+      "which closed it at `[13, 691]`.  `Touch` is now `[13, 1092]` and 802 of the 1092 are ONE " +
+      "term.  The program is `Fixpoint(Mention(a), r, Union(Mention(r), Mention(b)))`: `a u b` is 72 " +
+      "paths over `K = [1, 8, 72]` so `nodes = 81`, and `fixRoundsIvl` returns `rounds = [1, 2]`.  " +
+      "`fixpointRel` builds the frontier of the ACCUMULATOR against the WHOLE ITERATE, both of which " +
+      "are `a u b`, so `mergeSummary` sees two identical closed profiles and reports " +
+      "`descents = 81 + 320 = 401` -- the merge priced as two independent 81-node tries agreeing at " +
+      "EVERY prefix, which is the worst case a merge has -- and it is then charged twice.  " +
+      "WHY TWICE IS RIGHT.  `fixStep` used to scale by `[roundsLo - 1, rounds - 1]`, justified by " +
+      "\"the round that DETECTS convergence runs `equalT` and then stops without the accumulating " +
+      "`union`\".  `IntTrie.scala`'s Fixpoint arm is the OPPOSITE ORDER: " +
+      "`nxt = ITrie.union(cur, evalI(body))` and THEN `if ITrie.equalT(nxt, cur)`, so the merge runs " +
+      "in every round, the terminating one included.  `R` is correct and `R - 1` was an UNDER-charge. " +
+      "The commit that fixed the multiplicity left that same `R - 1` sentence standing as the " +
+      "justification for a ZEROED `touch` floor, which is now also removed: `evalI` is eager and " +
+      "`unionR` emits its `TrieNodeVisit` before `a eq b` and before the empty tests, so one visit " +
+      "per round cannot be avoided by any data distribution.  That floor moves `lo` 13 -> 14 and the " +
+      "width 78.07 -> 72.87 -- NECESSARY AND NOT SUFFICIENT, and the arithmetic is the point: the " +
+      "UPPER endpoint decides this row.  THE ROUTE, not shipped: price the accumulating merge " +
+      "against the union tower's NON-RECURSIVE RESIDUE `E` instead of against the whole iterate; " +
+      "`fixRoundsIvl` already computes that predicate (`unionOperands(body)` with the bare `rec` " +
+      "removed) and throws it away.  ONE THING MUST NOT BE TAKEN WITH IT: the accompanying claim " +
+      "that the residue form licenses an `R - 1` FRONTIER multiplicity is FALSE on a term the " +
+      "predicate accepts verbatim -- `Fixpoint(a, r, Union(b, Mention(r)))`, the AC-permuted tower " +
+      "-- which is why only the re-pricing half is recorded here as the route."),
+    Limitation("OP-9g", "operator", "graph", EffortComponent.Touch, WidthAll,
+      Vector("fixpoint"), Inf, 72.87, "SpatialCost.scala (`TrieAlgebraCost.fixStep`)",
+      "as OP-9.  `GraphCost`'s only fixpoint overrides are `fixPrologue` (alloc) and `fixRound` " +
+      "(work); neither touches this channel, so the `Touch` column is literally the same number."),
+    Limitation("OP-9z", "operator", "zipper", EffortComponent.Touch, WidthAll,
+      Vector("fixpoint"), Inf, 72.87, "SpatialCost.scala (`ZipperCost`) / `TrieAlgebraCost.fixStep`",
+      "as OP-9, through the control-flow fallback: `ZipperCost.controlFlowFallback = Some(Trie)` and " +
+      "`isControlFlow(Fixpoint)` holds, so `go` reprices the WHOLE fixpoint subterm with the trie " +
+      "model and adds only `fallbackEntry` (work = 1) and `finish` (zero) -- no `touch` at all.  " +
+      "That all three backends print 72.87 TO THE DIGIT is exactly this, and it is the clearest " +
+      "single illustration of why the pricing target belongs in the backend profile."),
     Limitation("OP-6", "operator", "trie", EffortComponent.Work, WidthAll,
-      Vector("iteration", "tails-union", "tails-inter"),
+      Vector("tails-union", "tails-inter"),
       Inf, 4900.0, "SpatialCost.scala (`CostModel.naryProbes` / the missing n-ary frontier)",
       "THE N-ARY OPERAND LOOPS, AND THE ONE CHANNEL `Meas` DOES NOT CARRY.  99.8% of the counted `Work` " +
       "on these three operators is `NaryOperandProbe` (981 of 983 on the operator table's source), a " +
@@ -909,21 +1149,96 @@ object ProductRequirement:
       "bounds the HEADS, and `liveDistinct` DEDUPS BY OBJECT IDENTITY — two heads routinely share one " +
       "child object, `k` heads can collapse to ONE live operand, and then `joinAll` returns it by " +
       "pointer with no split arrays, no terminal scan and a `pr` of zero.  " +
-      "WHAT WOULD CLOSE IT is a LIVE-OPERAND count — how many head children are DISTINCT OBJECTS — " +
-      "which is per-head sub-shape information `Meas` does not carry.  That is the n-ary analogue of " +
-      "`SpatialFrontier`'s binary paired/reuse split, and it is the named next step; the remaining " +
-      "`Sigma|live|` slack (402 predicted against ~151 counted) is the same missing structure."),
+      "THE LIVE-OPERAND COUNT WAS THEN BUILT, AND `tails-union` LEFT THIS ENTRY.  The previous " +
+      "revision of this note ended \"WHAT WOULD CLOSE IT is a LIVE-OPERAND count — how many head " +
+      "children are DISTINCT OBJECTS — which is per-head sub-shape information `Meas` does not " +
+      "carry ... and it is the named next step\".  `TailsFacts.distinctLo` is that count and it is a " +
+      "DIFFERENT QUANTITY from `headsLo` in exactly the way the two refutations needed: `{a·x, b·x}` " +
+      "has two heads and ONE child object, and `distinctLo` counts 1 there because the two sub-shapes " +
+      "are not provably different.  On it, `naryLiveLo`/`naryDeepLo`/`naryDisjointLo` gate " +
+      "`tailsScratchLo` and `tailsProbesLo` on `kd >= 3` (at two live operands `joinAll`/`meetAll` " +
+      "delegate to the BINARY union/intersection and run none of these loops), on `allHeaded` " +
+      "(`meetAll`'s `collectLive` runs with `stopOnNil = true` and abandons the call at the first " +
+      "ε-only child) and on `Tuning.patriciaOps` (with the flag off `IntTrieOps.joinAllTries` never " +
+      "runs, so a floor read off its source would describe code that is not executing).  " +
+      "`tails-union` reached 7.35 and MEETS the requirement.  " +
+      "TWO SUBJECTS REMAIN, AND THEY REMAIN FOR DIFFERENT REASONS.  `tails-inter` (11.84) is the " +
+      "operator whose descent the floor CANNOT follow: `meetAllTries` tests `forcedL && forcedR` and " +
+      "returns before it recurses, so on the key-disjoint operand set — the case where that test is " +
+      "most likely to fire — nothing below the root split is forced and the meet's floor stops at the " +
+      "root, which is why `tailsJoinProbesLo` adds its two descent terms for the JOIN alone and why " +
+      "the counted `tails-inter` (371) sits so far below the counted `tails-union` (983) on the very " +
+      "same operands.  `iteration` HAS SINCE LEFT THIS ENTRY, and not by that route -- see the " +
+      "retired OP-2.  " +
+      "THE `Sigma_calls |live|` CEILING WAS UNSOUND AND IS NOW CORRECT, WHICH IS WHY BOTH `tails` ROWS " +
+      "ARE RED AND `tails-union` IS BACK.  The second factor of `naryProbes` was " +
+      "`tighter(k*(2*nodes+1), 2*nodes + k)`, and the `2*nodes + k` arm came from \"every live " +
+      "entry in the whole descent is a DISTINCT Patricia node, each appearing in exactly one " +
+      "call's `live` array\".  THAT IS FALSE: one arm of `IntTrieOps`' split is " +
+      "`case t => if (repKey(t) & br) == 0 then ls(nl) = t else rs(nr) = t`, so an operand whose " +
+      "own mask is STRICTLY BELOW the split bit is passed down UNCHANGED and the SAME node is " +
+      "re-listed in `live` -- and re-charged `probes(k)` twice plus `probes(i)` -- at EVERY level " +
+      "between where it becomes live and where `br == maskOf(it)`.  `br` strictly decreases but " +
+      "may SKIP bit positions, so the carry is bounded by the KEY-BIT SPAN, not the node count.  " +
+      "MEASURED on `ITrie.tailsUnion` over `k` head children with one grandchild each: grandchild " +
+      "keys `2^i` count 613 against a predicted upper of 558 at k = 12 and 4399 against 792 at " +
+      "k = 26 (5.6x OUTSIDE its own interval); dense keys count 1560 against 972 at k = 32 and " +
+      "15552 against 7692 at k = 256.  THE PREDECESSOR OF THAT ARM, `2*nodes + 32k`, IS ALSO " +
+      "UNSOUND -- `2^i` plus dense filler at k = 34 counts 7439 against 7356 -- because `32k` " +
+      "charges the carry to the `k` ROOT operands only and interior nodes carry too.  A SECOND, " +
+      "INDEPENDENT DEFECT in the same term: `perProbe` was NON-MONOTONE (15 at k = 24, 16 at 25, " +
+      "6 at 26), because `collectLive` picks its dedup regime PER CALL on that call's own live " +
+      "count and a root at k = 26 has sub-calls at 25, 24, ... still in the quadratic regime the " +
+      "root escaped; the prediction FELL as arity rose (2032 -> 792) while the counted value ROSE " +
+      "(1307 -> 1328).  Both fixed: the regime is capped at the threshold, and the ceiling is now " +
+      "`tighter(k*(spineNodes+1), carryDepth*(spineNodes+k))` with `carryDepth` a `ReprProfile` " +
+      "field, because CARRY IS AN ARTEFACT OF PATH COMPRESSION -- a fixed-stride 256-ary node " +
+      "consumes exactly `lg R` bits per level and cannot skip one, so the lowering this tree is " +
+      "heading for deletes the term.  Containment is 100% on every gated channel in BOTH declared " +
+      "configurations after the fix.  " +
+      "WHAT IS LEFT IS TIGHTNESS, AND THE ROUTE IS MEASURED BUT NOT SHIPPED.  `iteration` left " +
+      "this entry by the OPERAND-STRUCTURE route (`OperandShape.DistinctSingleKey`; see the " +
+      "retired OP-2), which `tails-*` cannot use because its operands are the source's head " +
+      "children -- general multi-key tries.  What they DO have here is PAIRWISE DISJOINT keys, " +
+      "which `TailsFacts.keyDisjoint` already tracks, and that family's counted behaviour is " +
+      "strikingly regular: with keys INTERLEAVED (this table's own layout, head `h_j` holding " +
+      "`t_j, t_{j+8}, ...`) the probe count is EXACTLY `f(k) * m` for `m` keys per operand, and " +
+      "with keys in DISTANT BLOCKS it is `f(k)` independent of `m`, where `f` is the single-key " +
+      "descent price -- so `tipJoinProbes(k) * m` is 5x-22x tighter than the generic ceiling at " +
+      "every point measured (k in 4..32, m in 1..16).  IT IS DELIBERATELY NOT SHIPPED: " +
+      "`probes(k, m) <= probes(k, 1) * m` is a MEASURED regularity over 32 points, not a " +
+      "derivation, and the defect this entry exists to record is exactly a ceiling that was " +
+      "argued rather than checked.  The rigorous version needs the closed shape's actual key " +
+      "layout, which the domain has for this table (channel (f), `headAtoms`) and which review " +
+      "item 5's certificate tier is the place to expose."),
     Limitation("OP-6g", "operator", "graph", EffortComponent.Work, WidthAll,
       Vector("tails-union", "tails-inter"),
       Inf, 4900.0, "SpatialCost.scala (`CostModel.naryProbes` / the missing n-ary frontier)",
       "as OP-6.  `execT` calls the SAME `ITrie.tailsUnion`/`tailsIntersection` `evalI` does — the two " +
       "backends differ on a loop's ACCUMULATION (see OP-3g), not on these two operators — so the n-ary " +
       "operand-loop price and its missing must side are identical here."),
-    Limitation("OP-6z", "operator", "zipper", EffortComponent.Work, WidthAll, Vector("iteration"),
-      Inf, 420.0, "SpatialCost.scala (`ZipperCost`) / SpatialDemand.scala",
-      "as OP-6, through the control-flow fallback: `execZ` hands an `Iteration` to `evalI` " +
-      "(`Zipper.scala`'s `case other => traversal(evalI(other))`), so the trie model's n-ary price is " +
-      "what it inherits.  401.00 -> 234.33 with OP-6's `per`."))
+    // ==============================================================================================
+    // OP-6z IS RETIRED — `iteration` was its only subject, and it left at 45.55, inside the zipper's
+    // 64 Work budget.  The entry was written when the width was 420 and recorded 401.00 -> 234.33 from
+    // `perProbe`'s correction alone; what took it the rest of the way is that the zipper inherits the
+    // TRIE model's n-ary price through the control-flow fallback (`Zipper.scala`'s
+    // `case other => traversal(evalI(other))`), so every floor `tailsProbesLo` / `tailsJoinProbesLo`
+    // established for `evalI` arrives here too, and `naryProbes`' second factor stopped being
+    // `2·nodes + 32k` — a bound on the SCRATCH SLOTS — where the probes need `2·nodes + k`.
+    //
+    // NOTE WHAT THIS RETIREMENT DOES *NOT* SAY.  The zipper's `iteration` ALLOC row is still red
+    // (OP-2z), and it is red because of the SAME fallback: a floor derived for the trie lands in the
+    // zipper's total, and `execZ` can allocate strictly less than `evalI` for the same term because
+    // `materialize` hands a `Lit` back by pointer.  Inheriting an UPPER bound through the fallback is
+    // sound; inheriting a LOWER one is not, and that asymmetry is the whole content of OP-2z.
+    // An entry with no measured subject is itself a ledger failure, which is why this is a comment.
+    // ==============================================================================================
+    // Limitation("OP-6z", "operator", "zipper", EffortComponent.Work, WidthAll, Vector("iteration"),
+    //   Inf, 420.0, "SpatialCost.scala (`ZipperCost`) / SpatialDemand.scala",
+    //   "as OP-6, through the control-flow fallback: `execZ` hands an `Iteration` to `evalI` " +
+    //   "(`Zipper.scala`'s `case other => traversal(evalI(other))`), so the trie model's n-ary price " +
+    //   "is what it inherits.  401.00 -> 234.33 with OP-6's `per`.")
+    )
 
   def limitationFor(scope: String, subject: String, backend: String,
                     comp: EffortComponent, what: String): Option[Limitation] =

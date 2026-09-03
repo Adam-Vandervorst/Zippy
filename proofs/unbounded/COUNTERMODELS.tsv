@@ -14,5 +14,5 @@ negative/not_card_additive	|A ∪ B| = |A| + |B| unconditionally	A=B={x}: |A∪B
 negative/not_tu_cap_equality	tu(A ∩ B) = tu(A) ∩ tu(B)	A={p.1} B={q.1}: tu(A∩B)={} vs tu(A)∩tu(B)={1}
 negative/not_restr_identity	restr(X,Y) = X	X={p.1} Y={q} (no prefix): restr={} vs X={p.1}
 negative/not_fold_eq_iter	fold = iter unconditionally	src={a.1,b.1}, update=acc·h: fold={z;z.a} vs iter-at-seed={z}
-negative/not_range_monotone	A ⊆ B => rng(A,..) ⊆ rng(B,..)	A={m} ⊆ B={a,m}: rng(A,1,2)={m} ⊄ rng(B,1,2)={a}
+negative/not_range_identity	rng(A,Lo,Hi) = A — a window is the identity	A={a,m}: rng(A,0,1)={a} != A={a;m}
 negative/not_grounded_monotone	a grounded function is monotone	f = {x,y} \ ·, A={x} ⊆ B={x,y}: f(A)={y} ⊄ f(B)={}

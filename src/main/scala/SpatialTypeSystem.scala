@@ -669,18 +669,81 @@ object SpatialTyping:
       case None => Shape.unionTransfer(i0, Shape.top)   // no certified post-fixpoint ⇒ ⊤
     end match
 
-  /** an upper bound on how many paths a `Range(_, start, end)` window keeps, from the source's SHAPE
-   *  size and the static arithmetic of [[RangeBounds.normalize]].  Windows whose width depends on the
-   *  (unknown) source size fall back to that size. */
-  private def windowWidth(src: Ivl, start: Int, end: Int): Long =
-    val static: Long =
-      if start == 0 && end == 0 then Ivl.INF
-      else if end > 0 && start > 0 then Ivl.relu(end.toLong - start.toLong)
-      else if end > 0 && start == 0 then end.toLong
-      else if end < 0 && start < 0 then Ivl.relu(end.toLong - start.toLong)
-      else if end == 0 && start < 0 then -start.toLong
-      else Ivl.INF
-    static min src.hi
+  /** ==============================================================================================
+   *  `RangeBounds.normalize` LIFTED OVER AN INPUT-SIZE INTERVAL — both endpoints, exactly.
+   *
+   *  ==WHAT THIS REPLACES==
+   *  The predecessor returned a single `Long` UPPER bound, case-split by the signs of `start` and
+   *  `end`, with `Ivl.INF` for the three forms it did not handle (`start == 0 && end == 0`,
+   *  `start > 0 && end < 0`, `start < 0 && end > 0`), met against the source's own `hi`.  There was
+   *  no lower bound at all, and `Shape.range` consequently set `others` to `[0, width]` for every
+   *  window — so a slice of a source known to hold a thousand paths was permitted to be empty.
+   *
+   *  ==WHY ENDPOINT EVALUATION WOULD BE UNSOUND==
+   *  `width(size) = hi - lo` where `lo` and `hi` come from `RangeBounds.normalize` is piecewise
+   *  LINEAR in `size` with slopes in `{-1, 0, +1}`, and it is NOT MONOTONE.  Take
+   *  `Range(x, -3, 5)`: `lo = size - 3` and `hi = 4`, so the width SHRINKS as the source grows,
+   *  reaching 0 once `size >= 7`.  Evaluating only at `sLo` and `sHi` would therefore miss both the
+   *  maximum (attained at an interior breakpoint) and the correct minimum on the mixed-sign forms.
+   *
+   *  The breakpoints are exactly the sizes at which a clamp or the `hi <= lo` collapse turns on:
+   *  `|start|`, `|start| - 1`, `|end|`, `|end| - 1` and the crossing point of the two linear pieces.
+   *  Evaluating at the interval's endpoints AND at every breakpoint inside it is therefore EXACT for
+   *  a finite interval, because a piecewise-linear function on a closed interval attains its
+   *  extrema at an endpoint or a breakpoint.
+   *
+   *  ==AND IT DEFERS TO THE REAL FUNCTION==
+   *  Every evaluation calls `RangeBounds.normalize` ITSELF rather than re-deriving its arithmetic.
+   *  That is the point: the predecessor's case split was a second implementation of the same
+   *  function and could disagree with it (its `start == 0 && end > 0` arm returns `end`, while
+   *  `normalize` clamps to `size`), and the whole review item is about the analysis describing the
+   *  code that runs.
+   *
+   *  An unbounded source keeps `INF` on the upper end only where the width really does grow without
+   *  bound; the lower end is evaluated at `sLo`, which is always finite. */
+  private[morkl] def windowCard(src: Ivl, start: Int, end: Int): Ivl =
+    def widthAt(size: Long): Long =
+      if size > Int.MaxValue then Ivl.INF
+      else
+        val (lo, hi) = RangeBounds.normalize(size.toInt, start, end)
+        (hi - lo).toLong
+    // the breakpoints, clamped into the interval; `probe` is where the growing forms are read off
+    val sLo = src.lo
+    val sHi = src.hi
+    // THE BREAKPOINTS, and each group is here for a named reason.
+    //   CLAMP TOGGLES: `lo` is `size + start` for `start < 0`, which stops being clamped at
+    //     `size = -start`; it is `start - 1` for `start > 0`, which stops being clamped at
+    //     `size = start - 1`.  `hi` is `end`/`end - 1` for `end > 0` (toggles at `end`, `end - 1`)
+    //     and `size + end` for `end < 0` (toggles at `-end`).  `+-1` on each covers the half-open
+    //     boundary without having to reason about which side the clamp takes.
+    //   THE COLLAPSE: `normalize` returns `(0, 0)` once `hi <= lo`, a downward kink to zero.  On the
+    //     mixed-sign form `start < 0, end > 0` that happens at `size = end - 1 - start`, and the
+    //     mirror form gives `start - 1 - end`.  The exhaustive check in `RangeCardCheck` passes
+    //     without these two, because the maximum on the segment ENDING at a collapse sits at that
+    //     segment's left end (a clamp toggle) and the minimum after it is 0 at `sHi` -- but the
+    //     argument should not rest on that being noticed, so the kink is a candidate like any other.
+    val marks = Vector(start, end).flatMap(b => Vector(math.abs(b).toLong, math.abs(b).toLong - 1L,
+                                                      math.abs(b).toLong + 1L)) ++
+                Vector(start.toLong + end.toLong, -(start.toLong + end.toLong),
+                       end.toLong - 1L - start.toLong, start.toLong - 1L - end.toLong).flatMap(
+                         m => Vector(m - 1L, m, m + 1L))
+    val finite = if sHi == Ivl.INF then math.max(sLo, Int.MaxValue.toLong - 1L) else sHi
+    val cands = (Vector(sLo, finite) ++ marks.filter(m => m >= sLo && m <= finite))
+      .filter(_ >= 0).distinct
+    val ws = cands.map(widthAt)
+    val loW = if ws.isEmpty then 0L else ws.min
+    val hiFinite = if ws.isEmpty then 0L else ws.max
+    // AN UNBOUNDED SOURCE: the upper end is INF exactly when the width is unbounded in `size`, which
+    // is decided by probing two far-apart sizes rather than by re-casing on the signs.
+    val hiW =
+      if sHi != Ivl.INF then hiFinite
+      else
+        val a = widthAt(1L << 20); val b = widthAt(1L << 21)
+        if b > a then Ivl.INF else math.max(hiFinite, math.max(a, b))
+    Ivl(Ivl.relu(loW), hiW)
+
+  /** the upper endpoint alone, for the callers that only have somewhere to put one */
+  private def windowWidth(src: Ivl, start: Int, end: Int): Long = windowCard(src, start, end).hi
 
   // ---- the consumer-facing entry points ---------------------------------------------------------
   /** every validated proposition the analysis licenses about `s` under `env`.  For facts at a

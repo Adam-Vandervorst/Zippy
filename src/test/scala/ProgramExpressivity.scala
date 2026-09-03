@@ -41,7 +41,7 @@ class ProgramExpressivity extends FunSuite:
 
     val rng = new java.util.Random(7)
     val sb = new StringBuilder
-    sb.append(s"# expressivity.csv — ${RunEnvironment.oneLine(Seq("target" -> N.toString, "bank" -> K.toString, "seed" -> "12345"))}\n")
+    sb.append(s"# expressivity.csv — ${RunEnvironment.oneLine(Seq("target" -> N.toString, "bank" -> K.toString, "seed" -> "bank=99 programs=7"))}\n")
     sb.append("uniqueOut,entropy,nEmpty,nSpace,nPath,respSpace,respPath,respFrac,avgSize,nodes\n")
     val t0 = System.nanoTime(); var got = 0; var draws = 0
     while got < N do
@@ -72,9 +72,12 @@ class ProgramExpressivity extends FunSuite:
           sb.append(f"$uniqueOut,$entropy%.4f,$nEmpty,$ns,$np,$respSpace,$respPath,${respArgs.toDouble / (ns + np)}%.4f,${totSize.toDouble / K}%.3f,${nodes(prog)}\n")
     val secs = (System.nanoTime() - t0) / 1e9
     // the repo root, not /tmp — see the note in ProgramStats
-    val f = new java.io.File(Loaders.repoRoot, "expressivity.csv"); val w = new java.io.FileWriter(f)
-    try w.write(sb.toString) finally w.close()
-    System.out.println(f"EXPR2: N=$got of $draws draws (respMin=$respMin), bank=$K, args space 1..$maxS path 0..$maxP, ${secs}%.1fs -> ${f.getPath}")
+    // as CorpusRuntimes: measured always, published only under a manifest
+    val dest =
+      if BenchmarkArtifact.publishing then
+        BenchmarkArtifact.write("expressivity.csv", sb.toString); "expressivity.csv"
+      else { println(BenchmarkArtifact.skipNote("expressivity.csv")); "(not written)" }
+    System.out.println(f"EXPR2: N=$got of $draws draws (respMin=$respMin), bank=$K, args space 1..$maxS path 0..$maxP, ${secs}%.1fs -> $dest")
     assertEquals(got, N)
   }
 

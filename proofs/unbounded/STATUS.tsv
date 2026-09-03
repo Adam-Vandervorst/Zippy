@@ -2,11 +2,11 @@ call_fix_least	Theorem	ok	PROVED
 call_fix_solves_sub	Theorem	ok	PROVED
 call_fix_solves_sup	Theorem	ok	PROVED
 call_unfold	Theorem	ok	PROVED
-card_incl_excl	Theorem	ok	PROVED
-card_meet	Theorem	ok	PROVED
-card_partition	Theorem	ok	PROVED
-card_subadd	Theorem	ok	PROVED
-card_wrap	Theorem	ok	PROVED
+card_incl_excl	Theorem	ok	PROVED-MODULO T7
+card_meet	Theorem	ok	PROVED-MODULO T7
+card_partition	Theorem	ok	PROVED-MODULO T7
+card_subadd	Theorem	ok	PROVED-MODULO T7
+card_wrap	Theorem	ok	PROVED-MODULO T1,T7
 composition_assoc	Theorem	ok	PROVED
 composition_distrib	Theorem	ok	PROVED
 composition_head	Theorem	ok	PROVED
@@ -40,7 +40,7 @@ length_compose	Theorem	ok	PROVED
 length_setops	Theorem	ok	PROVED
 length_tails	Theorem	ok	PROVED
 length_wrap	Theorem	ok	PROVED
-mon_cancel	Theorem	ok	PROVED
+mon_cancel	Theorem	ok	PROVED-MODULO T1
 mon_cancel_base	Theorem	ok	PROVED
 mon_cancel_step	Theorem	ok	PROVED
 mono_compose	Theorem	ok	PROVED
@@ -64,12 +64,12 @@ unwrap_hom	Theorem	ok	PROVED
 wrap_as_comp	Theorem	ok	PROVED
 wrap_nest	Theorem	ok	PROVED
 wrap_restriction	Theorem	ok	PROVED
-wrap_roundtrip	Theorem	ok	PROVED
+wrap_roundtrip	Theorem	ok	PROVED-MODULO T1
 negative/not_card_additive	Timeout	-	NOT-PROVED (expected)
-negative/not_fold_eq_iter		-	NOT-PROVED (expected)
-negative/not_grounded_monotone		-	NOT-PROVED (expected)
+negative/not_fold_eq_iter	Timeout	-	NOT-PROVED (expected)
+negative/not_grounded_monotone	Timeout	-	NOT-PROVED (expected)
 negative/not_iter_split	Timeout	-	NOT-PROVED (expected)
-negative/not_range_monotone		-	NOT-PROVED (expected)
+negative/not_range_identity	Timeout	-	NOT-PROVED (expected)
 negative/not_restr_identity	Timeout	-	NOT-PROVED (expected)
 negative/not_ti_eq_tu	Timeout	-	NOT-PROVED (expected)
 negative/not_ti_monotone	Timeout	-	NOT-PROVED (expected)

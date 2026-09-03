@@ -376,13 +376,28 @@ class TierThreeConformance extends FunSuite:
       val itr = run(Iteration(src, h, t, Singleton(z)))       // the same body frozen at the seed
       assertNotEquals(fld, itr, "not_fold_eq_iter is NOT false at this input")
       s"src={a.1,b.1}, update=acc·h: fold=${fld.pretty} vs iter-at-seed=${itr.pretty}"),
-    Counter("negative/not_range_monotone", "A ⊆ B => rng(A,..) ⊆ rng(B,..)", () =>
-      // a bigger source SHIFTS every later rank, so the window moves off the path it kept
-      val a = sv("m"); val b = sv("a", "m")
-      val (wa, wb) = (run(Range(lit(a), 1, 2)), run(Range(lit(b), 1, 2)))
-      assert(a.paths.subsetOf(b.paths), "the witness must have A ⊆ B")
-      assert(!wa.paths.subsetOf(wb.paths), "not_range_monotone is NOT false at this input")
-      s"A={m} ⊆ B={a,m}: rng(A,1,2)=${wa.pretty} ⊄ rng(B,1,2)=${wb.pretty}"),
+    Counter("negative/not_range_identity", "rng(A,Lo,Hi) = A — a window is the identity", () =>
+      // A PARTIAL WINDOW IS NOT THE IDENTITY, which is the near-miss of U61 ("a FULL window is the
+      // identity"): drop U61's full-window hypothesis and the conclusion fails at once.
+      //
+      // WHY THIS CONTROL AND NOT THE MONOTONICITY ONE IT REPLACES.  The entry here used to execute
+      // `A={m} ⊆ B={a,m}: rng(A,1,2)={m} ⊄ rng(B,1,2)={a}` against a MONOTONICITY control that has
+      // since been removed.  That execution is a real fact about `Space.Range` — a
+      // bigger source shifts every later RANK — but the TPTP conjecture it was filed against
+      // quantified over PATH endpoints, and with the endpoints fixed the window is a pointwise
+      // order-interval filter which IS monotone: `_range_ops.p` derives it from `rng_sub`,
+      // `rng_bounds` and `rng_full`, and vampire proves it in seconds.  So the countermodel did not
+      // apply to the sentence, and the sentence was a theorem masquerading as a control.  It also
+      // went unnoticed for a round because that file's includes did not resolve under `run.sh`'s
+      // `cd negative`, so the prover could not read it and the harness scored the non-answer as
+      // "NOT-PROVED (expected)".  `docs/TRUSTED.md` T5 now records the non-monotonicity of
+      // `Space.Range` as an EXECUTED observation about rank arithmetic rather than as a theorem of
+      // this tier, which is where it belongs.
+      val a = sv("a", "m")
+      val w = run(Range(lit(a), 0, 1))
+      assert(w.paths.subsetOf(a.paths), "a window must still be a SUBSET of its source (U61's half)")
+      assert(w.paths != a.paths, "not_range_identity is NOT false at this input")
+      s"A={a,m}: rng(A,0,1)=${w.pretty} != A=${a.pretty}"),
     Counter("negative/not_grounded_monotone", "a grounded function is monotone", () =>
       // an opaque function is free to be antitone; this one complements against a fixed set
       val u = sv("x", "y")

@@ -45,7 +45,7 @@ class SpatialFrontierCheck extends FunSuite:
 
   /** The over-prediction ceiling for the key-disjoint depth ladder PAST `Shape.MaxDepth + 1`, as a
    *  multiple of the true rebuild count `d`.  A RECORDED MEASUREMENT, not a design target: the rows
-   *  past the cap are the open half of RESOLUTION.md item 7, and this constant exists so the gate
+   *  past the cap are the open half of plan.md Track C (item 5), and this constant exists so the gate
    *  fails when the over-prediction GROWS rather than only when the bound becomes unsound.  MEASURED
    *  over d = 1..16: exact to d = `MaxDepth + 1`, then `hi = 4d - 14` — a line of slope 4, so `4·d`
    *  holds at every row.  Lower it whenever the measurement improves. */
@@ -293,7 +293,7 @@ class SpatialFrontierCheck extends FunSuite:
     // certificates on both tails made `leq` compare them, which turned six corpus shapes in
     // `SpatialAnalysisCheck`'s decorated-soundness gate red.  Getting this row exact needs
     // `SpatialFrontier`'s relational walk to consult tail certificates, which is a change to the
-    // frontier and not to the shape carrier.  Recorded in RESOLUTION.md item 7; the range below
+    // frontier and not to the shape carrier.  Recorded in plan.md Track C (item 5); the range below
     // still runs well past the cap, so the shape of the remaining gap is visible in the printout.
     var shown = Vector.empty[String]
     var rows = Vector.empty[(Int, FrontierSummary)]
@@ -328,7 +328,7 @@ class SpatialFrontierCheck extends FunSuite:
         // rather than evidence of super-linear growth — at d = 15 it wants 45 and the model gives 46.
         // The ceiling below is `4·d`, which the measurement supports at every row, and the ladder is
         // printed above so the line is visible instead of only its envelope.  The rows past the cap
-        // being over-predicted AT ALL is the open half of RESOLUTION.md item 7.
+        // being over-predicted AT ALL is the open half of plan.md Track C (item 5).
         assert(s.rebuilt.hi <= RebuiltRatioPastCap * d,
                s"depth=$d: the over-prediction past the depth cap exceeded the recorded ceiling " +
                s"(${RebuiltRatioPastCap}·d) — it grew, which is a regression in the depth budget " +

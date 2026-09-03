@@ -106,7 +106,7 @@ zipper-egg-tests/pipeline/puzzle15-zipper.egg	SINGLE-SIDE
 zipper-egg-tests/pipeline/puzzle3-full-graph-agnostic.egg	REAL
 zipper-egg-tests/pipeline/puzzle3-full-graph.egg	REAL
 zipper-egg-tests/pipeline/puzzle3-full-space-agnostic.egg	LAW-JUSTIFIED
-zipper-egg-tests/pipeline/puzzle3-full-space-impl.egg	REAL
+zipper-egg-tests/pipeline/puzzle3-full-space-impl.egg	SINGLE-SIDE
 zipper-egg-tests/pipeline/puzzle3-full-space.egg	BUDGET
 zipper-egg-tests/pipeline/puzzle3-full-zipper-agnostic.egg	TRIVIAL
 zipper-egg-tests/pipeline/puzzle3-full-zipper-virtual.egg	BUDGET

@@ -190,7 +190,7 @@ object EquivPipeline:
             throw IllegalStateException(
               s"expandKeepBinders: ${other.getClass.getSimpleName} reads a variable bound by an " +
               s"enclosing Iteration/Fixpoint, so it cannot be executed and no renderer models it. " +
-              s"Carrying this node symbolically is the open part of the instance tier (RESOLUTION.md " +
+              s"Carrying this node symbolically is the open part of the instance tier (plan.md, " +
               s"item 3); the caller must fall back to `expand` and record the marker.")
           Literal(eval(other))
     go(s, Set.empty, Set.empty)
@@ -595,15 +595,144 @@ object AgnosticPipeline:
    *      argument equivalence proved first ([[residualPairings]] states it as its own obligation).
    *  The full descriptor of every symbol is kept in [[residualCuts]] so emitters can print it and
    *  gates can compare arguments rather than names. */
+  /** ==============================================================================================
+   *  A CANONICAL, INJECTIVE, STABLE IDENTITY FOR A TERM — what the residual symbol is keyed by.
+   *
+   *  ==WHY `show` CANNOT BE IT==
+   *  [[ResidualCut.digest]] used to hash `Space.show`, truncated to FOUR BYTES.  Four separate
+   *  defects, and the width is the least of them:
+   *
+   *   1. `Space.show` HAS NO `Fold` ARM.  It is a non-exhaustive match (the compiler says so), so a
+   *      cut whose argument contains a `Fold` did not get a weak identity — it threw `MatchError`.
+   *   2. `GroundedPS`/`GroundedSS`/`GroundedPP`/`GroundedSP` render as `f.hashCode()`, a 32-bit JVM
+   *      IDENTITY hash.  So the "stable digest" was neither stable across runs — the same term
+   *      digests differently in a fresh JVM, and these symbols are written into COMMITTED artifacts
+   *      — nor injective, since two distinct functions collide whenever their identity hashes do.
+   *   3. `show` is not injective even on the pure algebra: `Wrap(src, p)` renders `(p x src)` and
+   *      `Composition(x, y)` renders `(x x y)` — the same surface syntax.
+   *   4. AND THEN the width: 32 bits is a collision at roughly 2^16 cuts by the birthday bound.
+   *      `cutSymbol`'s guard DETECTS a collision and throws, which is right but is not the same
+   *      thing as not having them, and it only sees the cuts made in ONE JVM.
+   *
+   *  ==WHAT THIS IS INSTEAD==
+   *  A tagged, length-prefixed structural encoding, TOTAL over every constructor of `Space` and
+   *  `Path`.  Injective by construction: each constructor has a distinct tag, every string is
+   *  written as `<byte length>:<bytes>` so no concatenation is ambiguous, and every operand list
+   *  carries its arity.  The digest is then the FULL SHA-256 of that encoding.
+   *
+   *  ==AND IT REFUSES RATHER THAN GUESSES==
+   *  A grounded node carries an arbitrary Scala function, for which no stable identity exists —
+   *  which is the fact `docs/TRUSTED.md` T6 records, from the other side.  This encoder returns
+   *  `None` there instead of inventing one, and [[ResidualCut.digest]] then FAILS LOUDLY.  Emitting
+   *  an artifact whose symbol silently changes between runs is worse than not emitting it: the
+   *  artifact is committed, and a reviewer diffing two runs would see a spurious difference. */
+  object CanonicalId:
+    /** the ONE separator, and it is safe for exactly one reason: every component written by the
+     *  encoders below is either a tag character or a length-prefixed string, so no component can
+     *  contain a run that parses as a boundary.  It is not a delimiter the encoding relies on. */
+    private val Sep = "~"
+    private def str(s: String, b: StringBuilder): Unit =
+      b.append(s.getBytes("UTF-8").length).append(':').append(s)
+
+    /** A PATH'S ITEMS, EACH LENGTH-PREFIXED, WITH THE COUNT.  Joining them on a separator first --
+     *  which this encoder did, as `items.mkString(" ")` -- makes the encoding NON-INJECTIVE the
+     *  moment an item contains that separator: `PathValue(List("a b"))` and
+     *  `PathValue(List("a", "b"))` both become the single string `"a b"`, so two distinct terms get
+     *  one key.  The claim on this object was "injective by construction", and joining on a
+     *  separator is exactly the construction that breaks it.
+     *
+     *  No current fixture exercises it, because every test alphabet here is single letters -- which
+     *  is why the injectivity tests could not see it and why `RangeCardCheck`-style exhaustion over
+     *  hand-built constructors is not a substitute for encoding the structure faithfully. */
+    private def items(xs: List[String], b: StringBuilder): Unit =
+      b.append(xs.length).append('<')
+      xs.foreach(str(_, b))
+      b.append('>')
+
+    /** the structural key of a term, or `None` if it contains a grounded node */
+    def of(s: Space): Option[String] =
+      val b = StringBuilder(); if go(s, b) then Some(b.result()) else None
+    def ofPath(p: Path): Option[String] =
+      val b = StringBuilder(); if goP(p, b) then Some(b.result()) else None
+    /** the key of a whole cut descriptor */
+    def ofCut(routine: String, depth: Int, refs: Vector[Path], mentions: Vector[Space]): Option[String] =
+      val parts = refs.map(ofPath) ++ mentions.map(of)
+      if parts.exists(_.isEmpty) then None
+      else
+        val b = StringBuilder()
+        str(routine, b); b.append(depth).append(',').append(refs.length).append(',')
+          .append(mentions.length).append(Sep)
+        Some(b.result() + parts.flatten.mkString(Sep))
+
+    private def go(s: Space, b: StringBuilder): Boolean = s match
+      case Space.Empty              => b.append("E"); true
+      case Space.Mention(m)         => b.append("M"); str(m.s, b); true
+      case Space.Singleton(p)       => b.append("S"); goP(p, b)
+      case Space.Literal(v)         =>
+        // the PATH SET itself, sorted and each path length-prefixed: injective on the value, and
+        // stable, where `SpaceValue.show` is a `Set` rendering
+        b.append("L").append(v.paths.size).append('[')
+        // sorted by the ITEM LIST, so the order is a function of the value and not of the Set's
+        // iteration order, and each path encoded item-wise
+        v.paths.toSeq.map(_.items).sortBy(x => (x.length, x.mkString("\u0000")))
+          .foreach(items(_, b))
+        b.append(']'); true
+      case Space.Union(x, y)        => b.append("u"); go(x, b) && go(y, b)
+      case Space.Intersection(x, y) => b.append("i"); go(x, b) && go(y, b)
+      case Space.Subtraction(x, y)  => b.append("d"); go(x, b) && go(y, b)
+      case Space.Restriction(x, y)  => b.append("r"); go(x, b) && go(y, b)
+      case Space.Raffination(x, y)  => b.append("f"); go(x, b) && go(y, b)
+      case Space.Composition(x, y)  => b.append("c"); go(x, b) && go(y, b)
+      case Space.Wrap(src, p)       => b.append("w"); go(src, b) && goP(p, b)
+      case Space.Unwrap(src, p)     => b.append("W"); go(src, b) && goP(p, b)
+      case Space.TailsUnion(src)    => b.append("t"); go(src, b)
+      case Space.TailsIntersection(src) => b.append("T"); go(src, b)
+      case Space.Range(z, lo, hi)   => b.append("R").append(lo).append(',').append(hi).append(';'); go(z, b)
+      case Space.Iteration(src, sym, rest, body) =>
+        b.append("I"); str(sym.s, b); str(rest.s, b); go(src, b) && go(body, b)
+      case Space.Fixpoint(init, rec, body) =>
+        b.append("X"); str(rec.s, b); go(init, b) && go(body, b)
+      case Space.Fold(src, initial, acc, sym, rest, body, upd) =>
+        // THE ARM `show` DOES NOT HAVE.  All seven fields, both binders included.
+        b.append("F"); str(acc.s, b); str(sym.s, b); str(rest.s, b)
+        go(src, b) && goP(initial, b) && go(body, b) && goP(upd, b)
+      case Space.Call(r, refs, mentions) =>
+        b.append("C"); str(r.s, b); b.append(refs.length).append(',').append(mentions.length).append(';')
+        refs.forall(goP(_, b)) && mentions.forall(go(_, b))
+      // NO STABLE IDENTITY EXISTS for an arbitrary Scala function; refuse rather than invent one.
+      case Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => false
+
+    private def goP(p: Path, b: StringBuilder): Boolean = p match
+      case Path.Deref(pr)     => b.append("p"); str(pr.s, b); true
+      case Path.Constant(pi)  => b.append("k"); items(pi.items, b); true
+      case Path.Concat(l, r)  => b.append("."); goP(l, b) && goP(r, b)
+      case Path.GroundedPP(_, _) | Path.GroundedSP(_, _) => false
+
   final case class ResidualCut(routine: String, depth: Int, refs: Vector[Path], mentions: Vector[Space]):
     /** the alpha-invariant rendering the digest is taken over — also what the emitters print */
     def canonical: String =
       s"$routine@$depth(" + refs.map(_.show).mkString(", ") + "; " +
         mentions.map(m => SmtDiff.alphaNorm(m).show).mkString(", ") + ")"
-    /** a stable, collision-resistant digest (SHA-256, first 8 hex digits) of [[canonical]] */
+    /** THE STRUCTURAL IDENTITY the digest is taken over — see [[CanonicalId]] for why this is not
+     *  [[canonical]], which is for humans and is neither injective nor total nor stable.  The
+     *  mentions are alpha-normalised first, so two cuts that differ only in binder names key alike. */
+    def identity: Option[String] =
+      CanonicalId.ofCut(routine, depth, refs, mentions.map(SmtDiff.alphaNorm))
+
+    /** THE FULL SHA-256 of [[identity]] — 256 bits, not the 32 this used to keep.
+     *
+     *  A truncated digest was a claim about how many cuts a run makes; the full one needs no such
+     *  claim.  [[CanonicalId]] carries the reason the INPUT to the hash had to change as well, which
+     *  matters more than the width: a digest is only as injective as the thing it digests. */
     def digest: String =
+      val id = identity.getOrElse(throw IllegalStateException(
+        s"cannot key a residual cut on $canonical: an argument contains a GROUNDED node, for which " +
+        "no stable identity exists (docs/TRUSTED.md T6).  A residual symbol is written into a " +
+        "COMMITTED artifact, so a per-JVM identity hash would make that artifact differ between " +
+        "runs for no semantic reason, and refusing is the sound direction.  Either the caller must " +
+        "not cut a call whose arguments are grounded, or the grounded node needs a declared id."))
       val md = java.security.MessageDigest.getInstance("SHA-256")
-      md.digest(canonical.getBytes("UTF-8")).take(4).map(b => f"${b & 0xff}%02x").mkString
+      md.digest(id.getBytes("UTF-8")).map(b => f"${b & 0xff}%02x").mkString
     /** the free-input name the cut is replaced by */
     def symbol: String = s"residual_${routine}_${depth}_$digest"
 

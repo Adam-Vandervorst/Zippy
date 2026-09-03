@@ -189,6 +189,16 @@ enum Space:
     case Space.Composition(x, y) => s"(${x.show} x ${y.show})"
     case Space.Iteration(src, symbol, rest, templates) => s"${src.show}.iter(P\"${symbol.s}\", S\"${rest.s}\", \n${" ".repeat(indent + 1)}${templates.show(using indent + 1)}\n)"
     case Space.Fixpoint(init, rec, body) => s"${init.show}.fix(S\"${rec.s}\", \n${" ".repeat(indent + 1)}${body.show(using indent + 1)}\n)"
+    // THE ARM THIS MATCH DID NOT HAVE, which made `show` PARTIAL and threw `MatchError` on a `Fold`.
+    // That is not only a rendering bug: `AgnosticPipeline.ResidualCut.canonical` renders through
+    // `show`, `canonical` is what the collision guard compares and what the emitters print into
+    // COMMITTED pipeline artifacts, and `alignCuts` calls it in production -- so a residual cut whose
+    // argument contained a `Fold` threw one call below the surface.  All seven fields are shown,
+    // both binders included, because two `Fold`s differing only in a binder are different terms.
+    case Space.Fold(src, initial, acc, symbol, rest, body, update) =>
+      s"${src.show}.fold(${initial.show} -> P\"${acc.s}\", P\"${symbol.s}\", S\"${rest.s}\", \n" +
+      s"${" ".repeat(indent + 1)}${body.show(using indent + 1)}, \n" +
+      s"${" ".repeat(indent + 1)}${update.show}\n)"
     case Space.Wrap(src, p) => s"(${p.show} x ${src.show})"
     case Space.Unwrap(src, p) => s"${src.show}(${p.show})"
     case Space.TailsUnion(src) => s"TailsUnion(${src.show})"

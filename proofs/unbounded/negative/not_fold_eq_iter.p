@@ -12,11 +12,11 @@
 %
 % Expected: NOT-PROVED.
 % ===========================================================================
-include('_signature.p').
-include('_paths.p').
-include('_tails_ops.p').
-include('_iter_ops.p').
-include('_fold_ops.p').
+include('../_signature.p').
+include('../_paths.p').
+include('../_tails_ops.p').
+include('../_iter_ops.p').
+include('../_fold_ops.p').
 tff(atacc_type, type, atAcc: ( bodyA * path ) > bodyF ).
 tff(atacc_def, axiom,
     ! [F: bodyA, I: path, H: item, S: space] :

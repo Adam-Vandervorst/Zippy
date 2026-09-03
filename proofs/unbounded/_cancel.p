@@ -26,6 +26,15 @@
 %                            => this clause       (a proved lemma, re-asserted)
 %                            => wrap_roundtrip.p, card_wrap.p
 %
+% AND THAT CHAIN IS NOW MACHINE-READABLE, because stating it only in prose is what let it be
+% missed.  This file has NO `include`, so an include-graph closure over `wrap_roundtrip.p` or
+% `card_wrap.p` reaches this clause and STOPS -- never reaching `_path_induction.p` -- and both were
+% reported as unqualified `PROVED` while resting on a trusted schema.  The marker below is the edge
+% `scripts/proof_closure.py` follows to fix that; it checks that the named theorem is reported and
+% PROVED, so this file cannot re-assert something unproved either.
+%
+% DISCHARGED-BY: mon_cancel.p
+%
 % RIGHT cancellation (`app(Q,P) = app(R,P) => Q = R`) is also true and is NOT
 % assumed — nothing in the operator table needs it (`unwrap`/`wrap` strip and
 % prepend on the LEFT), and assuming an unused axiom only widens the search.

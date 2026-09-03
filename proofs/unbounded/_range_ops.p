@@ -20,11 +20,20 @@
 %     is the property that makes the four backends agree, since they all slice by
 %     the SAME order (`pathValueOrdering`, "every backend slices Range by THIS
 %     order, so they agree");
-%   * a window is NOT MONOTONE (`negative/not_range_monotone.p`) — adding a path
-%     to the source shifts every later rank, so a bigger source can give a
-%     smaller window.  That is why `AgnosticPipeline.monotoneInMention` refuses a
-%     `Fixpoint` whose recursion variable occurs under a `Range`, and why
-%     `MORKL.mono`/`monoIn` forbid an SCC call there.
+%   * a window is NOT THE IDENTITY for arbitrary endpoints
+%     (`negative/not_range_identity.p`) — the near-miss of U61, whose full-window
+%     hypothesis would be vacuous if it were provable.
+%
+% WHAT THIS MODULE CANNOT SAY, stated here because a previous revision claimed it
+% could.  The ENDPOINTS BELOW ARE PATHS, NOT RANKS, so with them fixed the window
+% is a pointwise order-interval filter — and such a filter IS MONOTONE: this
+% module PROVES `sub(A,B) => sub(rng(A,Lo,Hi), rng(B,Lo,Hi))` from `rng_sub`,
+% `rng_bounds` and `rng_full`.  The non-monotonicity of `Space.Range` is about
+% RANK arithmetic (integer bounds against |x|, i.e. `RangeBounds.normalize`), which
+% is tier-1/tier-2's subject and not expressible here.  `docs/TRUSTED.md` T5 records
+% it as an executed observation rather than a theorem, and it is still why
+% `AgnosticPipeline.monotoneInMention` and `MORKL.mono`/`monoIn` refuse a recursion
+% variable under a `Range` — conservatively, so nothing unsound follows from the gap.
 %
 % ENCODING.  `plt` is the canonical STRICT TOTAL ORDER on paths (Scala:
 % `pathValueOrdering` — item order, shorter-is-less on a shared prefix).  It is

@@ -9,10 +9,10 @@
 (declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
 
 
-(define-fun s_3 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil)))) (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil))))))
-(define-fun s_2 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 17 nil)))) (s_3 p)))
-(define-fun s_1 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 18 (cons 17 nil)))) (s_2 p)))
-(define-fun sideA ((p Path)) Bool (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil)))))
+(define-fun s_3 ((p Path)) Bool (or (or (= p (cons 12302 (cons 12303 nil))) (= p (cons 12302 (cons 12304 nil))) (= p (cons 12302 (cons 12305 nil))) (= p (cons 12303 (cons 12304 nil))) (= p (cons 12305 (cons 12303 nil))) (= p (cons 12305 (cons 12304 nil)))) (or (= p (cons 12302 (cons 12303 nil))) (= p (cons 12302 (cons 12304 nil))) (= p (cons 12302 (cons 12305 nil))) (= p (cons 12303 (cons 12304 nil))) (= p (cons 12305 (cons 12303 nil))) (= p (cons 12305 (cons 12304 nil))))))
+(define-fun s_2 ((p Path)) Bool (or (or (= p (cons 12302 (cons 12303 nil))) (= p (cons 12302 (cons 12305 nil))) (= p (cons 12303 (cons 12304 nil))) (= p (cons 12305 (cons 12303 nil))) (= p (cons 12305 (cons 12304 nil)))) (s_3 p)))
+(define-fun s_1 ((p Path)) Bool (or (or (= p (cons 12302 (cons 12305 nil))) (= p (cons 12303 (cons 12304 nil))) (= p (cons 12305 (cons 12303 nil)))) (s_2 p)))
+(define-fun sideA ((p Path)) Bool (or (= p (cons 12302 (cons 12303 nil))) (= p (cons 12302 (cons 12304 nil))) (= p (cons 12302 (cons 12305 nil))) (= p (cons 12303 (cons 12304 nil))) (= p (cons 12305 (cons 12303 nil))) (= p (cons 12305 (cons 12304 nil)))))
 (define-fun sideB ((p Path)) Bool (s_1 p))
 (assert (not (forall ((p Path)) (= (sideA p) (sideB p)))))
 (check-sat)

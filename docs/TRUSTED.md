@@ -1,9 +1,25 @@
 # The trusted base
 
-Every claim this tree makes rests on some assumption. This file is the **complete list of them**, so
-that "PROVED" in a status table can be read without reconstructing what it is proved *relative to*.
-Nothing else may be assumed; anything not here is either derived or is an open obligation named in a
-registry.
+Every claim this tree makes rests on some assumption. This file is the **complete list of the
+assumed FACTS**, so that "PROVED" in a status table can be read without reconstructing what it is
+proved *relative to*. Nothing else may be assumed; anything not here is either derived or is an open
+obligation named in a registry.
+
+**Two distinctions that an earlier revision of this file left implicit, and that its "complete list"
+claim needs.** A proof corpus contains axioms of two quite different kinds:
+
+* **Definitional axiomatization** — the clauses that *say what the objects are*: `_signature.p`'s
+  sorts and operations, `_paths.p`'s free-monoid laws for `nil`/`cons`/`app`, `_nat.p`'s arithmetic.
+  These are not assumptions that could be false; they are the subject matter. They are not listed
+  here and do not need to be.
+* **Assumed facts about those objects** — clauses that *could* be false and are not derived in the
+  corpus. Every one of these is a T entry below.
+
+That distinction is now **enforced rather than stated**: any axiom file carrying an `% ASSUMED`
+block must also carry a `% TRUSTED-ENTRY: T<n>` marker naming its entry here, and
+`scripts/proof_closure.py --check` fails if it does not, or if the entry does not exist. The check
+was added because the claim was already false: `_card.p` declared six assumed counting axioms, in
+its own header, and none of them was a T entry — see **T7**.
 
 Two things are deliberately *not* on this list, because they are checked rather than trusted:
 
@@ -96,7 +112,7 @@ cornerstone before emitting anything, so the expansion is checked per instance a
 **If it were false**, the instance obligations would be about a different program than the one that
 runs. Note that the acceptance review of `f6832fc` requires this trusted boundary to be **removed**
 for `Iteration`/`Fixpoint` — the binders should reach the renderers — and that work is open; see
-`RESOLUTION.md` item 1.
+`plan.md`, Track A′ (item 4) and Track D (item 2).
 
 ## T5. `Range` is outside the certified path-set algebra
 
@@ -110,8 +126,37 @@ order, not on membership, so it is the one operator whose semantics cannot be wr
 `proofs/unbounded/range_window.p` (U61: a window is inside its source; a full window is the
 identity) and `range_interval.p` (U62: a window is an **interval** of the canonical order, for an
 *arbitrary* strict total order — which is what makes the four backends agree on it, since they all
-slice by `pathValueOrdering`). Non-monotonicity is pinned by
-`negative/not_range_monotone.p` (N10) with an executed countermodel in `COUNTERMODELS.tsv`.
+slice by `pathValueOrdering`).
+
+**Non-monotonicity is NOT certified by this tier, and a previous revision of this entry said it
+was.** It claimed the fact was "pinned by (N10) with an executed countermodel", N10 then being a
+monotonicity control. Both halves were wrong together:
+
+* `_range_ops.p` axiomatises the window with **path** endpoints — `rng(A,Lo,Hi)` is
+  `{P ∈ A : Lo ≤ P < Hi}` — deliberately, because naming the endpoints by *rank* needs counting the
+  module avoids. With the endpoints fixed, the window is a pointwise order-interval filter, and
+  such a filter **is monotone**: `rng_sub` and `rng_bounds` give `mem(P,A)` and the bounds,
+  `A ⊆ B` gives `mem(P,B)`, and `rng_full` puts `P` in `rng(B,Lo,Hi)`. Vampire proves the control's
+  conjecture in seconds. So it was not an unprovable statement being used as a control — it was a
+  **theorem** labelled as a refutation.
+* the recorded countermodel (`A={m} ⊆ B={a,m}` with bounds `1..2`) is a real fact, but about
+  **integer** bounds, i.e. about `Space.Range` and `RangeBounds.normalize` — not about the sentence
+  it was filed against.
+
+It also went undetected for a round because the file's includes did not resolve under `run.sh`'s
+`cd negative`, so vampire could not read it at all and the harness scored the resulting non-answer
+as "NOT-PROVED (expected)". `run.sh` now treats an unreadable file as a hard failure on both loops,
+and N10 has been replaced by `negative/not_range_identity.p`, which is genuinely unprovable here and
+pins the near-miss of U61 (if a window were the identity for *arbitrary* endpoints, U61's
+full-window hypothesis would be vacuous).
+
+**So what is trusted here is wider than it was.** The non-monotonicity of `Space.Range` is an
+executed observation about the executor and a property of rank arithmetic in tier 1/2
+(`SpatialTypeSystem.windowWidth`); it is **not** a machine-checked theorem anywhere in this tree.
+`AgnosticPipeline.monotoneInMention` and `MORKL.mono`/`monoIn` refuse a recursion variable under a
+`Range` for that reason, and that refusal is the conservative direction, so nothing unsound follows
+from the gap — but it is a gap, and it is stated here rather than implied by a control that does not
+hold.
 
 **If it were false** — specifically, if a window were not an interval of the order every backend
 slices by — the backends could disagree on `Range` even though each is individually correct.
@@ -132,6 +177,34 @@ a grounded function that consults a clock or a mutable cell, and nothing in the 
 control, with an executed countermodel. This is why `monotoneInMention` and `MORKL.mono` / `monoIn`
 refuse a recursion variable under a grounded node.
 
+## T7. The counting axioms
+
+**File:** `proofs/unbounded/_card.p` · **Used by:** `card_wrap.p`, and anything whose closure
+reaches it
+
+Six clauses, and `_card.p`'s own header is the authoritative list of them:
+
+* four counting axioms — `card_empty`, `card_sing`, `card_mono`, `card_disj_add` (non-negativity
+  comes free from `_nat.p`'s `zero_le`);
+* one axiom and one comprehension of a different character — that an **injective image has the same
+  cardinality**, and the `pfxmap` comprehension asserting the prefix map exists.
+
+**Why they are not derived.** Cardinality of an arbitrary path set is not definable in the
+first-order signature this tier uses: there is no counting quantifier, and `_nat.p` gives arithmetic
+on a `num` sort without any map from sets to it. So the counting facts are stated as axioms or the
+operator does not exist in the tier at all.
+
+**Why this entry did not exist until now, which is the part worth recording.** It was assumed in
+`_card.p` and absent from this file, while this file's own opening sentence claimed to be the
+complete list — so `card_wrap` was reported as an unqualified `PROVED` resting on six undeclared
+assumptions. The gap was found by auditing this document against the corpus rather than by any
+check, which is why the `% TRUSTED-ENTRY:` marker and its enforcement were added at the same time.
+
+**If they were false**, `card_wrap` (U-series cardinality of a wrap) would lose its premises. Note
+that the four counting axioms are the standard ones and `_card.p` separately records which of its
+neighbours are *derived* rather than assumed, so the axiom list cannot be accused of containing its
+own conclusions.
+
 ---
 
 ## Open obligations, which are *not* trusted assumptions
@@ -147,3 +220,40 @@ it is open, and the registries say so.
 
 `terminating/REGISTRY.tsv` and `proofs/unbounded/REGISTRY.tsv` are the authoritative lists; this
 table is the short form for the three the acceptance review names.
+
+---
+
+## The closure, and how it is enforced
+
+An entry in the list above is only useful if a reader can tell **which results depend on it**. A
+prover verdict cannot say: it reports `Theorem` under whatever axioms the file included, and it does
+not distinguish an assumption from a discharged lemma. So `scripts/proof_closure.py` computes the
+transitive `include` closure of every reported status **from the files themselves** — not from a
+hand-maintained dependency column, which is the kind of thing that drifts — intersects it with this
+list, and reports each status as either `PROVED` or `PROVED-MODULO T…`. With `--check` an
+unqualified `PROVED` whose closure reaches a trusted axiom is an **error**.
+
+It found one immediately: **`mon_cancel` was reported as unqualified `PROVED` and its closure
+reaches T1.** It is conditional, and `wrap_roundtrip` and `card_wrap` are conditional through it.
+
+That is now recorded in the table rather than only in a report. `--annotate` rewrites a conditional
+verdict to `PROVED-MODULO T1`, `proofs/unbounded/run.sh` calls it after every corpus run, and
+`--check` holds the table to the closure afterwards — so the prover writes the verdict it reached
+and the closure decides whether that verdict is unqualified. The annotation only ever weakens a
+verdict, and it is idempotent.
+
+Two limits, stated so the report is not read as complete:
+
+* **T2, T3, T4, T5 and T6 are not reachable through an `include`.** They are properties of a corpus
+  or of the implementation, so no closure over axiom files can detect or discharge them; the script
+  prints them separately as exactly that.
+* **An implementation-correspondence lemma carried by a test is invisible to it.** T4 and T6 are
+  both of that kind. A closure over axioms cannot see a claim whose evidence is a differential run.
+
+The script also reports an include that resolves **only from the corpus root**, because TPTP
+resolves includes against the prover's working directory rather than the including file — and that
+difference is not academic. Three negative controls used a bare `include('_signature.p')` while
+`run.sh` runs them with `cd negative`, so vampire could not read them at all, emitted no SZS status,
+and the harness scored the non-answer as `NOT-PROVED (expected)` — **a pass for three controls that
+pinned nothing, for a whole round.** `run.sh` now treats an unreadable file as a hard failure on
+both loops, and fixing the includes is what exposed the invalid N10 recorded under T5 above.

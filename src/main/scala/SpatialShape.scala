@@ -610,7 +610,7 @@ object Shape:
       //     both tails, `leq(a.otherTail, b.otherTail)` starts comparing them, and
       //     `SpatialAnalysisCheck`'s "every decorated node admits the real value" gate went red on
       //     six corpus shapes — sound, but no longer provable, which is a live regression.
-      // So the depth half of the review's ambition is OPEN and recorded in RESOLUTION.md item 7
+      // So the depth half of the review's ambition is OPEN and recorded in plan.md, Track C (item 5)
       // rather than half-built.
       if hc.hi == 0 then Shape(s.eps, SortedMap.empty, Ivl.zero, None, noUntracked)
       else Shape(s.eps, SortedMap.empty, hc, None, ks, at)

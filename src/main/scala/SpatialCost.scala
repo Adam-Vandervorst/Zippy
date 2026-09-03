@@ -1115,6 +1115,266 @@ enum CostForm:
     case AsGiven => "the term as given"
   def describesWhatRuns: Boolean = this == Optimized || this == Residual
 
+/** ==================================================================================================
+ *  THE BACKEND EXECUTION PROFILE — the declared representation and algorithm parameters that every
+ *  trie-shaped cost is DERIVED from, rather than fitted to.
+ *
+ *  ==WHY THIS EXISTS AND WHAT IT IS FOR==
+ *  The child map is a 2-ary big-endian Patricia trie over interned `Int` keys TODAY.  The intended
+ *  lowering is BIT-WISE and 256-ARY, and that is the point at which this model's numbers start to
+ *  matter for anything but its own gates.  A cost model whose constants are fitted to the 2-ary
+ *  loops would have to be RE-DERIVED by that change, formula by formula; one whose constants are
+ *  derived from a profile is RE-INSTANTIATED by it.  So a dependence on how a node is laid out — a
+ *  branching-bit scan, a 256-way child scan, a word-parallel popcount, an allocation growth policy
+ *  — belongs HERE as a field, and the transfer function reads a DERIVED helper.
+ *
+ *  This is not speculation about a future representation.  THERE ARE ALREADY TWO, and they behave
+ *  differently: `Tuning.patriciaOps` selects between `IntTrieOps.{join,meet}AllTries`' simultaneous
+ *  Patricia descent and `IntTrie.meetAll`'s per-key probe loop, and the two run DIFFERENT LOOPS
+ *  emitting DIFFERENT EVENTS.  A floor read off one of them is not a floor for the other, and the
+ *  gates only ever ran the default — see [[descendsPatricia]], which is that field, and the note on
+ *  [[CostModel.naryDeepLo]], which is the hole it closes.
+ *
+ *  ==WHAT IS DERIVED, AND WHY THAT MATTERS MORE THAN THE FIELDS==
+ *  A derived helper cannot drift from the field it is computed from.  `spineNodes` replaces the
+ *  literal `2 *` that appears on node counts throughout this file (`2·m` is the physical-node count
+ *  of a 2-ary spine holding `m` keys, i.e. `m + ceil(m/(R-1))` at `R = 2`); `spineDepth` replaces
+ *  `FrontierConfig.PatriciaBits`, of which it is exactly equal at `R = 2, W = 32`.  Migrating a
+ *  constant to a derived helper is therefore a REFACTOR WITH A GATE: every width, containment and
+ *  calibration number must be unchanged by it, which is what says the derivation is faithful.
+ *
+ *  ==WHAT IS DELIBERATELY *NOT* CLAIMED==
+ *  A profile is a description of code, so it can be WRONG.  [[Provenance]] is the distinction:
+ *  `CountedAgainstThisTree` means every field is pinned by a counted run of this tree (the
+ *  consistency gate in `SpatialEventsCheck`), and `Declared` means the profile is a PROJECTION of a
+ *  representation this tree does not contain — printed, never gated, and never allowed to license a
+ *  floor.  A projection exists to show that the derivation survives the lowering, not to make a
+ *  claim about code nobody has run. */
+final case class ReprProfile(
+    /** the name this profile goes by in a report */
+    name: String,
+    /** `R`: children per PHYSICAL node.  2 for big-endian Patricia over `Int`; 256 for a byte-wide
+     *  node; 64 for a popcount-indexed HAMT word. */
+    arity: Long,
+    /** `W`: bits of an interned child key that the descent discriminates on */
+    keyWidthBits: Long,
+    /** is the structure PATH-COMPRESSED, so that a descent must COMPUTE the branch point (the
+     *  `acc |= repKey ^ rep` scan and `highestOneBit` in `IntTrieOps.joinAllTries`), rather than
+     *  indexing a fixed stride?  Compressed also means a descent is 2-way regardless of `arity`. */
+    compressed: Boolean,
+    /** does the n-ary descent make ONE simultaneous pass over all operands
+     *  (`IntTrieOps.{join,meet}AllTries`), or a per-key probe loop over the smallest fan
+     *  (`IntTrie.meetAll`'s `else` arm)?  This is `Tuning.patriciaOps`, and it is a field rather
+     *  than a flag read because a MUST-count read off one arm's source is not a floor for the
+     *  other. */
+    descendsPatricia: Boolean,
+    /** are sub-maps handed back BY POINTER on an unchanged descent (`bin1`/`binP`), so that an
+     *  unchanged branch allocates nothing?  This is what makes every `alloc` floor conditional. */
+    pointerPreservingRebuild: Boolean):
+  /** `lg R`, i.e. bits of key consumed per physical level */
+  def lgArity: Long = 63L - java.lang.Long.numberOfLeadingZeros(arity)
+  /** PHYSICAL nodes of a child map holding `m` keys: `m + ceil(m/(R-1))`.  At `R = 2` this is `2m`,
+   *  which is the literal this file used to write; at `R = 256` it is `m + ceil(m/255)`.  THIS IS
+   *  THE REPLACEMENT FOR EVERY BARE `2 *` ON A NODE COUNT. */
+  def spineNodes(m: Sym): Sym =
+    if arity <= 2L then Sym.c(2) * m                      // EXACT at R = 2: `m + ceil(m/1)` = `2m`
+    else m match
+      // exact where the key count is known
+      case Sym.Const(n) => Sym.c(n + (n + arity - 2L) / (arity - 1L))
+      // and SOUND but deliberately loose where it is not: `Sym` has no division, and
+      // `ceil(m/(R-1)) <= m` for every `R >= 2`, so `2m` still bounds it.  This arm is only ever
+      // reached by a `Declared` projection, which no gate reads — tightening it would mean adding a
+      // division constructor to `Sym` for the benefit of code that does not exist yet.
+      case other => Sym.c(2) * other
+  /** physical levels under ONE logical node, root inclusive: `ceil(W / lg R) + 1`.  At `R = 2,
+   *  W = 32` this is `33` — `FrontierConfig.PatriciaBits` exactly, which is the check that this
+   *  derivation is the same quantity and not a lookalike. */
+  def spineDepth: Long = (keyWidthBits + lgArity - 1L) / lgArity + 1L
+  /** child calls one descent call makes: 2 when compressed (the `br` split), `R` otherwise */
+  /** child calls one descent call makes.  UNUSED so far: the descent count enters the cost
+   *  through [[descentPassesPerCall]] and [[carryDepth]], not through the branching factor
+   *  directly.  Kept because a 256-ary `naryScratch` needs it and its value is checked. */
+  def splitWays: Long = if compressed then 2L else arity
+  /** LEVELS AN OPERAND CAN BE CARRIED DOWN UNCHANGED before the descent reaches its own mask.
+   *  Path compression is what creates this: `br` skips bit positions, so an operand whose mask is
+   *  below `br` is re-listed at every intervening level.  A fixed-stride node consumes exactly
+   *  `lg R` bits per level and cannot skip one, so there the carry is just the spine depth. */
+  def carryDepth: Long = if compressed then keyWidthBits else spineDepth
+  /** `O(k)` passes over the live-operand array that ONE descent call makes, per live operand: the
+   *  branch-point scan (compressed only), the split, and the result-identity search. */
+  def descentPassesPerCall: Long = (if compressed then 1L else 0L) + 1L + 1L
+
+/** the parameters of the ALGORITHM rather than the representation — these survive a
+ *  re-representation, which is why they are a separate record */
+final case class AlgoProfile(
+    /** `collectLive`/`liveDistinct` dedup by OBJECT IDENTITY, not by value.  This is the fact that
+     *  refuted two head-count-derived floors: `k` heads can share one child object. */
+    dedupByObjectIdentity: Boolean,
+    /** the linear-scan -> `IdentityHashMap` crossover in `IntTrieOps.collectLive` */
+    dedupScanMax: Long,
+    /** does the n-ary meet pre-scan its operands for an empty one (`ITrie.meetAll`'s
+     *  `anyEmptyOperand`)?  The join has no such loop. */
+    meetPreScansOperands: Boolean,
+    /** does the meet's descent exit BEFORE recursing when nothing is forced
+     *  (`meetAllTries`' `if forcedL && forcedR then Nil`)?  The join has no such exit, which is the
+     *  whole reason `tailsJoinProbesLo` can add descent terms the meet cannot. */
+    meetExitsBeforeRecursion: Boolean,
+    /** at two live operands the n-ary entry points delegate to the BINARY merge and run none of the
+     *  operand loops — the side condition every n-ary floor is gated on (`kd >= 3`) */
+    delegatesAtTwoOperands: Boolean)
+  // `dedupProbesPerOperand` AND `dedupProbesTotal` WERE HERE AND ARE DELETED.  Both were unused,
+  // and the first was worse than unused: it reproduced verbatim the two-regime form
+  // `2 + (dedupScanMax + k - 1)/k` that this same change records as REFUTED for being
+  // NON-MONOTONE -- `perProbe(24) = 15`, `(25) = 16`, `(26) = 6`, so a root that escapes the
+  // quadratic regime prices its sub-calls, which have not, at the cheaper rate.  Leaving a dead
+  // copy of a refuted formula in the file a future reader will mine for the right one is a trap,
+  // and it read as though the profile supplied the rate the transfers use.  The live derivations
+  // are `CostModel.dedupPerOperand` (monotone, capped at the threshold) and
+  // `CostModel.dedupTotal` (the promotion pass included, boundary at `dedupScanMax`, both pinned
+  // by counted runs in `BackendProfileCheck`).
+
+/** host allocation granularity: neither structure nor algorithm, but it is what an `alloc` floor
+ *  is quoted in */
+final case class AllocProfile(
+    /** `ArrayBuffer`'s growth factor as the `max(4, 4*len)` amortisation this tree counts */
+    growthFactor: Long,
+    /** the UNCONDITIONAL floor of that policy: `new ArrayBuffer[ITrie](4)` on entry */
+    minBufferSlots: Long,
+    /** `IdentityHashMap`'s interleaved key/value table, `scratch(2*(k+1))` */
+    hashSlotsPerEntry: Long,
+    /** the DECLARED per-operation modelling slack — a constant, so it changes no slope */
+    perOperationSlack: Long)
+
+/** WHICH EXECUTABLE'S EVENT STREAM IS BEING PREDICTED, which is not always the one whose source the
+ *  formula was read off.
+ *
+ *  `execZ` materialises `Iteration`/`Fold`/`Fixpoint`/`Call`/grounded subterms through `evalI`
+ *  ([[CostModel.controlFlowFallback]]), so `SpatialCost.go` reprices those subterms with the TRIE
+ *  model and adds the result to a ZIPPER total.  Inheriting an UPPER bound across that handoff is
+ *  sound — `evalI` really does run.  Inheriting a LOWER one is not: the zipper's total also contains
+ *  `materialize`, which hands a `Lit` back by pointer, so `execZ` can allocate strictly less than
+ *  `evalI` for the same term.  That asymmetry is the entire content of defect OP-2z, and it is the
+ *  reason a must-count needs to know which side of the handoff it is on. */
+final case class PricingTarget(
+    /** whose SOURCE the formulas were read off */
+    formulaFor: Backend,
+    /** whose COUNTED EVENTS the result will be compared against */
+    eventsOf: Backend):
+  def handedOff: Boolean = formulaFor != eventsOf
+  /** may a MUST-count derived from `formulaFor`'s source be charged into this total?  Only when the
+   *  formulas and the counted stream belong to the same executable. */
+  def claimsFloor: Boolean = !handedOff
+
+/** how much this profile is allowed to license */
+enum Provenance:
+  /** every field is pinned to a counted run of THIS tree by the consistency gate */
+  case CountedAgainstThisTree
+  /** a PROJECTION of a representation this tree does not contain: printed, never gated, and it may
+   *  not license a floor */
+  case Declared(why: String)
+  def gated: Boolean = this == Provenance.CountedAgainstThisTree
+
+final case class BackendProfile(repr: ReprProfile, algo: AlgoProfile, alloc: AllocProfile,
+                                target: PricingTarget, provenance: Provenance):
+  /** may a MUST-count be charged at all?  A projected profile describes code nobody ran, so no. */
+  def claimsFloor: Boolean = provenance.gated && target.claimsFloor
+  /** retarget this profile for a control-flow handoff: the formulas stay, the event stream changes.
+   *
+   *  ==NOTHING CALLS THIS YET, AND SAYING SO IS THE POINT==
+   *  An earlier round's resolution document listed [[PricingTarget]] among the review's four
+   *  required facts as though it were wired, and it is not: `SpatialCost.go`'s
+   *  [[CostModel.controlFlowFallback]] arm swaps the whole model (`Backends.of(fb, model.phase)`)
+   *  and never touches the profile, so the trie model pricing FOR the zipper still reports
+   *  `target.eventsOf == Trie` and [[BackendProfile.claimsFloor]] is `true` across exactly the
+   *  handoff it was written to make `false`.
+   *
+   *  WHY IT HAS NO CONSUMER, which is the honest reason rather than an oversight: the floor it was
+   *  going to gate is the thrice-refused `iteration` ALLOC floor, and that row was closed from the
+   *  CEILING instead ([[OperandShape.DistinctSingleKey]]), with no must-count at all.  So there is
+   *  currently no floor whose soundness depends on the distinction.  Wiring a predicate nothing
+   *  reads would be theatre; what this channel is for is the NEXT must-count derived from
+   *  `evalI`'s source that has to be withheld from a zipper total, and `BackendProfileCheck` pins
+   *  the semantics so that consumer inherits a checked contract rather than a fresh argument.
+   *
+   *  The retargeting itself needs a delegating `CostModel` at the `go` handoff, because
+   *  `Backends.of` returns a fixed instance whose `profile` is the default. */
+  def pricingFor(events: Backend): BackendProfile =
+    copy(target = target.copy(eventsOf = events))
+
+object BackendProfile:
+  /** TODAY'S TRIE, with every field read off the source it describes.  `descendsPatricia` is
+   *  `Tuning.patriciaOps` because that flag really does select a different loop. */
+  val intMapPatricia2: BackendProfile = BackendProfile(
+    repr = ReprProfile(name = if Tuning.patriciaOps then "intmap-patricia-2" else "intmap-perkey-2",
+                       arity = 2L, keyWidthBits = 32L, compressed = true,
+                       descendsPatricia = Tuning.patriciaOps, pointerPreservingRebuild = true),
+    algo = AlgoProfile(dedupByObjectIdentity = true, dedupScanMax = 24L,
+                       meetPreScansOperands = true, meetExitsBeforeRecursion = true,
+                       delegatesAtTwoOperands = true),
+    alloc = AllocProfile(growthFactor = 4L, minBufferSlots = 4L, hashSlotsPerEntry = 2L,
+                         perOperationSlack = 24L),
+    target = PricingTarget(Backend.Trie, Backend.Trie),
+    provenance = Provenance.CountedAgainstThisTree)
+
+  /** THE PROJECTIONS, which exist to show that the derivations above survive the lowering the tree
+   *  is heading for.  Both are `Declared`, so [[BackendProfile.claimsFloor]] is false for them and
+   *  no gate reads them: they are printed by the profile report and nothing else.  A cost derived
+   *  from a projection is a PREDICTION about code that does not exist yet, and it is labelled as one
+   *  for the same reason [[CostForm.Definitional]] is. */
+  val array256: BackendProfile = intMapPatricia2.copy(
+    repr = ReprProfile(name = "array-256", arity = 256L, keyWidthBits = 32L, compressed = false,
+                       descendsPatricia = true, pointerPreservingRebuild = true),
+    provenance = Provenance.Declared("a 256-ary byte-indexed node; no such executor is in this tree"))
+  val hamt64Popcount: BackendProfile = intMapPatricia2.copy(
+    repr = ReprProfile(name = "hamt-64-popcount", arity = 64L, keyWidthBits = 32L, compressed = false,
+                       descendsPatricia = true, pointerPreservingRebuild = true),
+    provenance = Provenance.Declared("a popcount-indexed 64-way HAMT word; not in this tree"))
+  val projections: Vector[BackendProfile] = Vector(array256, hamt64Popcount)
+
+/** ==================================================================================================
+ *  THE STRUCTURE OF AN N-ARY OPERATION'S OPERAND SET — the review's "ordered frontier structure".
+ *
+ *  The generic n-ary ceiling ([[CostModel.liveTotal]]) has to allow for an operand set whose
+ *  Patricia descent walks into the operands' interiors, because in general it does.  For the shapes
+ *  that actually occur it does not, and the difference is two orders of magnitude on the iteration
+ *  row.  What decides it is a STRUCTURAL fact about the operand set, not a numeric one, so it is a
+ *  separate channel rather than another `Sym`.
+ *
+ *  This is deliberately a SYNTACTIC fact about the term, derived once at the transfer site, not a
+ *  shape-domain inference: the two head-count-derived floors this file records as refuted were both
+ *  attempts to get the same information out of a NUMERIC channel, and the refutation in both cases
+ *  was that the numbers do not determine the object structure. */
+enum OperandShape:
+  /** nothing is known: the descent may walk the operands' interiors */
+  case Unknown
+  /** every non-empty operand is a SINGLE-KEY non-terminal trie, and the keys are PAIRWISE DISTINCT.
+   *  Produced by a head-retagging loop body — `Wrap(inner, p)` whose `p` derefs the loop symbol —
+   *  because `ITrie.wrap` builds exactly `node(false, IntMap.Tip(k_g, ·))` and the `k_g` are the
+   *  source's own distinct child keys.  See [[CostModel.tipJoinProbes]] for what it licenses. */
+  case DistinctSingleKey
+
+object OperandShape:
+  /** THE SYNTACTIC DERIVATION, and it is narrow ON PURPOSE.
+   *
+   *  `wrap` tags by `pathItemsI(p)`, so the operands are on pairwise DISTINCT keys only when the
+   *  first item of `p` is the loop's own symbol.  A CONSTANT first item would put every group under
+   *  the SAME key, which is the `br == 0` arm — a completely different descent that recurses into
+   *  the values — so the fact must not be claimed there.  Anything else, including a `Wrap` by a
+   *  path whose head is some other reference, is [[Unknown]].
+   *
+   *  `plen >= 1` is implied by a non-empty item list; `wrap` with `Nil` returns its argument
+   *  unchanged and would claim nothing. */
+  def ofLoopBody(body: Space, symbol: PathRef): OperandShape = body match
+    case Space.Wrap(_, p) if headDerefs(p, symbol) => DistinctSingleKey
+    case _ => Unknown
+
+  /** does this path BEGIN with a deref of `symbol`?  Only the first item matters: it is the key the
+   *  outermost `node` is built under, and the rest of the path is inside the operand's value. */
+  private def headDerefs(p: Path, symbol: PathRef): Boolean = p match
+    case Path.Deref(r) => r.s == symbol.s
+    case Path.Concat(a, _) => headDerefs(a, symbol)
+    case _ => false
+
 /** A per-operator cost transfer.  Each method returns the LOCAL cost INTERVAL of one node,
  *  EXCLUDING the node's own dispatch (which the traversal adds once, uniformly, via [[dispatch]]);
  *  the traversal adds the operands' costs and scales loop bodies by their group-count interval.
@@ -1124,6 +1384,17 @@ enum CostForm:
 trait CostModel:
   def backend: Backend
   def phase: ExecutionPhase
+  /** THE REPRESENTATION AND ALGORITHM PARAMETERS THIS MODEL'S FORMULAS ARE DERIVED FROM.
+   *
+   *  Defaulted to [[BackendProfile.intMapPatricia2]] because all three trie-shaped models price the
+   *  SAME `ITrie` structure — `execT` calls the very `ITrie` operations `evalI` does, and `execZ`
+   *  hands its control flow to `evalI` — and [[ReferenceCost]] prices `Set[PathValue]` and reads no
+   *  field of it.  What differs per model is [[BackendProfile.target]], which says whose counted
+   *  event stream the answer will be compared against.  NOTE: `SpatialCost.go` does NOT yet
+   *  retarget it across a [[CostModel.controlFlowFallback]] handoff -- see
+   *  [[BackendProfile.pricingFor]] for why the channel currently has no consumer and what it is
+   *  waiting for. */
+  def profile: BackendProfile = BackendProfile.intMapPatricia2
   def name: String = s"${backend.slug}/${if phase == ExecutionPhase.Warm then "warm" else "cold"}"
 
   /** WHY this instance's `touch` component has no counted oracle, when it has none.
@@ -1194,8 +1465,58 @@ trait CostModel:
    *  same gates that fail on any under-prediction anywhere. */
   protected def naryProbes(k: Sym, nodes: Sym): Sym = k match
     case Sym.Const(n) if n <= 2L => Sym.c(n * (n - 1) / 2)
-    case _ =>
-      perProbe(k) * Sym.tighter(k * (Sym.c(2) * nodes + Sym.one), Sym.c(2) * nodes + k)
+    case _ => perProbe(k) * liveTotal(k, nodes)
+
+  /** ==============================================================================================
+   *  `Σ_calls |live|`, THE SECOND FACTOR — and the term whose previous form was REFUTED BY MEASUREMENT.
+   *
+   *  It used to be `tighter(k·(2·nodes+1), 2·nodes + k)`, and the `2·nodes + k` arm was derived from
+   *  "every live entry in the whole descent is a DISTINCT Patricia node, and each appears in exactly
+   *  one call's `live` array".  THAT IS FALSE, and one arm of the split says so:
+   *
+   *      case t => if (repKey(t) & br) == 0 then { ls(nl) = t; nl += 1 }
+   *                else { rs(nr) = t; nr += 1 }                    // IntTrieOps.scala
+   *
+   *  An operand whose own mask is STRICTLY BELOW the split bit is passed down UNCHANGED — so the
+   *  SAME node is re-listed in `live`, and re-charged `probes(k)` twice plus `probes(i)`, at EVERY
+   *  level between where it becomes live and where `br == maskOf(it)`.  `br` is
+   *  `highestOneBit(acc)` and strictly decreases but may skip many bit positions, so the carry is
+   *  bounded by the KEY-BIT SPAN and not by the node count.
+   *
+   *  MEASURED, on `ITrie.tailsUnion` over `k` head children with one grandchild each, counting
+   *  `NaryOperandProbe` against the model's own two factors:
+   *
+   *    grandchild keys `2^i` (maximum carrying)   k = 12   counted   613  predicted [·, 558]  OUT
+   *                                               k = 26   counted  4399  predicted [·, 792]  OUT (5.6x)
+   *    dense grandchild keys `0..k-1`             k = 32   counted  1560  predicted [·, 972]  OUT
+   *                                               k = 256  counted 15552  predicted [·, 7692] OUT
+   *    `2^i` plus dense filler                    k = 34   counted  7439  predicted [·, 1032] OUT
+   *
+   *  and the predecessor of the predecessor, `2·nodes + 32k`, IS ALSO UNSOUND on the third family
+   *  (7439 against 7356): the `32k` charges a carry to the `k` ROOT operands only, and INTERIOR
+   *  nodes carry too.
+   *
+   *  ==THE TWO DERIVED CEILINGS, MET==
+   *   (a) CALLS x ARITY.  Every internal call separates at least two keys at its own bit, so there
+   *       are at most `2·nodes + 1` calls, each with at most `k` live entries: `k·(2·nodes+1)`.
+   *   (b) ENTRIES x CARRY DEPTH.  There are at most `2·nodes + k` distinct live entries and each is
+   *       carried at most `carryDepth` levels: `carryDepth·(2·nodes + k)`.
+   *
+   *  ==CARRY IS A PROPERTY OF PATH COMPRESSION, WHICH IS WHY IT IS A PROFILE FIELD==
+   *  A fixed-stride node consumes exactly `lg R` bits per level and CANNOT skip one, so an operand
+   *  is either split or absent and nothing is carried: `carryDepth` is `spineDepth` there and
+   *  `keyWidthBits` here.  This is the clearest instance in the model of a cost that is an artefact
+   *  of the CURRENT representation rather than a fact about the algebra — the 256-ary lowering
+   *  deletes it — and it is exactly why the ceiling is derived from [[ReprProfile]] instead of
+   *  being a fitted constant.  Tightening it further for the 2-ary case would be work that lowering
+   *  throws away; what recovers tightness for a CLOSED shape is the operand-structure facts (see
+   *  [[CostModel.groupJoin]]), not a better generic ceiling.
+   *
+   *  Validated by the corpus soundness sweep and `SpatialEventsCheck`'s CALIBRATION, which is what
+   *  reports an under-prediction anywhere. */
+  protected def liveTotal(k: Sym, nodes: Sym): Sym =
+    val spine = profile.repr.spineNodes(nodes)
+    Sym.tighter(k * (spine + Sym.one), Sym.c(profile.repr.carryDepth) * (spine + k))
 
   /** PROBES PER (CALL, LIVE OPERAND), derived from the three loops rather than bounded by the widest
    *  of them.  Per `joinAllTries`/`meetAllTries` call over `k` live operands (`IntTrieOps.scala`):
@@ -1216,10 +1537,32 @@ trait CostModel:
    *
    *  A SYMBOLIC `k` keeps the coarse form: the fold below needs an integer to halve. */
   private def perProbe(k: Sym): Sym = k match
-    case Sym.Const(n) =>
-      val dedupPer = if n <= 25L then (n + 1L) / 2L else 2L + (24L + n - 1L) / n
-      Sym.c(dedupPer + 3L)
-    case _ => Sym.tighter(k, Sym.c(24)) + Sym.c(4)
+    case Sym.Const(n) => Sym.c(dedupPerOperand(n) + profile.repr.descentPassesPerCall)
+    case _ => Sym.c(dedupPerOperand(profile.algo.dedupScanMax + 1L)
+                      + profile.repr.descentPassesPerCall)
+
+  /** ==============================================================================================
+   *  THE DEDUP RATE, AND WHY IT MUST BE MONOTONE — a REFUTED upper endpoint, not a loose one.
+   *
+   *  `collectLive` picks its regime PER CALL, on THAT call's own live count
+   *  (`IntTrieOps.scala`: `if (seen eq null) && k > dedupScanMax`), and every recursive call has
+   *  `k_c <= k`.  So a rate read off the ROOT's regime is not a bound for a sub-call still in the
+   *  regime the root escaped, and the previous form — `2 + ceil(24/k) + 3` above the threshold —
+   *  was NON-MONOTONE: `perProbe(24) = 15`, `perProbe(25) = 16`, `perProbe(26) = 6`.  A root at
+   *  `k = 26` has sub-calls at 25, 24, ... all charged 6 while each really pays up to 16.
+   *
+   *  MEASURED.  `ITrie.tailsUnion` over a source of `k` head children with one grandchild each,
+   *  counting `NaryOperandProbe`: the PREDICTION FALLS as the arity rises across the threshold
+   *  (`k = 25` predicts 2032, `k = 26` predicts 792) while the counted value RISES (1307 -> 1328),
+   *  so `k = 26` counted 1328 against a predicted upper of 792.  Non-monotonicity is the whole
+   *  defect; capping the regime at the threshold removes it and costs nothing below it.
+   *
+   *  Both terms are profile-derived: the crossover is `AlgoProfile.dedupScanMax` and the per-call
+   *  pass count is `ReprProfile.descentPassesPerCall` (branch-point scan, split, identity search —
+   *  the branch-point scan disappears when the representation is not path-compressed). */
+  private def dedupPerOperand(n: Long): Long =
+    val d = math.min(n, profile.algo.dedupScanMax + 1L)
+    (d + 1L) / 2L
 
   /** THE MEET'S PRE-SCAN, which [[naryProbes]] does not price because it is a JOIN-shaped formula.
    *
@@ -1246,10 +1589,13 @@ trait CostModel:
    *  where a per-operation constant of two dozen slots is inside the noise of a bound already met against
    *  `nd`. */
   protected def naryScratch(k: Sym, nodes: Sym): Sym = k match
-    case Sym.Const(n) if n <= 2L => Sym.c(24) + Sym.c(4) * k
+    case Sym.Const(n) if n <= 2L => Sym.c(profile.alloc.perOperationSlack) + Sym.c(4) * k
     case _ =>
-      Sym.c(24) + Sym.c(5) * k +
-        Sym.c(3) * Sym.tighter(k * (Sym.c(2) * nodes + Sym.one), Sym.c(2) * nodes + Sym.c(32) * k)
+      // the same `Sigma_calls |live|` factor as [[naryProbes]], for the same reason: the split
+      // arrays are allocated PER CALL over that call's live count, so an entry carried down is
+      // charged again.  The `32k` this used to write is the carry applied to the ROOT operands
+      // alone; [[liveTotal]]'s note has the measured refutation of that reading.
+      Sym.c(profile.alloc.perOperationSlack) + Sym.c(5) * k + Sym.c(3) * liveTotal(k, nodes)
 
   /** ==============================================================================================
    *  THE MUST SIDE OF THE SAME TWO LOOPS — the endpoint that was 0 by construction.
@@ -1321,8 +1667,29 @@ trait CostModel:
    *  counted run cannot go below, and `SpatialEventsCheck`'s CALIBRATION is what says so. */
   protected def naryLiveLo(src: Meas): Option[Long] =
     src.tails.map(_.distinctLo).filter(_ >= 3L)
+  /** THE DEEP FLOOR IS PATRICIA-PATH ONLY, AND IT USED NOT TO SAY SO — a real containment hole.
+   *
+   *  Every term this gates (`tailsScratchLo`'s `3 * kd`, `tailsProbesLo`'s `3 * kd + kd + 1`) is
+   *  read off `IntTrieOps.{join,meet}AllTries`: the `maps` hand-off array, that function's own
+   *  `live` array, the split arrays, the branching-bit scan, the split pass and the
+   *  result-identity search.  With `-Dmorkl.patriciaOps=false` NONE OF IT RUNS.  `IntTrie.meetAll`
+   *  takes its `else` arm instead — a per-key probe loop over the smallest fan, whose
+   *  `mutable.ArrayBuffer.empty[ITrie]` per key emits no `NaryScratchSlot` and whose per-key misses
+   *  emit `PatriciaEntry`/`SubtrieRejectedByPointer` rather than `NaryOperandProbe` — and
+   *  `IntTrieOps.meetAllTries` is never entered at all.
+   *
+   *  MEASURED, NOT ARGUED.  `naryDisjointLo` below was already gated on this flag and this one was
+   *  not, and the corpus calibration under `-Dmorkl.patriciaOps=false` reports
+   *  `corpus/trie Work actual=91 in [101, 257] OUT` — an UNDER-PREDICTION, which the gate prints as
+   *  "!! UNSOUND (soundness is never excused)".  The reason it survived is that NO GATE EVER RAN
+   *  THE SECOND CONFIGURATION: `Tuning.patriciaOps` is a `val` read at class-load, so exercising it
+   *  needs a second JVM, and nothing did.  `SpatialProfileCheck` is that gate now.
+   *
+   *  Read through the PROFILE rather than the flag, because "which loop does the descent use" is a
+   *  representation parameter and the 256-ary lowering will have its own answer to it. */
   protected def naryDeepLo(src: Meas): Option[Long] =
-    src.tails.filter(t => t.allHeaded && t.distinctLo >= 3L).map(_.distinctLo)
+    if !profile.repr.descendsPatricia then None
+    else src.tails.filter(t => t.allHeaded && t.distinctLo >= 3L).map(_.distinctLo)
   /** `NaryScratchSlot` this call cannot avoid */
   protected def tailsScratchLo(src: Meas): Sym =
     val shallow = naryLiveLo(src).map(4L * _).getOrElse(0L)
@@ -1335,7 +1702,7 @@ trait CostModel:
    *  takes the `LongMap` group-by path and `IntTrieOps.joinAllTries` never runs at all, so a floor
    *  read off its source would be a claim about code that is not executing. */
   protected def naryDisjointLo(src: Meas): Option[Long] =
-    if !Tuning.patriciaOps then None
+    if !profile.repr.descendsPatricia then None
     else src.tails.filter(t => t.allHeaded && t.keyDisjoint && t.distinctLo >= 3L).map(_.distinctLo)
   /** `NaryOperandProbe` this call cannot avoid */
   protected def tailsProbesLo(src: Meas): Sym =
@@ -1501,8 +1868,77 @@ trait CostModel:
    *  makes one `joinAll` call PER LOOP FRAME.  The degenerate arms below may only collapse the upper
    *  endpoint under `single`: the frame count is `Σ K_d`, a MAX over each level's distinct prefixes,
    *  so multiplying a per-call cost by it is the may/must confusion traps.md lesson 9 is about. */
-  def collectJoin(groups: Sym, groupsLo: Sym, body: Meas, single: Boolean = true): CostInterval =
+  def collectJoin(groups: Sym, groupsLo: Sym, body: Meas, single: Boolean = true,
+                  operands: OperandShape = OperandShape.Unknown): CostInterval =
     collect(groups, body)
+
+  /** ==============================================================================================
+   *  THE ARITY-ONLY PRICE OF AN N-ARY JOIN WHOSE OPERANDS ARE SINGLE-KEY TRIES ON DISTINCT KEYS.
+   *
+   *  ==THE FACT==
+   *  `evalI`'s `Iteration` arm hands `ITrie.joinAll` whatever `evalI(body)` returns; it applies no
+   *  wrap of its own.  When the BODY'S HEAD is `Wrap(inner, p)` and `p`'s first item derefs the loop
+   *  SYMBOL — the head-retagging shape every cornerstone loop has, and the one the operator table
+   *  uses — then `ITrie.wrap` is
+   *
+   *      if s.isEmpty then empty else ids.foldRight(s)((id, acc) => node(false, singleton(id, acc)))
+   *
+   *  so each group result is `empty` or `node(false, IntMap.Tip(k_g, X_g))` with `k_g` the group's
+   *  own head key.  The `k_g` are the DISTINCT child keys of the source, so the operand set is `k`
+   *  single-key non-terminal tries on pairwise distinct keys.
+   *
+   *  ==WHAT THAT BUYS==
+   *  `IntTrieOps.joinAllTries` can then never take the `br == 0` arm (the rep keys differ), never
+   *  calls `ITrie.joinAll` on children, and `unionTries` on two distinct-key `Tip`s emits nothing:
+   *  THE DESCENT NEVER ENTERS THE OPERAND VALUES, and every `X_g` is placed by pointer.  So the cost
+   *  is a function of the ARITY ALONE, and `nd(body)` — which the generic
+   *  [[CostModel.naryProbes]] multiplies in, and which dominates it — must not appear at all.
+   *
+   *  MEASURED, and the fan is the control.  Counting `NaryOperandProbe`/`NaryScratchSlot` of
+   *  `ITrie.joinAll` over `k` such operands, with each operand carrying `fan` grandchildren:
+   *  THE COUNTS ARE IDENTICAL AT `fan = 1` AND `fan = 8` for every `k` tried (3 … 256).  That is the
+   *  fact, not an argument for it.
+   *
+   *  ==THE WORST CASE IS THE DEGENERATE CHAIN, AND IT IS EXACT THERE==
+   *  `joinAllTries` recurses on the compressed Patricia trie over the `k` keys, so its internal
+   *  calls have live counts bounded by `k, k-1, …, 3` (any other tree's sorted sizes are pointwise
+   *  below that, and both terms below increase).  Against counted runs on key families chosen to
+   *  force that chain (`2^i`, and `0` plus `2^i`), [[tipJoinProbes]] is EXACT — slack 1.00 — at
+   *  every `k` from 3 to 31, and sound with slack ≤ 12.5 on dense keys where the real tree is
+   *  balanced.  [[tipJoinScratch]] is sound with slack ≤ 1.12 on the same families.
+   *
+   *  Both are stated in profile terms: `dedupScanMax` and the growth policy are
+   *  [[AlgoProfile]]/[[AllocProfile]] fields, and `descentPassesPerCall` loses the branch-point scan
+   *  when the representation is not path-compressed. */
+  /** THE ARITY THIS FACT IS APPLIED UP TO.  Both sums below are `O(k)` terms and grow as `k^3`, so
+   *  at a large head count they would be both slow and a `Long` overflow risk -- and the fact buys
+   *  nothing there anyway, because the generic ceiling it is met against is already smaller.  Beyond
+   *  the cap the transfer falls back to that ceiling, which is the sound direction. */
+  protected def tipArityCap: Long = 4096L
+
+  // `private[morkl]` rather than `protected` so a TEST can check it: the claims about this
+  // formula (fan-invariance, exactness on the degenerate chain) were measured by a scratch
+  // script and quoted in comments, which is not a check anyone can re-run.
+  private[morkl] def tipJoinProbes(k: Long): Long =
+    dedupTotal(k) + 3L * k + (3L to k).map(j => dedupTotal(j) + profile.repr.descentPassesPerCall * j).sum + 1L
+  private[morkl] def tipJoinScratch(k: Long): Long =
+    val g = profile.alloc
+    val liveArrays = (2L to k).sum + math.max(0L, k - 2L)   // incl. the `k-2` singleton branches
+    val splits = (3L to k).map(2L * _).sum
+    math.max(g.minBufferSlots, g.growthFactor * k) + g.hashSlotsPerEntry * (k + 1L) + k +
+      liveArrays + splits + crossings(k)
+  /** `collectLive`/`liveDistinct` dedup probes for `j` PAIRWISE-DISTINCT operands.  Two regimes and a
+   *  one-off promotion pass between them, and THE BOUNDARY IS OFF BY ONE FROM THE OBVIOUS READING:
+   *  the promotion fires when the kept count EXCEEDS `dedupScanMax` (`buf.length > 24`), so `j = 25`
+   *  already pays `pr += 25`.  Capping the whole term at `dedupScanMax` — the first draft — drops
+   *  that pass and the per-operand probes above it, and a counted run at `k = 26` said so to the
+   *  probe (4399 against 4374, a constant 25 short). */
+  protected def dedupTotal(j: Long): Long =
+    val m = profile.algo.dedupScanMax + 1L
+    if j < m then j * (j - 1L) / 2L else profile.algo.dedupScanMax * m / 2L + m + (j - m)
+  /** every descent call that crosses the threshold builds its own `IdentityHashMap` table */
+  protected def crossings(k: Long): Long =
+    (math.max(profile.algo.dedupScanMax + 1L, 3L) to k).map(j => profile.alloc.hashSlotsPerEntry * (j + 1L)).sum
   /** one fixpoint round's union + equality check, EXCLUDING the body.
    *
    *  CHARGED `R` TIMES.  Every executable's loop is now
@@ -2227,7 +2663,8 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  Both arms therefore cost EXACTLY `work 0, alloc 4, touch 1` — no split array, no maps copy, no
    *  terminal-flag scan, no result-identity search, and no `ITrie.node`.  `groups * opEntry` is kept
    *  in the upper endpoint so a subclass with a nonzero op entry cannot be under-charged. */
-  override def collectJoin(groups: Sym, groupsLo: Sym, body: Meas, single: Boolean): CostInterval =
+  override def collectJoin(groups: Sym, groupsLo: Sym, body: Meas, single: Boolean,
+                           operands: OperandShape): CostInterval =
     val buffer = Cost.of(alloc = Sym.c(4), touch = entryVisit)
     if single && joinReturnsEarly(groups, body) then
       // THE `nodes` (alloc) UPPER ENDPOINT IS NOT COLLAPSED, and the reason is a MEASURED refutation
@@ -2246,10 +2683,22 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
                               nodes = Sym.one + groups * nd(body) +
                                       naryScratch(groups, groups * nd(body))))
     else
+      // THE OPERAND-STRUCTURE FACT, MET WITH THE GENERIC CEILING SO IT CAN ONLY TIGHTEN.  Under
+      // `OperandShape.DistinctSingleKey` the descent cannot enter the operand values, so the price
+      // is a function of the arity alone -- see [[CostModel.tipJoinProbes]] for the fact, the
+      // measured fan control, and why `nd(body)` must not appear.  `Sym.tighter` and not a
+      // replacement: a wrong tightening then still cannot exceed the ceiling it was met against,
+      // and the counted oracle is what decides between them.
+      val gnodes = groups * nd(body)
+      val (probesHi, scratchHi) = (operands, groups) match
+        case (OperandShape.DistinctSingleKey, Sym.Const(k)) if k >= 3L && k <= tipArityCap && single =>
+          (Sym.tighter(Sym.c(tipJoinProbes(k)), naryProbes(groups, gnodes)),
+           Sym.tighter(Sym.c(tipJoinScratch(k)), naryScratch(groups, gnodes)))
+        case _ => (naryProbes(groups, gnodes), naryScratch(groups, gnodes))
       CostInterval(buffer + Cost.of(alloc = naryScratchLo(groupsLo)),
-                   mk(work = groups * opEntry + naryProbes(groups, groups * nd(body)),
-                      nodes = Sym.one + groups * nd(body) + naryScratch(groups, groups * nd(body)),
-                      touch = Sym.one + tPer * groups * nd(body)))
+                   mk(work = groups * opEntry + probesHi,
+                      nodes = Sym.one + gnodes + scratchHi,
+                      touch = Sym.one + tPer * gnodes))
 
   /** does `ITrie.joinAll` provably take its `live.isEmpty` or `live.length == 1` arm? */
   private def joinReturnsEarly(groups: Sym, body: Meas): Boolean =
@@ -2263,15 +2712,29 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  visits are counted as `EqualityFrontierVisit` (an `Explain` event) and therefore do NOT belong in
    *  the calibrated `touch` component. */
   def fixStep(acc: Meas, body: Meas, rel: Rel): CostInterval =
-    // NO FORCED VISIT PER ROUND: the round that DETECTS convergence runs `equalT` and then stops
-    // without the accumulating `union`, so `R` rounds perform at most `R - 1` merges and a per-round
-    // lower endpoint of one visit over-claims on every fixpoint.
+    // ONE FORCED VISIT PER ROUND, AND THE COMMENT THAT USED TO STAND HERE WAS WRONG ABOUT THE LOOP.
+    // It read "the round that DETECTS convergence runs `equalT` and then stops without the
+    // accumulating `union`, so `R` rounds perform at most `R - 1` merges", and zeroed the `touch`
+    // lower endpoint on that ground.  `IntTrie.scala`'s Fixpoint arm is the opposite order:
+    //
+    //   while !stop do
+    //     effort(EffortEvent.FixpointRound)                  // counts the terminating round too
+    //     val nxt = ITrie.union(cur, evalI(body)(...))       // <- THE MERGE, unconditionally
+    //     if ITrie.equalT(nxt, cur) then stop = true else cur = nxt
+    //
+    // The union is computed BEFORE the test and the test reads its RESULT, so the merge runs in
+    // every round including the terminating one -- `R` merges, not `R - 1`.  That is why the caller
+    // scales this interval by the full `[roundsLo, rounds]`, and with that scaling the zeroed
+    // endpoint was no longer conservative bookkeeping but a hole: `evalI` is eager and
+    // `ITrie.union` emits its `TrieNodeVisit` as its first statement, before `a eq b` and before
+    // the empty tests, so one visit per round cannot be avoided by any data distribution.
+    // `priced` already derives exactly that floor (`forcedEntry`, and the stronger must-paired
+    // count where `Rel.mayShare` permits it), so this arm now passes `p` through unchanged.
     val coarseAlloc = tighter(nd(acc), nd(body))
     val alloc = childlessPairedPruned(rel) match
       case Some(r) => tighter(coarseAlloc, r + Sym.one)
       case None => coarseAlloc
-    val p = priced(rel, acc, body, merge2(nd(acc), nd(body)), alloc)
-    CostInterval(p.lo.copy(touch = Amount.zero), p.hi)
+    priced(rel, acc, body, merge2(nd(acc), nd(body)), alloc)
 
   /** ==============================================================================================
    *  A PAIRED PREFIX WITH NO CHILDREN ON EITHER SIDE IS NEVER REBUILT BY THE ACCUMULATING UNION.
@@ -2357,7 +2820,9 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
       // implementation and this model prices THAT executable; under the `LongMap` alternative the
       // per-group `ITrie.joinAll` recursion emits its own `TrieNodeVisit` instead, so the floor holds
       // either way, but the claim is gated on the flag rather than argued across two code paths.
-      val nary = if Tuning.patriciaOps && naryDeepLo(src).isDefined then Sym.one else Sym.zero
+      // `naryDeepLo` now carries the `descendsPatricia` gate itself, so the conjunct is redundant
+      // -- kept as one read of the profile so the dependence stays visible at the use site.
+      val nary = if profile.repr.descendsPatricia && naryDeepLo(src).isDefined then Sym.one else Sym.zero
       src.headsLo match
         case Sym.Const(n) if n >= 2L => Sym.c(2) + nary
         case _ => entry
@@ -2481,7 +2946,8 @@ final class GraphCost(p: ExecutionPhase) extends TrieAlgebraCost(p):
    *  containment gained: the quadratic was slack, not safety.)
    *
    *  No must side: an empty source runs the fold zero times. */
-  override def collectJoin(groups: Sym, groupsLo: Sym, body: Meas, single: Boolean): CostInterval =
+  override def collectJoin(groups: Sym, groupsLo: Sym, body: Meas, single: Boolean,
+                           operands: OperandShape): CostInterval =
     CostInterval.upperOnly(
       mk(work = groups * opEntry + Sym.c(5) * groups,
          nodes = groups * nd(body),
@@ -2886,7 +3352,7 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
                      src.tails.exists(_.distinctLo >= 2L)
       val touch =
         if !twoHeads then Sym.one
-        else if Tuning.patriciaOps && naryDeepLo(src).isDefined then Sym.c(3)
+        else if profile.repr.descendsPatricia && naryDeepLo(src).isDefined then Sym.c(3)
         else Sym.c(2)
       Cost.of(work = Sym.c(3) + tailsProbesLo(src),
               alloc = Sym.one + tailsScratchLo(src),
@@ -2943,7 +3409,8 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
    *  `collect` here (a left fold, which runs no operand loop at all) put the prediction BELOW the counted
    *  total on two corpus programs the moment `NaryOperandProbe` existed; the comment above about
    *  `controlFlowFallback` is not true of every route into a loop. */
-  override def collectJoin(groups: Sym, groupsLo: Sym, body: Meas, single: Boolean): CostInterval =
+  override def collectJoin(groups: Sym, groupsLo: Sym, body: Meas, single: Boolean,
+                           operands: OperandShape): CostInterval =
     CostInterval(Cost.of(alloc = naryScratchLo(groupsLo)),
                  Cost.of(work = groups + naryProbes(groups, groups * body.nodes),
                          alloc = groups * body.nodes + naryScratch(groups, groups * body.nodes),
@@ -3488,7 +3955,7 @@ object SpatialCost:
       // So what the decoration is WORTH here is its LAW AND BINDER REFINEMENTS — which a fresh
       // per-node infer genuinely cannot have — rather than a saved traversal.  Making
       // `SpatialAnalysis` strong enough per node to drop the re-inference is the right long-run fix
-      // and belongs there, not here; PLAN.md records it.
+      // and belongs there, not here; plan.md task 1B.6 records it.
       case Some(t) =>
         st.note(DecoratedNote)
         if env.shapeFacts then st.note(ShapeNote)
@@ -4148,8 +4615,14 @@ object SpatialCost:
         val m = refineHere(Meas(groups * mb.size, mb.len, groups * mb.size))
         // ITERATION ACCUMULATES WITH `joinAll`, an n-ary simultaneous pass, NOT the left fold `Fold`
         // uses — the requirement: "Split them."
+        // THE OPERAND-STRUCTURE FACT is read off the BODY'S SYNTAX here, where the term is in hand.
+        // `collectJoin` receives a `Meas`, which cannot express "every operand is a single-key trie
+        // on a distinct key" -- that is a fact about the objects `ITrie.wrap` builds, not about any
+        // count -- so it is derived at the transfer site and passed down.  See [[OperandShape]].
+        val opShape = OperandShape.ofLoopBody(body, sym)
         val cost = d + cs + model.loopPrologue + model.group(ms) + cb.scale(groupsLo, groups) +
-                   model.collectJoin(groups, groupsLo, mb) + CostInterval(Cost.r(groupsLo), Cost.r(groups))
+                   model.collectJoin(groups, groupsLo, mb, single = true, operands = opShape) +
+                   CostInterval(Cost.r(groupsLo), Cost.r(groups))
         (cost, m)
 
       case Space.Fold(src, initial, acc, sym, rest, body, update) =>

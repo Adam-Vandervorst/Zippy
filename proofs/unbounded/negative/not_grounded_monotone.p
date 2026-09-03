@@ -13,9 +13,9 @@
 %
 % Expected: NOT-PROVED.
 % ===========================================================================
-include('_signature.p').
-include('_paths.p').
-include('_grounded_ops.p').
+include('../_signature.p').
+include('../_paths.p').
+include('../_grounded_ops.p').
 tff(not_grounded_monotone, conjecture,
     ! [F: gfun, S1: space, S2: space] :
       ( sub(S1,S2) => sub(gss(F,S1), gss(F,S2)) ) ).

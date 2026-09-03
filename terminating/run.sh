@@ -123,6 +123,16 @@ check reachable_value                 1
 check scc_decrease                    7
 check transitive_equiv                1
 
+# ANNOTATE THE CONDITIONAL VERDICTS.  This harness writes the verdict the PROVER reached, which is
+# right.  Whether that verdict is UNQUALIFIED is a separate question, decided by the trusted base in
+# docs/TRUSTED.md, and `PROVED` in a table is read as unqualified.  One tool owns that decision so
+# the trusted base is not duplicated into each harness; it only ever weakens a verdict, and it is
+# idempotent.  See scripts/proof_closure.py.
+if command -v python3 >/dev/null 2>&1; then
+  python3 ../scripts/proof_closure.py --annotate >/dev/null 2>&1 && \
+    echo "conditional verdicts annotated from the trusted base (scripts/proof_closure.py)"
+fi
+
 echo "-----"
 echo "certified: $pass  expected-open: $open_exp  countermodels: $cm  unexpected-open: $fail"
 echo "status table: terminating/STATUS.tsv    obligation map: terminating/REGISTRY.tsv"

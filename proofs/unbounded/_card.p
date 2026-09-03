@@ -11,6 +11,11 @@
 % write down, as axioms, exactly the counting facts we rely on.  This file is
 % that list, and it is deliberately short.
 %
+% TRUSTED-ENTRY: T7
+%   (the marker `scripts/proof_closure.py` requires of any file with an ASSUMED block, so
+%   that docs/TRUSTED.md's claim to be the COMPLETE list of assumptions is enforced rather
+%   than asserted.  These six were assumed here and absent from that file for a whole round.)
+%
 % ASSUMED (4 axioms; non-negativity comes free from `_nat.p`'s `zero_le`):
 %   card_empty      |{}| = zero
 %   card_sing       |{p}| = one

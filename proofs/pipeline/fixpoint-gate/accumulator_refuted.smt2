@@ -24,14 +24,14 @@
 
 (declare-fun fix_2 (Path) Bool)
 ; FIXPOINT fix_2 — first-class: the LEAST post-fixpoint above init (never unrolled)
-(assert (forall ((zq Path)) (=> (or (= zq (cons 3 nil))) (fix_2 zq))))
-(assert (forall ((zq Path)) (=> (or (exists ((q_3 Path)) (and (= zq (cons 2 q_3)) (and (fix_2 (cons 3 q_3)) (or (= (cons 3 q_3) (cons 3 nil)))))) (exists ((q_4 Path)) (and (= zq (cons 1 q_4)) (and (and (fix_2 (cons 3 q_4)) (or (= (cons 3 q_4) (cons 3 nil)))) (and (fix_2 (cons 2 q_4)) (or (= (cons 2 q_4) (cons 2 nil)))))))) (fix_2 zq))))
+(assert (forall ((zq Path)) (=> (or (= zq (cons 12337 nil))) (fix_2 zq))))
+(assert (forall ((zq Path)) (=> (or (exists ((q_3 Path)) (and (= zq (cons 12335 q_3)) (and (fix_2 (cons 12337 q_3)) (or (= (cons 12337 q_3) (cons 12337 nil)))))) (exists ((q_4 Path)) (and (= zq (cons 12336 q_4)) (and (and (fix_2 (cons 12337 q_4)) (or (= (cons 12337 q_4) (cons 12337 nil)))) (and (fix_2 (cons 12335 q_4)) (or (= (cons 12335 q_4) (cons 12335 nil)))))))) (fix_2 zq))))
 (define-fun s_1 ((p Path)) Bool (fix_2 p))
 (define-fun sideA ((p Path)) Bool (s_1 p))
-(define-fun sideB ((p Path)) Bool (or (= p (cons 2 nil)) (= p (cons 3 nil))))
+(define-fun sideB ((p Path)) Bool (or (= p (cons 12335 nil)) (= p (cons 12337 nil))))
 ; PARK INDUCTION fix_2 ⊑ sideA — leastness of fix_2; BOTH premises are obligations
-(assert (=> (and (forall ((zr Path)) (=> (or (= zr (cons 3 nil))) (sideA zr))) (forall ((zr Path)) (=> (or (exists ((q_5 Path)) (and (= zr (cons 2 q_5)) (and (sideA (cons 3 q_5)) (or (= (cons 3 q_5) (cons 3 nil)))))) (exists ((q_6 Path)) (and (= zr (cons 1 q_6)) (and (and (sideA (cons 3 q_6)) (or (= (cons 3 q_6) (cons 3 nil)))) (and (sideA (cons 2 q_6)) (or (= (cons 2 q_6) (cons 2 nil)))))))) (sideA zr)))) (forall ((zq Path)) (=> (fix_2 zq) (sideA zq)))))
+(assert (=> (and (forall ((zr Path)) (=> (or (= zr (cons 12337 nil))) (sideA zr))) (forall ((zr Path)) (=> (or (exists ((q_5 Path)) (and (= zr (cons 12335 q_5)) (and (sideA (cons 12337 q_5)) (or (= (cons 12337 q_5) (cons 12337 nil)))))) (exists ((q_6 Path)) (and (= zr (cons 12336 q_6)) (and (and (sideA (cons 12337 q_6)) (or (= (cons 12337 q_6) (cons 12337 nil)))) (and (sideA (cons 12335 q_6)) (or (= (cons 12335 q_6) (cons 12335 nil)))))))) (sideA zr)))) (forall ((zq Path)) (=> (fix_2 zq) (sideA zq)))))
 ; PARK INDUCTION fix_2 ⊑ sideB — leastness of fix_2; BOTH premises are obligations
-(assert (=> (and (forall ((zr Path)) (=> (or (= zr (cons 3 nil))) (sideB zr))) (forall ((zr Path)) (=> (or (exists ((q_7 Path)) (and (= zr (cons 2 q_7)) (and (sideB (cons 3 q_7)) (or (= (cons 3 q_7) (cons 3 nil)))))) (exists ((q_8 Path)) (and (= zr (cons 1 q_8)) (and (and (sideB (cons 3 q_8)) (or (= (cons 3 q_8) (cons 3 nil)))) (and (sideB (cons 2 q_8)) (or (= (cons 2 q_8) (cons 2 nil)))))))) (sideB zr)))) (forall ((zq Path)) (=> (fix_2 zq) (sideB zq)))))
+(assert (=> (and (forall ((zr Path)) (=> (or (= zr (cons 12337 nil))) (sideB zr))) (forall ((zr Path)) (=> (or (exists ((q_7 Path)) (and (= zr (cons 12335 q_7)) (and (sideB (cons 12337 q_7)) (or (= (cons 12337 q_7) (cons 12337 nil)))))) (exists ((q_8 Path)) (and (= zr (cons 12336 q_8)) (and (and (sideB (cons 12337 q_8)) (or (= (cons 12337 q_8) (cons 12337 nil)))) (and (sideB (cons 12335 q_8)) (or (= (cons 12335 q_8) (cons 12335 nil)))))))) (sideB zr)))) (forall ((zq Path)) (=> (fix_2 zq) (sideB zq)))))
 (assert (not (forall ((p Path)) (= (sideA p) (sideB p)))))
 (check-sat)

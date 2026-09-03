@@ -370,8 +370,30 @@ object SpatialTypes:
         val x = rec(xs)
         if a == 0 && b == 0 then x
         else
-          val w = Lower.sizeBounds(s).hi                            // the window (already computed there)
-          build(x.byLen.map((l, c) => l -> Ivl(0, c.hi min w)), Ivl(0, x.rest.hi min w), x.restLens)
+          // THE WINDOW'S CARDINALITY, BOTH ENDPOINTS.  `SpatialTyping.windowCard` lifts
+          // `RangeBounds.normalize` over the SOURCE'S OWN size interval and is exact (45367
+          // (bound-pair, size-interval) lifts at two magnitudes, checked against `normalize` itself
+          // in `src/test/scala/RangeCardCheck.scala`).  It is MET with the tier-1 syntactic bound
+          // rather than replacing it: the two are computed from different information — tier-1 from
+          // the term's syntax, this from the histogram just derived for `xs` — and neither subsumes
+          // the other.
+          val sz = x.size
+          val card = SpatialTyping.windowCard(Ivl(sz.lo, sz.hi), a, b)
+          val w = Lower.sizeBounds(s).hi min card.hi
+          // ==A LOWER BOUND NEEDS A CLASS TO ATTRIBUTE IT TO==
+          // `card.lo` bounds the window's TOTAL cardinality, and a positional window may draw its
+          // paths from any length class, so no individual class gets a must-count from it in
+          // general — which is why every class below is `Ivl(0, ...)` and was before.  There is one
+          // case where the attribution is forced: when the source's support is a SINGLE class and
+          // there is no spill (`rest.hi == 0`), every surviving path has that length, so the whole
+          // of `card.lo` lands there.  Anything weaker than that side condition would claim a must
+          // for a class the window can miss entirely.
+          val sup = x.support
+          val single = sup.length == 1 && x.rest.hi == 0
+          def loAt(l: Long, cHi: Long): Long =
+            if single && sup.head == l then card.lo min cHi else 0L
+          build(x.byLen.map((l, c) => l -> Ivl(loAt(l, c.hi), c.hi min w)),
+                Ivl(0, x.rest.hi min w), x.restLens)
 
       case Space.Iteration(src, sym, rest, body) =>
         val x = rec(src)

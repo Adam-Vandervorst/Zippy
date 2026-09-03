@@ -658,8 +658,16 @@ class SpatialCostCheck extends FunSuite:
       // is every operator here in its left argument — so `Subtraction(rest, B)`, `Restriction(rest, B)`
       // and `TailsUnion(rest)` are all collapsible in principle and a future rule could collapse them
       // in fact.  The body below binds BOTH names and TAGS its output with the group head, so
-      // `⋃_h h·(T_h ∖ b)` genuinely needs the grouping, and it is the shape every cornerstone loop
-      // actually has (`aunt`, `gol/nextStep`, `nqueens.place` all bind the head and re-tag by it).
+      // `⋃_h h·(T_h ∖ b)` genuinely needs the grouping.
+      //
+      // AND IT IS *NOT* "THE SHAPE EVERY CORNERSTONE LOOP HAS", which is what this comment used to
+      // claim of `aunt`, `gol/nextStep` and `nqueens.place`.  Checked: all four of `gol/nextStep`'s
+      // `Iteration` bodies are an `Iteration`, a `Subtraction` (`exactly(...)`) or a `Call`, and
+      // only the INNERMOST level of `nqueens.place` is a head-retagging wrap.  The claim mattered
+      // because `OperandShape.ofLoopBody` fires exactly on this shape, so the sentence made a
+      // fixture-specific tightening look like a general one -- and the logs show `gol trie Alloc`'s
+      // upper going UP, not down, when that fact landed.  `BackendProfileCheck` pins which bodies
+      // fire and which do not.
       // It also keeps the per-group result LARGE, so the n-ary accumulate `collectJoin` is still
       // exercised on eight substantial operands — which is the cost structure this row exists to show.
       "iteration"    -> Space.Iteration(A, h, SpaceMention("t"),

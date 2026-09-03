@@ -67,7 +67,7 @@ args = ap.parse_args()
 # This is the honest half of the acceptance review's item 3: the pipeline matrix is NOT a
 # full-support table, and rather than let a reader infer its shape from marker vocabulary the shape
 # is written down and checked.  Discharging the cells is the other half and is open — see
-# RESOLUTION.md item 3.
+# plan.md, Track A′ (item 4).
 DECLARED_FILE = root / "proofs" / "pipeline" / "DECLARED.tsv"
 
 

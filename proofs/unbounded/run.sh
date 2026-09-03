@@ -76,6 +76,18 @@ szs() {  # last SZS status word, or "none"
   printf '%s\n' "$1" | grep '^% SZS status' | tail -1 | awk '{print $4}'
 }
 
+# A FILE THE PROVER COULD NOT READ IS NOT AN UNPROVABLE FILE, AND SCORING IT AS ONE HID A BUG FOR A
+# WHOLE ROUND.  Three negative controls used bare `include('_signature.p')` while the loop below
+# runs `cd negative`, so vampire reported
+#     User error: cannot open file .../negative/_signature.p
+# emitted no SZS status at all, and the `*)` arm of the case below recorded
+# "NOT-PROVED (expected)" -- a PASS.  A negative control that cannot be parsed pins nothing, so the
+# corpus reported three non-vacuity checks it was not performing.  This is checked FIRST now, for
+# both loops, and it is a hard failure rather than a verdict.
+user_error() {
+  printf '%s\n' "$1" | grep -q '^% *User error' || printf '%s\n' "$1" | grep -q '^User error'
+}
+
 probe_one() {  # $1 = file, $2 = conjecture name -> "ok" | "VACUOUS"
   [ "$VACUITY" = "0" ] && { echo "skipped"; return; }
   sed "/^tff($2, conjecture,/,\$d" "$1" > .probe.p
@@ -95,6 +107,17 @@ for path in *.p; do
   f=${path%.p}
   out=$("$VAMPIRE_BIN" --mode casc -t "${TLIMIT}s" "$path" 2>&1)
   st=$(szs "$out")
+  # THE SAME CHECK ON THE POSITIVE SIDE, and here it matters even more: an unreadable file scores
+  # `OPEN`, and `OPEN` for a name in `EXPECTED_OPEN` is a PASS.  A missing include would therefore
+  # be indistinguishable from a hard obligation.
+  if user_error "$out"; then
+    printf "%s\t%s\t%s\t%s\n" "$f" "${st:-none}" "-" \
+      "UNREADABLE — the prover could not load this file" >> STATUS.tsv
+    printf "%-26s vampire: %-20s probe: %-8s => %s\n" "$f" "${st:-none}" "-" \
+      "UNREADABLE — the prover could not load this file"
+    fail=$((fail+1))
+    continue
+  fi
   probe=$(probe_one "$path" "$f")
   case "$st" in
     Theorem|Unsatisfiable)      v=PROVED ;;
@@ -127,18 +150,39 @@ for path in negative/*.p; do
   f=$(basename "$path" .p)
   out=$(cd negative && "$VAMPIRE_BIN" --mode casc -t "${NLIMIT}s" "$f.p" 2>&1)
   st=$(szs "$out")
+  if user_error "$out"; then
+    verdict="UNREADABLE — the prover could not load this file, so the control pins NOTHING"
+    st="${st:-none}"
+    neg_bad=$((neg_bad+1))
+  else
   case "$st" in
     Theorem|Unsatisfiable|ContradictoryAxioms)
       verdict="PROVED — ENCODING IS BROKEN"; neg_bad=$((neg_bad+1)) ;;
     *) verdict="NOT-PROVED (expected)"; neg_ok=$((neg_ok+1)) ;;
   esac
+  fi
   printf "%s\t%s\t%s\t%s\n" "negative/$f" "$st" "-" "$verdict" >> STATUS.tsv
   printf "%-26s vampire: %-20s          => %s\n" "negative/$f" "$st" "$verdict"
 done
 
 rm -f .probe.p
+
+# ANNOTATE THE CONDITIONAL VERDICTS.  This loop writes the verdict THE PROVER REACHED, which is
+# right -- the prover is what ran.  But `PROVED` in a table is read as unqualified, and for a result
+# whose transitive `include` closure reaches a trusted assumption (docs/TRUSTED.md) that reading is
+# wrong: `mon_cancel` is proved from `_path_induction.p`, an induction SCHEMA first-order logic
+# cannot state, so it is conditional and the table has to say so.  Duplicating the trusted base into
+# this script so it could annotate as it goes would give two copies to drift apart, so the closure is
+# computed from the proof files by one tool and applied here, after the run.
+if command -v python3 >/dev/null 2>&1; then
+  python3 ../../scripts/proof_closure.py --annotate >/dev/null 2>&1 &&     echo "conditional verdicts annotated from the include closure (scripts/proof_closure.py)"
+fi
+
 echo "-----"
 echo "certified: $pass  expected-open: $open_exp  unexpected-open: $fail  countermodels/contradictions: $cm"
 echo "negative controls held: $neg_ok  BROKEN: $neg_bad   vacuous axiom sets: $vac_bad"
+echo '  NOTE: "certified" counts PROVER verdicts.  Whether a verdict is UNQUALIFIED is a different'
+echo '  question, decided by the include closure: run `python3 scripts/proof_closure.py` for the'
+echo '  per-result answer and the trusted entries each one reaches.'
 echo "status table: proofs/unbounded/STATUS.tsv   registry: proofs/unbounded/REGISTRY.tsv"
 [ $fail -eq 0 ] && [ $cm -eq 0 ] && [ $neg_bad -eq 0 ] && [ $vac_bad -eq 0 ]

@@ -44,7 +44,12 @@ class CorpusRuntimes extends FunSuite:
     sb.append(s"# corpus_runtimes.csv — ${RunEnvironment.oneLine(Seq("rows" -> recs.size.toString, "envs-per-program" -> M.toString, "seed" -> "424242"))}\n")
     sb.append("idx,nodes,nSpace,nPath,uniqueOut,evalI_ms_per1000\n")
     for (i, r, ms, nd) <- rows do sb.append(f"$i,$nd,${r.nSpace},${r.nPath},${r.uniqueOut},$ms%.3f\n")
-    locally { val w = new java.io.FileWriter(new java.io.File(Loaders.repoRoot, "corpus_runtimes.csv")); try w.write(sb.toString) finally w.close() }
+    // PUBLISHING IS NOT A SIDE EFFECT OF TESTING.  This suite measures; `publish_benchmarks.py`
+    // publishes.  Without a manifest the table is printed and not written, so `sbt test` leaves the
+    // committed artifact alone — which is what stops three suites stamping three different
+    // environment records onto one claimed measurement.
+    if BenchmarkArtifact.publishing then BenchmarkArtifact.write("corpus_runtimes.csv", sb.toString)
+    else println(BenchmarkArtifact.skipNote("corpus_runtimes.csv"))
     val tot = rows.map(_._3).sum; val nd = rows.map(_._4.toDouble).sorted; val ms = rows.map(_._3).sorted
     def pct(v: Vector[Double], p: Double) = v(math.min(v.size - 1, (p * v.size).toInt))
     System.out.println(f"RUNTIMES: ${recs.size} programs x $M inputs, total evalI ${tot}%.0f ms.")

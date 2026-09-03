@@ -1,4 +1,4 @@
-fixpoint_is_lfp	14/14 unsat	10/14 proved	PROVED
+fixpoint_is_lfp	14/14 unsat	10/14 proved	PROVED-MODULO T2
 asfixpoint_sound	18/18 unsat	15/18 proved	PROVED
 unroll_vs_kleene	19/19 unsat	13/19 proved	PROVED
 seminaive_correct	21/21 unsat	19/21 proved	PROVED

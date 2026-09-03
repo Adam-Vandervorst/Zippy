@@ -83,7 +83,8 @@ class ProgramStats extends FunSuite:
     val rows = c.keys.toVector.sortBy((y, p) => (tIdx(y), pIdx(p), y, p))
     val cols = c.values.flatMap(_.keys).toSet.toVector.sortBy(x => (tIdx(x), x))
     val sb = new StringBuilder
-    sb.append(s"# prog_matrix.tsv — ${RunEnvironment.oneLine(Seq("programs" -> got.toString, "min-nodes" -> minNodes.toString))}\n")
+    sb.append(s"# prog_matrix.tsv — ${RunEnvironment.oneLine(Seq("programs" -> got.toString, "min-nodes" -> minNodes.toString,
+                                                 "seed" -> "2026"))}\n")
     sb.append("row\t").append(cols.mkString("\t")).append('\n')
     for (y, p) <- rows do
       val row = c((y, p))
@@ -91,10 +92,11 @@ class ProgramStats extends FunSuite:
     // THE REPO ROOT, not /tmp: this artifact is committed, and writing it to /tmp meant every
     // regeneration had to be copied over by hand — which is how the committed copy came to carry a
     // `Transformation` column for a constructor the `Space` enum no longer has.
-    val f = new java.io.File(Loaders.repoRoot, "prog_matrix.tsv")
-    val w = new java.io.FileWriter(f); try w.write(sb.toString) finally w.close()
+    // as CorpusRuntimes: measured always, published only under a manifest
+    if BenchmarkArtifact.publishing then BenchmarkArtifact.write("prog_matrix.tsv", sb.toString)
+    else println(BenchmarkArtifact.skipNote("prog_matrix.tsv"))
     System.out.println(s"PROGSTATS: N=$got accepted of $draws draws (${(100.0*got/draws).round}% >= $minNodes nodes), " +
-      f"avg ${totalNodes.toDouble/got}%.1f nodes/program, ${secs}%.1fs; matrix ${rows.size}x${cols.size} -> ${f.getPath}")
+      f"avg ${totalNodes.toDouble/got}%.1f nodes/program, ${secs}%.1fs; matrix ${rows.size}x${cols.size} -> prog_matrix.tsv")
     System.out.println(sb.toString)
     assertEquals(got, N.toLong)
   }
