@@ -43,11 +43,20 @@ object GlobalState:
   val tables: Vector[Table] = Vector(
     // The two the plan names, and the two whose ids everything downstream is keyed by.
     Table("Interner.size", "IntTrie.scala", () => Interner.size.toLong),
-    Table("HeadAtoms.count", "SpatialShape.scala", () => HeadAtoms.count.toLong),
-    // `HeadAtoms`' two memo tables: they cannot change an ANSWER (both are pure memos of a decidable
-    // set predicate) but they can change TIMING, and this suite set also has wall-clock budgets.
-    Table("HeadAtoms.disjointDecided", "SpatialShape.scala", () => HeadAtoms.disjointDecided.toLong),
-    Table("HeadAtoms.subsetDecided", "SpatialShape.scala", () => HeadAtoms.subsetDecided.toLong),
+    // THE CERTIFICATE ARENA (plan.md 1C.1) — and it is the one table here that CANNOT change an
+    // answer, by construction rather than by argument: `Cert`'s `equals`/`hashCode` are structural
+    // and the arena only hands back a canonical instance, so `Cert.reset()` mid-run changes nothing.
+    // That is exactly what the `HeadAtoms` id table it replaces could not say, and why the ids had to
+    // go: a `Shape` carrying an atom id was meaningless without the table, and shapes outlive their
+    // analysis.  It is still probed, because it can change TIMING and this suite set has wall-clock
+    // budgets as well as counted ones.
+    // `Cert.constructed` AND NOT `Cert.arenaSize`.  The arena is WEAK-keyed, so its occupancy depends
+    // on when the collector ran and it is not a determinism signal at all —
+    // `scripts/check_determinism.sh` reported it as a differing probe line across two runs of
+    // `SpatialEventsCheck` (28 against 41), which is the gate working.  The construction counter is
+    // deterministic for a deterministic run and answers what the probe is for: how much certificate
+    // work the suite did.
+    Table("Cert.constructed", "SpatialCert.scala", () => Cert.constructed),
     // By-ref literal ids.  These appear in EMITTED TEXT (`lit#7`), so unlike a memo they are
     // observable in artifacts, which makes them a candidate for a golden-file diff as well.
     Table("LiteralStore.size", "MORKL.scala", () => LiteralStore.size.toLong),

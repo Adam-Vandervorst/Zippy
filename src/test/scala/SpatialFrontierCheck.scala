@@ -43,13 +43,6 @@ class SpatialFrontierCheck extends FunSuite:
   def sv(ps: Iterable[PathValue]): SpaceValue = SpaceValue(ps.toSet)
   def ty(v: SpaceValue): SpatialType = SpatialType.of(v)
 
-  /** The over-prediction ceiling for the key-disjoint depth ladder PAST `Shape.MaxDepth + 1`, as a
-   *  multiple of the true rebuild count `d`.  A RECORDED MEASUREMENT, not a design target: the rows
-   *  past the cap are the open half of plan.md Track C (item 5), and this constant exists so the gate
-   *  fails when the over-prediction GROWS rather than only when the bound becomes unsound.  MEASURED
-   *  over d = 1..16: exact to d = `MaxDepth + 1`, then `hi = 4d - 14` — a line of slope 4, so `4·d`
-   *  holds at every row.  Lower it whenever the measurement improves. */
-  val RebuiltRatioPastCap = 4L
   def tr(v: SpaceValue): Trie = Trie.fromSpaceValue(v)
 
   /** the complete `arity`-ary trie of depth `depth`, hung under `prefix`: `arity^depth` paths */
@@ -238,18 +231,18 @@ class SpatialFrontierCheck extends FunSuite:
     // `rebuilt = [2,2]` for n ≤ 12 and `[2, n+2]` for n ≥ 13 — the SAME program family, one more key,
     // and a prediction that changes GROWTH CLASS (`Sym.bigO` from 1 to n) at a fixed cutoff.
     //
-    // The untracked-head certificate (`Shape.otherKeys`, channel (e)) is what removes the cliff, and
+    // The untracked-head certificate (`Shape.cert`, channel (e)) is what removes the cliff, and
     // THIS TEST IS THE GATE ON IT: the assertion is now unconditional, so a regression that drops the
     // certificate anywhere on the path — `Shape.mk`, `capDepth`, `widen`, `SpatialAnalysis.capWidth`
     // or `SpatialTypeSystem.constrainShape` — turns this row red instead of merely printing wider.
-    // ...AND PAST `MaxSpillKeys` TOO.  The list used to stop at 4096, which is exactly the cap, so
-    // it never crossed it: each side's level-1 certificate was `Some` of exactly `MaxSpillKeys`
-    // names and the row stayed flat for a reason that would have failed one key later.  Over the cap
-    // the enumerated certificate used to degrade to ⊤ and this family's prediction jumped growth
-    // class again — the same cliff as `MaxHeads`, one cap further out.  Channel (f) interns the
-    // overflow instead (`Shape.headAtoms`, `HeadAtoms`), so the rows below the cap and above it are
-    // now the same prediction.
-    val ns = Vector(4, 8, 12, 13, 16, 24, 64, 256, 1024, 4096, Shape.MaxSpillKeys + 1, 3 * Shape.MaxSpillKeys)
+    // ...AND PAST THE CERTIFICATE'S OWN WIDTH BUDGET TOO.  The list used to stop at 4096, which was
+    // exactly the old `MaxSpillKeys`, so it never crossed it: each side's level-1 certificate was
+    // `Some` of exactly the cap's worth of names and the row stayed flat for a reason that would have
+    // failed one key later.  Over that cap the flat certificate degraded to ⊤ and this family's
+    // prediction jumped growth class again — the same cliff as `MaxHeads`, one cap further out.
+    // `Cert.widen`'s width rule folds the level into a `Bounded` outside that still bounds every
+    // sub-trie instead, so the rows below the budget and above it are the same prediction.
+    val ns = Vector(4, 8, 12, 13, 16, 24, 64, 256, 1024, 4096, Shape.CertKeys + 1, 3 * Shape.CertKeys)
     var shown = Vector.empty[String]
     for n <- ns do
       val l = sv((0 until n).map(i => pv("g", s"x${2 * i}")))
@@ -268,33 +261,34 @@ class SpatialFrontierCheck extends FunSuite:
       assertEquals(s.depth.pairedTotal.hi, 2L,
                    s"n=$n: |Q| must NOT move at the width cap: ${s.show}")
     println(s"  KEY-DISJOINT union across the width cap (Shape.MaxHeads = ${Shape.MaxHeads}, " +
-            s"Shape.MaxSpillKeys = ${Shape.MaxSpillKeys}) — FLAT:")
+            s"Shape.CertKeys = ${Shape.CertKeys}) — FLAT:")
     for l <- shown do println("    " + l)
   }
 
-  test("CONTINUITY ACROSS THE DEPTH CAP: exact to MaxDepth+1, and LINEAR IN d past it") {
+  test("CONTINUITY ACROSS THE DEPTH CAP: EXACT at every depth (plan.md 1C.3/1C.4)") {
     // `Shape.capDepth` is the OTHER half of the spill and it lost the names the same way: the
     // collapsed level's tracked keys became an anonymous count.  Four key-disjoint keys under a
     // shared prefix of length d-1 measured `rebuilt = [d,d]` for d ≤ MaxDepth and then `[5,9]`,
     // `[5,10]`, `[5,14]` for d = 5, 6, 7.
     //
-    // TWO DIFFERENT CAUSES SAT ON TOP OF EACH OTHER THERE, and only one of them was a defect:
-    //  * d = MaxDepth + 1 — the divergent keys land exactly ON the collapsed level, so the names
-    //    were available and were thrown away.  The certificate recovers them and the row is now
-    //    EXACT.  That is the discontinuity, and it is gone.
-    //  * d > MaxDepth + 1 — the divergent keys land BELOW the collapsed level.  Both sides' shapes
-    //    truncate to the same shared prefix head, so the prediction stays sound and LINEAR in d
-    //    rather than becoming a product.
+    // TWO DIFFERENT CAUSES SAT ON TOP OF EACH OTHER THERE, and the previous revision of this test
+    // could only close one of them:
+    //  * d = MaxDepth + 1 — the divergent keys land exactly ON the collapsed level, so the names were
+    //    available and were thrown away.  The flat certificate recovered them.
+    //  * d > MaxDepth + 1 — the divergent keys land BELOW the collapsed level, where a flat
+    //    certificate has nothing to say.  Measured over d = 1..16 the prediction was `4d - 14`, a
+    //    line of slope 4, and this test asserted only that the line did not steepen.
     //
-    // THE ACCEPTANCE REVIEW ASKS FOR THIS ROW TO BE EXACT TOO, AND IT IS NOT.  A per-level interned
-    // certificate below the collapse was built and measured and did not deliver it: the frontier's
-    // disjointness query reads `possibleHeads` AT A LEVEL and never descends into an `otherTail`'s
-    // certificate, so d = 6 still predicted `rebuilt = [5, 10]` against a truth of 6 — and carrying
-    // certificates on both tails made `leq` compare them, which turned six corpus shapes in
-    // `SpatialAnalysisCheck`'s decorated-soundness gate red.  Getting this row exact needs
-    // `SpatialFrontier`'s relational walk to consult tail certificates, which is a change to the
-    // frontier and not to the shape carrier.  Recorded in plan.md Track C (item 5); the range below
-    // still runs well past the cap, so the shape of the remaining gap is visible in the printout.
+    // BOTH ARE CLOSED NOW, and the second one is what the certificate TIER was for.  `capDepth` keeps
+    // the collapsed level's whole sub-trie (`Cert`, 1C.3), `Shape.under`/`untrackedTailBound` consult
+    // it, and the relational walk's untracked summary frame descends WITH it (1C.4) — which is
+    // exactly the "`SpatialFrontier` must consult tail certificates, a change to the frontier and not
+    // to the shape carrier" that the previous revision named as the missing step.  MEASURED over
+    // d = 1..16: `rebuilt.hi == d` at every row, so the over-prediction is not smaller, it is gone.
+    //
+    // THE ASSERTION IS EQUALITY AND NOT AN ENVELOPE, deliberately: a retired limitation that is gated
+    // by a ceiling can silently come back inside the ceiling.  The recorded `RebuiltRatioPastCap`
+    // constant is deleted with it.
     var shown = Vector.empty[String]
     var rows = Vector.empty[(Int, FrontierSummary)]
     for d <- 1 to 3 * Shape.MaxDepth + 4 do
@@ -307,33 +301,20 @@ class SpatialFrontierCheck extends FunSuite:
     // PRINT THE WHOLE LADDER BEFORE ASSERTING.  A failure part-way through used to abort before the
     // printout, which is the one thing a reader needs to see when a growth claim breaks.
     println(s"  KEY-DISJOINT union across the depth cap (Shape.MaxDepth = ${Shape.MaxDepth}) — " +
-            s"exact to d = ${Shape.MaxDepth + 1}; past it the review's ambition is UNMET (see the " +
-            s"comment above) and what the model actually gives is recorded below:")
+            s"EXACT at every depth now that the certificate carries the collapsed levels:")
     for l <- shown do println("    " + l)
     for (d, s) <- rows do
       // SOUNDNESS IS THE HARD GATE AT EVERY DEPTH.
       assert(s.rebuilt.hi >= d.toLong, s"depth=$d: UNSOUND, below the truth $d: ${s.show}")
-      if d <= Shape.MaxDepth + 1 then
-        assertEquals(s.rebuilt.hi, d.toLong,
-                     s"depth=$d: the rebuild count must be EXACT up to Shape.MaxDepth + 1 " +
-                     s"(= ${Shape.MaxDepth + 1}) — the collapsed level's names are available: ${s.show}")
-      else
-        // PAST THE CAP THE OVER-PREDICTION IS LINEAR IN d, AND EXTENDING THE RANGE IS WHAT SHOWS IT.
-        // MEASURED over d = 1..16 (the test used to stop at `MaxDepth + 3`, three rows past the cap):
-        //
-        //     d      1  2  3  4  5   6   7   8  …  15  16
-        //     hi     1  2  3  4  5  10  14  18  …  46  50        exact to d = 5, then hi = 4d - 14
-        //
-        // so the line has SLOPE 4 and the old `<= 3d` envelope was simply too tight for large d
-        // rather than evidence of super-linear growth — at d = 15 it wants 45 and the model gives 46.
-        // The ceiling below is `4·d`, which the measurement supports at every row, and the ladder is
-        // printed above so the line is visible instead of only its envelope.  The rows past the cap
-        // being over-predicted AT ALL is the open half of plan.md Track C (item 5).
-        assert(s.rebuilt.hi <= RebuiltRatioPastCap * d,
-               s"depth=$d: the over-prediction past the depth cap exceeded the recorded ceiling " +
-               s"(${RebuiltRatioPastCap}·d) — it grew, which is a regression in the depth budget " +
-               s"even though the bound stays sound: ${s.show}")
-    for l <- shown do println("    " + l)
+      assertEquals(s.rebuilt.hi, d.toLong,
+                   s"depth=$d: the rebuild count must be EXACT at EVERY depth — the certificate " +
+                   s"carries the collapsed level's sub-trie and the walk descends with it, so a " +
+                   s"re-opened over-prediction shows up here first: ${s.show}")
+    // the LOWER endpoint is a separate claim and stays where the shape's tracked levels put it: a
+    // must-count is read off `heads` and `capDepth` really does stop tracking at `MaxDepth`.
+    for (d, s) <- rows if d > Shape.MaxDepth + 1 do
+      assertEquals(s.rebuilt.lo, (Shape.MaxDepth + 1).toLong,
+                   s"depth=$d: the must-side floor is the tracked-level count, not the depth: ${s.show}")
   }
 
   test("the prediction's ORDER CLASS is invariant under the config's own width cap") {
@@ -365,6 +346,16 @@ class SpatialFrontierCheck extends FunSuite:
              s"n=$n: the head set must stay enumerable past the width cap: ${ty(l).shape.show}")
       assertEquals(ty(l).shape.possibleHeads.get, (0 until n).map(i => s"a$i").toSet,
                    s"n=$n: and it must name EXACTLY the real heads: ${ty(l).shape.show}")
+      // AND THE CERTIFICATE IS WHAT IS ANSWERING, above the width cap (plan.md 1C.6).  Without this
+      // the rows at n ≤ Shape.MaxHeads carry the whole test: there the root is CLOSED and
+      // `possibleHeads` reads `heads` directly, so the certificate is trivially defined and the
+      // assertions above hold whether it works or not.
+      if n > Shape.MaxHeads then
+        assert(!ty(l).shape.headsClosed,
+               s"n=$n: the root must be genuinely OPEN here, or this row proves nothing about the " +
+               s"certificate: ${ty(l).shape.show}")
+        assert(ty(l).shape.certBounded,
+               s"n=$n: and the certificate must be the thing carrying the head set: ${ty(l).shape.show}")
       assertEquals(s.cases, Set(FrontierCase.Empty),
                    s"n=$n: head-disjoint intersection is PROVED empty at every n: ${s.show}")
       assert(s.rootOnly, s"n=$n: nothing below the root is paired: ${s.show}")
@@ -512,12 +503,22 @@ class SpatialFrontierCheck extends FunSuite:
     gate(Scale("equal values, UNSHARED, fixed depth — union descents", rows), expected = 1.0)
   }
 
-  test("PUBLISHED GAP: past the shape's four tracked levels the frontier carries a log factor") {
-    // K_d is bounded by the SHAPE for d ≤ Shape.MaxDepth and only by E_d (the total path count)
-    // below it, so `Σ_d min(K_d, K_d)` over a family whose DEPTH grows is `N·len`, not `N`.  That is
-    // the same information loss `Meas.nodes = 1 + size·len` already has, and it is published rather
-    // than hidden: the frontier model is strictly better than the size-only bound everywhere else and
-    // exactly as good here.
+  test("RETIRED GAP: past the shape's tracked levels the frontier is now EXACT (plan.md 1C.4)") {
+    // ==WHAT THIS TEST USED TO PUBLISH, AND WHY IT NO LONGER DOES==
+    // `K_d` was bounded by the SHAPE for `d ≤ Shape.MaxDepth` and only by `E_d` (the total path
+    // count) below it, so `Σ_d min(K_d, K_d)` over a family whose DEPTH grows was `N·len` rather
+    // than `N` — a log factor, published rather than hidden, and named in `Shape.capDepth`'s own
+    // note as the half of the review's ambition that was OPEN and deferred to Track C.
+    //
+    // THE CERTIFICATE TIER CLOSED IT.  `capDepth` keeps the collapsed level's whole sub-trie
+    // (`Cert`, plan.md 1C.3) instead of its head names, `Shape.under`/`untrackedTailBound` consult
+    // it, and the relational walk's summary frame descends WITH it (1C.4) instead of into a ⊤
+    // `otherTail`.  So `K_d` is bounded at every depth, not just the first `MaxDepth` of them.
+    //
+    // THIS TEST IS THE LEDGER ENTRY'S RETIREMENT, and it is written so it cannot silently rot in
+    // either direction: it asserts the prediction is EXACT (not merely sound) on the whole family,
+    // so a regression that reintroduces the log factor fails here, and it asserts soundness
+    // separately, so an over-tightening fails here too.
     val rows = (2 to 9).map { k =>
       val v = full(Nil, 2, k)
       val (s, t) = point(FrontierOp.Union, v, v, shared = false)
@@ -526,11 +527,15 @@ class SpatialFrontierCheck extends FunSuite:
     val sc = Scale("equal values, UNSHARED, growing DEPTH — union descents", rows)
     println(sc.report)
     for r <- sc.rows do assert(r.pred >= r.derived, s"still sound at n=${r.n}")
-    println(f"    KNOWN GAP: predicted slope ${sc.worstPredSlope}%.3f against the algorithm's " +
-            f"${sc.worstDerivedSlope}%.3f — the log factor is Shape.MaxDepth=${Shape.MaxDepth} tracked levels")
+    println(f"    RETIRED: predicted slope ${sc.worstPredSlope}%.3f against the algorithm's " +
+            f"${sc.worstDerivedSlope}%.3f — the certificate carries every level, not just " +
+            f"Shape.MaxDepth=${Shape.MaxDepth} of them")
     assert(sc.worstDerivedSlope <= 1.2, "the algorithm itself is linear")
-    assert(sc.worstPredSlope <= 2.0, "the gap is a log factor, not a polynomial one")
-    assert(sc.worstPredSlope > sc.worstDerivedSlope, "the gap is real and is being published")
+    // EXACT, not just linear: every row's prediction equals the algorithm's own count.
+    for r <- sc.rows do
+      assertEquals(r.pred, r.derived,
+        s"n=${r.n}: the frontier must be EXACT on the growing-depth family now that the certificate " +
+        "carries the collapsed levels — a re-opened log factor shows up here first")
   }
 
   test("subset / superset pairs") {

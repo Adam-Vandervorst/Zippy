@@ -397,7 +397,7 @@ class SpatialAcceptance extends FunSuite:
                   "SubsetOfImage law closes it to 9·|field| the moment a field type IS declared, and " +
                   "test 4 shows the declared-type route."))),
     // `heads` USED TO BE AN EXPECTED-⊤ ENTRY here ("the outermost group set comes from the undeclared
-    // frontier").  It is bounded now, at 16, and the reason is the width spill's `otherKeys`
+    // frontier").  It is bounded now, at 16, and the reason is the width spill's `Cert`
     // certificate: the 16-level `iterN` nest writes tiles drawn from a KNOWN set, and past
     // `Shape.MaxHeads` the spill used to throw those names away and reopen the count.  Keeping them
     // keeps the head count finite, which is the whole point of channel (e).  `size` stays ⊤ — knowing
@@ -759,7 +759,7 @@ class SpatialAcceptance extends FunSuite:
       universe.indices.collect { case i if (mask & (1 << i)) != 0 => universe(i) }.toSet
     }
 
-  test("6a. the closure law TIGHTENS the datalog cornerstone, and changes its residual and its cost") {
+  test("6a. the closure law TIGHTENS the datalog cornerstone, and what it no longer has to reach") {
     // ---- (1) establish the bound exhaustively, in plain Scala ---------------------------------
     var checked = 0
     var tight = 0
@@ -790,9 +790,23 @@ class SpatialAcceptance extends FunSuite:
     showDelta("no law", before); showDelta("with law", after)
     println(s"      facts gained      ${(after.facts -- before.facts).mkString(", ")}")
     println(s"      candidates gained ${(after.candidates -- before.candidates).mkString(", ")}")
-    // the transfers alone cannot bound the closure: the inner self-call is ⊤
-    assertEquals(before.size._2, SizeBounds.INF, "without the law the cardinality must be unbounded")
-    assertEquals(before.len._2, LenBounds.INF, "without the law the length must be unbounded")
+    // ==WHAT THE TRANSFERS ALONE NOW BOUND, AND WHAT THEY STILL DO NOT (plan.md 1D.1)==
+    //
+    // This used to assert that BOTH the cardinality and the length are unbounded without the law,
+    // because "the inner self-call is ⊤".  It is not ⊤ any more: `SpatialRecursion.summaryAt` is the
+    // production consumer of the certified summaries and the `Call` arms consult it where
+    // `env.active(rp)` stops the interprocedural descent.  The LENGTH half of that summary bounds the
+    // closure's path length without the law; the CARDINALITY half does not, because a transitive
+    // closure's size is not a function of its argument's length histogram.
+    //
+    // So the split is asserted rather than the old blanket claim, and the law's contribution is what
+    // is left over — which is the honest form of "the law tightens this cornerstone".
+    assertEquals(before.size._2, SizeBounds.INF,
+                 "without the law the CARDINALITY must still be unbounded: the summary's length half " +
+                 "says nothing about how many closure edges there are")
+    assert(before.len._2 <= 2L,
+           s"the summary's LENGTH half must bound the closure's paths without the law " +
+           s"(plan.md 1D.1): got ${before.len._2}")
     // with the law: |closure| <= |E|^2 = 9, and every closure edge is a length-2 path
     assertEquals(after.size, (3L, 9L), s"the law must give [|E|, |E|²]: ${aAfter.result.show}")
     assertEquals(after.len, (2L, 2L), "the law must pin the path length to 2")
@@ -835,27 +849,54 @@ class SpatialAcceptance extends FunSuite:
     assertEquals(sound, 512)
     println(s"[6a] $sound law-refined analyses of the real Zippy closure, every one γ-admitting `eval`")
 
-    // ---- (5) A LAW CHANGING A RESIDUAL AND A COST ---------------------------------------------
-    // `closure ∩ {a.b.c, x.y.z}`: the literal holds only length-3 paths, and the law proves the closure
-    // holds only length-2 ones, so the intersection is EMPTY.  The transfers alone cannot see it.
+    // ---- (5) THE RESIDUAL THE TRANSFERS NOW REACH WITHOUT THE LAW ------------------------------
+    // ==WHAT CHANGED HERE, AND WHY THE ASSERTIONS INVERTED (plan.md 1D.1)==
+    //
+    // `closure ∩ {a.b.c, x.y.z}`: the literal holds only length-3 paths, so if the closure holds only
+    // length-2 ones the intersection is EMPTY.  This block used to assert that the LAW is what sees
+    // that — "the transfers alone cannot see it" — and it was true while the inner self-call was ⊤.
+    //
+    // It is not true any more, and it is the SAME fact asserted at (3): `before.len._2 <= 2`.  The
+    // summary consumer supplies the length half, the length half is the whole premise of this
+    // emptiness, so `EliminateEmpty` now fires WITHOUT the law and the residual is `Empty` either way.
+    // The measurement is unambiguous — both sides: empty=true, the same one rewrite at `/`, residual
+    // `Empty`, warm work `1` — so the honest form is to assert the CONVERGENCE and keep the law's own
+    // contribution where it is still real, which (4b) below states exactly.
     val inter = Space.Intersection(closureCall, lit(pv("a", "b", "c"), pv("x", "y", "z")))
     val rInter = routineOf("closure_inter", inter, E)
     val (iBefore, _, gBefore) = deltaOf(rInter, ann)
     val (iAfter, aI, gAfter) = deltaOf(rInter, ann.withLaws(law))
     println("[6a] `closure ∩ {length-3 literal}` — the RESIDUAL and COST delta:")
     showDelta("no law", iBefore); showDelta("with law", iAfter)
-    assert(!iBefore.empty, "without the law the intersection cannot be proved empty")
-    assert(iAfter.empty, s"with the law the intersection IS provably empty: ${aI.result.show}")
-    assert(!gBefore.applied.exists(_.isInstanceOf[Rewrite.EliminateEmpty]),
-           s"no elimination without the law: ${gBefore.applied.map(_.show)}")
-    assert(gAfter.applied.exists(_.isInstanceOf[Rewrite.EliminateEmpty]),
-           s"the law must license the elimination: ${gAfter.applied.map(_.show)}")
-    assertEquals(gAfter.residual.body, Space.Empty: Space, "the residual is the empty space")
-    assert(iBefore.residualNodes > iAfter.residualNodes,
-           s"${iBefore.residualNodes} -> ${iAfter.residualNodes} nodes")
-    assertEquals(iBefore.work.take(9), "UNBOUNDED",
-                 s"the un-refined residual's warm work is unbounded: ${iBefore.work}")
-    assertEquals(iAfter.work, "1", s"the refined residual costs one operation: ${iAfter.work}")
+    assert(iBefore.empty, "the summary's LENGTH half alone must prove the intersection empty (1D.1)")
+    assert(iAfter.empty, s"and the law must not weaken that: ${aI.result.show}")
+    for (tag, g) <- Vector("no law" -> gBefore, "with law" -> gAfter) do
+      val elim = g.applied.filter(_.isInstanceOf[Rewrite.EliminateEmpty])
+      assertEquals(elim.length, 1, s"$tag: exactly one elimination, not ${g.applied.map(_.show)}")
+      assertEquals(g.residual.body, Space.Empty: Space, s"$tag: the residual is the empty space")
+    assertEquals(iBefore.residualNodes, iAfter.residualNodes, "the residual is the same size either way")
+    assertEquals(iBefore.work, "1", s"the un-refined residual ALREADY costs one operation: ${iBefore.work}")
+    assertEquals(iAfter.work, "1", s"and the refined one costs the same: ${iAfter.work}")
+
+    // ---- (5b) WHERE THE LAW IS STILL LOAD-BEARING, AND WHERE IT DOES NOT REACH ------------------
+    // The cardinality half is the law's alone — (3) asserts `[3, 9]`, `MaximumCardinality(9)` and the
+    // `TrieUnroll` candidate that only exists with the law.  What it does NOT do is change the CLOSURE
+    // ROUTINE's cost, and that is worth pinning rather than leaving as an unexamined absence: the cost
+    // model's recursion arm asks for a spatial-parameter FIXPOINT on the accumulator and refuses when
+    // it does not converge, and a `MaximumCardinality` fact on the RESULT is not something that arm
+    // consults.  So the law's bound reaches the type, the facts and the backend candidates, and stops
+    // at the cost model.  Closing that is a `SpatialCost` change (teach the recursion arm to read a
+    // discharged cardinality law as the accumulator's ceiling), out of 1D.1's scope and recorded here
+    // so it is a KNOWN gap with a named cause rather than a surprise.
+    assertEquals(before.work.take(9), "UNBOUNDED", s"baseline closure work: ${before.work}")
+    assertEquals(after.work.take(9), "UNBOUNDED",
+                 s"the law's cardinality bound does NOT reach the cost model's recursion arm: ${after.work}")
+    assert(after.work.contains("spatial parameter fixpoint failed"),
+           s"and the refusal must still name its own reason: ${after.work}")
+    assertEquals(before.residualNodes, after.residualNodes,
+                 "and the closure routine's residual is unchanged by the law")
+    println(s"      the law reaches: size ${before.size} -> ${after.size}, +TrieUnroll; " +
+            s"it does not reach: work ${after.work.take(9)}")
     // the law's residual is CORRECT: on every one of the 512 graphs the intersection really is ∅
     for e <- allDirectedGraphs(3) do
       given SpaceContext = SpaceContextMap(Map(E -> SpaceValue(e.map((i, j) => pv(i.toString, j.toString)))))
@@ -1101,9 +1142,25 @@ class SpatialAcceptance extends FunSuite:
     println("[6d] chainBound at depth 2, default config: Unchanged — `SpatialTypes`' Iteration count " +
             "transfer already applies the same Σ K_i law")
 
-    // (ii) DEPTH 3, DEFAULT CONFIG: the INNER binder's compositional bound is the per-level product
-    //      (4·4·4 = 64) where the pointwise truth is 4·4 = 16, and the law tightens THAT NODE's
-    //      published result — a per-node delta an optimizer rewriting at that position consumes.
+    // (ii) DEPTH 3, DEFAULT CONFIG: THE TRANSFERS NOW BEAT THE LAW HERE, and the recorded figures
+    //      this case used to assert are both stale.
+    //
+    //      IT USED TO SAY: the inner binder's compositional bound is the per-level product
+    //      (4·4·4 = 64) where the pointwise truth is 4·4 = 16, and `chainBound` tightens that node
+    //      to 16 — so the law was load-bearing at this depth even though (i) shows it is not at
+    //      depth 2.
+    //
+    //      IT NOW MEASURES 4, WITH AND WITHOUT THE LAW.  `SpatialTyping.groupUnion` bounds the group
+    //      count by the source's PATH COUNT as well as by the shape's head count, and binds the
+    //      `rest` mention's own length type instead of `SpaceType.unknown` (plan.md 1B.5).  The
+    //      source here is 4 paths of length 3, so ANY tail-set inside it has at most 4 paths and the
+    //      body is a `Singleton` — 4 is EXACT, and it is better than both figures this case recorded.
+    //      `chainBound` therefore reports `Unchanged` for the same reason (i) does: it adds nothing.
+    //
+    //      THE TEST'S CLAIM SURVIVES IN (iii), which is where the law is still load-bearing — the
+    //      cheap config's compositional stub cannot see the chain at all.  What is asserted here now
+    //      is the honest pair: the transfers reach the exact answer, and the law says so rather than
+    //      claiming credit.
     val h3 = PathRef("h3").known(1)
     val nest3 = Space.Iteration(Space.Mention(SRC), PathRef("h1").known(1), SpaceMention("r1"),
       Space.Iteration(Space.Mention(SpaceMention("r1")), PathRef("h2").known(1), SpaceMention("r2"),
@@ -1120,11 +1177,18 @@ class SpatialAcceptance extends FunSuite:
     val innerApp = a3CB.decorated.lawsAt(inner)
     println(f"[6d] chainBound at depth 3, default config: the INNER binder ${inner.show} " +
             f"${innerBare.size.hi} -> ${innerCB.size.hi} paths")
-    assertEquals(innerApp.map(_.outcome), Vector(LawOutcome.Tightened), innerApp.map(_.show).toString)
-    assert(innerCB.size.hi < innerBare.size.hi,
-           s"the law must tighten the inner binder: ${innerBare.size.hi} -> ${innerCB.size.hi}")
-    assertEquals(innerCB.size.hi, 16L, "the pointwise bound at depth 2 of a 4-path source is 4·4")
-    assertEquals(innerBare.size.hi, 64L, "the compositional bound there is the per-level product")
+    assertEquals(innerApp.map(_.outcome), Vector(LawOutcome.Unchanged), innerApp.map(_.show).toString)
+    assertEquals(innerBare.size.hi, 4L,
+                 "the transfers must reach the EXACT bound here: a 4-path source has no tail-set " +
+                 "larger than 4 paths, and the body is a Singleton")
+    assertEquals(innerCB.size.hi, innerBare.size.hi,
+                 s"the law must add nothing where the transfers are already exact: " +
+                 s"${innerBare.size.hi} -> ${innerCB.size.hi}")
+    // AND THE LAW IS STILL SOUND HERE, which is the property a `Unchanged` outcome must not hide:
+    // the pointwise bound it computes is an upper bound on what the transfers proved.
+    assert(innerCB.size.hi <= 16L,
+           s"the pointwise bound is 4·4 = 16 and the published result must be inside it: " +
+           s"${innerCB.size.hi}")
 
     // (iii) CHEAP CONFIG (histQueries = 0 — the setting the compile-path hook uses): the binder's
     //       histogram comes from the COMPOSITIONAL stub alone, which cannot see the chain at all, and
@@ -1302,15 +1366,32 @@ class SpatialAcceptance extends FunSuite:
       result = SpatialRecursion.lengthAnnotation(1, 1))
 
     // (1) the inferred input→output type, and (2) the three-way conformance verdict.
-    //     On the RECURSIVE routine the contract is NOT provable: the checker marks the routine active,
-    //     so the self-call widens to ⊤ and the result type really could hold anything.  That is the
-    //     honest answer, and it is exactly the gap stage 2 exists to close.
+    //
+    // ==THIS ASSERTION IS STRENGTHENED, WHICH IS WHAT ITS OWN MESSAGE ASKED FOR (plan.md 1D.1)==
+    //
+    // It used to be `assert(!rep.check.isProved)` with the note "the ordinary transfer cannot prove a
+    // contract across a self-call; if it ever can, this test should be strengthened rather than
+    // deleted", and the reason it could not was that the checker marks the routine ACTIVE and the
+    // self-call then widened to ⊤.  `SpatialRecursion.summaryAt` is now the production consumer of
+    // the CERTIFIED summaries at exactly that point, so the self-call carries a real type and the
+    // contract IS provable.
+    //
+    // So the assertion is the strengthened one: the verdict must be PROVED, and the inferred result
+    // must actually satisfy the declared contract rather than merely not contradicting it.  If a
+    // future change loses the summary consumer this fails here, which is the direction that matters.
     val rep = noEval("checkRoutine")(SpatialCheck.report(walk, sig, table))
     println(s"\n[9] signature ${sig.show}")
     println(s"[9] recursive verdict  ${rep.check.show.linesIterator.next()}")
-    assert(!rep.check.isProved,
-      "the ordinary transfer cannot prove a contract across a self-call; if it ever can, this test " +
-      "should be strengthened rather than deleted")
+    println(s"[9] inferred across the self-call: ${rep.check.inferredType.show}")
+    assert(!rep.check.isRefuted,
+      s"the contract must not be REFUTED across a self-call: ${rep.check.show}")
+    assert(rep.check.isProved,
+      "the contract across a self-call is now provable, through `SpatialRecursion.summaryAt` " +
+      s"(plan.md 1D.1): ${rep.check.show}.  If the summary consumer is removed this is the gate that " +
+      "reports it.")
+    assert(SpatialType.leq(rep.check.inferredType, sig.result),
+      s"the inferred result must be inside the declared contract: ${rep.check.inferredType.show} " +
+      s"against ${sig.result.show}")
 
     // (3) per-node validated facts with lexical provenance, and (4) the SAME premises as the verdict:
     // the checker marks the routine active, so the pipeline must be told to as well or the two are

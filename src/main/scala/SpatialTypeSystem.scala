@@ -267,7 +267,8 @@ object SpatialType:
         else s.eps
       if below.hi == 0 then                                       // H1/H3: no heads are possible
         if s.heads.exists((_, c) => c.definitelyNonEmpty) || s.others.lo >= 1 then None
-        else Some(Shape(eps, scala.collection.immutable.SortedMap.empty, Ivl.zero, None, Some(Set.empty)))
+        else Some(Shape(eps, scala.collection.immutable.SortedMap.empty, Ivl.zero, None,
+                        if eps == Presence.No then Cert.empty else Cert.epsOnly))
       else
         var dead = false
         val kids = Vector.newBuilder[(PathItem, Shape)]
@@ -296,17 +297,16 @@ object SpatialType:
             if emptyTail && s.others.lo >= 1 then None
             else
               val hi = if emptyTail then 0L else othersHi
-              // THE UNTRACKED-HEAD CERTIFICATE (channel (e)) MUST BE THREADED THROUGH HERE, or the
-              // whole channel is INERT: `SpatialType.reduce` runs `constrainShape` on every decorated
-              // node, so a certificate this function drops never reaches the cost model.  (A prototype
-              // that carried the keys in `Shape.mk` but not here measured `SpatialType.of(v)` with the
-              // 52 spilled keys and `reduce(SpatialType.of(v))` with `None`.)  The H1/H2/H3 constraints
-              // only shrink COUNTS; they never introduce a head, so the incoming bound still holds.
+              // THE CERTIFICATE MUST BE THREADED THROUGH HERE, or the whole channel is INERT:
+              // `SpatialType.reduce` runs `constrainShape` on every decorated node, so a certificate
+              // this function drops never reaches the cost model.  (A prototype that carried the keys
+              // in `Shape.mk` but not here measured `SpatialType.of(v)` with the 52 spilled keys and
+              // `reduce(SpatialType.of(v))` with `None`.)  The H1/H2/H3 constraints only shrink
+              // COUNTS; they never introduce a path, so the incoming language bound still holds.
               Some(Shape(eps, scala.collection.immutable.SortedMap.from(kept.filter(_._2.possiblyNonEmpty)),
                          if hi == 0 then Ivl.zero else Ivl(s.others.lo, hi),
                          if hi == 0 then None else ot,
-                         if hi == 0 then Some(Set.empty) else s.otherKeys,
-                         if hi == 0 then Set.empty else s.headAtoms))
+                         s.cert))
 
   /** H4.  The space is known NON-EMPTY (from the histogram); if the shape leaves exactly one place a
    *  path could be, that place is forced — a MUST claim the count domain paid for.  `None` =
@@ -358,6 +358,12 @@ enum Fact:
   case MinimumHeadCount(k: Long)            // ≥ k distinct heads, so an iteration definitely runs
   case MaximumHeadCount(k: Long)
   case PrefixAbsent(prefix: List[PathItem]) // no path starts with this prefix
+  /** 1D.2 — THE SELECTED PATH.  The space is EXACTLY `{path}`, and the shape knew which one by
+   *  RANK rather than by evaluating anything: `Range(x, 0, 1)` is `x`'s `orderMin` and, at an exact
+   *  size, `Range(x, -1, 0)` is its `orderMax`.  Distinct from `MinimumCardinality(1)` +
+   *  `MaximumCardinality(1)`, which say the space is a singleton without saying WHICH — and an
+   *  optimiser that cannot name the member cannot rewrite the selection away. */
+  case SelectedPath(path: PathValue)
   def show: String = toString
 
 object Fact:
@@ -392,6 +398,14 @@ object Fact:
       val hc = t.headCount
       if hc.lo >= 1 then out += Fact.MinimumHeadCount(hc.lo)
       if hc.hi != Ivl.INF then out += Fact.MaximumHeadCount(hc.hi)
+      // 1D.2 — a singleton whose member the RANK determines.  Emitted only when the shape says the
+      // space has exactly one path AND `orderMin` names it; `orderMin == orderMax` is the check
+      // that the two rank readings agree, so a shape that had somehow pinned different endpoints
+      // for a one-path space emits nothing rather than picking one.
+      if sz.lo == 1 && sz.hi == 1 then
+        (t.shape.orderMin, t.shape.orderMax) match
+          case (Some(a), Some(b)) if a == b => out += Fact.SelectedPath(a)
+          case _ => ()
       for p <- probes.iterator.filter(_.nonEmpty).toVector.distinct
           if SpatialTyping.prefixAbsent(t, p) do out += Fact.PrefixAbsent(p)
     out.result()
@@ -437,6 +451,16 @@ object SpatialTyping:
    *  out yields ⊤, which is always sound. */
   private final class Budget(var left: Int):
     def spend(): Boolean = { left -= 1; left > 0 }
+    /** ONE SUMMARY SOLVE PER (routine, abstract arguments) PER ANALYSIS (plan.md 1D.1).
+     *
+     *  `SpatialRecursion.summaryAt` runs a whole worklist solve, so a recursive `Call` reached from
+     *  several positions must not re-solve it.  The memo lives on the BUDGET because that is the one
+     *  object whose lifetime is exactly this analysis — which is also where the routine table is
+     *  fixed, and the table is the part of the answer that cannot be put in the key. */
+    val summaries = collection.mutable.HashMap.empty[SpatialRecursion.Key, Option[SpatialType]]
+    /** solves this analysis may run.  A solve is orders of magnitude more expensive than a transfer,
+     *  so it gets its own budget rather than drawing on `left`. */
+    var solves: Int = 16
 
   /** A listener on the ONE shape traversal.  `visit` is called on every node in POST-ORDER with the
    *  node's lexical position, the binder environment it was analysed in, and the shape the transfer
@@ -529,14 +553,37 @@ object SpatialTyping:
           val whole = (lo == 0 && hi == 0) ||
             (sz.lo == sz.hi && sz.hi != Ivl.INF && sz.hi <= Int.MaxValue &&
               RangeBounds.normalize(sz.hi.toInt, lo, hi) == (0, sz.hi.toInt))
-          Shape.range(src, windowWidth(sz, lo, hi), whole)
+          // 1D.2 — THE RANKED TRANSFER.  `Shape.range` knows only the window's WIDTH, so
+          // `Range(x, 0, 1)` over a four-head literal reported "one path, any of four heads".
+          // `Shape.rangeAt` localises the window in the head ORDER — which is the position order,
+          // because every backend slices `Range` by `pathValueOrdering` and `heads` is a
+          // `SortedMap` — and pins the exact singleton when the rank is determined.  It falls back
+          // to `Shape.range` itself wherever it cannot do better, so this can only tighten.
+          //
+          // MET against the old transfer rather than replacing it outright: both bracket the same
+          // set, so the meet is sound and at least as tight, and a regression in `rangeAt` cannot
+          // LOSE information the width-only reading had.
+          //
+          // `Shape.meet` is `Option`-valued: `None` is a CONTRADICTION between the two readings,
+          // which for two sound over-approximations of one set means the set is empty.
+          if whole then src
+          else
+            val byWidth = Shape.range(src, windowWidth(sz, lo, hi), whole)
+            // `rangeAt` returns `Option`: `None` is "no rank information", and the width-only
+            // reading is then the whole answer.  It NEVER computes a width itself — the first
+            // version did and was unsound, because the window width is not monotone in the size
+            // once a bound counts from the end (see `Shape.rangeAt`).
+            Shape.rangeAt(src, lo, hi) match
+              case None => byWidth
+              case Some(byRank) => Shape.meet(byWidth, byRank).getOrElse(Shape.empty)
 
         case Space.Iteration(src, sym, rest, body) =>
           // THE shape payoff: the group count is the number of DISTINCT HEADS, not the path count,
           // and each group is analysed with its head bound to that item and `rest` bound to that
           // head's tail-set.  `{a.0,a.1,a.2,a.3}` has ONE group and `{a.0,b.0,c.0,d.0}` has FOUR —
           // indistinguishable to a length histogram.
-          groupUnion(rec(0, src), env, sym, rest, body, depth, Map.empty, pos)
+          groupUnion(rec(0, src), SpatialTypes.infer(src, env.lengths), env, sym, rest, body,
+                     depth, Map.empty, pos)
 
         case Space.Fold(src, _, acc, sym, rest, body, _) =>
           // the same head-group union, but the ACCUMULATOR is opaque: its value depends on the
@@ -544,47 +591,115 @@ object SpatialTyping:
           // read the accumulator therefore keeps full precision, and one that does degrades exactly
           // where it reads it.  The accumulator's own contribution to the RESULT is nil — `Fold`
           // returns the union of the bodies, not the accumulator.
-          groupUnion(rec(0, src), env, sym, rest, body, depth, Map(acc -> LenBounds.unknown), pos)
+          groupUnion(rec(0, src), SpatialTypes.infer(src, env.lengths), env, sym, rest, body,
+                     depth, Map(acc -> LenBounds.unknown), pos)
 
         case Space.Fixpoint(init, recm, body) => fixpoint(init, recm, body, env, depth, pos)
 
         case Space.Call(rp, refs, mentions) =>
           val table = env.lenv.routines
-          if table.isDefinedAt(rp) && !env.lenv.active(rp) then
+          if !table.isDefinedAt(rp) then Shape.top
+          else
             val Routine(_, refns, mentionns, cbody) = table(rp)
             // INTERPROCEDURAL: a routine body denotes a function of its parameters, so analysing it
             // with the parameters bound to the ARGUMENT shapes is sound, must channels included.
             // The callee scope starts empty — inheriting the caller's bindings would let a body read
             // a mention it does not have.
-            val argShapes = mentionns.zip(mentions.zipWithIndex.map((m, i) =>
-              SpatialType(rec(i, m), SpaceType.unknown))).toMap
+            // THE ARGUMENT'S LENGTH TYPE GOES WITH IT (plan.md 1B.5).  `SpaceType.unknown` here threw
+            // the whole length half of the interprocedural argument away, and the length half is the
+            // one channel with no depth cap: `Sliding.superpose`'s `res` parameter is bound to
+            // `Singleton(tupleP)` — one path of `n-1` items — and inside the callee its path count was
+            // unknown, so the 15-level nest over it could not be shown to have one group per level.
+            // THE ARGUMENT TYPES ARE COMPUTED ONCE and used by both branches — the interprocedural
+            // descent binds them as parameters, and the recursive branch turns them into the summary
+            // KEY.  Sharing them is what makes the key the one the solver would have built for this
+            // site (plan.md 1D.1); two spellings of the arguments would silently miss the table.
+            val argTypes = mentions.zipWithIndex.map((m, i) =>
+              SpatialType(rec(i, m), SpatialTypes.infer(m, env.lengths)))
             val argPathsAll = refns.zip(refs.map(p => constPath(p, env) -> pathLenOf(p, env)))
-            val known = argPathsAll.collect { case (n, (Some(items), _)) => n -> PathValue(items) }.toMap
-            val opaque = argPathsAll.collect { case (n, (None, k)) => n -> k }.toMap
-            val callee = Env(spaces = argShapes, paths = known, opaque = opaque,
-                             lenv = env.lenv.copy(spaces = Map.empty, paths = Map.empty,
-                                                  active = env.lenv.active + rp))
-            // the callee's body belongs to ANOTHER routine's lexical tree, so it is analysed but not
-            // decorated: a position under this term would be a lie about where the node lives.
-            goShape(cbody, callee, depth + 1, pos, "callee")(using b, ShapeVisitor.Off)
-          else Shape.top
+            if !env.lenv.active(rp) then
+              // INTERPROCEDURAL: a routine body denotes a function of its parameters, so analysing it
+              // with the parameters bound to the ARGUMENT shapes is sound, must channels included.
+              // The callee scope starts empty — inheriting the caller's bindings would let a body read
+              // a mention it does not have.
+              val known = argPathsAll.collect { case (n, (Some(items), _)) => n -> PathValue(items) }.toMap
+              val opaque = argPathsAll.collect { case (n, (None, k)) => n -> k }.toMap
+              val callee = Env(spaces = mentionns.zip(argTypes).toMap, paths = known, opaque = opaque,
+                               lenv = env.lenv.copy(spaces = Map.empty, paths = Map.empty,
+                                                    active = env.lenv.active + rp))
+              // the callee's body belongs to ANOTHER routine's lexical tree, so it is analysed but not
+              // decorated: a position under this term would be a lie about where the node lives.
+              goShape(cbody, callee, depth + 1, pos, "callee")(using b, ShapeVisitor.Off)
+            else
+              val pathArgs = refs.map(p => constPath(p, env) match
+                case Some(items) => SpatialRecursion.PathArg.known(PathValue(items))
+                case None => SpatialRecursion.PathArg.opaque(pathLenOf(p, env)))
+              recursiveSummary(rp, argTypes, pathArgs, table).map(_.shape).getOrElse(Shape.top)
 
         // an arbitrary Scala function: NOTHING is claimed
         case Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => Shape.top
       v.visit(pos, s, env, out, cause)
+
+  /** ==A RECURSIVE CALLEE'S SUMMARY, INSTEAD OF ⊤ (plan.md 1D.1)==
+   *
+   *  The arm above descends into a callee and binds its parameters, and `env.lenv.active(rp)` is what
+   *  stops that descent at a recursive call — correctly, since the descent would not terminate.  What
+   *  it used to return there was `Shape.top`.  `SpatialRecursion` solves exactly this: the abstract
+   *  result of a routine at an abstract argument tuple, to a CERTIFIED post-fixed point.
+   *
+   *  THE ARGUMENTS ARE BUILT THE WAY THE SOLVER BUILDS THEM — a mention argument's type from this
+   *  analysis' own transfers, a path argument's value when it is constant and its length bound
+   *  otherwise — so the key looked up is the key the solver would have created for this site.  A
+   *  mismatch would silently miss the table and fall back to ⊤, which is why `argsOf` is shared.
+   *
+   *  BUDGETED AND MEMOISED per analysis (`Budget.solves`, `Budget.summaries`): a solve is a worklist
+   *  fixpoint, not a transfer.  Exhausting the budget returns `None`, i.e. exactly the ⊤ this
+   *  replaced. */
+  private def recursiveSummary(rp: RoutinePtr, argTypes: Vector[SpatialType],
+                               pathArgs: Vector[SpatialRecursion.PathArg],
+                               table: PartialFunction[RoutinePtr, Routine])
+                              (using b: Budget): Option[SpatialType] =
+    val key = SpatialRecursion.Key(rp, SpatialRecursion.argsOf(argTypes, pathArgs))
+    b.summaries.getOrElseUpdate(key, {
+      if b.solves <= 0 then None
+      else { b.solves -= 1; SpatialRecursion.summaryAt(rp, key.args, table) }
+    })
 
   /** the head-group union shared by `Iteration` and `Fold`.  A group whose head is only MAY-present
    *  need not run, so its body cannot contribute must information; a MUST-present head's group DOES
    *  run and contributes fully.  An open head set adds ONE extra weakened body, analysed with the
    *  head symbol opaque (length 1 — `sp_iter_head_one`) and `rest` bound to the weakened
    *  `otherTail`; without that arm the whole transfer had to degrade to ⊤. */
-  private def groupUnion(x: Shape, env: Env, sym: PathRef, rest: SpaceMention, body: Space,
-                         depth: Int, extraOpaque: Map[PathRef, LenBounds], pos: Vector[Int])
+  private def groupUnion(x: Shape, srcLens: SpaceType, env: Env, sym: PathRef, rest: SpaceMention,
+                         body: Space, depth: Int, extraOpaque: Map[PathRef, LenBounds],
+                         pos: Vector[Int])
                         (using b: Budget, v: ShapeVisitor): Shape =
     if x.definitelyEmpty || x.headCount.hi == 0 then Shape.empty
     else
+      // ==THE GROUP COUNT IS ALSO BOUNDED BY THE PATH COUNT (plan.md 1B.5)==
+      //
+      // Every group is a distinct FIRST ITEM of some path, so there cannot be more groups than paths.
+      // That is trivial and it is the one bound in this transfer that does NOT go through the shape,
+      // which is what makes it decisive: the shape is capped at `shapeDepth` levels and the LENGTH
+      // histogram is not capped at all.
+      //
+      // MEASURED on `Sliding.superpose`, which is puzzle15's astronomical factor.  Its arm is
+      // `iterN(res, refs, _, labeled)` over `res = Singleton(tupleP)` — ONE path of `n-1` derefs.  The
+      // shape says "one head" for the first `shapeDepth` levels and ⊤ below them, so from level 4 down
+      // the untracked arm had to `openCounts` and `labeled`'s exact `+[1,1]` tile per cell became
+      // `+[0, 38654705664]`; `Sliding.collapse`'s `Unwrap(state, c_i)` then cost the whole state per
+      // cell and its 15-fold `Composition` cost `3584^15 = 2.068e+53`.  The histogram says
+      // `byLen = {15 -> [1,1]}` at level 0 and `tailsUnionLens` peels one item per level, so the path
+      // count stays 1 all the way down and no level has to open its counts.
+      val srcPaths = srcLens.size
+      val lensAtMostOne = srcPaths.hi <= 1
+      // the rest's own LENGTH TYPE, which used to be thrown away here (`SpaceType.unknown`).  One
+      // group's tails are a subset of the tails-union, so the tails-union transfer bounds them from
+      // ABOVE — and `fiberLens` is what drops the lower bounds that do NOT carry to a single group.
+      // Keeping them typed 11 corpus terms definitely-empty; see the note on `SpatialTypes.mayOnlyLens`.
+      val restLens = SpatialTypes.fiberLens(srcLens)
       def bind(head: Option[PathItem], tail: Shape): Env =
-        val base = env.copy(spaces = env.spaces + (rest -> SpatialType(tail, SpaceType.unknown)),
+        val base = env.copy(spaces = env.spaces + (rest -> SpatialType(tail, restLens)),
                             opaque = env.opaque ++ extraOpaque)
         head match
           case Some(h) => base.copy(paths = base.paths + (sym -> PathValue(List(h))),
@@ -596,7 +711,33 @@ object SpatialTyping:
         val bs = goShape(body, bind(Some(h), tail), depth + 1, pos :+ 1, s"head=$h")
         parts += (if tail.definitelyNonEmpty then bs else Shape.weaken(bs))
       if x.others.hi > 0 then
-        val ot = Shape.weaken(x.otherTail.getOrElse(Shape.top))
+        // ==THE SINGLE-GROUP EXEMPTION (plan.md 1B.5)==
+        //
+        // `headCount == [1,1]` PROVES the source has exactly one head, so this untracked arm is the
+        // ONLY group and it definitely runs.  Two weakenings then have nothing to weaken away:
+        // `otherTail` is a per-head summary and with one head it bounds THIS group's tails outright,
+        // must channels and count lower bounds included; and the result is that one group's body
+        // shape rather than a union over an unknown family of them.
+        //
+        // MEASURED on `Sliding.superpose`: its arm is `iterN(res, refs, _, labeled)` over
+        // `res = Singleton(tupleP)` — one path of `n-1` derefs, hence `headCount = [1,1]` at all 15
+        // levels — and `labeled` types exactly, `[13, 28]` with one tile per cell.  Weakened at every
+        // level the nest came out `[0, 241]` with `+[0,16]` tiles per cell, and `Sliding.collapse`'s
+        // `Unwrap(state, c_i)` could not be shown to select ONE tile; its 15-fold `Composition` then
+        // cost `3584^15 = 2.068e+53`, which is puzzle15's reported `alloc`.
+        // `headCount.hi == 1` IS REQUIRED AND `lensAtMostOne` DOES NOT SUBSTITUTE FOR IT.  This arm
+        // stands for the UNTRACKED groups, so the exemption needs the one group to BE this arm's — and
+        // that is what `headCount.hi == 1` beside `others.hi > 0` establishes.  Reading `lensAtMostOne`
+        // here instead admitted a source with one path and several MAY-present tracked heads, where the
+        // single group may be a tracked one and this arm's body then contributes must claims about a
+        // group that does not run.  `SpatialAnalysisCheck` produced it as 11 corpus shapes typed
+        // DEFINITELY EMPTY against non-empty values, `Subtraction` deleting the paths those false musts
+        // licensed — the same defect shape as the 4-queens round-count collapse in `groupTailType`'s
+        // note.  `lensAtMostOne` is still used below, where all it decides is whether the counts have
+        // to open, and "at most one group" is exactly the right premise for that.
+        val oneGroup = x.headCount.lo == 1 && x.headCount.hi == 1
+        val ot0 = x.otherTail.getOrElse(Shape.top)
+        val ot = if oneGroup then ot0 else Shape.weaken(ot0)
         val bs = goShape(body, bind(None, ot), depth + 1, pos :+ 1, "untracked-heads")
         // there may be up to `others.hi` untracked groups, and the result is the union of ALL of
         // them.  One body shape bounds ONE group; unioning an unknown number of sets each admitted
@@ -604,7 +745,11 @@ object SpatialTyping:
         // once, weakened, was a soundness bug — found by the nested operator matrix on
         // `Fold(GroundedSS(…), …, Wrap(rest, acc), …)`, where two head groups each produced one head
         // and the transfer claimed at most one.
-        parts += (if x.others.hi <= 1 then Shape.weaken(bs) else Shape.openCounts(bs))
+        // AT MOST ONE GROUP is what decides whether the counts have to open, and the path count
+        // decides it where the shape cannot (see the note above).
+        parts += (if oneGroup then bs
+                  else if x.others.hi <= 1 || lensAtMostOne then Shape.weaken(bs)
+                  else Shape.openCounts(bs))
       val ps = parts.result()
       if ps.isEmpty then Shape.empty else ps.reduce((p, q) => Shape.unionTransfer(p, q))
 

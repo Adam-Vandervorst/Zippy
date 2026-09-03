@@ -72,6 +72,123 @@ class BackendProfileCheck extends FunSuite, CalibrationProbe:
            "executables, so a floor read off one is not a floor for the other")
   }
 
+  // ---- 1B.1: THE HANDOFF IS WIRED, AND THIS IS WHAT "WIRED" MEANS -------------------------------
+  //
+  // `PricingTarget` was previously a predicate with no consumer: `SpatialCost.go`'s fallback arm
+  // handed the subterm to `Backends.of(Trie, phase)`, a singleton whose profile reports
+  // `eventsOf == Trie`, so `claimsFloor` was TRUE across exactly the handoff it exists to make
+  // false.  These four tests are the contract the wiring has to satisfy, and each fails if a
+  // different part of it is undone.
+
+  test("1B.1a. every plain backend instance targets its OWN counted stream and may claim a floor") {
+    for m <- Backends.all do
+      assertEquals(m.eventsOf, m.backend,
+        s"${m.name}: a plain instance must target its own events; only Backends.handoff retargets")
+      assertEquals(m.profile.target.eventsOf, m.backend,
+        s"${m.name}: `profile` is not derived from `eventsOf` — the retarget cannot reach the profile")
+      assert(m.profile.claimsFloor,
+        s"${m.name}: a gated profile pricing its own events must be able to license a MUST-count, " +
+        "or every lower endpoint in the tree is withdrawn")
+  }
+
+  test("1B.1b. Backends.handoff returns a RETARGETED instance whose profile refuses a floor") {
+    for phase <- Vector(ExecutionPhase.Warm, ExecutionPhase.Cold) do
+      val h = Backends.handoff(Backend.Trie, phase, Backend.Zipper)
+      assertEquals(h.backend, Backend.Trie, "the formulas are still the trie's")
+      assertEquals(h.eventsOf, Backend.Zipper, "but the counted stream is the zipper's")
+      assert(h.profile.target.handedOff, "the profile does not report the handoff")
+      assert(!h.profile.claimsFloor,
+        "the handoff instance still claims a floor — this is the exact defect 1B.1 fixes.  A " +
+        "must-count read off `evalI`'s source would be charged into `execZ`'s total, and " +
+        "`materialize` can return a `Lit` by pointer, so `execZ` can allocate strictly less.")
+      assert(h.name.contains("->"), s"the handoff instance is not distinguishable by name: ${h.name}")
+      assertNotEquals(h.asInstanceOf[AnyRef], Backends.of(Backend.Trie, phase).asInstanceOf[AnyRef],
+        "handoff returned the plain singleton, so the retarget did nothing")
+  }
+
+  test("1B.1c. handoff REFUSES a pair it has no instance for, instead of degrading") {
+    // The failure mode must not be reachable by adding a second `controlFlowFallback`: a silent
+    // fall back to `Backends.of` would restore the bug for the new consumer.
+    val e = intercept[IllegalArgumentException](
+      Backends.handoff(Backend.Trie, ExecutionPhase.Warm, Backend.Graph))
+    assert(e.getMessage.contains("no instance prices"), e.getMessage)
+    // an identity "handoff" is not a handoff and is allowed through to the plain instance
+    assertEquals(Backends.handoff(Backend.Trie, ExecutionPhase.Warm, Backend.Trie).eventsOf,
+                 Backend.Trie)
+  }
+
+  test("1B.1e. the PREMISE of `inheritsHandoffFloor`, MEASURED: execZ >= evalI on a handed-off term") {
+    // `ZipperCost.inheritsHandoffFloor` is a claim about `transpileZ`'s SOURCE: it is a total, eager
+    // structural walk with no short-circuit, so a control-flow subterm is always reached and
+    // `evalI` is always run on it IN FULL.  If that is true, every event `evalI(T)` must emit is
+    // emitted during `execZ`'s run, and `evalI`'s floor for T is a floor for `execZ`'s total.
+    //
+    // THE ROOT IS THE CONTROL-FLOW NODE in every case below, so the handed-off subterm IS the whole
+    // program and the attribution is unambiguous.  Comparing a term with a FUSED outer operator
+    // would be the wrong measurement: there `transpileZ` hands off only the inner node, `execZ`
+    // fuses the rest, and `execZ` legitimately touches fewer nodes than `evalI` does for the whole
+    // term — measured, `Union(Iteration(…), lit)` gives touch 7 against 5.  That is the fusion win,
+    // not a floor violation.
+    //
+    // THE CACHES ARE WARMED FIRST, and that is not hygiene, it is the difference between a right
+    // and a wrong answer: `iLiteralCache`/`iLiteralStrCache`/`iConstStrCache` (IntTrie.scala) are
+    // append-only for the life of the JVM, so whichever executor runs first pays the decode
+    // allocations.  The first version of this measurement ran `evalI` then `execZ` cold and reported
+    // `alloc 47 -> 35`, i.e. an apparent floor VIOLATION that was entirely the cache warming.
+    given PathContext = PathContextMap(Map.empty)
+    given SpaceContext = SpaceContextMap(Map.empty)
+    given PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
+    def pv(items: String*): PathValue = PathValue(items.toList)
+    def slit(ps: PathValue*): Space = Space.Literal(SpaceValue(ps.toSet))
+    val src = slit(pv("a", "1"), pv("a", "2"), pv("b", "3"), pv("c", "4"))
+    val cases: Vector[(String, Space)] = Vector(
+      "iteration" -> Space.Iteration(src, PathRef("y"), SpaceMention("r"),
+                       Space.Union(Space.Mention(SpaceMention("r")),
+                                   Space.Singleton(Path.Deref(PathRef("y"))))),
+      "fixpoint"  -> Space.Fixpoint(slit(pv("a")), SpaceMention("rec"),
+                       Space.Union(Space.Mention(SpaceMention("rec")), slit(pv("b")))),
+      "fold"      -> Space.Fold(src, Path.Constant(pv("k")), PathRef("acc"), PathRef("sym"),
+                       SpaceMention("r"), Space.Mention(SpaceMention("r")),
+                       Path.Concat(Path.Deref(PathRef("acc")), Path.Deref(PathRef("sym")))),
+    )
+    assert(Backends.zipperWarm.inheritsHandoffFloor,
+      "ZipperCost no longer declares `inheritsHandoffFloor`, so this measurement pins nothing")
+    for (label, t) <- cases do
+      assert(SpatialCost.isControlFlowForTest(t),
+        s"$label is not a control-flow term, so `transpileZ` does not hand it off and this case " +
+        "measures the wrong thing")
+      evalI(t); execZ(t)                                    // warm the process-wide decode memos
+      val (_, ei) = EffortSink.count(evalI(t))
+      val (_, ez) = EffortSink.count(execZ(t))
+      // order-stability, so a future cache cannot make this read differently by running the other way
+      val (_, ez2) = EffortSink.count(execZ(t))
+      val (_, ei2) = EffortSink.count(evalI(t))
+      assertEquals(ei.showComponents, ei2.showComponents, s"$label: evalI is not order-stable warm")
+      assertEquals(ez.showComponents, ez2.showComponents, s"$label: execZ is not order-stable warm")
+      println(f"HANDOFF: $label%-10s evalI [${ei.showComponents}]  execZ [${ez.showComponents}]")
+      for c <- EffortComponent.values if c != EffortComponent.Explain do
+        assert(ez.component(c) >= ei.component(c),
+          s"$label/$c: execZ counted ${ez.component(c)} where evalI counted ${ei.component(c)}.  " +
+          "`ZipperCost.inheritsHandoffFloor` claims `transpileZ` runs `evalI` IN FULL on a " +
+          "handed-off subterm, so every event evalI must emit is emitted here too.  A strict " +
+          "decrease refutes that — check `transpileZ` for a short-circuit or a lazy operand — and " +
+          "until it is explained the override must be withdrawn, because the floor it licenses " +
+          "would be a claim about a run that did not happen.")
+  }
+
+  test("1B.1d. the model `go` hands control flow to is the retargeted one, for every fallback") {
+    // Read off the models rather than asserted about one of them: any model declaring a
+    // `controlFlowFallback` must have a handoff instance, and that instance must refuse a floor.
+    val withFallback = Backends.all.filter(_.controlFlowFallback.isDefined)
+    assert(withFallback.nonEmpty,
+      "no model declares a controlFlowFallback, so this test is vacuous — `ZipperCost` used to")
+    for m <- withFallback; fb <- m.controlFlowFallback do
+      val h = Backends.handoff(fb, m.phase, m.backend)
+      assert(!h.profile.claimsFloor,
+        s"${m.name} hands control flow to ${fb.slug}, and that handoff instance (${h.name}) still " +
+        "claims a floor")
+  }
+
   // ---- the OPERAND-STRUCTURE FACT, measured -----------------------------------------------------
   /** `k` single-key non-terminal operands on pairwise distinct keys, each carrying `fan`
    *  grandchildren — exactly what `ITrie.wrap` hands `ITrie.joinAll` under a head-retagged loop. */

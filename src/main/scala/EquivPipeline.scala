@@ -159,9 +159,46 @@ object EquivPipeline:
       bm.exists(n => AgnosticPipeline.usesMention(x, n)) ||
         bp.exists(n => AgnosticPipeline.usesPathRef(x, n))
     def cpath(p: Path): Path = Path.Constant(PathValue(eval(Space.Singleton(p)).paths.head.items))
-    def go(x: Space, bm: Set[String], bp: Set[String]): Space =
-      def sub(y: Space) = go(y, bm, bp)
+    def go(x: Space, bm: Set[String], bp: Set[String], active: Set[RoutinePtr] = Set.empty): Space =
+      def sub(y: Space) = go(y, bm, bp, active)
       x match
+        // ---- AN ACYCLIC CALL IS INLINED, NOT REFUSED (plan.md 1D.4, and 2A.2's first clause) ----
+        //
+        // This arm did not exist and the `Call` fell through to the throw below whenever it read an
+        // enclosing binder.  MEASURED: that is what made `puzzle15` and `nqueens` the two
+        // cornerstones whose binder census read FALLBACK — the caller had to use `expand`, which
+        // EXECUTES the control flow, so both stones' stage-1 artifacts described a ground
+        // computation instead of the binder structure.  2 of 7 cornerstones.
+        //
+        // Inlining needs a SIMULTANEOUS, CAPTURE-AVOIDING substitution and that is the whole reason
+        // it could not be done before 1A.1: the arguments are normalised in the CALLER's scope and
+        // may mention the very binder the callee body is about to sit under, which is precisely the
+        // capture case, and the one-parameter-at-a-time loop `Lower.inline` used would also have
+        // collapsed two arguments naming each other's formals.  `Subst` handles both.
+        //
+        // THE JUSTIFYING LAW, which a reader of the resulting artifact needs: `call_unfold.p` (U63)
+        // proves the SEMANTIC half — a call IS its body applied to the argument — and the SYNTACTIC
+        // half is `O6a`, beta-soundness of capture-avoiding inlining, which is OPEN as a theorem and
+        // carried by `SubstConformance` + `SubstCapture` + `proofs/lean/Zippy/Subst.lean`.  Recording
+        // that pair in the emitted artifact's `; TRUSTS:` header is 2A.2's clause; the format is
+        // fixed (`Certified.Trust`, plan.md 0.8) and `outside:Call` maps to `O6a`.
+        //
+        // `active` is the cycle guard: a SELF-recursive callee cannot be inlined (it would not
+        // terminate) and falls through to the same honest refusal as before.
+        // ONLY A CALL THAT READS AN ENCLOSING BINDER, and the first version of this arm omitted
+        // that guard and MADE A CORNERSTONE WORSE.  A CLOSED call was previously EVALUATED by the
+        // `other` arm below (`Literal(eval(other))`), which is strictly the better answer — a ground
+        // literal is renderable by every renderer and needs no binder machinery at all.  Inlining it
+        // instead splices the callee's body into the term and can surface a node that is NOT
+        // renderable under a binder: MEASURED, `gol` went from BINDERS KEPT to a fallback on a
+        // `Range` that had been inside a closed `Call` and is now exposed.  The guard restores
+        // evaluation for the closed case and confines the inlining to exactly the calls that used to
+        // throw.
+        case Call(rp, refs, mentions)
+            if rc.isDefinedAt(rp) && !active(rp) && free(x, bm, bp) =>
+          val Routine(_, refns, mentionns, body) = rc(rp)
+          go(Subst(body, (mentionns zip mentions.map(sub)).toMap, (refns zip refs).toMap),
+             bm, bp, active + rp)
         case Empty => Empty
         case Literal(v) => Literal(v)
         case Mention(m) if bm(m.s) => x                        // the binder's own variable: keep
@@ -179,9 +216,9 @@ object EquivPipeline:
         case TailsUnion(src) => TailsUnion(sub(src))
         case TailsIntersection(src) => TailsIntersection(sub(src))
         case Iteration(src, sym, rest, body) =>
-          Iteration(sub(src), sym, rest, go(body, bm + rest.s, bp + sym.s))
+          Iteration(sub(src), sym, rest, go(body, bm + rest.s, bp + sym.s, active))
         case Fixpoint(init, rec, body) =>
-          Fixpoint(sub(init), rec, go(body, bm + rec.s, bp))
+          Fixpoint(sub(init), rec, go(body, bm + rec.s, bp, active))
         case other =>
           // Fold / Call / Range / grounded — the trusted executed steps, as in `expand`.  A closed
           // one is evaluated; one that reads an enclosing binder cannot be, and saying which is the
@@ -191,7 +228,19 @@ object EquivPipeline:
               s"expandKeepBinders: ${other.getClass.getSimpleName} reads a variable bound by an " +
               s"enclosing Iteration/Fixpoint, so it cannot be executed and no renderer models it. " +
               s"Carrying this node symbolically is the open part of the instance tier (plan.md, " +
-              s"item 3); the caller must fall back to `expand` and record the marker.")
+              s"item 3); the caller must fall back to `expand` and record the marker.  " +
+              (other match
+                 case Call(rp, _, _) if !rc.isDefinedAt(rp) =>
+                   s"This is a Call to `${rp.s}`, which is NOT in the routine table — an ACYCLIC " +
+                   "call with a known body is inlined through `Subst` by the arm above, so a Call " +
+                   "reaching here is either unknown or self-recursive."
+                 case Call(rp, _, _) =>
+                   s"This is a SELF-RECURSIVE call to `${rp.s}`: inlining it would not terminate, " +
+                   "so the honest options are the residual k-unrolling (`unrollControl`) or a " +
+                   "first-class `Space.Fixpoint` (`asFixpointGeneral`)."
+                 case _ =>
+                   s"There is no inlining for a ${other.getClass.getSimpleName}: `Fold` and `Range` " +
+                   "are positional and the grounded forms are opaque closures (T6)."))
           Literal(eval(other))
     go(s, Set.empty, Set.empty)
 
@@ -494,42 +543,27 @@ object AgnosticPipeline:
    *  to it, so there is a single implementation of the binder rules for the whole tree — see the
    *  note at that call site for what the alternative cost.
    *
-   *  THE MATCH IS TOTAL, AND IT HAS TO BE.  `Fold` and `GroundedSS` used to fall through to
-   *  `case other => other`, which meant substitution SILENTLY DID NOTHING under them — including
-   *  in `Fold`'s SOURCE, which is not a binder position at all, so a `Fold` whose source mentioned
-   *  the substituted name kept an unbound mention and `eval` then failed to resolve it.
-   *  `src/test/scala/SubstConformance.scala` is the differential that found it, and the arms are
-   *  spelled out one per constructor so a new `Space` case cannot repeat the omission.
+   *  ==IT DELEGATES TO [[Subst]] NOW, AND WHY THAT WAS NOT OPTIONAL==
+   *  This used to be its own walker.  It was TOTAL — `Fold` and `GroundedSS` had fallen through a
+   *  `case other => other`, so substitution silently did nothing under them, and
+   *  `src/test/scala/SubstConformance.scala` is the differential that found it — but it was only
+   *  SHADOW-AWARE: it stopped descending when a binder rebound `m`, and never renamed a binder that
+   *  would CAPTURE a free name of `r`.  Shadowing without renaming is half of hygiene:
    *
-   *  THE BINDER RULES, stated once:
+   *      Iteration(src, y, rest, Mention(rest))  with  outer := Mention(rest)
+   *
+   *  substitutes an `outer` occurrence for a term whose free `rest` the `Iteration` then binds, and
+   *  the replacement silently starts reading the loop variable.  `Subst` alpha-renames the binder;
+   *  `SubstCapture` pins the case.  Four implementations of substitution disagreed about exactly
+   *  this, and `Subst.scala`'s header lists all four.
+   *
+   *  The binder rules it encoded are unchanged and are now stated once, in `Subst`:
    *    * `Iteration`  — `rest` binds in `templates` only; `src` is outside;
    *    * `Fixpoint`   — `rec` binds in `body` only; `init` is outside;
    *    * `Fold`       — `rest` binds in `templates` only; `src`, `initial` and `update` are not
    *                     space-mention scopes at all (`update` is a Path);
    *    * `GroundedSS` — an ordinary space operand, no binder.  `GroundedPS` takes a Path only. */
-  def substMention(s: Space, m: SpaceMention, r: Space): Space = s match
-    case Mention(`m`) => r
-    case Mention(_) | Empty | Literal(_) | Singleton(_) | GroundedPS(_, _) => s
-    case Union(a, b) => Union(substMention(a, m, r), substMention(b, m, r))
-    case Intersection(a, b) => Intersection(substMention(a, m, r), substMention(b, m, r))
-    case Subtraction(a, b) => Subtraction(substMention(a, m, r), substMention(b, m, r))
-    case Restriction(a, b) => Restriction(substMention(a, m, r), substMention(b, m, r))
-    case Raffination(a, b) => Raffination(substMention(a, m, r), substMention(b, m, r))
-    case Composition(a, b) => Composition(substMention(a, m, r), substMention(b, m, r))
-    case Wrap(src, p) => Wrap(substMention(src, m, r), p)
-    case Unwrap(src, p) => Unwrap(substMention(src, m, r), p)
-    case TailsUnion(src) => TailsUnion(substMention(src, m, r))
-    case TailsIntersection(src) => TailsIntersection(substMention(src, m, r))
-    case Iteration(src, sym, rest, body) =>
-      Iteration(substMention(src, m, r), sym, rest, if rest == m then body else substMention(body, m, r))
-    case Fixpoint(init, rec, body) =>
-      Fixpoint(substMention(init, m, r), rec, if rec == m then body else substMention(body, m, r))
-    case Fold(src, initial, acc, sym, rest, body, upd) =>
-      Fold(substMention(src, m, r), initial, acc, sym, rest,
-           if rest == m then body else substMention(body, m, r), upd)
-    case GroundedSS(src, f) => GroundedSS(substMention(src, m, r), f)
-    case Call(rp, refs, ms) => Call(rp, refs, ms.map(substMention(_, m, r)))
-    case Range(x, lo, hi) => Range(substMention(x, m, r), lo, hi)
+  def substMention(s: Space, m: SpaceMention, r: Space): Space = Subst.mention(s, m, r)
 
   /** MONOTONICITY of `s` in the space mention `m`: does `X ⊑ Y` imply `s[m↦X] ⊑ s[m↦Y]`?
    *
@@ -841,11 +875,22 @@ object AgnosticPipeline:
     } =>
       val Routine(_, refns, mentionns, body) = rc(rp)
       // substitute args; unroll self-recursion k levels, then cut with a fresh shared free input
+      // ONE SIMULTANEOUS SUBSTITUTION, NOT A LOOP OF SINGLE ONES.
+      //
+      // This read
+      //     for (pr, arg) <- refns zip refs      do b = substPathRef(b, pr, arg)
+      //     for (mn, arg) <- mentionns zip args  do b = substMention(b, mn, arg)
+      // which is SEQUENTIAL COMPOSITION.  It differs from simultaneous substitution exactly when an
+      // ARGUMENT mentions a later FORMAL, and then it is WRONG: for `g(a, b)` called as `g(b, a)`,
+      // `a := b` rewrites every `a` to `b`, and the following `b := a` rewrites BOTH to `a` — the two
+      // arguments collapse into one variable.  The same hazard runs ACROSS the two sorts, which is
+      // why both maps go into ONE call rather than two: a path argument naming a formal mention's
+      // binder, or the reverse, would be resolved in whichever order the two loops happened to run.
+      // `SubstCapture` pins the `g(y,x)` case; `Subst.scala`'s header works the example through.
       def inlineOnce(depth: Int, args: Vector[Space]): Space =
-        var b = body
-        for (pr, arg) <- refns zip refs do b = substPathRef(b, pr, arg)
-        for (mn, arg) <- mentionns zip args do b = substMention(b, mn, arg)
-        expandCalls(b, depth)
+        val pm = (refns zip refs).toMap
+        val sm = (mentionns zip args).toMap
+        expandCalls(Subst(body, sm, pm), depth)
       def expandCalls(b: Space, depth: Int): Space = b match
         case Call(`rp`, rs, ms) =>
           // THE CUT.  The residual is keyed by (routine, depth, ARGUMENTS) — see [[ResidualCut]];
@@ -872,49 +917,24 @@ object AgnosticPipeline:
       // the lowerable case: substitute the actual arguments into the Fixpoint form and keep going
       val r = rc(rp)
       val fixBody = asFixpointGeneral(rp, r.refs, r.mentions, r.body).get
-      var b = fixBody
-      for (pr, arg) <- r.refs zip refs do b = substPathRef(b, pr, arg)
-      for (mn, arg) <- r.mentions zip mentions do b = substMention(b, mn, unrollControl(arg, k))
-      unrollControl(b, k)
+      // Simultaneous, for the same reason as `inlineOnce` above — and it matters more here, because
+      // the term being substituted into is a `Space.Fixpoint` whose `rec` binder is exactly the kind
+      // of name a sequential pass can capture.
+      val pm = (r.refs zip refs).toMap
+      val sm = (r.mentions zip mentions.map(unrollControl(_, k))).toMap
+      unrollControl(Subst(fixBody, sm, pm), k)
     case other => other
 
-  /** THE ONE CAPTURE-AVOIDING PATH-REF SUBSTITUTION; see [[substMention]] for why both live here
-   *  and what used to fall through `case other => other`.  `Lower.inline` delegates to it. */
-  def substPathRef(s: Space, pr: PathRef, arg: Path): Space =
-    def sp(p: Path): Path = p match
-      case Path.Deref(`pr`) => arg
-      case Path.Concat(l, r) => Path.Concat(sp(l), sp(r))
-      case other => other
-    s match
-      case Singleton(p) => Singleton(sp(p))
-      case Wrap(src, p) => Wrap(substPathRef(src, pr, arg), sp(p))
-      case Unwrap(src, p) => Unwrap(substPathRef(src, pr, arg), sp(p))
-      case Union(a, b) => Union(substPathRef(a, pr, arg), substPathRef(b, pr, arg))
-      case Intersection(a, b) => Intersection(substPathRef(a, pr, arg), substPathRef(b, pr, arg))
-      case Subtraction(a, b) => Subtraction(substPathRef(a, pr, arg), substPathRef(b, pr, arg))
-      case Restriction(a, b) => Restriction(substPathRef(a, pr, arg), substPathRef(b, pr, arg))
-      case Raffination(a, b) => Raffination(substPathRef(a, pr, arg), substPathRef(b, pr, arg))
-      case Composition(a, b) => Composition(substPathRef(a, pr, arg), substPathRef(b, pr, arg))
-      case TailsUnion(src) => TailsUnion(substPathRef(src, pr, arg))
-      case TailsIntersection(src) => TailsIntersection(substPathRef(src, pr, arg))
-      case Iteration(src, sym, rest, body) =>
-        Iteration(substPathRef(src, pr, arg), sym, rest, if sym.s == pr.s then body else substPathRef(body, pr, arg))
-      // `rec` is a SPACE mention, so it shadows nothing for a path ref: BOTH arms are substituted.
-      // This arm was MISSING and `Fixpoint` fell through to `case other => other`, so a path ref
-      // inside a fixpoint was never substituted at all.
-      case Fixpoint(init, rec, body) =>
-        Fixpoint(substPathRef(init, pr, arg), rec, substPathRef(body, pr, arg))
-      // `acc` AND `symbol` are path-ref binders, scoping over `templates` and `update`.  `initial`
-      // is evaluated OUTSIDE them and is substituted.  This arm was missing too.
-      case Fold(src, initial, acc, sym, rest, body, upd) =>
-        val bound = acc.s == pr.s || sym.s == pr.s
-        Fold(substPathRef(src, pr, arg), sp(initial), acc, sym, rest,
-             if bound then body else substPathRef(body, pr, arg), if bound then upd else sp(upd))
-      case GroundedPS(p, f) => GroundedPS(sp(p), f)
-      case GroundedSS(src, f) => GroundedSS(substPathRef(src, pr, arg), f)
-      case Call(rp, refs, ms) => Call(rp, refs.map(sp), ms.map(substPathRef(_, pr, arg)))
-      case Range(x, lo, hi) => Range(substPathRef(x, pr, arg), lo, hi)
-      case Empty | Literal(_) | Mention(_) => s
+  /** PATH-REF SUBSTITUTION — delegated to [[Subst.pathRef]].
+   *
+   *  Its own walker had TWO defects, and the second is the one no equivalence test could see.  It was
+   *  shadow-aware but not capture-avoiding, exactly as [[substMention]] was; and its inner path
+   *  walker `sp` ended in `case other => other`, so `Path.GroundedPP` and `Path.GroundedSP` were
+   *  never descended — a path ref inside a grounded closure's ARGUMENT was never substituted at all,
+   *  and the closure then ran against an unbound ref.  `Subst`'s path walker is total over all five
+   *  `Path` constructors, and `Path.GroundedSP` goes through the SPACE walker because it carries a
+   *  `Space` that can contain binders. */
+  def substPathRef(s: Space, pr: PathRef, arg: Path): Space = Subst.pathRef(s, pr, arg)
 
   /** ground = no free mentions, no bound-variable references. */
   def isGround(s: Space, boundP: Set[String], boundM: Set[String]): Boolean =
@@ -1476,85 +1496,95 @@ ${smt.defsText}
    *  COMPILE ERROR here rather than a silent identity.  Every closed case is listed by name with
    *  the reason it needs no descent.
    *
-   *  ==THE ONE RENAMING, AND WHERE IT IS GOING==
-   *  Renaming happens in exactly one place per sort -- `pm`/`mm` lookup at `Deref` and `Mention` --
-   *  and binder introduction in exactly one helper, `bind`.  plan.md 1A.1 replaces that with
-   *  `Subst.apply`, the single simultaneous capture-avoiding substitution every other site delegates
-   *  to; until then this is deliberately the ONLY renamer in this file, so 1A.1 has one call site to
-   *  redirect rather than four implementations to reconcile.
+   *  ==IT DELEGATES TO `Subst` (plan.md 0.6/1A.1), AND THE SHAPE CHANGED WITH IT==
+   *  This used to thread two rename maps (`pm`, `mm`) down the traversal and apply them at `Deref`
+   *  and `Mention`.  It now renames EACH BINDER'S OWN OCCURRENCES with one `Subst` call at that
+   *  binder and then descends into the result, so the maps are gone: by the time `go` reaches a
+   *  subterm, every enclosing binder has already been renamed in it.  That is `Matching.canon`'s
+   *  structure, and it is the right one — there is one substitution in the tree and this is not a
+   *  second implementation of half of it.
    *
-   *  ==WHY IT IS STILL CAPTURE-FREE TODAY==
-   *  Every name it introduces is minted from a monotone counter with a prefix (`av`/`ar`/`af`/`fa`/
-   *  `fv`/`fr`) that no source program uses, and each is fresh across the whole traversal, so no
-   *  introduced name can capture a free occurrence.  That is a property of the FRESHNESS SUPPLY, not
-   *  of the traversal, which is why the traversal may be a plain rename; it is not a substitution
-   *  and must not become one here.
+   *  The MINTING ORDER is unchanged, so the canonical names are unchanged: the counter is still one
+   *  monotone sequence over the traversal, and two alpha-equivalent terms still get identical names,
+   *  which is what makes `alphaNorm(a) == alphaNorm(b)` a decision procedure.
+   *
+   *  ==WHAT THE DELEGATION BUYS, GIVEN THE FRESHNESS ARGUMENT ALREADY HELD==
+   *  Every name introduced here is minted from a monotone counter with a prefix (`av`/`ar`/`af`/
+   *  `fa`/`fv`/`fr`) that no source program uses, so no introduced name could capture a free
+   *  occurrence — the old map-threading was capture-free for that reason.  But it was capture-free
+   *  by an argument about the FRESHNESS SUPPLY, written in this comment, and correct SHADOWING was a
+   *  second property of the map updates (`pm + (sym.s -> ns)` overriding an outer entry).  Both are
+   *  now `Subst`'s, checked by `SubstCapture` and proved in `proofs/lean/Zippy/Subst.lean`, and this
+   *  file no longer carries an argument of its own that a future edit could invalidate.
    *  ============================================================================================ */
   def alphaNorm(s: Space): Space =
     var n = 0
     def fresh(): Int = { n += 1; n }
     /** one canonical name per binder occurrence, from the shared counter */
     def bind(prefix: String): String = s"$prefix${fresh()}"
-    def go(s: Space, pm: Map[String, String], mm: Map[String, String]): Space = s match
+    def go(s: Space): Space = s match
       // ---- closed: nothing to rename, and each is named so the match stays exhaustive ----------
       case Empty => Empty
       case Literal(v) => Literal(v)                 // a SpaceValue is ground; it holds no binders
+      // ---- variable occurrences: FREE by the time `go` sees them.  Every enclosing binder has
+      //      already renamed its own occurrences through `Subst`, so a name still standing here is
+      //      free in the whole term and must be PRESERVED.
+      case Mention(m) => Mention(m)
       // ---- pointwise, non-binding -------------------------------------------------------------
-      case Union(a, b) => Union(go(a, pm, mm), go(b, pm, mm))
-      case Intersection(a, b) => Intersection(go(a, pm, mm), go(b, pm, mm))
-      case Subtraction(a, b) => Subtraction(go(a, pm, mm), go(b, pm, mm))
-      case Restriction(a, b) => Restriction(go(a, pm, mm), go(b, pm, mm))
-      case Raffination(a, b) => Raffination(go(a, pm, mm), go(b, pm, mm))
-      case Composition(a, b) => Composition(go(a, pm, mm), go(b, pm, mm))
-      case Wrap(src, p) => Wrap(go(src, pm, mm), rp(p, pm, mm))
-      case Unwrap(src, p) => Unwrap(go(src, pm, mm), rp(p, pm, mm))
-      case TailsUnion(src) => TailsUnion(go(src, pm, mm))
-      case TailsIntersection(src) => TailsIntersection(go(src, pm, mm))
-      case Range(x, lo, hi) => Range(go(x, pm, mm), lo, hi)
-      case Singleton(p) => Singleton(rp(p, pm, mm))
-      // ---- the two variable occurrences: THE ONLY renaming sites -------------------------------
-      case Mention(m) => Mention(SpaceMention(mm.getOrElse(m.s, m.s)))
+      case Union(a, b) => Union(go(a), go(b))
+      case Intersection(a, b) => Intersection(go(a), go(b))
+      case Subtraction(a, b) => Subtraction(go(a), go(b))
+      case Restriction(a, b) => Restriction(go(a), go(b))
+      case Raffination(a, b) => Raffination(go(a), go(b))
+      case Composition(a, b) => Composition(go(a), go(b))
+      case Wrap(src, p) => Wrap(go(src), rp(p))
+      case Unwrap(src, p) => Unwrap(go(src), rp(p))
+      case TailsUnion(src) => TailsUnion(go(src))
+      case TailsIntersection(src) => TailsIntersection(go(src))
+      case Range(x, lo, hi) => Range(go(x), lo, hi)
+      case Singleton(p) => Singleton(rp(p))
       // ---- calls: `r` is a GLOBAL routine name, not a binder, so it is preserved verbatim.
-      //      Its arguments are ordinary subterms of the enclosing scope and are descended.  Leaving
-      //      them un-descended was the unsoundness above: a `Call`'s `mentions` are exactly where a
-      //      renamed outer binder is passed in.
-      case Call(r, refs, mentions) =>
-        Call(r, refs.map(rp(_, pm, mm)), mentions.map(go(_, pm, mm)))
-      // ---- binding forms ----------------------------------------------------------------------
+      //      Its arguments are ordinary subterms and are descended.  Leaving them un-descended was
+      //      the unsoundness the old `case other => other` had.
+      case Call(r, refs, mentions) => Call(r, refs.map(rp), mentions.map(go))
+      // ---- binding forms.  ONE `Subst` per binder, then descend into the result.  `src`/`init`/
+      //      `initial` are OUTSIDE the binder and are descended without it.
       case Iteration(src, sym, rest, body) =>
         val (ns, nr) = (bind("av"), bind("ar"))
-        Iteration(go(src, pm, mm), PathRef(ns).known(1), SpaceMention(nr),
-                  go(body, pm + (sym.s -> ns), mm + (rest.s -> nr)))
+        val ref = PathRef(ns).known(1)
+        val men = SpaceMention(nr)
+        Iteration(go(src), ref, men,
+                  go(Subst(body, Map(rest -> Mention(men)), Map(sym -> Path.Deref(ref)))))
       case Fixpoint(init, rec, body) =>
-        val nr = bind("af")
-        Fixpoint(go(init, pm, mm), SpaceMention(nr), go(body, pm, mm + (rec.s -> nr)))
-      // `Fold` BINDS THREE NAMES, and this is the case the catch-all lost entirely.  `src` and
+        val men = SpaceMention(bind("af"))
+        Fixpoint(go(init), men, go(Subst.mention(body, rec, Mention(men))))
+      // `Fold` BINDS THREE NAMES, and this is the case the old catch-all lost entirely.  `src` and
       // `initial` are evaluated OUTSIDE the binder (the accumulator's seed cannot mention the
       // accumulator), so they are normalised in the outer scope; `templates` and `update` are the
       // body and see all three.  Order of minting follows the field order so the canonical names are
       // a function of the term, which is what makes two alpha-equivalent folds compare equal.
       case Fold(src, initial, acc, symbol, rest, templates, update) =>
         val (na, nv, nr) = (bind("fa"), bind("fv"), bind("fr"))
-        val pm2 = pm + (acc.s -> na) + (symbol.s -> nv)
-        val mm2 = mm + (rest.s -> nr)
-        Fold(go(src, pm, mm), rp(initial, pm, mm),
-             PathRef(na).known(1), PathRef(nv).known(1), SpaceMention(nr),
-             go(templates, pm2, mm2), rp(update, pm2, mm2))
+        val (ra, rv, mr) = (PathRef(na).known(1), PathRef(nv).known(1), SpaceMention(nr))
+        val ren = (x: Space) => Subst(x, Map(rest -> Mention(mr)),
+                                      Map(acc -> Path.Deref(ra), symbol -> Path.Deref(rv)))
+        Fold(go(src), rp(initial), ra, rv, mr,
+             go(ren(templates)),
+             rp(Subst.path(update, Map(rest -> Mention(mr)),
+                           Map(acc -> Path.Deref(ra), symbol -> Path.Deref(rv)))))
       // ---- grounded: the CLOSURE is opaque (docs/TRUSTED.md T6 assumes only determinism) but its
       //      ARGUMENT is an ordinary subterm and must be descended.
-      case GroundedPS(p, f) => GroundedPS(rp(p, pm, mm), f)
-      case GroundedSS(p, f) => GroundedSS(go(p, pm, mm), f)
+      case GroundedPS(p, f) => GroundedPS(rp(p), f)
+      case GroundedSS(p, f) => GroundedSS(go(p), f)
 
-    def rp(p: Path, pm: Map[String, String], mm: Map[String, String]): Path = p match
-      case Path.Deref(pr) => Path.Deref(PathRef(pm.getOrElse(pr.s, pr.s)).known(1))
-      case Path.Concat(l, r) => Path.Concat(rp(l, pm, mm), rp(r, pm, mm))
+    def rp(p: Path): Path = p match
+      case Path.Deref(pr) => Path.Deref(pr)         // free by the time `rp` sees it; see `go`
+      case Path.Concat(l, r) => Path.Concat(rp(l), rp(r))
       case Path.Constant(pi) => Path.Constant(pi)   // a PathValue is ground
-      // `GroundedSP` carries a SPACE, so the path side cannot be normalised without the space
-      // environment -- which is why `rp` takes `mm` even though only this one case reads it.
-      case Path.GroundedPP(q, f) => Path.GroundedPP(rp(q, pm, mm), f)
-      case Path.GroundedSP(q, f) => Path.GroundedSP(go(q, pm, mm), f)
+      case Path.GroundedPP(q, f) => Path.GroundedPP(rp(q), f)
+      case Path.GroundedSP(q, f) => Path.GroundedSP(go(q), f)
 
-    go(s, Map.empty, Map.empty)
+    go(s)
 
   /** PROOF-CARRYING JUSTIFICATION: try to match a differing pair as an instance of one of the
    *  optimiser's laws (or a short composition).  A justified pair needs NO per-program prover run —

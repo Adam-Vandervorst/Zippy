@@ -189,6 +189,32 @@
 (assert (forall ((n Int)) (!
   (=> (>= n 0) (= (A (+ n 1)) (cup (A n) (C (+ n 1))))) :pattern ((A (+ n 1))))))
 
+; -----------------------------------------------------------------------------
+; DISCHARGED (plan.md 1E.3).  The FOUR bridging induction principles this file
+; asserts -- the four `(assert (forall ((n Int)) ...))` lines below -- are
+; THEOREMS in Lean, where induction over the chain index is `Nat.rec`:
+;
+;   (i)     chain_ascends            forall n. C n subset C (n+1)
+;   (ii)    acc_eq_chain             forall n. A n = C n
+;   (iii-a) init_subset_chain        forall n. init subset C n
+;   (iii-b) chain_below_prefixpoint  forall n y. init<=y and F y<=y => C n <= y
+;
+; and so is the CONCLUSION they exist for, `stationary_is_lfp`: at a stationary
+; index the returned accumulator IS lfp_{>=init} F.  Both side conditions
+; (monotone F, init subset F init) are explicit parameters of every one of them,
+; so none can be read as unconditional -- which is what this file's
+; monotone-but-non-inflationary counterexample at :47-50 is about.
+;
+; NOT DISCHARGED, and the Lean file says so in the same words: part (iv), that
+; over a finite universe the stationary index EXISTS.  It is not one of the four
+; -- it is a single `card` check whose bridging principle lives in
+; no_infinite_descent.smt2 -- and it is a well-foundedness claim needing a
+; finiteness hypothesis that none of the four needs.  `stationary_is_lfp` takes
+; the stationary index as a HYPOTHESIS for exactly that reason.
+;
+; MECHANIZED-IN: proofs/lean/Zippy/Fixpoint.lean#Zippy.Kleene.stationary_is_lfp
+; -----------------------------------------------------------------------------
+
 ; =============================================================================
 ; (i) the Kleene chain ASCENDS - induction on k.
 ; =============================================================================

@@ -1008,8 +1008,8 @@ object SpatialPipeline:
    *  exactly what rewriting inside a binder body requires (the same argument [[exactEdits]] uses).
    *
    *  NOTE FOR THE WIDTH SPILL: `headDisjoint` goes through `Shape.possibleHeads`, so this rewrite's
-   *  yield is bounded by whether the head set is enumerable — which is what the `otherKeys`/`headAtoms`
-   *  certificate restored past `Shape.MaxHeads`. */
+   *  yield is bounded by whether the head set is enumerable — which is what the [[Cert]] certificate
+   *  restored past `Shape.MaxHeads`, at any width (plan.md 1C.2). */
   private def frontierEdits(d: SpatialAnalysis, ann: SpatialAnnotations)
       : Vector[(NodeId, Space, Rewrite)] =
     import FrontierCase.*
@@ -1074,8 +1074,16 @@ object SpatialPipeline:
               .filter(_ => !rebinds(tmpl, sym, rest))
               .map { h =>
                 val c = Path.Constant(PathValue(List(h)))
-                val sub = subs(tmpl)(spost = { case Space.Mention(`rest`) => Space.TailsUnion(src) },
-                                     ppost = { case Path.Deref(pr) if pr == sym => c })
+                // THROUGH `Subst`, AND THIS IS THE ONE OF THE TWO WHERE IT MATTERS.  The
+                // `rebinds` guard above refuses the rewrite when `tmpl` REBINDS `sym` or `rest`,
+                // which handles SHADOWING by refusal — but capture is the OTHER direction and
+                // `rebinds` cannot see it: the replacement here is `TailsUnion(src)`, which is NOT
+                // closed, so a binder inside `tmpl` named after a FREE name of `src` captured it and
+                // the substituted term silently started reading that binder.  (`unrollProvedHeads`
+                // below substitutes only closed `Literal`/`Constant` terms, so it was safe on that
+                // count; its header's "the substitution would then capture" describes shadowing, not
+                // capture.)  `Subst` alpha-renames the offending binder instead.
+                val sub = Subst(tmpl, Map(rest -> Space.TailsUnion(src)), Map(sym -> c))
                 (n.id, sub, Rewrite.IterationSubstitute(n.id, h))
               }
               // AND IT MUST NOT GROW THE TERM.  When the body never mentions `rest` the substitution
@@ -1195,7 +1203,11 @@ object SpatialPipeline:
    *  optimization, so that form was removed rather than reported as a win.  With a pinned source the
    *  tail sets are constants, nothing is duplicated, and the rewrite is a strict improvement.
    *
-   *  HYGIENE: refused when `body` rebinds `h` or `rest`, since the substitution would then capture. */
+   *  HYGIENE: refused when `body` REBINDS `sym` or `rest`.  That is SHADOWING, not capture — an
+   *  inner binder of the same name means the inner occurrences belong to it and must not be
+   *  rewritten — and the two are separate hazards.  Capture (a binder here swallowing a free name of
+   *  the REPLACEMENT) cannot arise in this rewrite because both replacements are closed, and is
+   *  handled by `Subst` in any case; `iterationSubstitute` above is the sibling where it could. */
   private def unrollProvedHeads(body: Space, a: RoutineAnalysis,
                                 ann: SpatialAnnotations): (Space, Vector[Rewrite]) =
     val edits = a.decorated.nodes.iterator.flatMap { n =>
@@ -1216,8 +1228,11 @@ object SpatialPipeline:
               val c = Path.Constant(PathValue(List(h)))
               val tail = SpaceValue(v.paths.collect { case PathValue(x :: t) if x == h => PathValue(t) })
               val tailTerm: Space = if tail.paths.isEmpty then Space.Empty else Space.Literal(tail)
-              subs(tmpl)(spost = { case Space.Mention(`rest`) => tailTerm },
-                         ppost = { case Path.Deref(pr) if pr == sym => c })
+              // THROUGH `Subst`; both replacements are closed here (a `Literal`/`Empty` and a
+              // `Constant`), so this one was never a capture hazard — it goes through the one
+              // substitution so that there is only one, and so the `rebinds` guard stops being the
+              // thing correctness rests on.
+              Subst(tmpl, Map(rest -> tailTerm), Map(sym -> c))
             }
             (n.id, arms.reduce((x, y) => Space.Union(x, y)), Rewrite.UnrollHeads(n.id, hs))
         case _ => None

@@ -661,6 +661,35 @@ object ITrie:
       if i < k then effortN(EffortEvent.SubtrieRejectedByPointer, (k - i).toLong)
       if ch.isEmpty && !term then empty else node(term, ch)
 
+  /** THE CANONICAL TERMINAL ORDER THE SLICE MACHINERY USES, ENUMERATED (plan.md 1D.3).
+   *
+   *  `slice` is an ORDER-STATISTIC operation: it never compares two paths, it walks [[ordered]]'s
+   *  child sequence and its running terminal offsets.  So the claim "`Range` slices in
+   *  `pathValueOrdering`" is a claim about [[ordered]]'s comparator and about `terminal` coming first
+   *  at each node — and comparing a few WINDOW OUTPUTS against `sliceRange` does not pin it: two
+   *  different orders agree on the full window and on the empty one, and can agree on many others.
+   *
+   *  This exposes the order itself, built from the SAME [[ordered]] the slice reads, so
+   *  `RangeOrderCheck` can compare it position by position against
+   *  `paths.toVector.sorted(pathValueOrdering)` on randomised tries.  A change to `ordered`'s
+   *  comparator is then a failing test rather than a silent re-ordering of every `Range`.
+   *
+   *  `terminal` FIRST is part of the claim, not an implementation detail: ε has length 0 and is a
+   *  prefix of everything, so `pathValueOrdering` makes it the minimum, and `slice`'s
+   *  `acc = if n.terminal then 1 else 0` is where that is encoded. */
+  private[morkl] def canonicalOrder(t: ITrie): Vector[PathValue] =
+    val out = Vector.newBuilder[PathValue]
+    def go(n: ITrie, rev: List[PathItem]): Unit =
+      if n.terminal then out += PathValue(rev.reverse)
+      val ord = ordered(n)
+      val k = ord.length >>> 1
+      var i = 0
+      while i < k do
+        go(n.children(ord(i)), Interner.unintern(ord(i)) :: rev)
+        i += 1
+    go(t, Nil)
+    out.result()
+
   /** Native ordered slice `[start, end)` in canonical (`String`) order — NO path materialization.
    *  A FULL window is the identity and costs O(1): the cached [[ITrie.count]] answers the window
    *  test without a walk, and the operand is returned by pointer. */

@@ -92,19 +92,27 @@ object SizeZ3:
       case Space.Iteration(src, sym, rest, b) =>
         val b1 = go(b)
         val (ns, nr) = (freshP(sym), freshM(rest))
+        // THROUGH `Subst`, and SIMULTANEOUSLY.  This is an alpha-rename, i.e. a substitution of a
+        // name by a name, and the blind `subs` walker got the right answer here only BY ACCIDENT OF
+        // ORDER: `go(b)` runs FIRST and bottom-up, so every inner binder has already been renamed to
+        // a fresh `~m`/`~p` by the time the outer rename descends, and there is nothing left for it
+        // to shadow.  That is a real argument but it was nowhere written down, and it evaporates the
+        // moment someone makes this pass top-down.  `Subst` honours shadowing itself, so the
+        // correctness stops depending on the traversal order.  The two maps also go in ONE call:
+        // renaming `rest` and `sym` in two passes is sequential composition, and `Path.Deref(ns)`
+        // could be reached by the second pass if `ns` collided with `rest`'s replacement.
         Space.Iteration(go(src), ns, nr,
-          subs(b1)(spre = { case Space.Mention(m) if m == rest => Space.Mention(nr) },
-                   ppre = { case Path.Deref(pr) if pr == sym => Path.Deref(ns) }))
+          Subst(b1, Map(rest -> Space.Mention(nr)), Map(sym -> Path.Deref(ns))))
       case Space.Fold(src, init, acc, sym, rest, b, upd) =>
         val b1 = go(b)
         val nr = freshM(rest)
         Space.Fold(go(src), init, acc, sym, nr,
-          subs(b1)(spre = { case Space.Mention(m) if m == rest => Space.Mention(nr) }), upd)
+          Subst.mention(b1, rest, Space.Mention(nr)), upd)
       case Space.Fixpoint(init, rec, b) =>
         val b1 = go(b)
         val nr = freshM(rec)
         Space.Fixpoint(go(init), nr,
-          subs(b1)(spre = { case Space.Mention(m) if m == rec => Space.Mention(nr) }))
+          Subst.mention(b1, rec, Space.Mention(nr)))
       case Space.Union(a, b) => Space.Union(go(a), go(b))
       case Space.Intersection(a, b) => Space.Intersection(go(a), go(b))
       case Space.Subtraction(a, b) => Space.Subtraction(go(a), go(b))

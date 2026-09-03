@@ -100,85 +100,16 @@ object Matching:
 
   // ---- substitution --------------------------------------------------------
 
-  /** Capture-avoiding simultaneous substitution of free mentions and refs.  A binder
-   *  (Iteration/Fold) shadows any substitution for the same name within its body; and if a
-   *  replacement term would otherwise be captured by a binder (i.e. the binder name occurs
-   *  free in the term being substituted in), the binder is alpha-renamed to a fresh name
-   *  (prefix `~`, checked against all names in scope) before descending.  This is true
-   *  hygiene, not merely shadow-awareness. */
+  /** Capture-avoiding simultaneous substitution — DELEGATED to [[Subst]], which is the single owner.
+   *
+   *  The implementation used to live here and was the only one of the tree's FOUR substitutions that
+   *  was actually capture-avoiding; `Subst.scala`'s header lists the other three and what each got
+   *  wrong.  It MOVED rather than being re-derived, because `SubstConformance` has been running a
+   *  randomized differential against exactly this code (three real bugs found, per its header) and
+   *  re-implementing it would discard that evidence.  This forwarder stays so the supercompiler's
+   *  call sites read unchanged. */
   def subst(s: Space, sm: Map[SpaceMention, Space] = Map.empty, pm: Map[PathRef, Path] = Map.empty): Space =
-    var fresh = 0
-    def freshName(avoid: Set[String], kind: String): String =
-      while avoid(s"~$kind$fresh") do fresh += 1
-      val r = s"~$kind$fresh"; fresh += 1; r
-    // renames preserve hints: a binder's lengthHint (an Iteration/Fold symbol is always a length-1
-    // head, tagged at the rename site) and any author sizeHint carry over to the fresh name
-    def keepP(f: PathRef, old: PathRef): PathRef = if old.lengthHint >= 0 then f.known(old.lengthHint) else f
-    def keepM(f: SpaceMention, old: SpaceMention): SpaceMention = if old.sizeHint >= 0 then f.known(old.sizeHint) else f
-    def rangeMentions(asm: Map[SpaceMention, Space], apm: Map[PathRef, Path]): Set[SpaceMention] =
-      asm.valuesIterator.flatMap(freeMentions).toSet ++ apm.valuesIterator.flatMap(p => freeMentions(Space.Singleton(p))).toSet
-    def rangeRefs(asm: Map[SpaceMention, Space], apm: Map[PathRef, Path]): Set[PathRef] =
-      apm.valuesIterator.flatMap(p => freeRefs(Space.Singleton(p))).toSet ++ asm.valuesIterator.flatMap(freeRefs).toSet
-    def recp(p: Path, sm: Map[SpaceMention, Space], pm: Map[PathRef, Path]): Path = p match
-      case Path.Deref(pr) => pm.getOrElse(pr, p)
-      case Path.Constant(_) => p
-      case Path.Concat(l, r) => Path.Concat(recp(l, sm, pm), recp(r, sm, pm))
-      case Path.GroundedPP(pp, f) => Path.GroundedPP(recp(pp, sm, pm), f)
-      case Path.GroundedSP(sp, f) => Path.GroundedSP(recs(sp, sm, pm), f)
-    def recs(x: Space, sm: Map[SpaceMention, Space], pm: Map[PathRef, Path]): Space = x match
-      case Space.Mention(v) => sm.getOrElse(v, x)
-      case Space.Empty | Space.Literal(_) => x
-      case Space.Singleton(p) => Space.Singleton(recp(p, sm, pm))
-      case Space.Call(r, refs, mentions) => Space.Call(r, refs.map(recp(_, sm, pm)), mentions.map(recs(_, sm, pm)))
-      case Space.Union(a, b) => Space.Union(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Intersection(a, b) => Space.Intersection(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Subtraction(a, b) => Space.Subtraction(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Restriction(a, b) => Space.Restriction(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Raffination(a, b) => Space.Raffination(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Composition(a, b) => Space.Composition(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Iteration(src, sym, rest, body) =>
-        val sm2 = sm - rest; val pm2 = pm - sym
-        val capM = rangeMentions(sm2, pm2).contains(rest)
-        val capP = rangeRefs(sm2, pm2).contains(sym)
-        if capM || capP then
-          val nr = if capM then keepM(SpaceMention(freshName(rangeMentions(sm2, pm2).map(_.s) ++ freeMentions(body).map(_.s), "m")), rest) else rest
-          val ns = if capP then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ freeRefs(body).map(_.s), "p")).known(1) else sym
-          val body1 = recs(body, if capM then Map(rest -> Space.Mention(nr)) else Map.empty, if capP then Map(sym -> Path.Deref(ns)) else Map.empty)
-          Space.Iteration(recs(src, sm, pm), ns, nr, recs(body1, sm2, pm2))
-        else Space.Iteration(recs(src, sm, pm), sym, rest, recs(body, sm2, pm2))
-      case Space.Fixpoint(init, rec, body) =>
-        val sm2 = sm - rec   // rec (a mention) shadows mention substitution in body; refs unaffected
-        if rangeMentions(sm2, pm).contains(rec) then
-          val nr = keepM(SpaceMention(freshName(rangeMentions(sm2, pm).map(_.s) ++ freeMentions(body).map(_.s), "m")), rec)
-          val body1 = recs(body, Map(rec -> Space.Mention(nr)), Map.empty)
-          Space.Fixpoint(recs(init, sm, pm), nr, recs(body1, sm2, pm))
-        else Space.Fixpoint(recs(init, sm, pm), rec, recs(body, sm2, pm))
-      case Space.Fold(src, init, acc2, sym, rest, body, upd) =>
-        val pm2 = pm - acc2 - sym; val sm2 = sm - rest
-        // alpha-rename any of the three binders that a replacement would capture
-        val capR = rangeMentions(sm2, pm2).contains(rest)
-        val capA = rangeRefs(sm2, pm2).contains(acc2)
-        val capS = rangeRefs(sm2, pm2).contains(sym)
-        if capR || capA || capS then
-          val bodyVars = freeMentions(body).map(_.s) ++ freeMentions(Space.Singleton(upd)).map(_.s)
-          val refVars = freeRefs(body).map(_.s) ++ freeRefs(Space.Singleton(upd)).map(_.s)
-          val nr = if capR then keepM(SpaceMention(freshName(rangeMentions(sm2, pm2).map(_.s) ++ bodyVars, "m")), rest) else rest
-          val na = if capA then keepP(PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ refVars, "p")), acc2) else acc2
-          val nsy = if capS then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ refVars, "p")).known(1) else sym
-          val renS = if capR then Map(rest -> Space.Mention(nr)) else Map.empty[SpaceMention, Space]
-          val renP = (if capA then Map(acc2 -> Path.Deref(na)) else Map.empty[PathRef, Path]) ++ (if capS then Map(sym -> Path.Deref(nsy)) else Map.empty)
-          val body1 = recs(body, renS, renP)
-          val upd1 = recp(upd, renS, renP)
-          Space.Fold(recs(src, sm, pm), recp(init, sm, pm), na, nsy, nr, recs(body1, sm2, pm2), recp(upd1, sm2, pm2))
-        else Space.Fold(recs(src, sm, pm), recp(init, sm, pm), acc2, sym, rest, recs(body, sm2, pm2), recp(upd, sm2, pm2))
-      case Space.Wrap(src, p) => Space.Wrap(recs(src, sm, pm), recp(p, sm, pm))
-      case Space.Unwrap(src, p) => Space.Unwrap(recs(src, sm, pm), recp(p, sm, pm))
-      case Space.TailsUnion(src) => Space.TailsUnion(recs(src, sm, pm))
-      case Space.TailsIntersection(src) => Space.TailsIntersection(recs(src, sm, pm))
-      case Space.GroundedPS(p, f) => Space.GroundedPS(recp(p, sm, pm), f)
-      case Space.GroundedSS(sp, f) => Space.GroundedSS(recs(sp, sm, pm), f)
-      case Space.Range(a, lo, hi) => Space.Range(recs(a, sm, pm), lo, hi)
-    if sm.isEmpty && pm.isEmpty then s else recs(s, sm, pm)
+    Subst(s, sm, pm)
 
   // ---- bound-name canonicalization -----------------------------------------
 
@@ -230,9 +161,13 @@ object Matching:
       case Path.GroundedPP(pp, f) => Path.GroundedPP(recp(pp), f)
       case Path.GroundedSP(sp, f) => Path.GroundedSP(recs(sp), f)
       case _ => p
-    // helper to substitute only inside an update Path before recursing
+    // substitution inside a bare Path — [[Subst.path]], which is where the `Singleton` routing and
+    // the reason for it (`Path.GroundedSP` carries a Space, so the space walker must see it) live.
+    // The old local copy silently returned `p` unchanged if the walker had not preserved the
+    // constructor; `Subst.path` raises instead, because a substitution that quietly did nothing is
+    // the failure mode this whole file is about.
     def subst2(p: Path, sm: Map[SpaceMention, Space], pm: Map[PathRef, Path]): Path =
-      subst(Space.Singleton(p), sm, pm) match { case Space.Singleton(q) => q; case _ => p }
+      Subst.path(p, sm, pm)
     recs(s)
 
   // ---- structural equality (after canon, plain ==) -------------------------

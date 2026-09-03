@@ -125,6 +125,46 @@ final case class SpatialEnv(spaces: Map[SpaceMention, SpaceType] = Map.empty,
 object SpatialTypes:
   import Lower.{LenBounds, SizeBounds}
   import scala.collection.immutable.SortedMap
+
+  /** THE LENGTH-SIDE `TailsUnion` TRANSFER, as a function rather than only as a `case` arm.
+   *
+   *  Extracted because `SpatialCost.ChainCost.leafEnv` needs it to iterate the PER-LEVEL FIBER
+   *  BOUND down a rest-chain nest (plan.md 1B.5): each level's `rest` is a group of the previous
+   *  level's tails, so the bound is `tailsUnion` applied once per level.  Re-deriving the shift
+   *  there would be a second copy of the arithmetic, which is exactly the kind of duplication that
+   *  drifts — `windowWidthOf` was one and it was unsound.
+   *
+   *  One tail per HEADED source path, deduped by tag: `>= 1` whenever the class is non-empty.  For
+   *  the spilled bucket only when EVERY length in it is headed — a bucket that may hold ε cannot
+   *  promise a tail, which is the precision the single rest bucket costs. */
+  private[morkl] def tailsUnionLens(x: SpaceType): SpaceType =
+    val restLo = if x.rest.lo >= 1 && !x.restLens.isEmpty && x.restLens.lo >= 1 then 1L else 0L
+    build(
+      x.byLen.collect { case (l, c) if l >= 1 => (l - 1) -> Ivl(if c.lo >= 1 then 1 else 0, c.hi) },
+      Ivl(restLo, x.rest.hi),
+      LenBounds(Ivl.relu(x.restLens.lo - 1),
+                if x.restLens.hi == LenBounds.INF then LenBounds.INF
+                else Ivl.relu(x.restLens.hi - 1)))
+  /** THE MAY-ONLY LENGTH TYPE — the length half of the FIBER BOUND (plan.md 1B.5), in ONE place.
+   *
+   *  One head group's tails are a SUBSET of the level's tails-union, so the union's UPPER bounds hold
+   *  of the group and its LOWER bounds do not: `Literal({a, b.a})`'s tails-union has a path of length
+   *  0 and one of length 1, and head `a`'s group has only the length-0 one.  Keeping the lower bounds
+   *  made the reduced product contradict itself — `SpatialType.reduce`'s `constrainShape` typed 11
+   *  corpus terms DEFINITELY EMPTY against non-empty values (`SpatialAnalysisCheck`, three distinct
+   *  operator families) — which is the same mistake, on the other channel, that `Shape.weaken` exists
+   *  to prevent on the shape side.
+   *
+   *  It is shared by `SpatialTyping.groupUnion` (the decorated analysis' binder) and
+   *  `SpatialCost.mayOnlyType` (the cost model's) so the two cannot drift: they are the same claim
+   *  about the same relationship. */
+  private[morkl] def mayOnlyLens(x: SpaceType): SpaceType =
+    build(x.byLen.map((l, c) => l -> Ivl(0, c.hi)), Ivl(0, x.rest.hi), x.restLens)
+
+  /** the fiber's length type: one group's tails, bounded above by the tails-union and claiming no
+   *  lower bound at all.  This is the composition the two binders both want. */
+  private[morkl] def fiberLens(x: SpaceType): SpaceType = mayOnlyLens(tailsUnionLens(x))
+
   val MaxClasses = 24
   val MaxLen = 8192
 
@@ -352,14 +392,7 @@ object SpatialTypes:
                 Ivl(0, x.rest.hi), LenBounds(Ivl.relu(x.restLens.lo - k.lo), if x.restLens.hi == LenBounds.INF then LenBounds.INF else x.restLens.hi - k.lo))
         else SpaceType.bounded(Lower.lenBounds(s), x.size.hi)
 
-      case Space.TailsUnion(src) =>
-        val x = rec(src)
-        // one tail per HEADED source path, deduped by tag: ≥1 whenever the class is nonempty
-        // (for the spilled bucket only when EVERY length in it is headed — a bucket that may hold
-        //  ε cannot promise a tail; this is the precision the single rest bucket costs us)
-        val restLo = if x.rest.lo >= 1 && !x.restLens.isEmpty && x.restLens.lo >= 1 then 1L else 0L
-        build(x.byLen.collect { case (l, c) if l >= 1 => (l - 1) -> Ivl(if c.lo >= 1 then 1 else 0, c.hi) },
-              Ivl(restLo, x.rest.hi), LenBounds(Ivl.relu(x.restLens.lo - 1), if x.restLens.hi == LenBounds.INF then LenBounds.INF else Ivl.relu(x.restLens.hi - 1)))
+      case Space.TailsUnion(src) => tailsUnionLens(rec(src))
 
       case Space.TailsIntersection(src) =>
         val x = rec(src)
@@ -476,6 +509,27 @@ object SpatialTypes:
           paths = refns.zip(refs.map(p => pathLen(p, env))).toMap,
           routines = env.routines, active = env.active + rp)
         go(body, callee, depth + 1)
+
+      // ==A RECURSIVE CALLEE'S SUMMARY ON THE LENGTH SIDE TOO (plan.md 1D.1)==
+      //
+      // `active(rp)` stops the interprocedural descent above, and this arm returned
+      // `SpaceType.unknown` — no claim about the length histogram OR the cardinality of a recursive
+      // call's result.  `SpatialRecursion` solves both halves at once (its table holds
+      // `SpatialType`s), so the length half is one field of the same certified answer.
+      //
+      // THE ARGUMENTS ARE BUILT FROM WHAT THIS SIDE HAS, which is less than the shape side has: a
+      // mention argument's SHAPE is not available here, so it goes in as ⊤ with the length half
+      // filled.  That is a sound argument tuple and it is a DIFFERENT key from the shape side's, so
+      // the two consult different summaries and neither is degraded by the other.  A key the solve
+      // does not reach yields `None` and this arm keeps its `unknown`.
+      case Space.Call(rp, refs, mentions) if env.routines.isDefinedAt(rp) =>
+        val argTypes = mentions.map(m => SpatialType(Shape.top, go(m, env, depth + 1)))
+        // OPAQUE, always: `SpatialEnv` carries `paths: Map[PathRef, LenBounds]` and no path VALUES,
+        // so a constant argument cannot be recognised here even when the shape side recognises it.
+        val pathArgs = refs.map(p => SpatialRecursion.PathArg.opaque(pathLen(p, env)))
+        if depth > 8 then SpaceType.unknown        // a solve per level of an open nest is not worth it
+        else SpatialRecursion.summaryAt(rp, SpatialRecursion.argsOf(argTypes, pathArgs), env.routines)
+               .map(_.lens).getOrElse(SpaceType.unknown)
 
       case Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => SpaceType.unknown
 

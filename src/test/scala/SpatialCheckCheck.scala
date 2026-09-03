@@ -399,7 +399,17 @@ class SpatialCheckCheck extends FunSuite:
     val r = Routine(RoutinePtr("id"), Vector.empty, Vector(mS), Space.Mention(mS))
     val sig = SpatialSignature(Map.empty, Map(mS -> fnA), fnB)
     val rep = SpatialCheck.report(r, sig)
-    assertEquals(rep.inferred, fnA, s"the routine really does infer the false-negative type: ${rep.inferred.show}")
+    // THE SAME CLAIM, NOT THE SAME CARRIER (plan.md 1C.2).  `SpatialCheck.report` runs
+    // `SpatialType.reduce`, whose `constrainShape` now installs a CERTIFICATE where the declaration
+    // carried none — `fnA`'s children have `Cert.top` and the inferred ones have `{ε}`, because the
+    // length constraint proves those levels hold nothing but the empty path.  That is `reduce` doing
+    // its job, so the assertion is on the claim: identical on every channel `show` renders, and
+    // inferred ⊑ declared in the strong-γ order.  Structural equality of the two carriers would fail
+    // for a strictly better answer, which is the one thing this assertion must not do.
+    assertEquals(rep.inferred.show, fnA.show,
+                 s"the routine really does infer the false-negative type: ${rep.inferred.show}")
+    assert(SpatialType.leq(rep.inferred, fnA),
+           s"the inferred type must be at least as strong as the declaration: ${rep.inferred.show}")
     assert(!rep.check.isRefuted)
     assert(rep.check.isProved, s"the product query must decide it through the routine too: ${rep.check.show}")
     assert(rep.diagnosis.product.exists(_.decidesContainment), rep.diagnosis.show)
@@ -694,7 +704,24 @@ class SpatialCheckCheck extends FunSuite:
     val rep = SpatialCheck.report(r, sig, { case `self` => r })
     assert(rep.diagnosis.assumptions.contains(SpatialAssumption.RecursionWidened(self)),
            rep.diagnosis.show)
-    assert(!rep.check.isProved, s"a recursive routine cannot be proved by this checker: ${rep.check.show}")
+    // ==A RECURSIVE ROUTINE *CAN* BE PROVED NOW, AND THE ASSUMPTION IS STILL NAMED (plan.md 1D.1)==
+    //
+    // This used to assert `!rep.check.isProved` — "a recursive routine cannot be proved by this
+    // checker" — because the self-call widened to ⊤.  `SpatialRecursion.summaryAt` is the production
+    // consumer of the CERTIFIED summaries at that point, so the self-call carries a real type and the
+    // verdict is PROVED with `inferred shape {a·{ε!}}  lens {len 1: [1, 1]}`.
+    //
+    // WHAT THIS TEST IS ACTUALLY FOR SURVIVES INTACT, and it is the assertion above: the self-call is
+    // NAMED as `RecursionWidened` in the diagnosis rather than silently inlined.  A proof that rests
+    // on a summary must say so, and it does.  So the pair asserted here is "provable AND the premise
+    // is named", which is strictly more than "not provable".
+    assert(rep.check.isProved,
+           s"a recursive routine's contract is provable through the certified summary (plan.md " +
+           s"1D.1); if the consumer is removed this is the gate that reports it: ${rep.check.show}")
+    assert(rep.diagnosis.assumptions.contains(SpatialAssumption.RecursionWidened(self)),
+           s"the self-call must still be NAMED as a premise even when the summary proves the " +
+           s"contract — a proof that does not say what it rests on is the thing this test exists " +
+           s"to prevent: ${rep.diagnosis.show}")
     println(s"DIAGNOSTICS/recursion: ${rep.check.show}")
   }
 
@@ -953,7 +980,7 @@ class SpatialCheckCheck extends FunSuite:
     // member as the witness, not a shrug.  Before channel (e) the spilled heads were anonymous, the
     // walk needed 16 fresh items, and the answer was "could not look".
     val wide16 = SpatialGamma.alpha(SpaceValue((0 until 16).map(i => p("h" + i)).toSet))
-    assert(wide16.shape.otherKeys.isDefined, s"the spill must name its keys: ${wide16.shape.show}")
+    assert(wide16.shape.certNames.isDefined, s"the spill must name its keys: ${wide16.shape.show}")
     assertEquals(SpatialCheck.plan(wide16, SpatialType.empty, ProductSearch.default).map(_.size),
                  Right(16), s"the complete path set must include the SPILLED heads: ${wide16.shape.show}")
     val (v16, _) = SpatialCheck.types(wide16, SpatialType.empty,

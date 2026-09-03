@@ -184,9 +184,9 @@ enum ResultChannel:
   case Head(prefix: List[PathItem])
   /** the untracked-head COUNT (`others`) of the shape node at `prefix` */
   case UntrackedCount(prefix: List[PathItem])
-  /** the untracked-head DOMAIN (channel (e) `otherKeys` PLUS channel (f) `headAtoms`, read
-   *  together through `Shape.certNames`) of the shape node at `prefix`: the
-   *  certificate names every head the shape does not track, and the value has one it does not name */
+  /** the untracked-head DOMAIN (channel (e), the [[Cert]] prefix trie, read through
+   *  `Shape.certNames`) of the shape node at `prefix`: the certificate names every head the shape
+   *  does not track, and the value has one it does not name */
   case HeadDomain(prefix: List[PathItem])
   /** the untracked-head TAIL SUMMARY (`otherTail`) of the shape node at `prefix` */
   case OtherTail(prefix: List[PathItem])

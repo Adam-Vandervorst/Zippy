@@ -371,6 +371,45 @@ law("law_guard_hoist", "hoisting an invariant wrap / composition factor / body-u
          eq(ITERC(A, UNION(B, C)), UNION(ITERC(A, B), ITERC(A, C))),
          eq(ITERC(A, COMP(C, B)), COMP(C, ITERC(A, B)))),
     decls=SETS + CONSTS)
+# ---- the positional boundary: `range-singleton` (plan.md 1D.3) ------------------------------------
+#
+# `Lower.Range_Singleton` rewrites `Range(Singleton(p), start, end)` to `Singleton(p)` or `Empty` by
+# computing `RangeBounds.normalize(1, start, end)` and testing `lo < hi`.  The law was registered
+# GROUND — "trusted positional boundary; executor-evaluated" — which meant the ONE arithmetic step it
+# rests on was checked by running the executor on instances and by nothing else.  It is a claim about
+# integers and it is certifiable, so it is certified.
+#
+# `normalize` is transcribed EXACTLY, at `size = 1`:
+#     lower(b) = 0 if b = 0;  b - 1 if b > 0;  size + b otherwise
+#     upper(b) = size if b = 0;  b if start = 0 and b > 0;  b - 1 if b > 0;  size + b otherwise
+#     lo = clamp(lower(start), 0, size);  hi = clamp(upper(end), 0, size)
+#     the result is (0,0) when hi <= lo, else (lo,hi)
+#
+# TWO CONJUNCTS, and the second is the one the rewrite actually needs:
+#   (1) the CLAMP INVARIANT: `0 <= lo <= size` and `0 <= hi <= size`.  Without it the third conjunct
+#       would be about indices outside the set.
+#   (2) THE BOUNDARY ITSELF: at size 1, `lo < hi` implies `lo = 0 and hi = 1`.  That is what licenses
+#       "keep the element iff `lo < hi`": the slice `[lo, hi)` of a one-element ordered set contains
+#       index 0 exactly when `lo = 0 < 1 <= hi`, so a non-empty window is necessarily the WHOLE set
+#       and `Singleton(p)` is the right answer rather than merely a non-empty one.
+#   (3) and the converse direction, `hi <= lo` => the window is empty => `Empty`, which is immediate
+#       from `normalize`'s own `(0,0)` and is stated so the case split is exhaustive on the face of it.
+law("law_range_singleton", "the positional boundary of Range over a one-element set",
+    conj("(forall ((s Int) (e Int)) (and (<= 0 (rlo s e)) (<= (rlo s e) 1)))",
+         "(forall ((s Int) (e Int)) (and (<= 0 (rhi s e)) (<= (rhi s e) 1)))",
+         "(forall ((s Int) (e Int)) (=> (< (rlo s e) (rhi s e)) (and (= (rlo s e) 0) (= (rhi s e) 1))))",
+         "(forall ((s Int) (e Int)) (=> (<= (rhi s e) (rlo s e)) (= (rwin s e) 0)))",
+         "(forall ((s Int) (e Int)) (= (= (rwin s e) 1) (< (rlo s e) (rhi s e))))"),
+    decls="", assume="""; `RangeBounds.normalize(size, start, end)` (MORKL.scala) transcribed at size = 1.
+(define-fun clamp1 ((x Int)) Int (ite (< x 0) 0 (ite (> x 1) 1 x)))
+(define-fun lower ((b Int)) Int (ite (= b 0) 0 (ite (> b 0) (- b 1) (+ 1 b))))
+(define-fun upper ((st Int) (b Int)) Int
+  (ite (= b 0) 1 (ite (and (= st 0) (> b 0)) b (ite (> b 0) (- b 1) (+ 1 b)))))
+(define-fun rlo ((st Int) (e Int)) Int (clamp1 (lower st)))
+(define-fun rhi ((st Int) (e Int)) Int (clamp1 (upper st e)))
+; the number of elements the slice keeps out of the one available: index 0 is in [rlo, rhi) or not
+(define-fun rwin ((st Int) (e Int)) Int (ite (< (rlo st e) (rhi st e)) 1 0))
+""")
 law("law_iter_fusion", "nested invariant iterations fuse and commute",
     conj(eq(ITERC(A, ITERC(A, B)), ITERC(A, B)),
          eq(ITERC(A, ITERC(C, B)), ITERC(C, ITERC(A, B)))),
@@ -513,7 +552,8 @@ REG = [
     ("restriction-singleton-unwrap", "FILE", "laws/law_restrict_set.smt2", "restriction by a singleton = wrap of unwrap"),
     ("iter-tails", "FILE", "laws/law_tailsu_set.smt2,keyfolds.smt2", "iteration realizing tails-union"),
     ("tailsunion-singleton", "FILE", "laws/law_tailsu_set.smt2", "tails of singleton sources"),
-    ("range-singleton", "GROUND", "-", "trusted positional boundary; executor-evaluated"),
+    ("range-singleton", "FILE", "laws/law_range_singleton.smt2",
+     "the positional boundary at size 1, certified (plan.md 1D.3); was GROUND/executor-evaluated"),
     ("unwrap-wrap", "FILE", "laws/law_unwrap_set.smt2", "unwrap of a wrap (all comparability cases)"),
     # formal.egg set-algebra family
     ("union-idem", "FILE", "laws/law_union_idem.smt2", "formal.egg"),

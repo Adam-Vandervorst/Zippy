@@ -122,16 +122,44 @@ class SpatialShapeCheck extends FunSuite:
     assertEquals(t.headCount, Ivl(2, 2), t.show)
   }
 
-  test("RANGE is a may-only slice, and the identity window is exact") {
+  test("RANGE: a DETERMINED window is exact; an undetermined one is may-only") {
+    // ==THIS TEST USED TO ASSERT THE OLD IMPRECISION AS A REQUIREMENT==
+    // It read `assertEquals(t.headCount.lo, 0L, "and no lower bound: the window may be empty")` for
+    // `Range({a,b,c}, 1, 2)`.  That window is `[0, 1)` over a THREE-path source, so it definitely
+    // selects a path and the lower bound 0 was slack, not a fact.  plan.md 1D.2's rank abstraction
+    // (`Shape.orderMin`/`orderMax`, `Shape.rangeAt`) pins the answer to the SINGLETON `{a}`, which
+    // is what `eval` returns, and the old assertion then failed — correctly.
+    //
+    // The "may-only" claim is still real and is still checked, on the case where it is true: a
+    // source with UNTRACKED heads has no known positions, so nothing about the window can be
+    // localised.  That is the second half below, and separating the two is the point — the original
+    // test conflated "a slice may delete" (always true) with "the analysis cannot say which"
+    // (true only when the rank is undetermined).
     val x = lit(p("a"), p("b"), p("c"))
     val whole = Space.Range(x, 0, 0)
     assertEquals(SpatialTyping.infer(whole).headCount, Ivl(3, 3), "the identity window keeps MUST")
+
+    // ---- DETERMINED: a literal source, so the head order IS the position order ----------------
     val one = Space.Range(x, 1, 2)
     val t = SpatialTyping.infer(one)
     assert(SpatialTyping.gammaMember(eval(one), t), s"${eval(one).pretty} not in ${t.show}")
-    assertEquals(t.headCount.hi, 1L, s"a 1-wide window has at most one head: ${t.show}")
-    assertEquals(t.headCount.lo, 0L, "and no lower bound: the window may be empty")
+    assertEquals(eval(one), SpaceValue(Set(p("a"))), "the window selects the least path")
+    assertEquals(t.headCount, Ivl(1, 1),
+      s"a determined 1-wide window names its head EXACTLY, both endpoints: ${t.show}")
     assertEquals(t.size.hi, 1L, t.show)
+    assertEquals(t.size.lo, 1L, s"…and it definitely selects one: ${t.show}")
+    assertEquals(t.shape.orderMin, Some(p("a")), s"the rank names the member: ${t.show}")
+
+    // ---- UNDETERMINED: an untyped source has untracked heads with no known position -----------
+    val open = Space.Range(Space.Mention(SpaceMention("u")), 1, 2)
+    val t2 = SpatialTyping.infer(open)
+    assertEquals(t2.headCount.hi, 1L, s"a 1-wide window has at most one head: ${t2.show}")
+    assertEquals(t2.headCount.lo, 0L,
+      s"and NO lower bound here: an untracked head could sort anywhere, so the window may miss " +
+      s"every head this shape tracks.  ${t2.show}")
+    assertEquals(t2.size.lo, 0L, s"nor a size floor: ${t2.show}")
+    assertEquals(t2.shape.orderMin, None,
+      s"an untracked head has no position, so no rank may be claimed: ${t2.show}")
   }
 
   test("FIXPOINT reaches a verified post-fixpoint instead of ⊤") {

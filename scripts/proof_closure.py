@@ -315,6 +315,38 @@ def classify(status_file: pathlib.Path, corpus: str, kind: str = "tptp"):
     return rows
 
 
+def want_verdict(r):
+    """THE verdict a row's closure entitles it to, or None when this analysis cannot decide.
+
+    ==ONE FUNCTION, BECAUSE TWO COPIES DISAGREED IMMEDIATELY==
+    `annotate` writes a verdict and `--check` holds the table to one, and they were two expressions.
+    The first version of the Lean lift had `annotate` write
+
+        PROVED (MECHANIZED <thm> discharges T1)
+
+    for `card_wrap` — whose closure reaches T1 AND T7 — because it branched on "was anything
+    lifted?" and forgot that something else was still reached.  That is a row reported as
+    UNQUALIFIED while depending on the counting axioms, i.e. exactly the defect this whole script
+    exists to prevent, arriving through the mechanism meant to prevent it.  `--check` caught it on
+    the next line, which is the point of having both; the fix is that there is now one function.
+
+    The composed form keeps BOTH halves, because a reader needs both: what is still assumed, and
+    what stopped being assumed and by what."""
+    if not r or r["negative"]:
+        return None
+    reached = r["reached"]
+    mech = r.get("mechanized") or []
+    lifted = r.get("lifted") or []
+    if reached:
+        base = "PROVED-MODULO " + ",".join(reached)
+        if mech and lifted:
+            return base + " (MECHANIZED " + ",".join(mech) + " discharges " + ",".join(lifted) + ")"
+        return base
+    if mech and lifted:
+        return "PROVED (MECHANIZED " + ",".join(mech) + " discharges " + ",".join(lifted) + ")"
+    return None
+
+
 def annotate():
     """rewrite each status table's verdict column so a conditional result says so.
 
@@ -353,12 +385,9 @@ def annotate():
             # closure found, and a row with nothing reached is left alone.
             # A LIFTED ROW SAYS WHAT LIFTED IT.  Writing a bare `PROVED` would erase the only
             # trace of why the qualification went away, and the next reader could not tell a row
-            # that never needed one from a row a Lean theorem discharged.
-            if r and r.get("mechanized") and r.get("lifted"):
-                want = ("PROVED (MECHANIZED " + ",".join(r["mechanized"]) +
-                        " discharges " + ",".join(r["lifted"]) + ")")
-            else:
-                want = "PROVED-MODULO " + ",".join(r["reached"]) if r and r["reached"] else None
+            # that never needed one from a row a Lean theorem discharged.  `want_verdict` is shared
+            # with `--check` so the two cannot disagree; see its docstring for the bug that caused.
+            want = want_verdict(r)
             if (r and not r["negative"] and want
                     and parts[-1].strip().startswith("PROVED")
                     and parts[-1].strip() != want):
@@ -444,7 +473,7 @@ def main():
         for r in cond:
             names = ", ".join(f"{k} ({TRUSTED[k]['what']})" for k in r["reached"])
             print(f"    {r['name']:34s} {r['verdict']:12s} PROVED-MODULO {names}")
-            want = "PROVED-MODULO " + ",".join(r["reached"])
+            want = want_verdict(r)
             why = ("its include closure reaches" if kind == "tptp"
                    else "a declared trusted entry names it:")
             if r["verdict"] == "PROVED":

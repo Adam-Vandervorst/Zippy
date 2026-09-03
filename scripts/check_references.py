@@ -189,6 +189,7 @@ TOKEN_EXCEPTIONS = {
     #     is itself a `--strict` failure, which is what makes this list shrink instead of rot.
     #     (0.2 check_determinism.sh, 0.3 ArtifactSink.scala, 0.4 gates.py, 0.5 check_lean.sh,
     #      0.6 AlphaNormCheck.scala, 0.8 Certified.scala + proofs/pipeline/CLAIMS.tsv)
+    #     TRACK A IS DONE, so 1A.1's `Subst.scala` entry is gone too.
     # (f) GENERATED PATHS UNDER `target/`, which is gitignored (a build output, never committed).
     #     These are not dangling references: each one is written by a task in this tree and the text
     #     that names it says which.  They cannot be resolved by the checker, because the whole point
@@ -223,9 +224,14 @@ TOKEN_EXCEPTIONS = {
     # `CLAIMS.tsv`'s (e) entry is GONE: 0.8 created `proofs/pipeline/CLAIMS.tsv` (the format; 2A.1
     # declares the rows), so plan.md's bare `CLAIMS.tsv` token resolves and the exception is unused.
     ("plan.md", "COVERAGE.tsv"): "(e) proposed by plan.md task 2A.6; delete when it exists",
-    ("plan.md", "src/main/scala/Subst.scala"): "(e) proposed by plan.md task 1A.1; delete when it exists",
-    ("plan.md", "proofs/laws/law_range_singleton.smt2"): "(e) proposed by plan.md task 1D.3; delete when it exists",
     ("plan.md", "proofs/zipper_refinement.smt2"): "(e) proposed by plan.md task 2A.4; delete when it exists",
+
+    # The ELIDED-GOAL record in the one over-cap pipeline artifact names where the full 174 MB
+    # obligation is written on every run.  That path is under `target/`, which is git-ignored on
+    # purpose (see `bodyCapBytes` in EquivPipelineTest): the whole point of the elision is that those
+    # bytes do NOT enter the tree.  The token is a real, reproducible local path, not a dangling one.
+    ("proofs/pipeline/puzzle15-space.smt2", "target/pipeline-elided/puzzle15-space.smt2"):
+        "(g) git-ignored spill path named by the ELIDED-GOAL record; written by every run",
 
     ("build.log", "review.md"): "(b) as above, cited by the narrative entries that acted on it",
     ("build.log", ".tools/env.sh"):

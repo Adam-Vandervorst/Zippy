@@ -46,6 +46,25 @@
 % closes it in 0.02 s.
 % =============================================================================
 
+% ---------------------------------------------------------------------------
+% DISCHARGED (plan.md 1E.3).  The schema this file asserts is a THEOREM in Lean:
+% `path_induction` is it, for every predicate, and it is not an axiom there
+% because `List` is an inductive type and the schema IS its recursor.
+% `PathInduction.lean` reproduces this file's derivation exactly rather than
+% shortcutting to the conclusion — `_paths.p`'s three freeness axioms as
+% theorems, the schema generically in Phi, both premises at the cancellation
+% predicate (this corpus's `mon_cancel_base.p` / `mon_cancel_step.p`), the
+% instance below stated verbatim, then `mon_cancel`.  Proving only the
+% CONCLUSION would have left the schema — the trusted item — undischarged,
+% which is the distinction this file's header is careful about.
+%
+% `scripts/proof_closure.py` lifts every row whose closure reaches this file
+% from `PROVED-MODULO T1` to unqualified `PROVED`, but ONLY when
+% `scripts/check_lean.sh` has witnessed the named theorem as built and
+% sorry-free.  With no local witness the rows stay conditional.
+% MECHANIZED-IN: proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction
+% ---------------------------------------------------------------------------
+
 tff(path_induction_cancel, axiom,
     ( (   ( ! [Q: path, R: path] : ( app(nil,Q) = app(nil,R) => Q = R ) )
         & ( ! [H: item, T: path] :

@@ -825,6 +825,18 @@ final case class Meas(size: Sym, len: Sym, heads: Sym,
  *  which are not the source's head children.  `collectJoin` therefore does NOT read this record. */
 final case class TailsFacts(distinctLo: Long, keyDisjoint: Boolean, arity: Long,
                            childKeys: Option[Long],
+                           /** THE PER-CHILD HEAD SETS `TailsFacts.of` ALREADY COMPUTES (plan.md 1B.2).
+                            *
+                            *  `of` builds `hs = kids.map(_.possibleHeads)` to decide `keyDisjoint`
+                            *  and to sum `childKeys`, and then threw them away — so the KEY LAYOUT
+                            *  the n-ary descent price needs was derived and discarded at the one site
+                            *  that had it.  Keeping them is what lets `pkdLiveTotal` bound the
+                            *  descent per OPERAND (`2m_i - 1` Steiner nodes each) instead of by the
+                            *  aggregate `k * spineNodes`.
+                            *
+                            *  `None` when any child's head set is open or wider than
+                            *  `MaxKeysScanned`: an unknown key set is no layout at all. */
+                           childKeySets: Option[Vector[Set[PathItem]]],
                            /** EVERY child provably has a head of its own (`ε ∉ γ` on a node that is
                             *  not empty forces one).  `IntTrieOps.collectLive` runs with
                             *  `stopOnNil = true` under `meetAll` and ABANDONS the whole call at the
@@ -833,11 +845,12 @@ final case class TailsFacts(distinctLo: Long, keyDisjoint: Boolean, arity: Long,
                            allHeaded: Boolean):
   def show: String =
     s"tails(k=$arity distinct>=$distinctLo${if keyDisjoint then " KEY-DISJOINT" else ""}" +
-      (if allHeaded then " all-headed" else "") + childKeys.map(n => s" keys<=$n").getOrElse("") + ")"
+      (if allHeaded then " all-headed" else "") + childKeys.map(n => s" keys<=$n").getOrElse("") +
+      childKeySets.map(ss => s" layout=${ss.map(_.size).mkString("/")}").getOrElse("") + ")"
 
 object TailsFacts:
   /** the per-pair work is `O(MaxHeads²)` set intersections; refuse to do it over spilled key sets that
-   *  can be `MaxSpillKeys` wide, where the answer is almost never `disjoint` anyway */
+   *  can be `Shape.CertKeys` wide, where the answer is almost never `disjoint` anyway */
   private val MaxKeysScanned = 256
 
   /** ================================================================================================
@@ -939,6 +952,7 @@ object TailsFacts:
               .forall(identity)
         val keys = if scannable then Some(hs.map(_.get.size.toLong).sum) else None
         Some(TailsFacts(reps.length.toLong, disjoint, kids.length.toLong, keys,
+                        if scannable then Some(hs.map(_.get)) else None,
                         kids.forall(_.eps == Presence.No)))
 
 object Meas:
@@ -1256,7 +1270,21 @@ final case class AllocProfile(
  *  `evalI` for the same term.  That asymmetry is the entire content of defect OP-2z, and it is the
  *  reason a must-count needs to know which side of the handoff it is on. */
 final case class PricingTarget(
-    /** whose SOURCE the formulas were read off */
+    /** WHICH EXECUTABLE the formulas describe — not which REPRESENTATION they read.
+     *
+     *  The distinction is load-bearing and getting it wrong is how this field was first written.
+     *  All three trie-shaped models price the same `ITrie` structure (that is what [[ReprProfile]]
+     *  records), but they describe THREE DIFFERENT EXECUTABLES: `GraphCost` charges `execT`'s own
+     *  slot-loop `opEntry` where `TrieCostModel` charges zero, because `execT` emits a
+     *  `TrieOpEntry` per slot and `evalI` does not.  A floor read off `GraphCost`'s formulas IS a
+     *  floor for `execT`'s counted stream, so `formulaFor` must be `Graph` there and not `Trie`.
+     *
+     *  MEASURED, by `BackendProfileCheck` 1B.1a on the first run of the 1B.1 wiring: with this
+     *  field pinned to `Trie` for every model, `ReferenceCost` — which prices `Set[PathValue]` and
+     *  reads no field of the trie profile at all — reported `handedOff`, and every reference-side
+     *  floor would have been withdrawn.  The old code hid that by pinning `eventsOf` to `Trie` too,
+     *  which made `claimsFloor` true for all four models including the one whose formulas describe
+     *  a different data structure entirely: wrong in the permissive direction. */
     formulaFor: Backend,
     /** whose COUNTED EVENTS the result will be compared against */
     eventsOf: Backend):
@@ -1280,24 +1308,30 @@ final case class BackendProfile(repr: ReprProfile, algo: AlgoProfile, alloc: All
   def claimsFloor: Boolean = provenance.gated && target.claimsFloor
   /** retarget this profile for a control-flow handoff: the formulas stay, the event stream changes.
    *
-   *  ==NOTHING CALLS THIS YET, AND SAYING SO IS THE POINT==
-   *  An earlier round's resolution document listed [[PricingTarget]] among the review's four
-   *  required facts as though it were wired, and it is not: `SpatialCost.go`'s
-   *  [[CostModel.controlFlowFallback]] arm swaps the whole model (`Backends.of(fb, model.phase)`)
-   *  and never touches the profile, so the trie model pricing FOR the zipper still reports
-   *  `target.eventsOf == Trie` and [[BackendProfile.claimsFloor]] is `true` across exactly the
-   *  handoff it was written to make `false`.
+   *  ==IT IS WIRED (plan.md 1B.1), AND HERE IS WHERE==
+   *  `CostModel.profile` is now DERIVED from `CostModel.eventsOf` through this method, and
+   *  `Backends.handoff` is the only thing that sets `eventsOf` away from the instance's own
+   *  `backend`.  `SpatialCost.go`'s [[CostModel.controlFlowFallback]] arm calls `handoff` instead of
+   *  `Backends.of`, and then WITHDRAWS the handed-off interval's lower endpoint when
+   *  `claimsFloor` is false.
    *
-   *  WHY IT HAS NO CONSUMER, which is the honest reason rather than an oversight: the floor it was
-   *  going to gate is the thrice-refused `iteration` ALLOC floor, and that row was closed from the
-   *  CEILING instead ([[OperandShape.DistinctSingleKey]]), with no must-count at all.  So there is
-   *  currently no floor whose soundness depends on the distinction.  Wiring a predicate nothing
-   *  reads would be theatre; what this channel is for is the NEXT must-count derived from
-   *  `evalI`'s source that has to be withheld from a zipper total, and `BackendProfileCheck` pins
-   *  the semantics so that consumer inherits a checked contract rather than a fresh argument.
+   *  That is one place, not forty: the handoff is the ONLY point in the analysis where `formulaFor`
+   *  and `eventsOf` come apart, so a floor that survives it cannot have crossed one.  A
+   *  `claimsFloor` test at each must-count site would have been one `if` per site and one site away
+   *  from being wrong again.
    *
-   *  The retargeting itself needs a delegating `CostModel` at the `go` handoff, because
-   *  `Backends.of` returns a fixed instance whose `profile` is the default. */
+   *  ==WHAT IT WAS BEFORE, because the previous state is the reason for the shape==
+   *  An earlier round listed [[PricingTarget]] among the review's required facts as though it were
+   *  wired, and it was not: the fallback arm swapped the whole model (`Backends.of(fb, model.phase)`)
+   *  and never touched the profile, so the trie model pricing FOR the zipper reported
+   *  `target.eventsOf == Trie` and [[claimsFloor]] was `true` across exactly the handoff this was
+   *  written to make `false`.  `Backends.handoff` now THROWS for a (formulas, events) pair it has no
+   *  instance for, rather than falling back to the singleton, so the failure mode cannot return by
+   *  someone adding a second `controlFlowFallback`.
+   *
+   *  `BackendProfileCheck` pins the semantics: the projections may not license a floor, the gated
+   *  profile may, a retargeted one may not, and the handoff instance `go` actually uses is the
+   *  retargeted one. */
   def pricingFor(events: Backend): BackendProfile =
     copy(target = target.copy(eventsOf = events))
 
@@ -1384,17 +1418,53 @@ object OperandShape:
 trait CostModel:
   def backend: Backend
   def phase: ExecutionPhase
+  /** WHOSE COUNTED EVENT STREAM this instance's answer will be compared against.
+   *
+   *  Normally the instance's own [[backend]].  It differs for ONE reason: a
+   *  [[controlFlowFallback]] handoff, where `SpatialCost.go` prices a subterm with the TRIE model
+   *  and adds the result to a ZIPPER total.  The formulas are then `evalI`'s and the events are
+   *  `execZ`'s, and [[BackendProfile.claimsFloor]] must go false — see [[PricingTarget]].
+   *  `Backends.handoff` is the only thing that sets it away from `backend`. */
+  def eventsOf: Backend = backend
+
+  /** WHICH EXECUTABLE this instance's formulas describe.  Always its own [[backend]]: a cost model
+   *  is written against one executable's source.  See [[PricingTarget.formulaFor]] for why this is
+   *  not the same question as which REPRESENTATION the formulas read — all three trie-shaped models
+   *  read `ITrie`, and they describe `evalI`, `execT` and `execZ` respectively. */
+  final def formulaFor: Backend = backend
+
+  /** ==============================================================================================
+   *  MAY A MUST-COUNT DERIVED FROM [[controlFlowFallback]]'s MODEL BE CHARGED INTO THIS TOTAL?
+   *
+   *  `false` by default, because in general it may not: the formulas describe one executable and
+   *  the counted stream belongs to another ([[PricingTarget]]).  A model may override it to `true`
+   *  only when it RUNS the other executable IN FULL on the handed-off subterm, so that every event
+   *  the other executable must emit is emitted during this one's run.  The override is a claim about
+   *  the executable's SOURCE and it must be pinned by a counted test, not argued in a comment.
+   *
+   *  ==WHY THIS IS SEPARATE FROM [[BackendProfile.claimsFloor]]==
+   *  `claimsFloor` is `provenance.gated && target.claimsFloor` — two conjuncts that answer two
+   *  different questions, and only the first is unconditional.  `provenance.gated` asks "does this
+   *  profile describe code that RAN", and a `Declared` projection can never license a floor whatever
+   *  any model says.  `target.claimsFloor` asks "are the formulas and the counted stream the same
+   *  executable", and its `false` at a handoff is a DEFAULT that a model with the right property can
+   *  override — which is what this predicate is.
+   *  ============================================================================================== */
+  def inheritsHandoffFloor: Boolean = false
+
   /** THE REPRESENTATION AND ALGORITHM PARAMETERS THIS MODEL'S FORMULAS ARE DERIVED FROM.
    *
    *  Defaulted to [[BackendProfile.intMapPatricia2]] because all three trie-shaped models price the
    *  SAME `ITrie` structure — `execT` calls the very `ITrie` operations `evalI` does, and `execZ`
    *  hands its control flow to `evalI` — and [[ReferenceCost]] prices `Set[PathValue]` and reads no
    *  field of it.  What differs per model is [[BackendProfile.target]], which says whose counted
-   *  event stream the answer will be compared against.  NOTE: `SpatialCost.go` does NOT yet
-   *  retarget it across a [[CostModel.controlFlowFallback]] handoff -- see
-   *  [[BackendProfile.pricingFor]] for why the channel currently has no consumer and what it is
-   *  waiting for. */
-  def profile: BackendProfile = BackendProfile.intMapPatricia2
+   *  event stream the answer will be compared against — and it is derived from [[eventsOf]], so a
+   *  handoff instance reports `claimsFloor == false` without any call site having to remember to
+   *  ask.  (plan.md 1B.1.  Before it, `go`'s fallback arm handed the subterm to the fixed
+   *  `Backends.of(Trie, phase)` singleton, whose profile said `eventsOf == Trie`, so `claimsFloor`
+   *  was TRUE across exactly the handoff [[PricingTarget]] was written to make false.) */
+  def profile: BackendProfile =
+    BackendProfile.intMapPatricia2.copy(target = PricingTarget(formulaFor, eventsOf))
   def name: String = s"${backend.slug}/${if phase == ExecutionPhase.Warm then "warm" else "cold"}"
 
   /** WHY this instance's `touch` component has no counted oracle, when it has none.
@@ -1467,6 +1537,17 @@ trait CostModel:
     case Sym.Const(n) if n <= 2L => Sym.c(n * (n - 1) / 2)
     case _ => perProbe(k) * liveTotal(k, nodes)
 
+  /** the same, with the operand set's KEY LAYOUT met in where it is known (plan.md 1B.2).  Both
+   *  factors bound `Σ_calls |live|` so the meet is sound; see [[pkdLiveTotal]] for the derivation and
+   *  for why the layout-exact version is not shipped. */
+  protected def naryProbes(k: Sym, nodes: Sym, tails: Option[TailsFacts]): Sym = k match
+    case Sym.Const(n) if n <= 2L => Sym.c(n * (n - 1) / 2)
+    case _ =>
+      val live = tails.flatMap(pkdLiveTotal) match
+        case Some(p) => Sym.tighter(liveTotal(k, nodes), p)
+        case None => liveTotal(k, nodes)
+      perProbe(k) * live
+
   /** ==============================================================================================
    *  `Σ_calls |live|`, THE SECOND FACTOR — and the term whose previous form was REFUTED BY MEASUREMENT.
    *
@@ -1517,6 +1598,50 @@ trait CostModel:
   protected def liveTotal(k: Sym, nodes: Sym): Sym =
     val spine = profile.repr.spineNodes(nodes)
     Sym.tighter(k * (spine + Sym.one), Sym.c(profile.repr.carryDepth) * (spine + k))
+
+  /** ==`Σ_calls |live|` FROM THE KEY LAYOUT, FOR A PAIRWISE-KEY-DISJOINT OPERAND SET (plan.md 1B.2)==
+   *
+   *  [[liveTotal]] bounds the aggregate two ways and meets them, and BOTH read the whole operand-node
+   *  total: `k * (spineNodes + 1)` is calls x arity and `carryDepth * (spineNodes + k)` is entries x
+   *  carry depth.  Neither uses the fact that the operands' KEY SETS ARE DISJOINT, which is what
+   *  `TailsFacts.keyDisjoint` proves and what the per-child sets now make quantitative.
+   *
+   *  THE DERIVATION, per operand rather than in aggregate.  `Σ_calls |live|` is
+   *  `Σ_i #{calls whose subtree meets K_i}`, so it is enough to bound ONE operand's reach:
+   *
+   *   - BELOW its Steiner root, the calls meeting `K_i` are the nodes of `K_i`'s Steiner tree in the
+   *     merged Patricia trie.  Patricia has NO UNARY INTERNAL NODES, so a Steiner tree over `m_i`
+   *     keys has at most `2*m_i - 1` nodes — the standard binary-tree bound, and it is the whole
+   *     content of the compression.
+   *   - ABOVE it, the calls are its ancestors, at most `carryDepth` of them — the same
+   *     `ReprProfile.carryDepth` the second arm of `liveTotal` uses, and for the same reason: a
+   *     fixed-stride node consumes `lg R` bits per level and cannot skip one.
+   *
+   *  So `Σ_calls |live| <= Σ_i (2*m_i - 1 + carryDepth) = 2*N - k + k*carryDepth` with `N = Σ m_i`.
+   *  DISJOINTNESS IS WHAT MAKES IT PER-OPERAND: with shared keys one node can hold several operands'
+   *  copies of the same key and the Steiner trees overlap without the sum accounting for it.
+   *
+   *  IT IS MET WITH [[liveTotal]] AND NEVER REPLACES IT: both are sound bounds on the same sum, and
+   *  the aggregate arms win on a wide-and-shallow operand set where `2N` dominates.
+   *
+   *  ==WHY THE LAYOUT-EXACT VERSION IS NOT SHIPPED, stated so the gap is a decision==
+   *  OP-6's note records the measured regularity this would capture: with keys INTERLEAVED the probe
+   *  count is `f(k) * m` and with keys in DISTANT BLOCKS it is `f(k)` independent of `m`.  The
+   *  difference is the DEPTH at which the operands separate, which is a function of the interned
+   *  `Int` keys — `IntTrieOps` branches on raw key bits, not on the canonical name order.  Deriving it
+   *  would make a cost prediction depend on `Interner`'s process-wide, first-seen-order state: a
+   *  different program analysed earlier in the same JVM would change the ids and hence the
+   *  prediction.  That is exactly the fragility `HeadAtoms` was deleted for (plan.md 1C.1: "identity
+   *  must be a value"), so the bound here uses only the SIZES and the disjointness, which are
+   *  program-determined. */
+  protected def pkdLiveTotal(t: TailsFacts): Option[Sym] =
+    if !t.keyDisjoint then None
+    else t.childKeySets match
+      case Some(sets) if sets.nonEmpty =>
+        val n = sets.map(_.size.toLong).sum
+        val k = sets.length.toLong
+        Some(Sym.c(2L * n - k + k * profile.repr.carryDepth))
+      case _ => None
 
   /** PROBES PER (CALL, LIVE OPERAND), derived from the three loops rather than bounded by the widest
    *  of them.  Per `joinAllTries`/`meetAllTries` call over `k` live operands (`IntTrieOps.scala`):
@@ -1596,6 +1721,15 @@ trait CostModel:
       // charged again.  The `32k` this used to write is the carry applied to the ROOT operands
       // alone; [[liveTotal]]'s note has the measured refutation of that reading.
       Sym.c(profile.alloc.perOperationSlack) + Sym.c(5) * k + Sym.c(3) * liveTotal(k, nodes)
+
+  /** the same, with the key layout met in (plan.md 1B.2) */
+  protected def naryScratch(k: Sym, nodes: Sym, tails: Option[TailsFacts]): Sym = k match
+    case Sym.Const(n) if n <= 2L => Sym.c(profile.alloc.perOperationSlack) + Sym.c(4) * k
+    case _ =>
+      val live = tails.flatMap(pkdLiveTotal) match
+        case Some(p) => Sym.tighter(liveTotal(k, nodes), p)
+        case None => liveTotal(k, nodes)
+      Sym.c(profile.alloc.perOperationSlack) + Sym.c(5) * k + Sym.c(3) * live
 
   /** ==============================================================================================
    *  THE MUST SIDE OF THE SAME TWO LOOPS — the endpoint that was 0 by construction.
@@ -1972,8 +2106,26 @@ trait CostModel:
    *  which is what turned 122 counted rounds into a predicted 390,580 (and then into `inf`).
    *  `refCounted` selects the reference evaluator's `groupMap`, which regroups the whole surviving PATH
    *  set at every level rather than the distinct prefixes. */
-  def chainNest(frames: Sym, leaves: Sym, visits: Sym, depth: Sym, leaf: Meas): CostInterval =
-    CostInterval.upperOnly(Cost.of(work = frames, rounds = frames, touch = visits))
+  /** ==THE FRAME COUNT IS A MUST-COUNT, AND `rounds` NOW CARRIES IT (plan.md 1B.7)==
+   *
+   *  `frames = Σ_{d=1..D} K_d` is described one screen up as "a STRUCTURAL IDENTITY, not an
+   *  estimate": the level-`i` iteration groups the tails of one depth-`(i-1)` prefix, so its groups
+   *  are exactly the depth-`i` prefixes extending it.  `rounds` COUNTS LOOP FRAME ENTRIES, so on a
+   *  source whose profile proves at least `framesLo` prefixes the executor provably enters at least
+   *  that many frames — and all three models wrote `rounds = 0` on the lower endpoint while
+   *  predicting the upper EXACTLY.
+   *
+   *  MEASURED before: `Rounds actual = 72,136,…,16392` and `pred = 72,136,…,16392` — exact on the
+   *  upper, `err = 1.00` — with `lower-error = 1821.44`, i.e. the interval was `[0, 72]` where the
+   *  answer was known to be 72.  That was one of the 33 undiagnosed rows.
+   *
+   *  ONLY `rounds`.  A frame entry is a `rounds` event by definition; whether it also forces a
+   *  counted `work` or `touch` event depends on the model's own event vocabulary, and claiming those
+   *  here would be the kind of floor the OP-9 note records being refuted. */
+  def chainNest(frames: Sym, framesLo: Sym, leaves: Sym, visits: Sym, depth: Sym,
+                leaf: Meas): CostInterval =
+    CostInterval(Cost.of(rounds = framesLo),
+                 Cost.of(work = frames, rounds = frames, touch = visits))
   /** entering one routine call: a `CallEntry`, plus a frame where the executable allocates one */
   def callFrame: CostInterval = CostInterval.exact(Cost.of(rounds = Sym.one))
 
@@ -2094,9 +2246,10 @@ final class ReferenceCost(val phase: ExecutionPhase) extends CostModel:
     CostInterval.upperOnly(Cost.of(touch = body.size))
   /** the reference evaluator regroups the whole surviving PATH set at every level (`groupMap`), which
    *  is `Σ E_d` and not `Σ K_d` — the identity `PrefixProfile.groupingVisits` computes */
-  override def chainNest(frames: Sym, leaves: Sym, visits: Sym, depth: Sym, leaf: Meas): CostInterval =
+  override def chainNest(frames: Sym, framesLo: Sym, leaves: Sym, visits: Sym, depth: Sym,
+                         leaf: Meas): CostInterval =
     val entries = Sym.c(2) * (frames + depth) + Sym.c(2)
-    CostInterval(Cost.of(rounds = Sym.zero),
+    CostInterval(Cost.of(rounds = framesLo),
                  Cost.of(work = entries, alloc = Sym.c(2) * visits + entries, rounds = frames,
                          touch = visits + entries))
 
@@ -2506,8 +2659,8 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
     if atMostOneHead(src) then CostInterval.exact(Cost.of(work = opEntry, touch = Sym.one))
     else CostInterval(Cost.of(work = opEntry + tailsJoinProbesLo(src), alloc = tailsScratchLo(src),
                               touch = tailsForced(src)),
-                      mk(work = opEntry + naryProbes(src.heads, nd(src)),
-                         nodes = nd(src) + naryScratch(src.heads, nd(src)),
+                      mk(work = opEntry + naryProbes(src.heads, nd(src), src.tails),
+                         nodes = nd(src) + naryScratch(src.heads, nd(src), src.tails),
                          touch = Sym.one + tPer * nd(src)))
   /** `ITrie.tailsIntersection` is now `meetAll`, whose work is controlled by the SMALLEST branch and
    *  which abandons a key on the first input that lacks it.  The
@@ -2534,8 +2687,9 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
     // `k`, i.e. exactly the missing arity factor.
     else CostInterval(Cost.of(work = opEntry + tailsProbesLo(src), alloc = tailsScratchLo(src),
                               touch = tailsForced(src)),
-                      mk(work = opEntry + naryPreScan(src.heads) + naryProbes(src.heads, nd(src)),
-                         nodes = nd(src) + naryScratch(src.heads, nd(src)),
+                      mk(work = opEntry + naryPreScan(src.heads) +
+                                naryProbes(src.heads, nd(src), src.tails),
+                         nodes = nd(src) + naryScratch(src.heads, nd(src), src.tails),
                          touch = Sym.one + tPer * nd(src)))
   /** RANGE.  The ORDER-STATISTIC SLICE changed two of the three terms:
    *  the child-key order is memoised per node and the window test reads a CACHED terminal count, so a
@@ -2797,9 +2951,10 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
    *  node itself, its `Mention(rest)` source and its group split — because the nest is
    *  priced in ONE transfer and its inner nodes are no longer visited individually.  A constant, not a
    *  slope: the whole point of the frame law is that `Σ K_d` replaces `Π K_d`. */
-  override def chainNest(frames: Sym, leaves: Sym, visits: Sym, depth: Sym, leaf: Meas): CostInterval =
+  override def chainNest(frames: Sym, framesLo: Sym, leaves: Sym, visits: Sym, depth: Sym,
+                         leaf: Meas): CostInterval =
     val entries = Sym.c(2) * (frames + depth) + Sym.c(2)
-    CostInterval(Cost.of(rounds = Sym.zero),
+    CostInterval(Cost.of(rounds = framesLo),
                  Cost.of(work = entries * (Sym.one + opEntry),
                          alloc = frames + depth + leaves * nd(leaf),
                          rounds = frames,
@@ -2846,8 +3001,14 @@ sealed abstract class TrieAlgebraCost(val phase: ExecutionPhase) extends CostMod
  *  [[EffortEvent.TriePathDispatch]] for `work`, [[EffortEvent.FreshTrieNode]] for `alloc`, `evalI`'s
  *  own [[EffortEvent.LoopBodyEntry]]/[[EffortEvent.FixpointRound]]/[[EffortEvent.CallEntry]] for
  *  `rounds`, and [[EffortEvent.TrieNodeVisit]] + [[EffortEvent.PatriciaVisit]] for `touch`. */
-final class TrieCostModel(p: ExecutionPhase) extends TrieAlgebraCost(p):
+final class TrieCostModel(p: ExecutionPhase, retarget: Option[Backend] = None)
+    extends TrieAlgebraCost(p):
   val backend = Backend.Trie
+  /** set only by `Backends.handoff`: these are `evalI`'s formulas, priced INTO another executable's
+   *  counted total.  See [[CostModel.eventsOf]] and [[PricingTarget]]. */
+  override def eventsOf: Backend = retarget.getOrElse(backend)
+  override def name: String =
+    retarget.fold(super.name)(e => s"${super.name}->${e.slug}")
   /** `evalI` emits no [[EffortEvent.TrieOpEntry]]: one [[EffortEvent.TrieDispatch]] per node covers
    *  both the AST dispatch and the algebra entry, and [[dispatch]] already charges it. */
   protected def opEntry: Sym = Sym.zero
@@ -2961,10 +3122,13 @@ final class GraphCost(p: ExecutionPhase) extends TrieAlgebraCost(p):
    *  UNDER-read the slot, which is the unsound direction — hence two hooks. */
   override def fixRound(acc: Meas, body: Meas): CostInterval =
     CostInterval.upperOnly(Cost.of(work = Sym.c(4)))
-  override def chainNest(frames: Sym, leaves: Sym, visits: Sym, depth: Sym, leaf: Meas): CostInterval =
-    // one FRAME per loop node (reused across its children) plus the per-child prologue slots
-    CostInterval.upperOnly(super.chainNest(frames, leaves, visits, depth, leaf).hi +
-                           Cost.of(work = Sym.c(2) * frames, alloc = depth))
+  override def chainNest(frames: Sym, framesLo: Sym, leaves: Sym, visits: Sym, depth: Sym,
+                         leaf: Meas): CostInterval =
+    // one FRAME per loop node (reused across its children) plus the per-child prologue slots.  The
+    // `rounds` floor is inherited: `execZ` hands control flow to `evalI`, which enters the frames.
+    CostInterval(Cost.of(rounds = framesLo),
+                 super.chainNest(frames, framesLo, leaves, visits, depth, leaf).hi +
+                   Cost.of(work = Sym.c(2) * frames, alloc = depth))
 
 // ------------------------------------------------------------------------------------------------
 // 3c. THE FUSED ZIPPER — `execZ`
@@ -3017,6 +3181,43 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
   override def raffinationSecondRead(cx: CostInterval): CostInterval = CostInterval.upperOnly(cx.hi)
   override def demandDriven: Boolean = true
   override def controlFlowFallback: Option[Backend] = Some(Backend.Trie)
+  /** ==============================================================================================
+   *  `execZ` INHERITS `evalI`'s FLOOR ACROSS THE HANDOFF, AND THIS IS THE PROPERTY THAT MAKES IT SO.
+   *
+   *  `transpileZ` (Zipper.scala) is a TOTAL, EAGER structural walk with NO short-circuit: every arm
+   *  recurses into every operand as a strict Scala argument (`union(transpileZ(x), transpileZ(y))`),
+   *  and its fallback arm is `case other => effort(ZipperFallbackToEvalI); traversal(evalI(other))`.
+   *  So every control-flow subterm in the program is REACHED and `evalI` is run on it IN FULL,
+   *  unconditionally — whatever `demandDriven` later does to the resulting cursor, which is
+   *  `materialize`'s business and not `transpileZ`'s.  Every event `evalI(T)` must emit is therefore
+   *  emitted during `execZ`'s run and lands in `execZ`'s counted total.
+   *
+   *  MEASURED, and this is what the claim rests on: on the three terms whose ROOT is the
+   *  control-flow node (so the handed-off subterm IS the program and the attribution is
+   *  unambiguous), `execZ`'s counted total is `>=` `evalI`'s on all four components —
+   *  `iteration` work 40->41 alloc 35->35 rounds 3->3 touch 15->15, `fixpoint` 8->9 / 1->1 / 2->2 /
+   *  9->9, `fold` 15->16 / 2->2 / 3->3 / 5->5.  `BackendProfileCheck` 1B.1e is that measurement.
+   *
+   *  ==WHAT THE PLAN'S JUSTIFICATION FOR WITHHOLDING GOT WRONG==
+   *  [[PricingTarget]]'s note argued the floor may NOT be inherited because "the zipper's total also
+   *  contains `materialize`, which hands a `Lit` back by pointer, so `execZ` can allocate strictly
+   *  less than `evalI` for the same term".  That is TRUE and it is about a DIFFERENT term: a FUSED
+   *  one.  `Unwrap(Lit, p)` is pure navigation, `materialize` returns the existing subtrie, and
+   *  `execZ` allocates nothing where `evalI` builds a trie.  It says nothing about a HANDED-OFF
+   *  subterm, on which `evalI` runs in full.
+   *
+   *  Withholding the floor anyway was MEASURED to cost 15x-826x of interval WIDTH on the zipper rows
+   *  (`CS-10z` 884.89 -> 731 363, `LIM-6az` 178 049 -> 8.01e6, `OP-9z` 72.87 -> 1093) for no
+   *  soundness gain — containment was 100% before and after.  A conservative choice with no
+   *  counterexample and a three-order-of-magnitude price is not conservatism; it is a worse answer.
+   *
+   *  ==AND WHAT WOULD RETIRE THIS OVERRIDE==
+   *  A short-circuit in `transpileZ`: an arm that does not descend into an operand (an `Empty`
+   *  fast path, a lazy operand, a demand-driven transpile).  Then a control-flow subterm the
+   *  ANALYSIS prices could go unexecuted, and its floor would be a claim about a run that did not
+   *  happen.  1B.1e fails on the first such change, because it compares counted totals.
+   *  ============================================================================================== */
+  override def inheritsHandoffFloor: Boolean = true
   override def fallbackEntry: CostInterval = CostInterval.exact(Cost.of(work = Sym.one))
   /** MATERIALISATION IS CHARGED PER OPERATOR, NOT AT THE ROOT.
    *
@@ -3317,8 +3518,11 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
     // `nd(src) >= 1 + heads` on every shape whose `nodesHi` comes from `SpatialFacts.trieNodes`
     // (`1 + Σ K_d` with `K_1 = heads`), so `anyEmptyOperand`'s at most `heads` probes are inside that
     // envelope.  1200 randomised tails shapes refute the trie endpoint at two heads and never this one.
-    val hi = Cost.of(work = Sym.c(2) * reads(src) + naryProbes(src.heads, src.nodes),
-                     alloc = src.nodes + naryScratch(src.heads, src.nodes),
+    // THE KEY LAYOUT REACHES THIS BACKEND TOO (plan.md 1B.2): it calls the same `ITrie.tailsIntersection`,
+    // so `pkdLiveTotal`'s per-operand bound on `Σ_calls |live|` applies here for exactly the reason the
+    // arity cancellation above does — same entry point, same operand set.
+    val hi = Cost.of(work = Sym.c(2) * reads(src) + naryProbes(src.heads, src.nodes, src.tails),
+                     alloc = src.nodes + naryScratch(src.heads, src.nodes, src.tails),
                      touch = Sym.one + Sym.c(3) * src.nodes)
     CostInterval(if forced then tailsInterLo(src) else Cost.zero, hi)
 
@@ -3477,6 +3681,29 @@ object Backends:
     case (Backend.Graph, ExecutionPhase.Cold) => graphCold
     case (Backend.Zipper, ExecutionPhase.Warm) => zipperWarm
     case (Backend.Zipper, ExecutionPhase.Cold) => zipperCold
+
+  /** THE HANDOFF INSTANCES.  `evalI`'s formulas, targeted at another executable's counted stream.
+   *  One per phase per consumer; today the only [[CostModel.controlFlowFallback]] in the tree is
+   *  `ZipperCost`'s `Some(Trie)`, so `Zipper` is the only consumer, and an unlisted combination is a
+   *  hard failure rather than a silent fall back to the un-retargeted singleton — which is precisely
+   *  the bug 1B.1 fixes. */
+  private val trieWarmForZipper: CostModel = new TrieCostModel(ExecutionPhase.Warm, Some(Backend.Zipper))
+  private val trieColdForZipper: CostModel = new TrieCostModel(ExecutionPhase.Cold, Some(Backend.Zipper))
+
+  /** the model to price a subterm that `events`' executable materialises through `formulas`'.
+   *
+   *  `of(formulas, phase)` would return the un-retargeted singleton, whose profile claims a floor it
+   *  has no right to. */
+  def handoff(formulas: Backend, phase: ExecutionPhase, events: Backend): CostModel =
+    (formulas, phase, events) match
+      case (Backend.Trie, ExecutionPhase.Warm, Backend.Zipper) => trieWarmForZipper
+      case (Backend.Trie, ExecutionPhase.Cold, Backend.Zipper) => trieColdForZipper
+      case (f, _, e) if f == e => of(f, phase)
+      case (f, ph, e) => throw new IllegalArgumentException(
+        s"Backends.handoff: no instance prices ${f.slug}'s formulas into ${e.slug}'s counted stream " +
+        s"(phase ${ph}).  Add one rather than falling back to `of(${f.slug})`: that singleton reports " +
+        "`eventsOf == " + f.slug + "`, so `BackendProfile.claimsFloor` would be true across a handoff " +
+        "and a MUST-count read off one executable's source would be charged into another's total.")
 
   val all: Vector[CostModel] = Vector(referenceWarm, trieWarm, graphWarm, zipperWarm,
                                       referenceCold, trieCold, graphCold, zipperCold)
@@ -3908,6 +4135,15 @@ object SpatialCost:
     // the decorated path exists to avoid is `shapeAt`'s full `SpatialTyping.infer` (the reduced
     // product, shape included), and that is still skipped.  `histAt` is the size/length product only,
     // and the fresh path already spends the same budget unit on it.
+    // EVERY CERTIFICATE DEGRADATION REACHES THE PRICED RESULT (plan.md 1C.5).  `Cert.widen`'s two
+    // rules are recorded on the certificate value, so a bound that was weakened by a budget rather
+    // than by the program says so in the report's assumptions instead of looking exact.  One note per
+    // distinct rule set, because the rule is the fact and the node is not.
+    val degr = decoratedAt(s, env, id).map(_.shape.certDegradations).getOrElse(Set.empty)
+    if degr.nonEmpty then
+      st.note(s"certificate DEGRADED by a budget rule (${Cert.Degradation.show(degr)}): the " +
+              s"untracked-head claim reaching ${nodeName(s)} is weaker than the transfers derived, " +
+              s"and the rule that weakened it is named above — see Shape.CertKeys / Shape.CertDepth")
     var out = histAt(s, env, st) match
       case None => m
       case Some(t) => m.copy(size = tighter(m.size, symSize(t.size.hi)), len = tighter(m.len, symLen(t.len)),
@@ -3958,17 +4194,103 @@ object SpatialCost:
       // and belongs there, not here; plan.md task 1B.6 records it.
       case Some(t) =>
         st.note(DecoratedNote)
-        if env.shapeFacts then st.note(ShapeNote)
-        var o2 = refineWith(out, t, env)
-        shapeAt(s, env, st) match
-          case Some(t2) => o2 = refineWith(o2, t2, env)
-          case None => ()
-        o2
+        // ==THE RE-INFERENCE IS GONE FROM THIS BRANCH (plan.md 1B.6)==
+        //
+        // It was here because the decorated type could be WEAKER than a fresh single-node inference:
+        // the decoration is a whole-routine run under `SpatialConfig`'s budgets, so at an individual
+        // node it may have widened where an unbudgeted `SpatialTyping.infer` would not.  MEASURED at
+        // the time: `gol`'s predicted work was 5913 with the decoration alone and 5853 with the
+        // re-inference met in.
+        //
+        // `SpatialAnalysis.Recorder` now meets that inference in ITSELF, once per POSITION
+        // (`SpatialConfig.strengthenQueries`), so the stored decoration dominates it by construction
+        // and re-running it here can only cost time.  The two reasons that is the right place:
+        //   * ONCE PER POSITION, not once per cost query — puzzle15 has 295 positions against a
+        //     `FactBudget` of 2000 spent per node, and the analysis is shared by all four backends;
+        //   * the recorder's meet is not budget-STARVED the way this one was: `shapeAt` returned
+        //     `None` the moment `State.budget` ran out, which on puzzle15 it does.
+        //
+        // The `histAt` meet above STAYS.  It is the length half, it is a different source from the
+        // shape inference, and it is what actually moved `gol` — see the note at the top of `refine`.
+        refineWith(out, t, env)
       case None =>
         shapeAt(s, env, st) match
           case Some(t) => out = refineWith(out, t, env)
           case None => ()
         out.copy(heads = tighter(out.heads, out.size))
+
+  /** THE DISJOINT-SLICE BUDGET of a composition chain (plan.md 1B.5).
+   *
+   *  `Some(cap)` when every factor of the chain is `Unwrap(x, Constant(k_i))` over a COMMON `x` with
+   *  pairwise distinct `k_i`: the slices are then disjoint subsets of `x`, so `Σ_i |slice_i| <= |x|`
+   *  and `Π_i |slice_i| <= (|x| / n)^n` by AM–GM (the real relaxation bounds the integer maximum).
+   *  `None` whenever the shape is anything else — one non-`Unwrap` factor, two factors over different
+   *  objects, or a repeated key — because then the slices are not disjoint and the sum does not hold.
+   *
+   *  The keys must be CONSTANT: two `Deref`s of different refs can name the same item at run time,
+   *  which would make the slices overlap and the sum false. */
+  private def sliceBudget(s: Space, env: Env, st: State, id: NodeId): Option[Sym] =
+    def factors(x: Space): Vector[Space] = x match
+      case Space.Composition(l, r) => factors(l) ++ factors(r)
+      case y => Vector(y)
+    val fs = factors(s)
+    if fs.length < 2 then None
+    else
+      // PARTITION the chain rather than requiring every factor to be a slice.  `Sliding.collapse`'s
+      // arm is `(loc /\ b) x state(o_1) x … x state(o_n)`: the leftmost factor is a guard and not an
+      // `Unwrap`, and the first version of this rejected the whole chain because of it.  The budget
+      // applies to the SLICE SUBSET and the remaining factors keep their own sizes, which is sound —
+      // `|Π all| = |Π slices| * |Π others|` and each half is bounded independently.
+      val slices = fs.collect { case Space.Unwrap(src, Path.Constant(k)) => (src, k) }
+      val others = fs.filter {
+        case Space.Unwrap(_, Path.Constant(_)) => false
+        case _ => true
+      }
+      if slices.length < 2 then None
+      else
+        val srcs = slices.map(_._1).distinct
+        val keys = slices.map(_._2)
+        if srcs.length != 1 || keys.distinct.length != keys.length then None
+        else
+          val n = slices.length.toLong
+          // ==THE SOURCE'S SIZE IS READ WITHOUT SPENDING FACT BUDGET==
+          //
+          // `typeAt` goes through `shapeAt`, which returns `None` the moment `State.budget` runs out
+          // and then reports ⊤ — and puzzle15, the one term this law exists for, EXHAUSTS that budget
+          // ("spatial-fact budget (2000 queries) exhausted" is in its own report).  So the first
+          // version of this law never fired on it.  A `Mention` source's measure is already in the
+          // cost environment, put there by `loopEnv`/`leafEnv`, and reading it costs nothing.
+          def srcSizeOf(x: Space): Option[Sym] = x match
+            case Space.Mention(m) => env.spaces.get(m).map(_.size)
+            case other =>
+              val hi = typeAt(other, env, st).size.hi
+              if hi >= SizeBounds.INF then None else Some(symSize(hi))
+          // and the non-slice factors' sizes, from the same place
+          val otherSzOpt = others.foldLeft(Option(Sym.one)) { (acc, f) =>
+            for a <- acc; s2 <- srcSizeOf(f) yield a * s2 }
+          val srcConst = srcSizeOf(srcs.head).flatMap {
+            case Sym.Const(v) => Some(BigInt(v))
+            case Sym.Big(v) => Some(v)
+            case _ => None                       // a symbolic size: the product bound is what there is
+          }
+          (srcConst, otherSzOpt) match
+            case (None, _) | (_, None) => None
+            case (Some(big), Some(otherSz)) if big >= BigInt(SizeBounds.INF) => None
+            case (Some(big), Some(otherSz)) =>
+              val hi = big.toLong
+              // `(hi / n)^n`, computed in `Double` and rounded UP, then narrowed: the exponent is the
+              // factor count and the base is a whole-object cardinality, so a `Long` power overflows
+              // long before the answer stops being useful.  `Sym.big` keeps a large finite value
+              // finite, which is the whole reason it exists.
+              val base = hi.toDouble / n.toDouble
+              if base <= 1.0 then Some(Sym.one)
+              else
+                val logv = n.toDouble * math.log10(base)
+                if logv > 300.0 then None                 // past `Double`; the product bound is better
+                else
+                  val cap = Sym.big(BigDecimal(math.pow(base, n.toDouble))
+                                      .setScale(0, BigDecimal.RoundingMode.CEILING).toBigInt)
+                  Some(cap * otherSz)
 
   /** meet a `Meas` with everything ONE already-computed `SpatialType` proves */
   private def refineWith(m: Meas, t: SpatialType, env: Env): Meas =
@@ -4386,6 +4708,11 @@ object SpatialCost:
     case _ => isControlFlow(s)
 
   /** Terms `transpileZ` refuses to fuse: it materialises them through `evalI` instead. */
+  /** the predicate `go`'s handoff arm dispatches on, exposed for `BackendProfileCheck` 1B.1e: that
+   *  measurement is only the right measurement on a term `transpileZ` actually hands off, and
+   *  asserting so from the model rather than from a hand-copied list is what keeps it right. */
+  private[morkl] def isControlFlowForTest(s: Space): Boolean = isControlFlow(s)
+
   private def isControlFlow(s: Space): Boolean = s match
     case Space.Iteration(_, _, _, _) | Space.Fold(_, _, _, _, _, _, _) | Space.Fixpoint(_, _, _) |
          Space.Call(_, _, _) | Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => true
@@ -4403,7 +4730,44 @@ object SpatialCost:
       case Some(fb) if isControlFlow(s) =>
         st.note(s"${model.name}: ${nodeName(s)} is NOT fused — transpileZ materialises it through evalI, " +
                 s"so this subterm is priced with the ${fb.slug} model (ZipperFallbackToEvalI is counted)")
-        val (c, m) = goNode(s, env, Backends.of(fb, model.phase), st, depth, id)
+        // THE RETARGETED MODEL, not the plain singleton (plan.md 1B.1).  `handoff` returns an
+        // instance whose `profile.claimsFloor` is FALSE, which is the fact the next line acts on.
+        val inner = Backends.handoff(fb, model.phase, model.backend)
+        val (c0, m) = goNode(s, env, inner, st, depth, id)
+        // THE MUST-COUNT DECISION, AT THE ONE PLACE THE TARGET CHANGES.
+        //
+        // A must-count IS a lower endpoint, and this is the only point in the analysis where
+        // `formulaFor` and `eventsOf` come apart — so a floor that survives this line cannot have
+        // crossed a handoff unexamined.  One check here rather than one at each of the ~40
+        // must-count sites is what makes the rule COMPLETE; a per-site check would be one `if` per
+        // site and one site away from being wrong again.
+        //
+        // TWO INDEPENDENT CONDITIONS, because they answer different questions:
+        //
+        //   `provenance.gated`        — does the inner profile describe code that RAN?  A `Declared`
+        //                               projection describes a representation this tree does not
+        //                               contain, and no model's property can license a floor from
+        //                               it.  Unconditional.
+        //   `inheritsHandoffFloor`    — does the OUTER executable run the inner one IN FULL on this
+        //                               subterm?  `ZipperCost` declares `true` and its override
+        //                               carries the argument and the measurement
+        //                               (`transpileZ` is a total eager walk with no short-circuit);
+        //                               every other model declares nothing and gets the safe
+        //                               default.
+        //
+        // `fallbackEntry` is added AFTER either way, and always keeps its own floor: it is the
+        // OUTER executable's cost of performing the handoff (one counted `ZipperFallbackToEvalI`),
+        // read off its own source, so it is a floor for the stream it is charged to.
+        val mayInherit = inner.profile.provenance.gated && model.inheritsHandoffFloor
+        val c = if mayInherit then c0 else CostInterval(Cost.zero, c0.hi)
+        if !mayInherit && c0.lo != Cost.zero then
+          st.note(s"${model.name}: MUST-count WITHDRAWN across the ${fb.slug}->${model.backend.slug} " +
+                  s"handoff on ${nodeName(s)} (${inner.name}): " +
+                  (if !inner.profile.provenance.gated then
+                     s"${fb.slug}'s profile is a PROJECTION, so no floor read off it describes a run"
+                   else
+                     s"${model.backend.slug} does not declare `inheritsHandoffFloor`, so a floor read " +
+                     s"off ${fb.slug}'s source is not known to be a floor for its counted stream"))
         val handed = c + model.fallbackEntry
         st.handedOff = st.handedOff + handed
         (handed, m)
@@ -4510,7 +4874,26 @@ object SpatialCost:
         // concatenations of different pairs CAN collide ({a, a.b} x {b, ε}), so the only generic
         // lower bound is positivity
         val loSz = if ma.provablyNonEmpty && mb.provablyNonEmpty then Sym.one else Sym.zero
-        val m = refineHere(Meas(ma.size * mb.size, ma.len + mb.len, ma.heads + mb.heads, loSz, Sym.zero))
+        // ==DISJOINT SLICES OF ONE OBJECT SHARE A BUDGET (plan.md 1B.5)==
+        //
+        // `|a x b| <= |a| * |b|` is the generic bound and it ignores where the factors CAME FROM.
+        // When the factor list of a composition chain is `Unwrap(x, k_1) x … x Unwrap(x, k_n)` with
+        // PAIRWISE DISTINCT CONSTANT keys over the SAME `x` — `Sliding.collapse`'s shape, one factor
+        // per cell of the board — the factors are disjoint slices of one object, so
+        // `Σ_i |Unwrap(x, k_i)| <= |x|` and the product is maximised, subject to that sum, at
+        // `(|x| / n)^n`.  Met with the plain product, so it can only tighten.
+        //
+        // MEASURED on puzzle15, which is the term this exists for: the 15-fold composition's factors
+        // were each bounded by the whole `|state|`, and the product `2133^15` is the reported `alloc`.
+        // The slice budget replaces it by `(2133/15)^15`, eighteen orders of magnitude lower — and it
+        // does NOT close the ITEM 5 gate, because `(S/15)^15 <= 1e12` needs `S <= 95` and the
+        // analysis has `S = 2133` where the truth is 16.  The residual is `|state|`, not the
+        // composition; see CS-P1 and build.log.
+        val slice = sliceBudget(s, env, st, id)
+        val szHi = slice match
+          case Some(cap) => tighter(ma.size * mb.size, cap)
+          case None => ma.size * mb.size
+        val m = refineHere(Meas(szHi, ma.len + mb.len, ma.heads + mb.heads, loSz, Sym.zero))
         // AT THE ROOT — and only at the root — the term IS what the executable is handed, so a
         // materialisation floor is available to a demand-driven model; see `CostModel.composeRoot`.
         val cmp = relAt(FrontierOp.Composition, a, b, ma, mb, env, st, id)
@@ -4528,7 +4911,18 @@ object SpatialCost:
       case Space.Unwrap(src, p) =>
         val (cs, ms) = rec(src, 0)
         val lp = plen(p, env)
-        val m = refineHere(Meas(ms.size, ms.len, ms.size))
+        // ==ONE PREFIX, NOT THEIR UNION (plan.md 1B.5)==
+        //
+        // `ms.size` is the whole operand's cardinality, which is a bound on the union over all
+        // depth-`j` prefixes.  The operator selects ONE, so the largest per-prefix tail-set bounds it
+        // and the sum does not.  `Shape.maxTailSize` is that, and it needs the prefix length KNOWN —
+        // an unknown `|p|` really does range over depths and the union is then the right object.
+        val sel = lp match
+          case Sym.Const(j) if j >= 1 && j <= Shape.MaxDepth =>
+            val mt = typeAt(src, env, st).shape.maxTailSize(j.toInt)
+            if mt >= Ivl.INF then ms.size else tighter(ms.size, symSize(mt))
+          case _ => ms.size
+        val m = refineHere(Meas(sel, ms.len, sel))
         (d + cs + dext(pathCost(p, model)) + model.unwrap(ms, lp), m)
 
       case Space.TailsUnion(src) =>
@@ -4600,10 +4994,41 @@ object SpatialCost:
         val m = refineHere(Meas(ch.leaves * ml.size, ml.len, ch.leaves * ml.size))
         // the leaf runs at most `leaves = K_D` times — NOT `Π K_d` times — and one dispatch per FRAME is
         // charged by `chainNest`, which also carries the `rounds` component
+        // ==THE ACCUMULATE IS PRICED PER LEVEL, NOT AS ONE JOIN OVER EVERY LEAF (plan.md 1B.3)==
+        //
+        // It was `collectJoin(ch.leaves, ..., ml)`: ONE n-ary join of `K_D` operands, each carrying
+        // `nd(leaf)` nodes.  `evalI` does not do that.  At level `d` it performs one `joinAll` per
+        // depth-`(d-1)` prefix over that prefix's CHILDREN, so the joins are
+        // `K_{d-1}` calls of arity `K_d / K_{d-1}`, and the operands at level `d` are the subtree
+        // unions below, not the whole leaf set.
+        //
+        // WHY THE OLD SHAPE WAS THE QUADRATIC `LIM-12` RECORDS.  `CostModel.naryProbes` reads
+        // `k * (spineNodes + 1)` with `k = leaves` and `spineNodes = leaves * nd(leaf)`, so BOTH
+        // factors grew with the rung and the ceiling was quadratic where the executor is linear:
+        // LIM-12's own note says "the nest is priced through `collectJoin(ch.leaves, ...)`, so BOTH
+        // factors grow with the rung … the predicted growth CLASS changes partway up the ladder".
+        // Summed per level the total operand count is `Σ_d K_d`, which is what the executor pays.
+        val levels = ch.levelsOf(ml)
+        st.note("rest-chain accumulate priced PER LEVEL: " + levels.zipWithIndex.map((l, i) =>
+          s"d=${i + 1} frames=${l.frames.show} arity=${l.arity.show} operand=${l.operand.size.show}")
+          .mkString("; "))
+        // MET WITH THE OLD SINGLE JOIN, NEVER REPLACING IT.  Both are sound upper bounds on the same
+        // accumulate, and the per-level sum can be WORSE — even INFINITE — when a level's quotient is
+        // unbounded: `cdiv(leaves.hi, K_d.lo)` is `INF` at `K_d.lo == 0`, so the level's operand
+        // measure is ⊤ and its `collectJoin` is unbounded.  MEASURED as a regression:
+        // `SpatialPipelineCheck`'s hook-corpus aggregate went to `Infinity` on both sides, which is
+        // how a "tighter" bound that is sometimes ⊤ shows up.
+        val single = model.collectJoin(ch.leaves, ch.leavesLo, ml, single = false)
+        val accumulate =
+          if levels.isEmpty then single
+          else
+            val perLevel = levels.map(l =>
+              model.collectJoin(l.arity, l.arityLo, l.operand, single = false)
+                   .scale(l.framesLo, l.frames)).reduce(_ + _)
+            CostInterval.meet(perLevel, single)
         val cost = d + cs + model.loopPrologue.scale(Sym.one, ch.depthSym) +
-                   model.chainNest(ch.frames, ch.leaves, ch.visits, ch.depthSym, ml) +
-                   cl.scale(ch.leavesLo, ch.leaves) +
-                   model.collectJoin(ch.leaves, ch.leavesLo, ml, single = false)
+                   model.chainNest(ch.frames, ch.framesLo, ch.leaves, ch.visits, ch.depthSym, ml) +
+                   cl.scale(ch.leavesLo, ch.leaves) + accumulate
         (cost, m)
 
       case Space.Iteration(src, sym, rest, body) =>
@@ -4900,11 +5325,22 @@ object SpatialCost:
    *  a mention with no env entry, so the spatial query returns ⊤ and the whole nest's cost
    *  saturated to `inf`.  That hit 31% of the corpus. */
   private def loopEnv(env: Env, src: Space, ms: Meas, sym: PathRef, rest: SpaceMention, st: State): Env =
-    val tailT = if rest.s == "_" then SpatialType.top else groupTailType(typeAt(Space.TailsUnion(src), env, st))
+    val tailT = if rest.s == "_" then SpatialType.top
+                else groupTailType(typeAt(src, env, st), typeAt(Space.TailsUnion(src), env, st))
     // `rest` is one head group's tail set — an `ITrie` CHILD of the source, i.e. a shared subtrie, so it
     // INHERITS the source's count-cache state (`count` recurses and memoises every descendant).
-    env.copy(spaces = if rest.s == "_" then env.spaces
-                      else env.spaces + (rest -> Meas(ms.size, ms.len, ms.size, countKnown = ms.countKnown)),
+    // ==THE `rest` MEASURE IS THE FIBER'S, NOT THE WHOLE SOURCE'S (plan.md 1B.5)==
+    //
+    // `Meas(ms.size, …)` — one group's tails bounded by the ENTIRE source — is sound and was the only
+    // bound here, and it is the one that actually priced puzzle15: the shape route gave
+    // `[0, 6.18e11]` for `Sliding.collapse`'s `state`, so `tighter` kept the numeric `3584`, and
+    // `Unwrap(state, c_i)` cost `3584` per cell.  `tailT` is a bound on the same object (the fiber
+    // type, above), so meeting the two can only tighten: `refineWith` takes `tighter` on every
+    // channel and `lub` on every lower endpoint.
+    val restMeas =
+      if rest.s == "_" then Meas.top
+      else refineWith(Meas(ms.size, ms.len, ms.size, countKnown = ms.countKnown), tailT, env)
+    env.copy(spaces = if rest.s == "_" then env.spaces else env.spaces + (rest -> restMeas),
              bound = if rest.s == "_" then env.bound else env.bound + rest,
              // `rest` IS an `ITrie` child of the source object, so it carries the source's bases: see
              // `evalI`'s `ic.updated(rest, sub)`.  Without this a body operand over `rest` would look
@@ -4927,10 +5363,70 @@ object SpatialCost:
    *  on 4-queens: 122 counted loop/call frames against a predicted upper bound of 28.  Widening the
    *  shape to ⊤ and zeroing the histogram's lower bounds costs precision in the loop body and buys
    *  back soundness, which is the required direction. */
+  /** THE FIBER BOUND, as one function (plan.md 1B.5).
+   *
+   *  A single head group's tail-set is a SUBSET of the level's whole tails-union, so a sound bound
+   *  for it is the DOWNWARD CLOSURE of a bound on that union: every must-channel opened, every
+   *  count lower bound zeroed, the may structure kept.  `Shape.weaken` is that on the shape side
+   *  and zeroing the histogram's lower bounds is that on the length side.
+   *
+   *  Shared by `groupTailType` (one loop) and `ChainCost.leafEnv` (one level of a nest) so the two
+   *  cannot drift: they are the same claim about the same relationship, applied at different
+   *  depths, and the only thing that used to differ between them was that one said ⊤. */
+  private def mayOnlyType(sh: Shape, lens: SpaceType): SpatialType =
+    // the length half is `SpatialTypes.mayOnlyLens`, shared with the decorated analysis' own binder
+    // (`SpatialTyping.groupUnion`) so the two readings of the fiber bound cannot drift
+    SpatialType(Shape.weaken(sh), SpatialTypes.mayOnlyLens(lens))
+
+  /** ==THE SINGLE-GROUP EXEMPTION (plan.md 1B.5)==
+   *
+   *  The weakening below is there because one group's tails are a PROPER SUBSET of the tails-union in
+   *  general.  When the source has EXACTLY ONE HEAD they are not a proper subset: they are the whole
+   *  tails-union, so every must-channel and every count lower bound of `tailsUnion(src)` is a fact
+   *  about the one group, and weakening them away is pure loss.
+   *
+   *  `Shape.headCount` is the sound bracket on the number of groups (tracked heads that may be
+   *  non-empty, plus the untracked count), so `headCount == [1,1]` is a PROOF that there is one group.
+   *  ε is not a head and contributes to neither endpoint, which is right: a path of length 0 has no
+   *  first item and joins no group.
+   *
+   *  ==WHY THIS IS THE puzzle15 BOUND, MEASURED==
+   *  `Sliding.superpose`'s arm is `iterN(res, refs, _, labeled)` over `res = Singleton(tupleP)` — ONE
+   *  path of `n-1` derefs, so `headCount = [1,1]` at every one of the 15 levels (each level's fiber is
+   *  the previous path minus its head, still one path).  `labeled` itself types exactly — `[13, 28]`,
+   *  one tile per cell — and with the weakening applied at every level the nest came out at `[0, 241]`
+   *  with `+[0, 16]` tiles per cell, so `Unwrap(state, c_i)` in `Sliding.collapse` could not be shown
+   *  to select one tile and its 15-fold `Composition` cost `3584^15 = 2.068e+53`.
+   *
+   *  This does NOT reintroduce the 4-queens defect the note below records.  That defect was
+   *  `Subtraction` deleting paths that were only provably in SOME group's tails from an operand over
+   *  THIS group's tails.  Under `headCount == [1,1]` there is only one group, so "in some group's
+   *  tails" and "in this group's tails" are the same claim and the deletion is correct.  The queens
+   *  loop's source has 4 heads and takes the weakened branch exactly as before. */
+  private def groupTailType(srcT: SpatialType, t: SpatialType): SpatialType =
+    val hc = srcT.shape.headCount
+    if hc.lo == 1 && hc.hi == 1 then t else groupTailType(t)
+
   private def groupTailType(t: SpatialType): SpatialType =
-    val mayOnly = SpaceType(SortedMap.from(t.lens.byLen.map((l, c) => l -> Ivl(0, c.hi))),
-                            Ivl(0, t.lens.rest.hi), t.lens.restLens)
-    SpatialType(Shape.top, mayOnly)
+    // ==THE FIBER BOUND, NOT ⊤ (plan.md 1B.5)==
+    //
+    // `Shape.weaken(t.shape)` is the SHAPE half of exactly the reasoning the paragraph above gives
+    // for the length half.  One group's tails are a SUBSET of all the tails, and `weaken` is the
+    // downward closure of a shape: it opens every must-channel (`eps.weak`, `others = [0, hi]`,
+    // recursively) and keeps only the MAY structure — the tracked head keys, the enumerated
+    // untracked-head domain, the per-head tail summary.  Every subset of every set `t.shape` admits
+    // is admitted by `Shape.weaken(t.shape)`, which is the property this needs.
+    //
+    // ⊤ WAS OVERSHOOTING, and the note above says which bug forced it: passing the UN-WEAKENED type
+    // let the shape's `Subtraction` transfer delete paths from `x ∖ rest(p)` that were not provably
+    // present, so an iteration source looked provably empty and the loop's round count collapsed
+    // (4-queens: 122 counted frames against a predicted 28).  That bug is about MUST claims, and
+    // `weaken` removes all of them — `definitelyNonEmpty` is false for a weakened shape by
+    // construction, so `Subtraction` can delete nothing.  Going all the way to ⊤ additionally threw
+    // away the head structure, and THAT is what made `Unwrap(state, o)` on puzzle15 cost `|state|`
+    // per cell instead of one tile: with no head keys there is no proof that the unwrap prefix
+    // selects a single fiber.
+    mayOnlyType(t.shape, t.lens)
 
   /** THE FIXPOINT ROUND COUNT, as an INTERVAL.
    *
@@ -5001,12 +5497,51 @@ object SpatialCost:
   /** THE FIXPOINT'S CHANGED FRONTIER.  The accumulator against one
    *  iterate: an ABSORBED iterate is `Identity(LEFT)` and rebuilds nothing, an unchanged subtrie is
    *  reused by pointer, and only the CHANGED frontier is merged. */
+  /** ==THE ACCUMULATING MERGE IS PRICED AGAINST THE UNION TOWER'S RESIDUE (plan.md 1B.4)==
+   *
+   *  `IntTrie`'s `Fixpoint` arm is `nxt = ITrie.union(cur, evalI(body))`, and for a MONOTONE body the
+   *  union tower contains the recursive mention: `body = Union(rec, E)` up to AC, so
+   *  `evalI(body) = cur ∪ E` and the merge is `union(cur, cur ∪ E)`.
+   *
+   *  Pricing that as a merge of `cur` against `cur ∪ E` — which is what passing the WHOLE ITERATE
+   *  did — makes `mergeSummary` see two profiles that agree at EVERY prefix, i.e. the worst case a
+   *  merge has.  OP-9's own note has the arithmetic: on
+   *  `Fixpoint(Mention(a), r, Union(Mention(r), Mention(b)))` with `a ∪ b` at 72 paths over 81 nodes
+   *  it reported `descents = 81 + 320 = 401`, "the merge priced as two independent 81-node tries
+   *  agreeing at EVERY prefix".
+   *
+   *  WHAT LICENSES THE RESIDUE.  `Trie.unionR`'s `a eq b` short circuit returns an untouched subtree
+   *  BY POINTER — the property `AlgoProfile.pointerPreservingRebuild` declares and nothing read — so
+   *  wherever `E` contributed nothing to a subtree, `cur ∪ E` holds `cur`'s own object there and the
+   *  descent stops.  The nodes the merge can touch are therefore the frontier between `cur` and `E`,
+   *  not between `cur` and `cur ∪ E`.
+   *
+   *  WHAT IS *NOT* TAKEN WITH IT, and 1B.4 is explicit: the `R - 1` FRONTIER MULTIPLICITY.  It is
+   *  false on `Fixpoint(a, r, Union(b, Mention(r)))` — the AC-permuted tower, which
+   *  `unionOperands` accepts verbatim — because `IntTrie`'s arm unions BEFORE it tests convergence,
+   *  so the merge runs in every round including the terminating one.  `R` stays.
+   *
+   *  THE FALLBACK IS THE OLD BEHAVIOUR.  A non-monotone body has no residue to speak of, and a body
+   *  whose residue is the whole tower (no recursive operand) is not an accumulator at all; both keep
+   *  the whole-iterate frontier, which is sound and is what they had. */
   private def fixpointRel(f: Space.Fixpoint, env: Env, st: State, id: NodeId, body: Space): Rel =
+    val Space.Fixpoint(_, recm, _) = f
+    val operands = unionOperands(body)
+    val residue = operands.filterNot { case Space.Mention(m) => m == recm; case _ => false }
+    val monotone = residue.length < operands.length
     val fr =
       if !env.shapeFacts || st.frontierBudget <= 0 then None
       else
         val accT = decoratedAt(f, env, id).orElse(shapeAt(f, env, st))
-        val itT = decoratedAt(body, env, id.child(1)).orElse(shapeAt(body, env, st))
+        val itT =
+          if monotone && residue.nonEmpty then
+            val e = residue.reduce((x, y) => Space.Union(x, y))
+            st.note("fixpoint TOUCH priced against the union tower's RESIDUE " +
+                    s"(${residue.length} of ${operands.length} operands, the recursive mention " +
+                    s"removed): `unionR`'s `a eq b` returns an untouched subtree by pointer, so the " +
+                    "merge's frontier is `cur` against the residue and not against `cur ∪ residue`")
+            shapeAt(e, env, st).orElse(decoratedAt(body, env, id.child(1)))
+          else decoratedAt(body, env, id.child(1)).orElse(shapeAt(body, env, st))
         (accT, itT) match
           case (Some(a), Some(i)) =>
             st.frontierBudget -= 1
@@ -5029,14 +5564,50 @@ object SpatialCost:
    *  `Π_{d} K_d` — `SpatialFacts.PrefixProfile.naiveProductBound`, which the profile itself documents as
    *  neither tight NOR sound — which the generic loop transfer produced by recursively multiplying the
    *  per-level group counts. */
-  private final case class ChainCost(chain: RestChain, frames: Sym, leaves: Sym, leavesLo: Sym,
-                                     visits: Sym, depthSym: Sym, srcMeas: Meas, note: String):
+  /** ONE LEVEL OF A REST-CHAINED NEST, as the joins that level actually performs (plan.md 1B.3).
+   *
+   *  `frames` is `K_{d-1}` — the depth-`(d-1)` prefixes, one `joinAll` each — and `arity` is that
+   *  frame's fan-out `K_d / K_{d-1}`.  `operand` is the measure of ONE of those operands: the union
+   *  of the subtree below it, `(K_D / K_d)` leaf results. */
+  private final case class ChainLevel(frames: Sym, framesLo: Sym, arity: Sym, arityLo: Sym,
+                                      operand: Meas)
+
+  private final case class ChainCost(chain: RestChain, frames: Sym, framesLo: Sym, leaves: Sym,
+                                     leavesLo: Sym, visits: Sym, depthSym: Sym, srcMeas: Meas,
+                                     note: String, levelsOf: Meas => Vector[ChainLevel]):
     def depth: Int = chain.depth
     /** the leaf sits at `child(1)` of every level, so its position is `1` repeated `depth` times */
     def leafId(root: NodeId): NodeId = (0 until depth).foldLeft(root)((n, _) => n.child(1))
     /** the leaf's environment: each head ref is ONE item, and each `rest` mention is over-approximated
-     *  by the union of ALL tails (a sound MAY bound — one group's tails are a subset), with a ⊤ shape so
-     *  no must claim leaks from a sibling group. */
+     *  by the PER-LEVEL FIBER BOUND — one group's tails at that level, weakened.
+     *
+     *  ==THIS WAS `SpatialType.top` PER LEVEL, AND THAT IS THE puzzle15 ASTRONOMICAL BOUND (1B.5)==
+     *  A rest-chain nest binds one `rest` per level and the leaf reads them all.  Installing ⊤ for
+     *  every one throws away the head structure at every level, and then `Unwrap(state, o)` in the
+     *  leaf cannot be shown to select a single fiber: with no head keys there is no proof that the
+     *  unwrap prefix hits one tile rather than all of `|state|`.  On the 16-cell puzzle that is a
+     *  16-fold product of `|state|` instead of 16 tiles, which is where `alloc = 7.6e+55` comes
+     *  from.
+     *
+     *  ==THE BOUND, AND WHY IT IS SOUND AT EVERY LEVEL==
+     *  `RestChain.recognize` peels `x.iter(h0, r0, r0.iter(h1, r1, …))`, so each level's SOURCE is
+     *  the previous level's `rest`:
+     *
+     *      r0 ⊆ TailsUnion(source)      r_{k+1} ⊆ TailsUnion(r_k)
+     *
+     *  and `Shape.weaken` is the downward closure of a shape (it opens `eps`, zeroes every count
+     *  lower bound, and recurses), so a weakened bound on the level's tails-union admits every
+     *  subset of it — which is what a single group's tail-set is.  The chain is built by iterating
+     *  `Shape.tailsUnion` from the source's own type, one step per level, and weakening each.
+     *
+     *  ==WHY WEAKENING IS STILL REQUIRED, not merely tidy==
+     *  `groupTailType`'s note records the bug that forced ⊤ here: an UN-weakened tails-union type let
+     *  the shape's `Subtraction` transfer delete paths from `x ∖ rest(p)` that were not provably
+     *  present, so an iteration source looked provably empty and a loop's round count collapsed
+     *  (4-queens: 122 counted frames against a predicted 28).  That bug is entirely about MUST
+     *  claims, and a weakened shape has none — `definitelyNonEmpty` is false for one by
+     *  construction — so `Subtraction` can delete nothing.  The head STRUCTURE is a may claim and is
+     *  exactly what ⊤ was throwing away with it. */
     def leafEnv(env: Env, st: State): Env =
       var sp = env.spaces
       var fsp = env.facts.spaces
@@ -5048,15 +5619,25 @@ object SpatialCost:
       // `loopEnv` installs, transitively
       val srcShares = sharesOf(chain.source, env)
       var sh = env.share
+      // the per-level fiber bound, iterated: level 0's tails come from the chain's source, and each
+      // later level's from the previous level's bound.
+      // the per-level SOURCE type, so the single-group exemption can be tested at every level:
+      // level 0's source is the chain's source and level `k+1`'s is level `k`'s fiber.
+      var src: SpatialType = typeAt(chain.source, env, st)
+      var fiber: SpatialType = groupTailType(src, typeAt(Space.TailsUnion(chain.source), env, st))
       for l <- chain.links do
         if l.rest.s != "_" then
           sp = sp + (l.rest -> Meas(srcMeas.size, srcMeas.len, srcMeas.size,
                                     countKnown = srcMeas.countKnown))
-          fsp = fsp + (l.rest -> SpatialType.top)
+          fsp = fsp + (l.rest -> fiber)
           bd = bd + l.rest
           sh = sh + (l.rest -> srcShares)
         lenv = lenv.withPath(l.head -> LenBounds(1, 1))
         ps = ps + (l.head -> Sym.one)
+        // descend one level: the NEXT `rest` is a group of THIS level's tails
+        src = fiber
+        val nextTails = SpatialType(Shape.tailsUnion(src.shape), SpatialTypes.tailsUnionLens(src.lens))
+        fiber = groupTailType(src, nextTails)
       env.copy(spaces = sp, paths = ps, bound = bd, share = sh,
                facts = env.facts.copy(spaces = fsp, lenv = lenv))
 
@@ -5081,8 +5662,31 @@ object SpatialCost:
               s"leafInvocations = K_$dd = ${leaves.show}, groupingVisits = Σ E_d = ${visits.show} — " +
               s"instead of the per-level product Π K_d = ${naive.show}, which the profile itself " +
               "documents as neither tight nor sound"
-            Some(ChainCost(ch, symSize(frames.hi), symSize(leaves.hi), symLo(leaves.lo),
-                           symSize(visits.hi), Sym.c(dd.toLong), refineWith(Meas.top, t, env), note))
+            // THE PER-LEVEL JOIN STRUCTURE (plan.md 1B.3), read off the same profile the frame law
+            // uses.  `ceilDiv` on the ENDPOINTS that make each quotient an upper bound: the fan-out
+            // is at most `K_d.hi / K_{d-1}.lo` and the subtree factor at most `K_D.hi / K_d.lo`; a
+            // zero lower endpoint means the quotient is unbounded and the level falls back to the
+            // whole count, which is exactly the old pricing for that level and no worse.
+            def cdiv(a: Long, b: Long): Long =
+              if a >= Ivl.INF || b <= 0L then Ivl.INF
+              else { val q = a / b; if a % b == 0 then q else q + 1 }
+            val levelsOf: Meas => Vector[ChainLevel] = (leafMeas: Meas) =>
+              (1 to dd).iterator.map { d =>
+                val kPrev = p.prefixes(d - 1)
+                val kHere = p.prefixes(d)
+                val arityHi = cdiv(kHere.hi, kPrev.lo)
+                val subtreeHi = cdiv(leaves.hi, kHere.lo)
+                val opSize = if subtreeHi >= Ivl.INF then Sym.Inf
+                             else leafMeas.size * symSize(subtreeHi)
+                ChainLevel(frames = symSize(kPrev.hi), framesLo = symLo(kPrev.lo),
+                           arity = if arityHi >= Ivl.INF then symSize(kHere.hi) else symSize(arityHi),
+                           arityLo = Sym.zero,
+                           operand = Meas(opSize, leafMeas.len, opSize,
+                                          countKnown = leafMeas.countKnown))
+              }.toVector
+            Some(ChainCost(ch, symSize(frames.hi), symLo(frames.lo), symSize(leaves.hi),
+                           symLo(leaves.lo), symSize(visits.hi), Sym.c(dd.toLong),
+                           refineWith(Meas.top, t, env), note, levelsOf))
         }
       }
     }

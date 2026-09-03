@@ -99,9 +99,44 @@ Two things are deliberately *not* on this list, because they are checked rather 
 Each entry says what is assumed, why it cannot be derived here, what stands in for a proof, and what
 would break if it were false.
 
+## Two entries are DISCHARGED (plan.md 1E.3)
+
+**T1 and T2 are no longer assumed.** Both are induction principles over free algebras — the reason
+each is here is a limitation of first-order logic, not a fact anyone doubted — and both are now
+theorems in `proofs/lean`, checked by Lean's kernel with no axiom of its own beyond `propext` /
+`Quot.sound` (`path_induction` uses **none**). `scripts/check_lean.sh` witnesses them and
+`scripts/proof_closure.py` lifts the rows that reach them:
+
+| row | table | verdict now |
+|---|---|---|
+| `mon_cancel` | `proofs/unbounded/STATUS.tsv` | `PROVED` (T1 discharged) |
+| `wrap_roundtrip` | `proofs/unbounded/STATUS.tsv` | `PROVED` (T1 discharged) |
+| `fixpoint_is_lfp` | `terminating/STATUS.tsv` | `PROVED` (T2 discharged) |
+| `card_wrap` | `proofs/unbounded/STATUS.tsv` | `PROVED-MODULO T7` — T1 discharged, **T7 remains** |
+
+The entries stay in this file rather than being deleted, because they are still what the TPTP and
+SMT corpora assert: a reader of `_path_induction.p` needs to know what it is and where it is
+discharged. Each now opens with a **DISCHARGED** line naming the Lean theorem.
+
+**T7 is not dischargeable this way, and the difference matters.** T1 and T2 are schemas; T7
+axiomatises an *uninterpreted* function, so there is nothing to derive — proving the axioms would
+mean choosing a `card`, which makes every theorem above a statement about that choice instead of
+about any measure. `proofs/lean/Zippy/Counting.lean` supplies a **model** instead (finite sets with
+`Finset.card` satisfy all six items, and `card_wrap` holds in it), which makes the residual
+`PROVED-MODULO T7` demonstrably non-vacuous. What would make `card_wrap` unqualified is a *taxonomy*
+decision — whether T7's counting axioms are definitional rather than assumed — and that file states
+the case without making the call.
+
 ---
 
 ## T1. Structural induction over `path`, at one predicate
+
+> **DISCHARGED** by `proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction` — the schema, for
+> **every** predicate, depending on **no axioms at all**. That file reproduces this entry's
+> derivation rather than shortcutting to the conclusion: `_paths.p`'s three freeness axioms as
+> theorems, the schema generically in `Phi`, both premises at the cancellation predicate, the
+> instance stated verbatim, then `mon_cancel`. Proving only the conclusion would have left the
+> *schema* — the trusted item — undischarged, which is the distinction the next paragraph draws.
 
 **File:** `proofs/unbounded/_path_induction.p` · **Used by:** `mon_cancel.p`, hence `_cancel.p`,
 hence `wrap_roundtrip.p` and `card_wrap.p`
@@ -129,6 +164,18 @@ four inductions — base and step machine-checked, then the bridging principle a
 hand proof invokes it (T2).
 
 ## T2. The four bridging induction principles of `fixpoint_is_lfp.smt2`
+
+> **DISCHARGED** by `proofs/lean/Zippy/Fixpoint.lean#Zippy.Kleene.stationary_is_lfp` and the four
+> theorems it composes — `chain_ascends`, `acc_eq_chain`, `init_subset_chain`,
+> `chain_below_prefixpoint`. Over `Nat` the bridge is `Nat.rec`; the SMT file needs it asserted
+> because its chain index is an unguarded `Int` with a `>= n 0` side condition rather than a
+> well-founded type. Both premises (monotone `F`, `init ⊆ F init`) are explicit parameters of every
+> one of them, so none can be read as unconditional.
+>
+> **Part (iv) is NOT discharged**, and it is not one of the four: that the stationary index *exists*
+> over a finite universe is a single `card` check whose bridging principle lives in
+> `no_infinite_descent.smt2`. `stationary_is_lfp` takes the stationary index as a hypothesis for
+> exactly that reason — it says what the answer *is* once the loop stops, not that it stops.
 
 **File:** `terminating/fixpoint_is_lfp.smt2` lines 210, 229, 246, 262 · **Used by:** every
 `Fixpoint` claim in the tree
@@ -246,6 +293,14 @@ control, with an executed countermodel. This is why `monotoneInMention` and `MOR
 refuse a recursion variable under a grounded node.
 
 ## T7. The counting axioms
+
+> **NOT DISCHARGED, and not dischargeable the way T1 and T2 were** — see the banner above.
+> `proofs/lean/Zippy/Counting.lean` is a **model**: finite sets of paths with `Finset.card` satisfy
+> all four counting axioms, the injective-image axiom and the comprehension, and `card_wrap` holds
+> in it. That makes the residual `PROVED-MODULO T7` non-vacuous, which is not a formality here:
+> `_nat.p` records that vampire *refutes* `_signature.p + _card.p` outright when `card` is
+> `$int`-valued, and `run.sh`'s vacuity probe against that is a negative check with a 10 s budget.
+> A model is the positive statement and does not expire.
 
 **File:** `proofs/unbounded/_card.p` · **Used by:** `card_wrap.p`, and anything whose closure
 reaches it

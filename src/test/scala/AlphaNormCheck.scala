@@ -231,6 +231,68 @@ class AlphaNormCheck extends FunSuite:
   }
 
   // ------------------------------------------------------------------------------------------------
+  // G. THERE ARE TWO CANONICAL RENAMERS, AND THEY AGREE AS EQUIVALENCE RELATIONS.
+  //
+  // `SmtDiff.alphaNorm` and `Matching.canon` both rename every binder to a traversal-order canonical
+  // name; they differ only in the prefix (`av`/`ar`/`af`/`fa`/`fv`/`fr` against `#s`/`#p`) and in
+  // whether `src` is normalised before or after the binder is minted.  Two renamers for one job is
+  // the duplication this tree keeps having to undo, and the reason both survive is that they have
+  // different consumers: `alphaNorm` feeds the pipeline's structural diff and appears in emitted
+  // artifacts, `canon` feeds the supercompiler's matching and embedding.
+  //
+  // What makes that defensible rather than a latent divergence is this: as DECISION PROCEDURES they
+  // must agree.  `alphaNorm(a) == alphaNorm(b)` and `canon(a) == canon(b)` are both "are these terms
+  // alpha-equivalent", and a term pair on which they disagree means one of them is wrong — and which
+  // one would be undiscoverable, because each is only ever compared with itself.
+  // ------------------------------------------------------------------------------------------------
+  test("G. alphaNorm and Matching.canon decide alpha-equivalence THE SAME WAY") {
+    val src = lit(p("a", "1"), p("b", "2"))
+    /** the same term with binders spelled differently, plus genuinely different terms */
+    def iter(sym: String, rest: String, body: Space) =
+      Iteration(src, PathRef(sym), SpaceMention(rest), body)
+    def fold(acc: String, sym: String, rest: String, t: Space, u: Path) =
+      Fold(src, K, PathRef(acc), PathRef(sym), SpaceMention(rest), t, u)
+    val terms: Vector[Space] = Vector(
+      iter("y", "rest", Union(Mention(SpaceMention("rest")), Singleton(Path.Deref(PathRef("y"))))),
+      iter("q", "tl",   Union(Mention(SpaceMention("tl")),   Singleton(Path.Deref(PathRef("q"))))),
+      iter("y", "rest", Union(Singleton(Path.Deref(PathRef("y"))), Mention(SpaceMention("rest")))),
+      iter("y", "rest", iter("y2", "r2", Union(Mention(SpaceMention("r2")),
+                                               Mention(SpaceMention("rest"))))),
+      iter("y", "rest", iter("a2", "b2", Union(Mention(SpaceMention("b2")),
+                                               Mention(SpaceMention("rest"))))),
+      iter("y", "rest", iter("y2", "r2", Union(Mention(SpaceMention("rest")),
+                                               Mention(SpaceMention("r2"))))),
+      Fixpoint(src, SpaceMention("rec"), Union(Mention(SpaceMention("rec")), src)),
+      Fixpoint(src, SpaceMention("z"),   Union(Mention(SpaceMention("z")), src)),
+      fold("acc", "sym", "rest", Mention(SpaceMention("rest")),
+           Path.Concat(Path.Deref(PathRef("acc")), Path.Deref(PathRef("sym")))),
+      fold("a2", "s2", "r2", Mention(SpaceMention("r2")),
+           Path.Concat(Path.Deref(PathRef("a2")), Path.Deref(PathRef("s2")))),
+      fold("acc", "sym", "rest", Mention(SpaceMention("rest")),
+           Path.Concat(Path.Deref(PathRef("sym")), Path.Deref(PathRef("acc")))),
+      Union(Mention(SpaceMention("free")), iter("y", "rest", Mention(SpaceMention("free")))),
+      Union(Mention(SpaceMention("other")), iter("y", "rest", Mention(SpaceMention("other")))),
+    )
+    var agree = 0
+    for (a, i) <- terms.zipWithIndex; (b, j) <- terms.zipWithIndex if i <= j do
+      val byAlpha = SmtDiff.alphaNorm(a) == SmtDiff.alphaNorm(b)
+      val byCanon = Matching.alphaEqual(a, b)
+      assertEquals(byAlpha, byCanon,
+        s"the two canonical renamers DISAGREE on terms $i and $j: alphaNorm says " +
+        s"${if byAlpha then "equal" else "different"}, Matching.canon says " +
+        s"${if byCanon then "equal" else "different"}.  Both are decision procedures for " +
+        "alpha-equivalence and both are only ever compared with themselves, so a disagreement is " +
+        "undiscoverable in production and one of them is wrong.\n  a = $a\n  b = $b")
+      if byAlpha then agree += 1
+    // and the pairs are not all-equal or all-different, so the agreement is not trivial
+    val pairs = terms.length * (terms.length + 1) / 2
+    assert(agree > terms.length && agree < pairs,
+      s"$agree of $pairs pairs compare equal — the test is degenerate (it needs both outcomes to " +
+      "be exercised, or agreement means nothing)")
+    println(s"ALPHANORM: the two renamers agree on all $pairs term pairs ($agree equal)")
+  }
+
+  // ------------------------------------------------------------------------------------------------
   // F. SEMANTIC PRESERVATION — the actual soundness statement.
   // ------------------------------------------------------------------------------------------------
   test("F. alphaNorm preserves the denotation, through all three executors") {

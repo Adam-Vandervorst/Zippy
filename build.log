@@ -5522,3 +5522,826 @@ WHAT THE SINK IS WORTH, stated as a measurement rather than a claim.  Across six
 that could not be stable at all.  Every one of those was previously OVERWRITTEN by the run that
 should have checked it, and would have been committed by the next `git add`.
 ====================================================================================================
+
+====================================================================================================
+## 2026-09-03 — PHASE 1 (plan.md).  TRACK A CLOSED; 1B.1 WIRED, AND ITS STATED JUSTIFICATION WAS
+## WRONG IN A WAY THAT COST 826x OF WIDTH.
+
+---- TRACK A: ONE SUBSTITUTION (item 3, Scala half) -------------------------------------------------
+
+`src/main/scala/Subst.scala` is the single owner.  `Matching.subst` — the one of the tree's FOUR
+substitutions that was already capture-avoiding — MOVED there rather than being re-derived, because
+`SubstConformance` has been running a randomized differential against exactly that code.  Everything
+now delegates:
+
+    Matching.subst / subst2            -> Subst.apply / Subst.path
+    EquivPipeline.substMention         -> Subst.mention
+    EquivPipeline.substPathRef         -> Subst.pathRef
+    EquivPipeline's Lower.inline (x2)  -> Subst.apply, ONE call with BOTH maps
+    MORKL's IterateLiteral_Union       -> Subst.apply
+    MORKL's IterateSingleton_Deref     -> Subst.apply (two arms)
+    MORKL's asFixpointGeneral `sub`    -> Subst.mention
+    SpatialRecursion.splice            -> Subst.apply
+
+THREE SUBSTITUTION SITES THE PLAN DID NOT NAME, found by sweeping `subs` for substitution-shaped
+uses.  All three are now routed, and one of them was a live capture hazard:
+
+  * `SizeConstraints`' alpha-renamer (3 sites).  Correct today, but only BY ACCIDENT OF ORDER: `go(b)`
+    runs first and bottom-up, so every inner binder has already been renamed to a fresh `~m`/`~p` and
+    there is nothing left to shadow.  That argument was nowhere written down and evaporates the
+    moment the pass is made top-down.
+  * `SpatialPipeline.iterationSubstitute`.  The `rebinds` guard refuses the rewrite when the template
+    REBINDS `sym`/`rest`, which handles SHADOWING by refusal — but capture is the OTHER direction and
+    `rebinds` cannot see it.  The replacement is `TailsUnion(src)`, which is NOT closed, so a binder
+    inside `tmpl` named after a free name of `src` captured it.  The header said "the substitution
+    would then capture", describing shadowing; the two are separate hazards and it had only one.
+  * `SpatialPipeline.unrollProvedHeads`.  Closed replacements, so never a capture hazard — routed so
+    that there is only one substitution and so `rebinds` stops being what correctness rests on.
+
+`SubstCapture` (13 tests) supplies what `SubstConformance` structurally cannot: OPEN replacements.
+Capture at all six binders (Iteration's `symbol`/`rest`, Fixpoint's `rec`, Fold's `acc`/`symbol`/
+`rest`), shadowing as its mirror, hint preservation across a rename, and `g(y,x)` end to end through
+`unrollControl` itself.  GATE GREEN: `SubstConformance` 4, `SubstCapture` 13, `AlphaNormCheck` 7.
+
+---- TRACK E: 1E.1, THE LEAN SUBSTITUTION -----------------------------------------------------------
+
+`proofs/lean/Zippy/{Syntax,Subst}.lean`.  ONE syntax for the package — the first attempt declared a
+second `Zippy.Space` in `Core.lean` for the closed fragment and the package stopped building
+("environment already contains 'Zippy.Space.unwrap'"), which was the right failure; `Core.lean` is
+now `Pointwise.lean` and only adds semantics.  26 theorems, no `sorry`, and the axiom audit over the
+WHOLE package reports `propext`, `Quot.sound`, `Classical.choice` — Lean's own and nothing else.
+
+  * `substS_nil` — the empty substitution is the identity, over all 22 space and 5 path
+    constructors.  This is `Subst.apply`'s `if mentions.isEmpty && paths.isEmpty then s` fast path,
+    whose correctness every call site assumed.
+  * `seq_ne_simul_gyx` — THE `g(y,x)` FACT, with both readings computed: simultaneous gives
+    `Union(b, Wrap(a))`, sequential gives `Union(a, Wrap(a))`.  The two arguments collapse into one
+    variable.
+  * `substS_keeps_freeM` / `substP_keeps_freeM` — CAPTURE AVOIDANCE, total over every constructor and
+    all three binding forms.  It rests on two lemmas, and the split is the whole content:
+    `bindM_not_in_range` (the bound name is free in NO replacement — in the no-capture branch because
+    that is exactly what the branch condition denies, in the capture branch by `FreshSupply.spec`)
+    and `bindM_lookup_ne` (the binder disturbs no other name's replacement).  `FreshSupply`'s
+    contract is used at exactly ONE point and the no-capture branch needs no supply at all: nothing
+    about the naming POLICY enters — not the order, not a counter, not `~`.
+
+TWO DELIBERATE DIFFERENCES FROM THE SCALA, both recorded in the file rather than assumed away.  (1)
+At a capturing binder the Scala does TWO passes (rename, then substitute); the Lean merges the rename
+into the map and does ONE, which is what makes it structurally recursive.  They agree, and 1E.2's
+trace check is where that is DISCHARGED rather than argued.  (2) Fresh names are a PARAMETER carrying
+its own spec, so the theorems hold for every supply and the Scala's `~m0` counter is one instance.
+
+A SIDE CONDITION THE PARTIAL SEMANTICS SURFACED.  `Space.unwrap_wrap` needs `p.den ρ = some v` and the
+first version omitted it and did not build: with `s.den = some a` and `p.den = none` the left side is
+`none` and the right is `some a`.  That case is exactly a `groundedPP`/`groundedSP` path — a term
+OUTSIDE the certified path algebra, T6's boundary.  The TPTP twin gets the condition for free by not
+having grounded paths in its signature, so it is invisible there.
+
+---- 1B.1: THE HANDOFF, AND A CORRECTION TO THE PLAN'S PREMISE --------------------------------------
+
+WIRED.  `CostModel.eventsOf` is new, `profile` is DERIVED from it, and `Backends.handoff(formulas,
+phase, events)` returns a retargeted instance whose `BackendProfile.claimsFloor` is false.  `go`'s
+`controlFlowFallback` arm calls `handoff` instead of `Backends.of`, which previously returned a
+singleton reporting `eventsOf == Trie` — `claimsFloor` was TRUE across exactly the handoff
+`PricingTarget` was written to make false.  `handoff` THROWS for a pair it has no instance for rather
+than degrading to `of`, so a second `controlFlowFallback` cannot silently restore the bug.
+
+1B.1a CAUGHT A LATENT FALSEHOOD ON ITS FIRST RUN.  `PricingTarget.formulaFor` was pinned to `Trie`
+for every model, so `ReferenceCost` — which prices `Set[PathValue]` and reads no field of the trie
+profile — reported `handedOff`, and every reference-side floor would have been withdrawn.  The old
+code hid it by pinning `eventsOf` to `Trie` as well, which made `claimsFloor` true for all four
+models including the one describing a different data structure: wrong in the permissive direction.
+`formulaFor` is now the model's own `backend`, and the field's doc says why that is not the same
+question as which REPRESENTATION the formulas read.
+
+AND THEN THE PART THE PLAN GOT WRONG.  1B.1 says "every must-count checks `claimsFloor`", and
+`PricingTarget`'s note justifies withholding the floor thus: "the zipper's total also contains
+`materialize`, which hands a `Lit` back by pointer, so `execZ` can allocate strictly less than
+`evalI` for the same term".  That sentence is TRUE and it is about a DIFFERENT term — a FUSED one.
+`Unwrap(Lit, p)` is pure navigation, `materialize` returns the existing subtrie, and `execZ`
+allocates nothing where `evalI` builds a trie.  It says nothing about a HANDED-OFF subterm.
+
+Implementing the blanket withdrawal anyway was MEASURED to cost 15x-826x of interval WIDTH on the
+zipper rows, for no soundness gain (containment was 100% before and after):
+
+    CS-10z  width   884.89 -> 731 363.00      (826x)
+    LIM-6az width   178 049 -> 8.01e+06       (45x)
+    LIM-6z  width   10 025.89 -> 180 466.00   (18x)
+    LIM-7z  width   1 821.44 -> 16 393.00     (9x)
+    OP-9z   width   72.87 -> 1 093.00         (15x)
+    CS-9    width   353.60 -> 26 537.00       (75x)
+    CS-P3/4 width   2.02e53 -> 7.61e55, 2.67e53 -> 2.58e56
+
+WHAT REPLACES IT IS A MEASURED PREMISE.  `transpileZ` (Zipper.scala) is a TOTAL, EAGER structural
+walk with NO short-circuit — every arm recurses into every operand as a strict Scala argument — and
+its fallback is `case other => effort(ZipperFallbackToEvalI); traversal(evalI(other))`.  So a
+control-flow subterm is always REACHED and `evalI` is always run on it IN FULL, and every event
+`evalI(T)` must emit lands in `execZ`'s counted total.  `ZipperCost.inheritsHandoffFloor` declares
+that, carries the argument, and `BackendProfileCheck` 1B.1e MEASURES it on the three terms whose ROOT
+is the control-flow node (so the handed-off subterm IS the program and the attribution is
+unambiguous): `iteration` work 40->41 alloc 35->35 rounds 3->3 touch 15->15, `fixpoint` 8->9 / 1->1 /
+2->2 / 9->9, `fold` 15->16 / 2->2 / 3->3 / 5->5.  `execZ >= evalI` on every component.
+
+THE FIRST VERSION OF THAT MEASUREMENT WAS WRONG, AND PHASE 0 IS WHY IT WAS CAUGHT.  Run cold, `evalI`
+then `execZ`, it reported `iteration alloc 47 -> 35` — an apparent floor VIOLATION.  It was the
+process-wide decode memos (`iLiteralCache`/`iLiteralStrCache`/`iConstStrCache`): whichever executor
+runs first pays the decode allocations.  `GlobalState.probe` is the list of exactly those tables, and
+1B.1e now warms them and asserts order-stability in both directions before comparing.
+
+WHAT WOULD RETIRE THE OVERRIDE: a short-circuit in `transpileZ` — an `Empty` fast path, a lazy
+operand, a demand-driven transpile.  Then a control-flow subterm the ANALYSIS prices could go
+unexecuted and its floor would describe a run that did not happen.  1B.1e fails on the first such
+change, because it compares counted totals rather than reading the source.
+====================================================================================================
+
+---- PHASE 1, CONTINUED: 1E.3 — T1 AND T2 DISCHARGED; T7 IS A DIFFERENT KIND OF ENTRY -------------
+
+THREE OF THE GATE'S FOUR ROWS ARE NOW UNQUALIFIED, and the fourth is honestly conditional on one
+entry instead of two:
+
+    mon_cancel       PROVED (MECHANIZED …#Zippy.path_induction discharges T1)
+    wrap_roundtrip   PROVED (MECHANIZED …#Zippy.path_induction discharges T1)
+    fixpoint_is_lfp  PROVED (MECHANIZED …#Zippy.Kleene.stationary_is_lfp discharges T2)
+    card_wrap        PROVED-MODULO T7 (MECHANIZED …#Zippy.path_induction discharges T1)
+
+T1 — `proofs/lean/Zippy/PathInduction.lean`.  The SCHEMA, for EVERY predicate, depending on NO
+AXIOMS AT ALL (`#print axioms` reports none).  It reproduces `_path_induction.p`'s derivation rather
+than shortcutting: `_paths.p`'s three freeness axioms as theorems, the schema generically in Phi,
+both premises at the cancellation predicate (this corpus's `mon_cancel_base.p`/`mon_cancel_step.p`),
+the instance stated verbatim, then `mon_cancel` DERIVED THROUGH IT.  `List.append_cancel_left` would
+have proved the conclusion in one line; that was declined on purpose, because
+`_path_induction.p`'s own header draws the distinction — the trusted item is the SCHEMA, which
+"mentions `app` only inside the schema's two premises", and discharging only the conclusion would
+leave it standing.
+
+T2 — `proofs/lean/Zippy/Fixpoint.lean`.  The four bridging inductions, in the order the SMT file
+asserts them (`chain_ascends`, `acc_eq_chain`, `init_subset_chain`, `chain_below_prefixpoint`), plus
+`stationary_is_lfp`, which is the conclusion every lowering pass cites.  Both side conditions are
+explicit parameters of every one of them, so none reads as unconditional — which is what the file's
+own monotone-but-non-inflationary counterexample at :47-50 is about.  Part (iv) — the stationary
+index EXISTS — is NOT discharged and is not one of the four: it is a `card` check whose bridging
+principle lives in `no_infinite_descent.smt2`, and it is a well-foundedness claim needing a
+finiteness hypothesis none of the four needs.  `stationary_is_lfp` takes the index as a HYPOTHESIS
+for exactly that reason, so nobody can read termination out of a theorem that does not mention it.
+
+T7 IS NOT LIKE THEM, AND THE GATE AS WRITTEN CANNOT BE MET.  1E.3's gate asks for `card_wrap`
+unqualified too.  T1 and T2 are induction principles over free algebras: FOL cannot STATE T1 (it
+quantifies over formulas) or DERIVE T2 (an unguarded `Int` index), and a dependently typed system
+gets both from the inductive declaration — no model chosen, nothing narrowed.  T7 axiomatises an
+UNINTERPRETED `card`, and `_card.p`'s own header makes the generalisation load-bearing: "nothing here
+forces `card` to be the cardinality of a FINITE set … Every theorem below is therefore a fact about
+ANY measure with these properties — which is exactly the class of facts tier-1 and tier-2
+implement".  There is nothing to derive; proving the axioms means PICKING a `card`, and that makes
+every counting theorem a statement about the choice instead of about any measure — strictly weaker
+than what the corpus proves.
+
+SO WHAT WAS DELIVERED INSTEAD IS A MODEL.  `proofs/lean/Zippy/Counting.lean`: finite sets of paths
+with `Finset.card` satisfy all four counting axioms, the injective-image axiom and the comprehension,
+and `card_wrap` holds in it.  That makes the residual `PROVED-MODULO T7` demonstrably NON-VACUOUS,
+which is not a formality: `_nat.p` records that vampire REFUTES `_signature.p + _card.p` outright
+when `card` is `$int`-valued, and `run.sh`'s guard against that is a vacuity probe — a negative check
+with a 10 s budget.  A model is the positive statement and does not expire.
+
+WHAT WOULD ACTUALLY CLOSE `card_wrap` is a TAXONOMY decision, not more proving: whether T7's four
+counting axioms are DEFINITIONAL ("the clauses that say what the objects are … not assumptions that
+could be false; they are the subject matter" — docs/TRUSTED.md's own line) rather than assumed.
+They have a fair claim to it — they say what `card` IS, as `_paths.p`'s freeness axioms say what
+`path` is, and `_paths.p` is not a T entry.  `Counting.lean` states the case and does NOT make the
+call, because reclassifying the trusted base is not a proof obligation.
+
+A BUG IN THE LIFT, CAUGHT BY `--check` ON THE NEXT LINE.  The first version of the annotator branched
+on "was anything lifted?" and wrote `card_wrap` as `PROVED (MECHANIZED … discharges T1)` — UNQUALIFIED
+while still reaching T7.  That is a row reported as unconditional while depending on the counting
+axioms: precisely the defect `proof_closure.py` exists to prevent, arriving through the mechanism
+meant to prevent it.  `--check` failed immediately, which is the point of having both halves.  The
+fix is that `annotate` and `--check` now call ONE `want_verdict`, and a lifted-but-still-conditional
+row composes both halves: `PROVED-MODULO T7 (MECHANIZED … discharges T1)`.
+
+AXIOM AUDIT, whole package: 57 theorems, 10 depending on no axiom at all, and the axioms used across
+the package are `propext`, `Quot.sound`, `Classical.choice` — Lean's own and nothing else.
+====================================================================================================
+
+====================================================================================================
+PHASE 1, TRACK C — THE CERTIFICATE TIER (plan.md 1C.1–1C.7), AND WHY 1B.5 CAME FIRST AND FAILED
+====================================================================================================
+
+WHY TRACK C WAS SEQUENCED HERE.  1B.5's own text ends with a conditional: "If the 16-cell state's
+spill past `shapeWidth` leaves the per-factor bound above 6, this task needs item 5's retained
+per-head tails."  That conditional fired.  Measured, in this order:
+
+  1. puzzle15's astronomical estimate is `alloc = 7.610e+55`, `touch = 2.581e+56`, and `work` and
+     `rounds` are FINE (1.497e+06 and 84).  So only the two cardinality-driven components are wrong.
+  2. Instrumenting `SpatialCost.go` located it exactly: a chain of 15 nested `Composition` nodes,
+     `len` running 2..16, each multiplying `size` by 3584 — `3584^15 = 2.068e+53`, which IS the
+     reported figure.  It is `Sliding.collapse`:
+         cells.map(b => (loc /\ b) x others(b).map(o => state(o)).reduce(_ x _)).reduce(_ \/ _)
+     a 15-fold cross product of `Unwrap(state, c_i)`, one per cell.
+  3. Each factor was bounded by the WHOLE state (3584) instead of by one tile.  The per-cell
+     certificate in `ass`'s shape was `{_?{⊤}, +[0, 38654705664] more}` — one tracked head and an
+     unbounded untracked count — so `Unwrap` could not be shown to select a single tile.
+  4. THE INFORMATION EXISTS AND IS DESTROYED, not absent.  `Sliding.superpose`'s per-cell arm types
+     EXACTLY: `{c0?{_?{ε}}, c1?{+[1,1] more}, …}`, size `[13, 28]`, ONE tile per cell.
+
+Four independent losses sat between (4) and (3), and three of them are now fixed:
+
+  * `Shape.tailsUnion` opened the untracked bucket's counts unconditionally.  With at most ONE
+    untracked head there is no aggregation and nothing to open (`Shape.untrackedTails`).
+  * `groupTailType`/`ChainCost.leafEnv` installed `SpatialType.top` per level.  They now install the
+    per-level FIBER BOUND, and where the source has exactly one head (`headCount == [1,1]`) they
+    install it UN-weakened — the single-group exemption, which is sound because "in some group's
+    tails" and "in this group's tails" are then the same claim.
+  * `SpatialTyping.groupUnion` bounded the group count only by the shape's `headCount`, which is
+    capped at `shapeDepth = 4` levels.  The PATH COUNT bounds it too and the length histogram has no
+    depth cap, so a 15-item singleton source is now known to have one group at every level.  The
+    `Call` arm also threw the argument's length type away (`SpaceType.unknown`) and no longer does.
+    MEASURED: `superpose`'s arm went from `[0, 241]` with `+[0,16]` tiles per cell to `[0, 28]` with
+    `+[0,1]` — the exact answer.
+  * NOT FIXED, and this is what still blocks puzzle15: `SpatialCost`'s own fact budget.  The report
+    says "spatial-fact budget (2000 queries) exhausted; the rest is symbolic only" on BOTH the
+    optimized body (`7.610e+55`) and the definitional one (`7.793e+199`), so the optimizer is not the
+    cause.  Past exhaustion `refine` stops tightening and `Unwrap` keeps the operand's size.
+    puzzle15's decorated analysis also reports `[0, 3584]` at those nodes, so the whole-routine run
+    does not reach the isolated arm's precision either.
+
+    AND THE BUDGET IS NOT THE CAUSE EITHER — MEASURED, so the lead is closed rather than left open.
+    `SpatialCost.FactBudget` was made settable and puzzle15 priced at 2000, 20000 and 200000:
+
+        budget    alloc         touch         wall clock
+        2000      7.610e+55     2.581e+56      19.6 s     EXHAUSTED
+        20000     7.610e+55     2.581e+56      69.8 s     EXHAUSTED
+
+    Ten times the budget gives a BIT-IDENTICAL answer for 3.5x the wall clock, and the note still
+    says exhausted.  So the missing precision is not a query that ran out of budget; the decorated
+    whole-routine analysis genuinely does not derive for puzzle15's optimized body what
+    `SpatialTyping.infer` derives for `Sliding.superpose`'s arm in isolation (`[0, 28]`, `+[0,1]` per
+    cell).
+
+    AND THE TARGET IS `ass`'s FACT, NOT `collapse` — measured, which narrows 1B.5 to one binder:
+
+        superpose(q, Singleton(15 derefs))     size [0, 1168]   {c0?{_?{T}, +[0,15] more}, ...}
+        tailsUnion of it                       size [0, inf]    {_?{T}, +[0,inf] more}
+        collapse(d, that)                      size [0, 16]     <-- SMALL
+        expandStep(frontier), whole            size [0, inf]    {c0?{T, +[0,inf] more}, ...}
+
+    `+[0,15]` for `superpose` is the TRUTH and not a loss: the routine unions over the 16 possible
+    blank positions, so a cell may hold `_` or any of 15 tiles, and `lens` agrees (256).  The point is
+    the third row: with `ass` bound to that, `collapse`'s 15-fold `Composition` types `[0, 16]`.  So
+    `collapse` is fine and the astronomical product comes entirely from the FACT the pipeline installs
+    for `ass` — `{c0?{_?{T}, +[0, 38654705664] more}, ...}`, size 6.18e11.
+
+    `ass` is the rest of `.iter(P"act", S"ass", ...)` over
+    `superpose(q, tupleP).iter(P"l", S"t", all_moves(q).iter(P"act", S"map", act x map(l) x t))`, so
+    one group's tails are `map(l) x t` — another `Composition`, of an `Unwrap` by an unknown path ref
+    with a `superpose` fiber.  THAT product is the next thing to bound, and it is a different problem
+    from the one this task named: not the fiber bound (delivered), not the certificate (delivered),
+    not the budget (ruled out), but a composition whose left factor is indexed by a bound path ref.
+    `SpatialPipelineCheck`'s ITEM 5 gate still fails on puzzle15, and per the plan that blocks 1B.1's
+    and 1B.6's publisher gate with it.
+
+TWO SOUNDNESS BUGS WERE INTRODUCED AND CAUGHT BY THE EXISTING GATES, which is worth recording
+because both were in the "obviously safe" direction:
+
+  * reading the path count into `oneGroup` admitted a source with one path and several MAY-present
+    TRACKED heads, where the single group need not be the untracked arm's; the arm's body then
+    contributed must claims about a group that does not run.  `SpatialAnalysisCheck` reported it as
+    11 corpus shapes typed DEFINITELY EMPTY against non-empty values.  `lensAtMostOne` now only
+    decides whether the counts open, which is exactly the premise it supports.
+  * binding `rest` to the tails-union LENGTH type kept its lower bounds, and one group's tails do not
+    inherit them (`Literal({a, b.a})`'s tails-union has a length-0 and a length-1 path; head `a`'s
+    group has only the length-0 one).  Same 11 shapes.  `SpatialTypes.mayOnlyLens`/`fiberLens` is now
+    the ONE place the may-only rule lives, shared with `SpatialCost.mayOnlyType`.
+
+WHAT TRACK C DELIVERED
+
+1C.1/1C.2 — `Cert` (src/main/scala/SpatialCert.scala): an immutable, structurally-equal,
+hash-consed PREFIX TRIE.  It replaces BOTH flat channels — `otherKeys: Option[Set[PathItem]]` (e) and
+`headAtoms: Set[Int]` (f) — with one `cert: Cert` field, and `object HeadAtoms` is deleted.  The claim
+is `L(shape) ⊆ L(cert)`, pure may, no counts.  Identity is a VALUE: `equals`/`hashCode` are
+structural and `Cert.arena` is a weak-keyed cache whose clearing cannot change an answer — the
+property an atom id into a process-wide table did not have, and shapes outlive their analysis.
+`GlobalState`'s three `HeadAtoms` probes become one `Cert.arenaSize`.
+
+1C.3 — all three ⊤-degrading sites plus `capDepth` and `mk`'s width spill go through one owner
+(`Shape.certOf` / `Shape.spillCertOf`) that keeps SUB-STRUCTURE: `Shape.of` at depth ≤ 0 keeps the
+literal's own sub-tries, `sub` out of budget keeps the left operand's whole language, `capWidth` and
+`mk` keep each spilled head's sub-shape, and `Shape.under`/`Shape.certUnder` read them back.
+
+1C.4 — `SpatialFrontier`'s relational walk descends its untracked summary frame with
+`Shape.untrackedTailBound` (summary MEET certificate) instead of into a ⊤ `otherTail`, and the
+`maxKeys` enumeration cliff is deleted in favour of `Cert.headsDisjoint`.
+
+1C.5 — `SpatialConfig.certKeys` (4096) and `certDepth` (12), a two-rule widening, and every
+degradation RECORDED ON THE VALUE (`Cert.Degradation.DepthCut` / `WidthFold`) so it survives the
+analysis; `SpatialCost.refine` turns it into an assumption on the priced report.
+
+1C.6/1C.7 — `SpatialCertCheck` (8 tests) and `SpatialCertBudgetCheck` (7 tests).  `Cert.costNote`
+prices construction, lookup, intersection and retained memory into `FrontierSummary.notes`.
+
+THREE BUGS THE NEW SUITES FOUND ON THEIR FIRST RUN, all in the tier itself:
+  * `Cert.leq` compared only the LEFT side's keys, so a key the right side TRACKS and the left
+    reaches through its `outside` was never checked — `leq({a/X, ?/T}, {ε, b/Y, *})` accepted with
+    `{b.t}` in γ of the left and not the right.  The identical defect `Shape.leq`'s own note records.
+  * the width budget counted KEYS, and the fold's output then violated the budget it had just
+    enforced.  It counts DISTINCT SUB-TRIES, which is also what the recursive walk costs.
+  * `Cert.of`'s normalisation swallowed the degradation record: a depth cut one level down produced a
+    ⊤ child, `Bounded(⊤)` normalised to `Unbounded`, and the certificate came back claiming exactness.
+
+AND TWO PUBLISHED LIMITATIONS ARE RETIRED, with equality assertions rather than envelopes so they
+cannot come back inside a ceiling:
+  * `SpatialFrontierCheck`'s growing-DEPTH family was a published LOG FACTOR ("the frontier model is
+    exactly as good as the size-only bound here").  It is now EXACT at every point.
+  * the key-disjoint depth ladder was exact to `MaxDepth + 1` and then `hi = 4d - 14`; the recorded
+    ceiling constant `RebuiltRatioPastCap = 4` existed to catch that line steepening.  MEASURED over
+    d = 1..16: `hi == d` at every row.  The constant is deleted and the test asserts equality.
+  * `Shape.capDepth`'s "WHAT IS *NOT* DONE HERE … the depth half of the review's ambition is OPEN"
+    note is replaced by what closed it, including why the ORDER survived this time (`keysExceed`
+    compares the two TRIES rather than starting a shape-level `leq` on the two `otherTail`s, which is
+    what turned six corpus shapes red in the earlier prototype).
+
+Past `certDepth` the depth ladder over-predicts again — `hi = 2d + 1`, measured over
+d = 13..24 — and `SpatialCertBudgetCheck` asserts that the GROWTH CLASS is unchanged there (linear in
+d, bounded constant) rather than pretending the budget is free.  That is the honest form of 1C.6's
+third requirement: a budget may cost precision, not asymptotics.
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+ENVIRONMENT: THE EXTERNAL TOOLCHAIN IS ABSENT IN THIS SESSION, AND WHAT THAT BLOCKS
+----------------------------------------------------------------------------------------------------
+`scripts/toolpath.sh` resolves NONE of z3, vampire, egglog, lake — the machine was reset and only the
+JVM survived (`sbt` itself had to be recovered from a scratch directory).  Reported rather than
+worked around, because four gates and one suite depend on them and a green run without them would be
+a green run of something smaller than the gate:
+
+  proofs/run.sh, proofs/unbounded/run.sh, terminating/run.sh   need z3 / vampire
+  scripts/check_lean.sh                                        needs lake (elan)
+  morkl.EquivPipelineTest                                      requires egglog IN ITS CONSTRUCTOR,
+                                                               so the suite cannot even initialise
+
+CONSEQUENCE FOR THE PIPELINE ARTIFACTS, left as found rather than tidied.  A `ZIPPY_REGENERATE=1
+EquivPipelineTest` run from the previous session was killed by the reset at 5 of 7 cornerstones, so
+`proofs/pipeline/*` and `zipper-egg-tests/pipeline/*` hold a PARTIAL regenerate.
+`scripts/audit_pipeline_markers.py` fails on four of them — nqueens-space and puzzle15-space, in both
+the `.smt2` and `.egg` families — reporting "declared IDENT but is BUDGET".
+
+That is a REAL and expected consequence of 0.6's `expandKeepBinders` inlining changing the optimized
+programs, and the audit's own instruction is to record it with `--declare`.  It is NOT declared here.
+Declaring a marker means asserting a measurement, and the measurement cannot be re-derived in this
+environment: egglog is needed to regenerate, so there is no way to know whether the two remaining
+cornerstones move a third and fourth marker as well.  Recording an unverifiable marker change is
+exactly the failure mode plan.md's opening paragraph names ("measurements that lived outside the
+repository"), so the state is left visible and failing instead.
+
+WHAT TO DO WHEN THE TOOLCHAIN IS BACK, in order: install z3 / vampire / egglog / elan, run
+`ZIPPY_REGENERATE=1 <runner> morkl.EquivPipelineTest` to completion, then
+`python3 scripts/audit_pipeline_markers.py --declare` and put the DECLARED.tsv diff in the same
+change.  Everything that does NOT need an external tool was run and is recorded above.
+----------------------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------------------
+ONE PREFIX, NOT THEIR UNION: `Shape.maxTailSize` (plan.md 1B.5, and it helps far beyond it)
+----------------------------------------------------------------------------------------------------
+`Unwrap(x, p)` with `|p| = j` KNOWN selects the tail-set under ONE depth-`j` prefix.  Every bound the
+domain had for it was a bound on the UNION over prefixes: `Shape.unwrapUnknown` returns
+`weaken(tailsUnion(x))`, whose cardinality is the SUM of the per-head tail-sets, and `SpatialTypes`'
+`Unwrap` arm keeps the whole source's size class-by-class.  Both are sound and both answer about the
+wrong object.
+
+`Shape.maxTailSize(j)` is the right one — the LARGEST tail-set under any depth-`j` prefix, taking the
+untracked bucket's contribution from `otherTail`'s own size (channel (d) is a PER-HEAD claim, so
+`others.hi` does not multiply it) and `Ivl.INF` when there is no summary to read.  `SpatialCost`'s
+`Unwrap` arm meets it into `Meas.size` whenever `plen` is a known constant in `1..MaxDepth`.
+
+MEASURED on the cornerstone ledger, `Routine.optimized`, trie backend:
+
+               alloc  before      after        touch  before      after
+    gol               2.654e+04   6.707e+03           9.039e+04   2.665e+04     4.0x / 3.4x
+    puzzle15          7.610e+55   1.017e+54           2.581e+56   3.449e+54      75x /  75x
+    reference gol     1.896e+04   5.228e+03           7.336e+04   1.763e+04     3.6x / 4.2x
+
+aunt, temperature, nqueens4 and datalog-sn are unchanged — they have no `Unwrap` by a known-length
+path over a multi-head source, which is exactly the shape of term the law is about.
+
+IT DOES NOT CLOSE puzzle15, and the reason says where the remaining factor is.  All fifteen factors of
+`Sliding.collapse`'s `Composition` are `Unwrap(ass, Constant(c_i))` with `j = 1`, and `ass`'s per-head
+tail-sets are each bounded at 3.8e10 — so `maxTailSize(1)` is 3.8e10 there and `tighter` keeps the
+3584 the length histogram already gave.  The 75x came from OTHER `Unwrap` nodes in the same term
+(`map(l)`, `state(...)`) where the max really is below the sum.  puzzle15 needs `ass`'s per-head bound,
+which is the composition `map(l) x t` recorded above as 1B.5's remaining target.
+----------------------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------------------
+WHAT THE CERTIFICATE TIER COST, AND THE FOUR REGRESSIONS THE EXISTING GATES CAUGHT
+----------------------------------------------------------------------------------------------------
+Swapping the carrier's certificate channel is what plan.md's Track C header warns about ("the domain
+where a smaller change previously produced three γ-regressions").  Four regressions happened, all
+caught by gates that already existed, and each is recorded with the measurement that found it because
+each was in the "obviously safe" direction:
+
+1. LATENCY, 45.9x.  The first version made `Shape.language` a `lazy val` computing the WHOLE-language
+   certificate (`Shape.certOf`, a full recursive walk with a `Cert.meet` per node) and every per-node
+   consumer read it — `certJoinL`, `certMeetL`, `keysExceed`, `sub`, `range`.  Once per shape INSTANCE
+   is still once per lattice edge.  `SpatialAcceptance` 5c:
+
+       puzzle15   infer 1068 ms   decorated 49046 ms   ratio 45.9x   (budget 12x)
+
+   The fix is `Shape.langLevel` — the SAME claim one level deep, which is exactly what the old
+   `possibleHeadsCert` gave at the same cost — plus dropping the `Shape.inter` that `Shape.under` had
+   started running on every descent.  A weaker bound costs precision and never soundness here: a join
+   of weaker bounds still admits both sides, a meet still admits what both admit, and `keysExceed`
+   refusing more often only makes the order more incomplete.  After:
+
+       puzzle15   infer 673 ms    decorated 4016 ms    ratio 5.97x
+
+2. A CLOSED HEAD SET THAT IS NOT CLOSED.  `langLevel`'s first version read `cert.outside`, producing a
+   one-level bound naming exactly the TRACKED heads and CLOSED — and the meet with the shape's own
+   certificate then INTERSECTED the two name sets and deleted the spilled ones.  puzzle15's 16 cells
+   became `HeadSetWithin` of 12 with `others.hi = 0`, i.e. `MaximumHeadCount(12)` for a 16-head value,
+   and nqueens' inferred size collapsed to `[0, 0]` against a true 32.  `Closed` only when
+   `others.hi == 0`; open buckets get `Unbounded`, which `Cert.of` canonicalises to ⊤, so the meet is
+   the stored certificate unchanged — right and free.
+
+3. THE UNTRACKED COUNT CAPPED BY THE WHOLE HEAD SET.  The flat certificate held `complete MINUS
+   tracked`, so `capOthersCert` capping `others.hi` by its size was right; the trie names ALL heads,
+   so the same cap over-counted by exactly the tracked ones and puzzle15's head count went 16 -> 28.
+   `Cert.headBoundExcluding` subtracts them.
+
+4. THE ORDER, TWICE, IN OPPOSITE DIRECTIONS.
+   * A certificate that admits everything was not spelled `Cert.top`: under `Unbounded` a named head
+     mapped to ⊤ adds nothing, so `of(true, {b -> top}, Unbounded)` and `Cert.top` have the same
+     language — but `Cert.leq(top, that)` is `false` by its `a.isTop` arm, and `leqStrong` refused a
+     pair whose languages are EQUAL (`SpatialPipelineCheck`'s narrow-weakens gate, channel
+     `shape:otherTail`).  `Cert.of` now drops ⊤ keys under `Unbounded`, recursively.
+   * And `langLevel` is ⊤ below the head, so where the right-hand certificate carries SUB-STRUCTURE —
+     the case the tier exists for — the order refused again.  `keysExceed` pays for the deep walk
+     exactly there, gated on `Cert.hasSubStructure`.  `Cert.depth > 1` was the first predicate and it
+     was wrong: `{b/{ε}}` has depth 1 because `epsOnly` is a leaf, and it is precisely the
+     certificate `capDepth`'s collapse produces.
+
+THE DIAGNOSTIC THAT MADE (4) TRACTABLE is now part of the gate: `SpatialPipelineCheck`'s
+narrow-weakens assertion prints the failing CHANNEL (`Shape.LeqShapeWhy`) and the two certificates.  A
+bare "not above it in the strong order" sent the first two attempts at the certificate comparison when
+the channel was `otherTail` and `Cert.leq` was already returning `true`.
+----------------------------------------------------------------------------------------------------
+
+----------------------------------------------------------------------------------------------------
+THE LEDGER FIGURES `Shape.maxTailSize` MADE STALE, RE-DERIVED (plan.md's own discipline)
+----------------------------------------------------------------------------------------------------
+`SpatialEventsCheck`'s STALE FIGURE check fired on six recorded `Limitation` figures, all in the
+IMPROVING direction, and the plan's rule is that a recorded figure nothing checks is a figure that is
+eventually wrong.  Re-derived from this run:
+
+    CS-3  gol trie  Touch error/error-p95      21.13 -> 6.23      (-70.5%)
+    CS-4  gol zip   Touch error/error-p95      21.14 -> 6.23      (-70.5%)
+    CS-P1 puz trie  Alloc error / width      3.23e52 -> 4.31e50, 2.02e53 -> 2.70e51   (-98.7%)
+    CS-P2 puz trie  Touch error / width      7.37e52 -> 9.86e50, 2.67e53 -> 3.57e51   (-98.7%)
+    CS-P3 puz zip   Alloc error / width      3.23e52 -> 4.31e50, 2.02e53 -> 2.70e51   (-98.7%)
+    CS-P4 puz zip   Touch error / width      7.37e52 -> 9.86e50, 2.67e53 -> 3.57e51   (-98.7%)
+
+The three requirement suites are then back at their exact pre-existing baselines, which is the check
+that the tier cost nothing on the ledger: `SpatialCostCheck` 436/448 with 0 undiagnosed,
+`SpatialScaleCheck` 1595/1680 with 33 undiagnosed, `SpatialEventsCheck` 228/251 with 1 undiagnosed.
+Containment stays 100% on every gated channel — the tier moved predictions DOWN toward the counted
+values and never below them.
+
+AND ONE PROBE WAS WRONG TO ADD.  `GlobalState` first probed `Cert.arenaSize`, and
+`scripts/check_determinism.sh` immediately reported it as a differing PROBE line across two runs of
+`SpatialEventsCheck` (28 against 41).  That is the gate working: the arena is WEAK-keyed, so its
+occupancy depends on when the collector ran and it is not a determinism signal at all.  The probe is
+now `Cert.constructed`, a monotone count of `Cert.of` calls — deterministic for a deterministic run,
+and it answers what the probe is for (how much certificate work a suite did).  Gate green: both runs
+agree on all 159 CALIBRATION lines.
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+PHASE 1, TRACK B — 1B.6: THE DECORATION IS MADE TO DOMINATE, AND `refine` STOPS RE-INFERRING
+====================================================================================================
+`SpatialCost.refine`'s decorated branch re-ran `SpatialTyping.infer` on every node of every cost
+query, and its own note said why and where the fix belonged: "the decorated analysis is a
+WHOLE-ROUTINE run under `SpatialConfig`'s budgets, so at an individual node it may have widened or
+capped where an unbudgeted single-node `SpatialTyping.infer` would not … Making `SpatialAnalysis`
+strong enough per node to drop the re-inference is the right long-run fix and belongs there, not here;
+plan.md task 1B.6 records it."
+
+WHAT LANDED.  `SpatialAnalysis.Recorder` now meets a fresh single-node inference into every recorded
+type itself, budgeted by the new `SpatialConfig.strengthenQueries` (4000, and 0 in `cheap`).  Two
+decisions make it affordable and sound:
+
+  * ONCE PER POSITION, not per observation.  puzzle15 has 295 positions and 13725 observations, and
+    `refine`'s version paid `FactBudget` (2000) per node per backend on top of that.
+  * With an EMPTY environment.  A position is visited once per head group, so an inference computed
+    under one group's bindings is not a bound for another's; with no environment every free mention is
+    ⊤, which is a bound under EVERY binding.  It is weaker where the node reads a binder — and that is
+    exactly where the compositional traversal is already strong — and equally strong on the closed
+    subterms where the budgets actually cost something.
+  * A BOTTOM from the meet keeps the compositional type and adds a note.  The two are sound bounds on
+    the same value, so a contradiction is a disagreement to report (`SpatialAnalysisCheck`'s
+    consistency gate), not a proof that the node is empty.
+
+MEASURED: with the re-inference removed from `refine`'s decorated branch, every one of the 32
+(cornerstone, backend, component) numbers in ITEM 8's table is BIT-IDENTICAL to the run that kept it.
+So the strengthening fully subsumes it and the cost model reads the decoration alone.
+
+AND THE GATE, WHICH 1B.6 ASKED TO MOVE TO `improved == 8 of 8`.  8 of 8 rests on a premise that is
+FALSE, and the measurement says so in two different ways:
+
+  nqueens4/zipper                                   a POINT INTERVAL on every component: no room
+                                                    between the endpoints, so no input type can move it
+  nqueens4/trie, temperature/trie, temperature/zipper   the FRESH path already reaches the same bound
+
+The fresh path is not blind — `refine` consults `histAt` on every node — so on a small closed term
+whose inputs are declared exactly, both paths derive the same answer.  The decoration can only win
+where a fresh per-node inference cannot reach: its LAW refinements and the BINDER refinements of the
+whole-routine traversal.
+
+So the gate is now `improved == informative`, where INFORMATIVE means the decoration is strictly
+stronger than a fresh inference of the same subterm AT SOME NODE.  That is the direction the review's
+objection is about — a decoration that carries more and changes no prediction — and it holds with no
+slack: 4 informative rows (gol x2, aunt x2), 4 improved, 0 unexplained.  `improved >= 1` was the old
+bar; it passed on one row out of eight and let the other seven rot.
+
+NOT AT THE ROOT, and the first version of the criterion was wrong there: `SpatialAnalysis.of` already
+meets an authoritative fresh inference into the root, so the root is never strictly stronger —
+measured, 0 of 8.  The decoration's value is INTERIOR.
+====================================================================================================
+
+====================================================================================================
+PHASE 1, TRACK B — 1B.3: THE REST-CHAIN ACCUMULATE, PRICED PER LEVEL
+====================================================================================================
+`evalI` does not perform one n-ary join over every leaf of a rest-chained nest.  At level `d` it
+performs one `joinAll` per depth-`(d-1)` prefix over that prefix's CHILDREN, so the joins are
+`K_{d-1}` calls of arity `K_d / K_{d-1}`, and the operands at level `d` are the subtree unions below
+rather than the whole leaf set.  The chain arm priced it as a single
+`collectJoin(ch.leaves, ..., leafMeas)`, which is where `LIM-12`'s quadratic comes from: `naryProbes`
+reads `k * (spineNodes + 1)` with `k = leaves` AND `spineNodes = leaves * nd(leaf)`, so both factors
+grow with the rung.  Summed per level the total operand count is `Σ_d K_d`, which is what the
+executor pays.
+
+MEASURED on the ladder's own depth-2 nest at n = 64 (`Iteration(s0, h, t, Iteration(t, g, _,
+Singleton(h·g)))` over 64 paths on 8 heads, so `K_1 = 8`, `K_2 = 64`), trie, definitional form:
+
+    work    229784 -> 37648    (6.1x)
+    alloc    43939 -> 17267    (2.5x)
+
+and the level structure the arm now prices is printed in the report's assumptions:
+`d=1 frames=1 arity=8 operand=8; d=2 frames=8 arity=8 operand=1`.
+
+AND IT DOES NOT MOVE THE 33 UNDIAGNOSED `rest-chain/nest` ROWS, for a reason worth recording because
+1B.3's premise is wrong about it.  `SpatialScaleCheck` measures `Routine.optimized`'s body, and the
+optimizer HOISTS the loop-invariant head out of the inner body:
+
+    given      S"s0".iter(h, t, S"t".iter(g, _, Singleton(h·g)))
+    optimized  S"s0".iter(h, t, (P"h" x S"t".iter(g, _, Singleton(g))))
+
+The outer body is then a `Composition`, not an `Iteration`, so `RestChain.recognize` does not see a
+chain and the nest is priced by the GENERIC `Iteration` arm at both levels — which is already
+per-level.  Verified directly: the optimized report carries ZERO rest-chain notes.  So `LIM-12`'s
+attribution to `CostModel.chainNest` describes the DEFINITIONAL form, and the ladder's rows are
+measured on a form that never reaches it.
+
+WHAT 1B.3 THEREFORE IMPROVES is every chain-priced nest that the optimizer does not hoist — which is
+the case whenever the inner body reads the level's own `rest` (puzzle15's 16-level nest is the
+cornerstone example) — and the 33 undiagnosed rows are a DIFFERENT defect, diagnosed under 1B.7/1B.8
+below.
+====================================================================================================
+
+====================================================================================================
+PHASE 1 — TRACKS B AND D COMPLETED (plan.md 1B.1–1B.8, 1D.1–1D.4), WITH THE TOOLCHAIN REBUILT
+====================================================================================================
+
+THE TOOLCHAIN, AGAIN FROM NOTHING.  z3 5.1.0 and Vampire 5.1.0 from their GitHub releases, egglog
+3.0.0 built from source at tag v3.0.0 (rustup, minimal profile), and elan with Lean 4.33.1 — all
+under `.tools/` (gitignored) with `.tools/env.sh` putting them on PATH as `$ZIPPY_TOOLS` and
+`$ELAN_HOME`, which is what `toolchain.conf`'s policy reads.  `lake build` completes in 673 jobs
+against the surviving Mathlib cache; `egglog formal.egg` passes.  ONE BUG IN `env.sh` WORTH RECORDING:
+the first version derived its root from `${BASH_SOURCE[0]:-$0}`, which under `sh` (dash) resolves to
+the CALLING script, so `$ZIPPY_TOOLS` silently pointed at the caller's directory and every tool went
+missing again.  The root is written out.
+
+---- 1B.2  `TailsFacts.childKeySets` and the PKD descent price ----------------------------------
+`TailsFacts.of` built `hs = kids.map(_.possibleHeads)` to decide `keyDisjoint` and then DISCARDED it,
+so the key layout the n-ary descent price needs was derived and thrown away at the one site that had
+it.  `childKeySets` keeps it, and `CostModel.pkdLiveTotal` bounds `Σ_calls |live|` PER OPERAND:
+`2*m_i - 1` Steiner nodes in the merged Patricia trie (no unary internal nodes, so the binary-tree
+bound applies) plus `carryDepth` ancestors, summing to `2N - k + k*carryDepth`.  Disjointness is what
+makes it per-operand.  Met with the two aggregate arms, never replacing them.
+
+    tails-union/inter  Alloc width   64.32 -> 22.21   OP-7, OP-7g RETIRED (budget 64)
+    tails-inter zipper Work  width   92.89 -> 33.95   OP-7z RETIRED
+    tails-inter        Work  width   89.60 -> 28.73   OP-6, OP-6g re-derived (budget 8, still red)
+    tails-union        Work  width   56.02 -> 17.93
+
+WHY THE LAYOUT-EXACT VERSION IS NOT SHIPPED, and it is a decision and not an omission: OP-6 records
+the measured regularity it would capture (interleaved keys give `f(k)*m`, distant blocks `f(k)`), and
+the difference is the DEPTH at which operands separate — a function of the interned `Int` keys, since
+`IntTrieOps` branches on raw key bits.  Deriving it would make a cost prediction depend on
+`Interner`'s process-wide, first-seen-order state, so a different program analysed earlier in the same
+JVM would change the answer.  That is the fragility `HeadAtoms` was deleted for.
+
+---- 1B.4  the fixpoint's accumulating merge, against the residue -------------------------------
+`fixpointRel` built the frontier of the accumulator against the WHOLE ITERATE, both of which are
+`a ∪ b` on the witness term, so `mergeSummary` saw two identical closed profiles — the worst case a
+merge has.  For a monotone body `evalI` computes `union(cur, cur ∪ E)`, and `unionR`'s `a eq b`
+returns an untouched subtree BY POINTER (the `pointerPreservingRebuild` property that was declared and
+never read), so the touched set is the frontier between `cur` and the RESIDUE `E`.  `fixRoundsIvl`
+already computed that residue and discarded it.
+
+    fixpoint Touch width   72.87 -> 40.33   OP-9, OP-9g, OP-9z RETIRED (budget 64)
+
+The `R - 1` multiplicity OP-9 warned about was NOT taken with it: it is false on
+`Fixpoint(a, r, Union(b, Mention(r)))` because `IntTrie`'s arm unions before it tests convergence.
+
+---- 1B.6  the decoration dominates, and `refine` stops re-inferring ---------------------------
+Recorded above.  `SpatialConfig.strengthenQueries`; every ITEM 8 number bit-identical with the
+re-inference removed; the gate is now `improved == informative` (4 of 4) instead of `improved >= 1`.
+
+---- 1B.7 / 1B.8  the ledger, re-derived and complete ------------------------------------------
+                          before                          after
+    SpatialCostCheck      436/448, 12 red, 0 undiagnosed   444/448,  4 red, 0 undiagnosed
+    SpatialEventsCheck    228/251, 23 red, 1 undiagnosed   228/251, 23 red, 0 undiagnosed
+    SpatialScaleCheck    1595/1680, 85 red, 33 undiagnosed 1595/1680, 85 red, 0 undiagnosed
+
+NINE ENTRIES RETIRED because their subject no longer fails — deleted, not annotated, because stale
+evidence is itself a ledger failure: OP-7, OP-7g, OP-7z, OP-9, OP-9g, OP-9z, CS-3, CS-4 (whose only
+subject was `gol`), and `gol`/`datalog-sn` removed from CS-1, CS-2, CS-8, CS-9, CS-10, CS-10z.
+TWENTY ENTRIES ADDED for residuals that had none: LAD-L1..L12 (the 26 `lower-error` rows — one defect,
+one statistic, four families, three backends), LAD-S1..S4 (`slope-measured-vs-declared`, the statistic
+that does NOT read the prediction), LAD-A1/A2 (absorption), LIM-7wz, CS-11z.
+TWENTY FIGURES RE-DERIVED across CS-3, CS-4, CS-10, CS-10z, CS-P1..P4, OP-6, OP-6g.
+
+TWO DIAGNOSES WORTH KEEPING, because both correct an attribution the ledger had wrong:
+
+  * `LIM-12`/`LIM-13` and friends attribute the `rest-chain/nest` rows to `CostModel.chainNest`.  The
+    ladder measures `Routine.optimized`'s body and the optimizer HOISTS the loop-invariant head out of
+    the inner body, so `RestChain.recognize` sees a `Composition` and not a chain: the optimized report
+    carries ZERO rest-chain notes.  Those rows are priced by the GENERIC `Iteration` arm, and 1B.3's
+    per-level accumulate and 1B.4's `rounds` floor — both real, both measured — cannot reach them.
+  * `absorption`'s `Alloc error` is not a ceiling defect.  `s0 ∪ (s0 ∩ s1)` returns `s0` by pointer, so
+    the executor allocates NOTHING, and `SpatialFrontier` has no route to `FrontierCase.Left` from a
+    SYNTACTIC containment between the operand terms — `same` is structural equality and one
+    constructor short of deciding it.
+
+---- 1D.1  the certified summaries have a production consumer ----------------------------------
+`SpatialRecursion.summaryAt` is the one entry point, refusing both an UNCERTIFIED table (a schedule
+that ran out, not a proof) and a key the solve never reached (`at` answers ⊤ for it, which is
+indistinguishable from "no claim").  Both `Call` arms consult it where `env.active(rp)` stops the
+interprocedural descent — `SpatialTypeSystem` with the argument types it already computes for the
+descent, so the KEY is the one the solver would have built, memoised and budgeted per analysis
+(`Budget.summaries`, `Budget.solves`); `SpatialTypes` with the length half alone, `PathArg.opaque`
+always, because `SpatialEnv` carries no path VALUES.
+
+`CrossFunctionCheck` (6 tests) on `descend(p, S) := S ∪ descend(p, Unwrap(S, p))`, whose result really
+does depend on the path argument and which TERMINATES under `eval` (the fixpoint guard fires at ∅), so
+γ-soundness is CHECKED against the computed value rather than assumed:
+
+    A  25 of 25 (path, value) summaries certified, every one admits the real value
+    B  3 distinct summaries and 3 distinct real answers over 5 path arguments — the non-vacuity the
+       old fixture could not show, since it fixed the path to "a" and a table ignoring path arguments
+       entirely would have passed
+    C  an opaque path argument admits every concrete path of the declared length
+    D  the consumer fires: `infer(descend("a", {a.a.b, a.c}))` is
+       `{a·{a·{b·{ε!}}, b·⊤, c·{ε!}}, b·⊤, c·⊤}` with `lens` size `[2, 11]` — γ-sound, and not ⊤
+    E  the uncertified refusal exercised (`Limits(maxRounds = 1)` does not certify)
+    F  monotonicity in the value argument at all 5 path arguments
+
+---- 1D.3  one `normalize`, one certificate, one comparator ------------------------------------
+`Lower.sizeBounds`' `Range` arm was the THIRD copy of the window arithmetic — a prefix/suffix special
+case, a same-sign `b - a`, and `INF` on the mixed signs.  It now computes through
+`SpatialTyping.windowCard`, the breakpoint analysis `RangeCardCheck` gates exhaustively.  The hazard
+was not duplication: the width is NOT MONOTONE in the source size (`normalize(1,-2,2)` has width 1 and
+`normalize(3,-2,2)` has width 0), which is the mistake `Shape.rangeAt` made and this arm avoided only
+by declining to answer.
+
+`range-singleton` was registered GROUND — "trusted positional boundary; executor-evaluated".  It is a
+claim about integers, so it is now certified: `proofs/laws/law_range_singleton.smt2` transcribes
+`RangeBounds.normalize` at `size = 1` and proves the clamp invariant, that `lo < hi` forces
+`(lo, hi) = (0, 1)` — which is what licenses "keep the element iff `lo < hi`" — and the empty
+converse.  z3 returns `unsat`.  REGISTRY.tsv row moved GROUND -> FILE.
+
+And the comparator is pinned, not only the outputs: `IntTrie.canonicalOrder` exposes the order the
+slice machinery actually walks (`ordered`'s child sequence with `terminal` first), and
+`RangeOrderCheck` compares it POSITION BY POSITION against `pathValueOrdering` on 160 randomised tries
+over four alphabets — one whose interning order is deliberately opposed to lexicographic, one where
+lexicographic and numeric order differ.  Every index is also checked through the production API alone
+(`Range(x, i+1, i+2)` must be the order's element `i`), and the fixture asserts it REACHED the two
+cases the claim is about: 117 tries contained ε and 130 had a path that is a strict prefix of another.
+
+---- 1D.4  the binder census is a gate, and it passes -----------------------------------------
+`ZIPPY_REGENERATE=1 EquivPipelineTest` ran to completion with the toolchain in place: `OK (9 tests)`,
+`BINDER CENSUS: 7 of 7 stones keep their binders — aunt, datalog-sn, gol, nqueens, puzzle15,
+puzzle3-full, temperature`.  The partial regenerate the environment reset had left behind is resolved,
+and `audit_pipeline_markers.py` is OK (97 declarations) after `--declare` recorded the two markers
+0.6's `expandKeepBinders` inlining genuinely moved: `nqueens-space.smt2` and `puzzle15-space.smt2`
+IDENT -> BUDGET.  That declaration is now re-derivable in-tree, which is why it was refused before.
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+1B.5: DISJOINT SLICES OF ONE OBJECT SHARE A BUDGET — 20 ORDERS ON puzzle15, AND THE RESIDUAL NAMED
+----------------------------------------------------------------------------------------------------
+`|a x b| <= |a| * |b|` is the generic composition bound and it ignores where the factors came from.
+When a composition chain's factors are `Unwrap(x, k_1) x … x Unwrap(x, k_n)` over the SAME `x` with
+PAIRWISE DISTINCT CONSTANT keys — `Sliding.collapse`'s shape, one factor per cell of the board — the
+factors are DISJOINT SLICES of one object, so `Σ_i |slice_i| <= |x|` and the product is maximised,
+subject to that sum, at `(|x| / n)^n`.  Met with the plain product, so it can only tighten.
+
+The keys must be CONSTANT: two `Deref`s of different refs can name the same item at run time, which
+would make the slices overlap and the sum false.
+
+TWO THINGS THE FIRST VERSION GOT WRONG, both found by measuring rather than by reading:
+
+  * IT REQUIRED EVERY FACTOR TO BE A SLICE.  `collapse`'s arm is `(loc /\ b) x state(o_1) x … x
+    state(o_n)` — the leftmost factor is a guard — so the chain was rejected outright.  The budget now
+    applies to the slice SUBSET and the remaining factors keep their own sizes, which is sound because
+    `|Π all| = |Π slices| * |Π others|` and each half is bounded independently.
+  * IT READ THE SOURCE'S SIZE THROUGH `typeAt`, which goes through `shapeAt` and returns ⊤ the moment
+    `State.budget` runs out — and puzzle15, the one term the law exists for, EXHAUSTS that budget
+    ("spatial-fact budget (2000 queries) exhausted" is in its own report).  So it never fired on it.
+    A `Mention` source's measure is already in the cost environment, put there by `loopEnv`, and
+    reading it costs no budget at all.
+
+MEASURED, puzzle15, trie, `Routine.optimized`:
+
+    alloc   2.359e+52 -> 2.316e+35        touch   7.333e+52 -> 1.234e+36
+
+and over the whole session's Track B work, from the figure this repository started at:
+
+    alloc   7.610e+55 -> 2.316e+35        touch   2.581e+56 -> 1.234e+36     twenty orders
+
+IT STILL DOES NOT MEET THE ITEM 5 CEILING (1e12) AND THE RESIDUAL IS ONE QUANTITY.  `(S/15)^15 <= 1e12`
+needs `S <= 95`, where `S = |ass|` is the analysis' bound on ONE head group's tail-set and the truth is
+16.  `loopEnv` bounds a `rest` mention by the WHOLE iteration source, and the two sound alternatives
+are both worse here: the fiber TYPE's own size is 6.18e11, and `|src| - (groupsLo - 1)` is 2132
+because the source has only two provable head groups.
+
+WHAT `|ass| = 16` ACTUALLY NEEDS, stated so the gap is a domain question and not a TODO: `ass` is one
+`act` group's tails of `superpose(q, tupleP).iter(l, t, all_moves(q).iter(act, map, act x map(l) x t))`,
+i.e. `map(l) x t`, and the fact that makes it 16 is that a puzzle STATE MAPS EACH CELL TO EXACTLY ONE
+TILE.  That is a FUNCTIONAL DEPENDENCY between two path positions.  The reduced product is
+`Shape x SpaceType` — a per-head trie summary and a length histogram — and neither channel can express
+a dependency between positions: the shape says which heads may occur and how many tails each may
+have, never that the count is one BECAUSE of what the head is.  Adding it is a new relational tier,
+not a refinement of an existing one, and it is outside what plan.md's Track C describes (whose
+"retained per-head tails" is delivered and gated by `SpatialCertCheck`/`SpatialCertBudgetCheck`).
+
+So ITEM 5's gate on puzzle15 stays red, `CS-P1..P4` carry it with their figures re-derived, and the
+four laws this session added to the same term — `Shape.maxTailSize`, `Shape.tailsAlternative`, the
+single-group exemption, and this slice budget — are each general, sound, and measured on their own.
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+1D.1 HAS TWO CONSEQUENCES IN `SpatialAcceptance` 6a, AND ONE OF THEM RETIRES AN ASSERTION
+====================================================================================================
+
+`SpatialRecursion.summaryAt` is now the production consumer of the certified summaries, so a recursive
+callee is no longer TOP.  Test 6a was written against the old behaviour in three places, and each one
+had to be re-derived from a measurement rather than adjusted:
+
+  (i)  the CARDINALITY is still unbounded without the law.  A transitive closure's size is not a
+       function of its argument's LENGTH HISTOGRAM, so the summary cannot supply it.  Asserted.
+
+  (ii) the LENGTH is now bounded without the law (<= 2).  Asserted, naming 1D.1.
+
+  (iii) and therefore the block that asserted "the transfers alone cannot see" the emptiness of
+        `closure INTER {length-3 literal}` is WRONG, because (ii) IS that block's whole premise.
+        MEASURED, both sides: `empty=true`, the same single `eliminate-empty at /`, residual `Empty`,
+        warm work `1`.  The law is not load-bearing for that residual any more.  The block now asserts
+        the CONVERGENCE, and says so in a comment that names what replaced the law.
+
+AND A GAP THE SAME MEASUREMENT EXPOSED, recorded because an unexamined absence is worse than a known
+limitation.  The law's cardinality bound reaches the TYPE (`[3, 9]`), the FACTS
+(`MaximumCardinality(9)`, `MaximumPathLength(2)`) and a BACKEND CANDIDATE (`TrieUnroll`, which does not
+exist without it) — and it stops there.  The closure routine's `work` is
+
+    UNBOUNDED(recursion in sn_tc: monotone accumulator, spatial parameter fixpoint failed ...)
+
+WITH the law exactly as without it, because the cost model's recursion arm asks for a spatial-parameter
+fixpoint on the accumulator and does not consult a discharged cardinality law about the RESULT.  Now
+asserted in both directions (5b), so closing it is a visible `SpatialCost` change and not a surprise.
+
+----------------------------------------------------------------------------------------------------
+LEDGER RE-DERIVATION, ROUND 2 — the twelve figures `sliceBudget` moved
+----------------------------------------------------------------------------------------------------
+
+1B.8's re-derivation had to run twice: `sliceBudget` landed after the first pass, and the STALE FIGURE
+gate caught every entry it touched.  Re-derived from this run:
+
+    CS-10    error 193.42 -> 161.79      width 667.24 -> 558.14
+    CS-10z   error 193.38 -> 161.76      width 666.83 -> 557.81
+    CS-P1    error 1.00e49 -> 2.89e30    width 5.40e49 -> 1.56e31      (alloc, trie)
+    CS-P2    error 2.10e49 -> 1.13e31    width 7.48e49 -> 4.02e31      (touch, trie)
+    CS-P3    as CS-P1                                                  (alloc, zipper)
+    CS-P4    as CS-P2                                                  (touch, zipper)
+
+`CS-P1`'s NOTE was rewritten too, not just its numbers: it described the pre-`sliceBudget` cause
+(`3584^15`), which is no longer where the figure comes from.  It now names the AM-GM slice bound that
+replaced it and the one residual quantity (`S = 2133` against a truth of 16, needing a functional
+dependency the reduced product cannot express).  A figure that moves without its diagnosis moving is
+the failure mode plan.md's preamble names.
+
+WHAT THE THREE LEDGERS DO AND DO NOT SAY.  `ProductGate.report` does not let a named `Limitation`
+convert a failure into a pass — that is this repository's policy and it predates this work
+(`789b26d`).  So `SpatialCostCheck` (4 red), `SpatialEventsCheck` (23 red) and `SpatialScaleCheck`
+(85 red) FAIL by design while any requirement is unmet, and what 1B.7/1B.8 could deliver is the
+hygiene: every red row has an entry, every entry's figure is from this run, and no entry survives its
+subject.  Track B's acceptance sentence ("the four suites green") is NOT met, and the reason is the
+single domain limitation above and not a missing measurement.
+====================================================================================================

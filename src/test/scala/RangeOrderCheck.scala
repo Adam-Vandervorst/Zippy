@@ -128,6 +128,70 @@ class RangeOrderCheck extends FunSuite:
     (4, 2), (-1, -3),          // INVERTED: hi <= lo, must be empty
   )
 
+  test("THE COMPARATOR, not the outputs: ITrie's canonical order IS pathValueOrdering (plan.md 1D.3)") {
+    // ==WHY THE OUTPUT CHECKS BELOW ARE NOT ENOUGH==
+    // `IntTrie.slice` is an ORDER-STATISTIC operation: it never compares two paths.  It walks
+    // `ordered`'s child sequence and its running terminal offsets, so "every backend slices by
+    // `pathValueOrdering`" is a claim about that comparator and about `terminal` coming first at each
+    // node.  Comparing WINDOW OUTPUTS cannot pin it — two different orders agree on the full window,
+    // on the empty one, and on any window whose contents happen to coincide.  So this test compares
+    // the ORDER ITSELF, position by position, on randomised tries, through
+    // `IntTrie.canonicalOrder` — the same `ordered` the slice reads.
+    //
+    // THE FAMILIES ARE CHOSEN WHERE KEY ORDER AND PATH ORDER CAN COME APART:
+    //   * SHARED PREFIXES with differing lengths — `pathValueOrdering` is shorter-is-less on a shared
+    //     prefix, and a trie has the shorter one as a `terminal` at an interior node, so this is
+    //     exactly the `terminal`-first rule;
+    //   * ε present — length 0, a prefix of everything, so the order minimum;
+    //   * items whose INTERNING ORDER is deliberately opposed to lexicographic order (the interner
+    //     assigns ids in first-seen order, and `ordered` sorts by `Interner.unintern`, so a trie built
+    //     in reverse-lexicographic order is the case that fails if the sort is dropped);
+    //   * multi-digit numeric items, where lexicographic and numeric order differ ("10" < "9").
+    val r = new scala.util.Random(20260903)
+    val alphabets = Vector(
+      Vector("a", "b", "c"),                       // small, lexicographic == interned order
+      Vector("c", "b", "a"),                       // interning order OPPOSED to lexicographic
+      Vector("9", "10", "11", "2"),                // lexicographic != numeric
+      Vector("zz", "z", "za", "Z", "_"))           // prefixes and case
+    var checked = 0
+    var withEps = 0
+    var interiorTerminals = 0
+    for alpha <- alphabets; trial <- 0 until 40 do
+      val gen = 1 + r.nextInt(12)
+      val paths = (0 until gen).map { _ =>
+        val len = r.nextInt(4)                     // 0 gives ε
+        PathValue(List.fill(len)(alpha(r.nextInt(alpha.length))))
+      }.toSet
+      val n = paths.size                             // generated paths may collide in the set
+      val t0 = ITrie.fromSpaceValue(SpaceValue(paths))
+      val canonical = ITrie.canonicalOrder(t0)
+      val expected = paths.toVector.sorted(using pathValueOrdering)
+      assertEquals(canonical, expected,
+        s"the trie's canonical terminal order is not `pathValueOrdering` on ${paths.map(_.show)}")
+      if paths.contains(PathValue(Nil)) then withEps += 1
+      // an interior terminal is a path that is a strict prefix of another — the `terminal`-first case
+      if paths.exists(p => paths.exists(q => q != p && q.items.startsWith(p.items))) then
+        interiorTerminals += 1
+      // AND THE SLICE AGREES WITH THE ORDER AT EVERY SINGLE INDEX, through the production API only:
+      // `Range(x, i+1, i+2)` is the 1-based exactly-index-i idiom.
+      for i <- 0 until n do
+        val one = ITrie.range(t0, i + 1, i + 2)
+        assertEquals(one.toSpaceValue.paths, Set(expected(i)),
+          s"Range(x, ${i + 1}, ${i + 2}) is not the order's element $i on ${paths.map(_.show)}")
+      // and every window agrees with `sliceRange` over the same order
+      for start <- -n - 1 to n + 1; end <- -n - 1 to n + 1 do
+        assertEquals(ITrie.range(t0, start, end).toSpaceValue.paths, sliceRange(paths, start, end),
+          s"window ($start, $end) on ${paths.map(_.show)}")
+      checked += 1
+    println(s"[1D.3] comparator pinned on $checked randomised tries over ${alphabets.size} alphabets; " +
+            s"$withEps contained ε, $interiorTerminals had a path that is a strict prefix of another")
+    // THE FIXTURE MUST REACH THE TWO CASES THE CLAIM IS ABOUT, or it proves nothing about them.
+    assert(withEps >= 5, s"only $withEps tries contained ε — the order-minimum case is untested")
+    assert(interiorTerminals >= 5,
+           s"only $interiorTerminals tries had an interior terminal — the shorter-is-less-on-a-shared-" +
+           "prefix case is what `terminal`-first encodes and it is untested")
+  }
+
   test("all backends agree on every (source, bound) pair — and the answer is a PREFIX-STABLE slice") {
     var n = 0
     for (sname, src) <- sources; (lo, hi) <- bounds do

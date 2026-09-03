@@ -667,6 +667,10 @@ object Hunt:
       case Fact.MinimumHeadCount(k) => heads.size.toLong < k
       case Fact.MaximumHeadCount(k) => heads.size.toLong > k
       case Fact.PrefixAbsent(pre) => v.paths.exists(_.items.startsWith(pre))
+      // 1D.2 — the RANK claim: the space is EXACTLY `{path}`.  It fails if the value is not that
+      // singleton, which is a stronger check than the cardinality facts beside it: those two would
+      // both hold of `{q}` for any `q`, and this one names the member.
+      case Fact.SelectedPath(pv) => v.paths != Set(pv)
 
   /** which of the four γ channels rejects `v`, and where in the trie.  A `None` means the shape
    *  admits the value; this is the attribution the report needs (eps / head / others / otherTail,

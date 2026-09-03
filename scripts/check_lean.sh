@@ -149,8 +149,8 @@ MARKERS=$(find proofs terminating -type f \
           | sed 's|.*MECHANIZED-IN:[[:space:]]*||' | sort -u)
 if [ -z "$MARKERS" ]; then
   echo "  none yet (plan.md 1E.3 attaches the first ones; 0.5 only makes the marker MEAN something)."
-  echo "  The marker Zippy/Core.lean documents is checked below as the self-test."
-  MARKERS="proofs/lean/Zippy/Core.lean#Zippy.Space.unwrap_wrap"
+  echo "  The marker Zippy/Pointwise.lean documents is checked below as the self-test."
+  MARKERS="proofs/lean/Zippy/Pointwise.lean#Zippy.Space.unwrap_wrap"
   SELFTEST=1
 else
   SELFTEST=0
@@ -218,6 +218,54 @@ fi
 [ "$rc" -eq 0 ] || fail "one or more \`% MECHANIZED-IN:\` markers do not resolve to a proved theorem.
   A marker is what lifts a status table row from PROVED-MODULO to unqualified PROVED, so an
   unresolved one would lift a claim on the strength of a typo."
+
+# ---- 6. THE AXIOM AUDIT OVER EVERY THEOREM, not only the marked ones -------------------------------
+#
+# 2E.6's requirement is that this script "lists the axioms each theorem uses and they are exactly
+# Lean's".  A marked theorem gets that above; an UNMARKED one is the more dangerous case, because a
+# theorem nothing points at is exactly where a `sorry` or a stray `axiom` survives unnoticed.  So the
+# list is derived FROM THE SOURCE — every top-level `theorem` in `proofs/lean/Zippy` — rather than
+# maintained by hand, and a new theorem is audited the moment it is written.
+#
+# `Classical.choice` is ALLOWED and named: Mathlib's `Finset`/`Set` development is classical, so a
+# theorem stated over them may legitimately use it.  `sorryAx` is not, and neither is any axiom whose
+# name is not one of Lean's four.
+echo
+echo "LEAN: axiom audit over every theorem in the package"
+THMS=$(grep -hoE '^(@\[[a-z, ]*\] )?(theorem|lemma) [A-Za-z_][A-Za-z0-9_'"'"']*' "$LEAN_DIR"/Zippy/*.lean \
+       | sed -E 's/^.*(theorem|lemma) //' | sort -u)
+NTHM=$(printf '%s\n' "$THMS" | grep -c . || true)
+[ "$NTHM" -gt 0 ] || fail "no theorems found in proofs/lean/Zippy — the audit would be vacuous"
+{
+  echo "import Zippy"
+  for t in $THMS; do echo "#print axioms Zippy.$t"; done
+} > "$LEAN_DIR/.axioms_probe.lean"
+AXOUT=$( (cd "$LEAN_DIR" && "$LAKE_BIN" env lean .axioms_probe.lean) 2>&1 )
+rm -f "$LEAN_DIR/.axioms_probe.lean"
+# Every axiom name the audit saw, deduplicated.
+SEEN=$(printf '%s\n' "$AXOUT" | sed -n "s/.*depends on axioms: \[\(.*\)\]/\1/p" \
+       | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u)
+printf '%s\n' "$AXOUT" | grep -cE "does not depend on any axioms" > /dev/null 2>&1 || true
+NAXFREE=$(printf '%s\n' "$AXOUT" | grep -c "does not depend on any axioms" || true)
+echo "  $NTHM theorem(s) audited; $NAXFREE depend on NO axiom at all"
+echo "  axioms used across the package: $(printf '%s\n' "$SEEN" | tr '\n' ' ')"
+if printf '%s\n' "$SEEN" | grep -q 'sorryAx'; then
+  printf '%s\n' "$AXOUT" | grep -B0 'sorryAx' | head -10 | sed 's/^/    /'
+  fail "a theorem depends on \`sorryAx\`: it compiles and proves nothing."
+fi
+UNEXPECTED=$(printf '%s\n' "$SEEN" \
+             | grep -vxE 'propext|Quot.sound|Classical.choice|Lean.ofReduceBool|Lean.ofReduceNat' || true)
+if [ -n "$UNEXPECTED" ]; then
+  echo "  UNEXPECTED: $(printf '%s\n' "$UNEXPECTED" | tr '\n' ' ')"
+  fail "the package depends on an axiom that is not one of Lean's own.  2E.6 requires the axiom set
+  of every PROVED claim to be exactly Lean's; an extra axiom here is a trusted assumption with no
+  entry in docs/TRUSTED.md."
+fi
+if printf '%s\n' "$AXOUT" | grep -q "unknown constant"; then
+  printf '%s\n' "$AXOUT" | grep "unknown constant" | head -5 | sed 's/^/    /'
+  fail "the audit could not resolve a theorem name it read from the source.  The name derivation
+  (namespace + declaration) has drifted from how the files are written."
+fi
 
 echo
 if [ "$SELFTEST" = "1" ]; then

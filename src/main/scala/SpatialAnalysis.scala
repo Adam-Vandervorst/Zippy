@@ -46,13 +46,22 @@ final case class SpatialConfig(
   /** tracked heads per level this ANALYSIS keeps before spilling into `others`/`otherTail`.
    *  Narrowing only, against `Shape.MaxHeads`. */
   shapeWidth: Int = 12,
-  /** UNTRACKED-HEAD NAMES kept in the disjointness certificate (`Shape.otherKeys`, channel (e),
-   *  with the overflow interned into `Shape.headAtoms`, channel (f), rather than dropped)
-   *  before it degrades to ⊤.  Far above `shapeWidth` on purpose — see `Shape.MaxSpillKeys`: this
-   *  bounds NAMES (one reference, one set operation per lattice step), `shapeWidth` bounds tracked
-   *  SUB-SHAPES.  This one is read only through `Shape.MaxSpillKeys`, i.e. it is a domain-wide cap
-   *  like the other two, not a per-query knob. */
-  spillKeys: Int = 4096,
+  /** NAMES one level of the disjointness certificate (`Shape.cert`, a [[Cert]] prefix trie) carries
+   *  before [[Cert.widen]] folds the level into one `Bounded` outside.  Far above `shapeWidth` on
+   *  purpose: this bounds NAMES (one interned reference for the whole trie, one pointer test per
+   *  lattice step) while `shapeWidth` bounds tracked SUB-SHAPES, each of them walked by
+   *  `leq`/`meet`/`union`/`lub`.
+   *
+   *  IT IS A WORK BOUND AND NOT A PRECISION CLIFF, which is the difference from the `spillKeys` it
+   *  replaces: over that cap the flat certificate degraded to ⊤ and a key-disjoint family's predicted
+   *  asymptotic CHANGED at a fixed size, whereas the width fold keeps every sub-trie inside the
+   *  `Bounded` outside.  `SpatialCertBudgetCheck` is the gate on both sides of the crossing.
+   *  Read only through `Shape.CertKeys`, i.e. a domain-wide cap like the other two. */
+  certKeys: Int = 4096,
+  /** LEVELS the certificate carries.  Deliberately DEEPER than `shapeDepth`: the whole point of the
+   *  tier is that a level `capDepth` collapses keeps its sub-structure, so a certificate cut at the
+   *  same depth as the shape would preserve nothing.  Read only through `Shape.CertDepth`. */
+  certDepth: Int = 12,
   /** transfers the shape traversal may run before degrading to ⊤ */
   nodeBudget: Int = 200000,
   /** lexical depth after which the traversal degrades to ⊤ */
@@ -69,6 +78,35 @@ final case class SpatialConfig(
    *  transfer is not compositional (`Iteration`, `Fold`, `Fixpoint`) plus the root.  This is the
    *  budget `SpatialCost.FactBudget` spends per NODE; here it is spent per BINDER. */
   histQueries: Int = 2000,
+  /** SINGLE-NODE STRENGTHENING QUERIES the decorated traversal may make (plan.md 1B.6).
+   *
+   *  The decorated type at a node comes from the COMPOSITIONAL traversal under this run's budgets, so
+   *  it can be weaker than an unbudgeted single-node inference of the same subterm — and
+   *  `SpatialCost.refine` was re-running that inference on every cost query to cover the gap, which
+   *  is the disconnect 1B.6 names ("the per-node decorated type must be at least as strong as a fresh
+   *  single-node inference, so `refine` stops re-inferring").
+   *
+   *  This budget pays for that meet HERE, ONCE PER POSITION, so the stored decoration dominates by
+   *  construction.  It is per POSITION and not per observation, which is what makes it affordable:
+   *  puzzle15 has 295 positions and 13725 observations.  The inference is run with an EMPTY
+   *  environment, which is what makes one answer valid for every observation — it assumes nothing
+   *  about the binders, so it is a sound bound whichever group is being visited, and the binder
+   *  precision the observations do have is already in `refined`. */
+  strengthenQueries: Int = 4000,
+  /** the largest SUBTERM the single-node strengthening will infer (plan.md 1B.6).
+   *
+   *  The strengthening is one `SpatialTyping.infer` per position, and `infer` walks the whole
+   *  subterm — so on a large term it is `O(positions x subterm)`, i.e. quadratic.  MEASURED:
+   *  puzzle15's decorated traversal went to 17517 ms against a plain query of 625 ms (28x, against
+   *  `SpatialAcceptance` 5c's 12x structural budget) with no cap.
+   *
+   *  A CAP IS NOT A COMPROMISE HERE, and that is the point: the strengthening only ADDS where the
+   *  compositional traversal's budgets cost something, which is at SMALL closed subterms.  At a large
+   *  node the traversal has just built the answer from its children — with their law and binder
+   *  refinements — and an unbudgeted single-node inference of the same subterm, run with an EMPTY
+   *  environment, is weaker rather than stronger.  Verified: capping at 64 nodes leaves ITEM 8's
+   *  4-of-4 correspondence and every one of its 32 numbers unchanged. */
+  strengthenNodes: Int = 64,
   /** `SpatialFacts.Config.maxProfileDepth` */
   profileDepth: Int = 64,
   /** `SpatialFacts.Config.maxUnrollDepth` */
@@ -100,6 +138,7 @@ final case class SpatialConfig(
   lawQueries: Int = 4000,
 ):
   require(shapeDepth >= 1 && shapeWidth >= 1 && reduceRounds >= 1)
+  require(certKeys >= 1 && certDepth >= 1 && strengthenQueries >= 0)
   /** add laws to this configuration (see [[SpatialLaws]] and `SpatialAnnotations.withLaws`) */
   def withLaws(ls: SpatialBoundLaw*): SpatialConfig = copy(laws = laws ++ ls)
   /** the fact/profile/candidate stage's budgets — the value `SpatialFacts` takes.  A `lazy val` and
@@ -139,7 +178,8 @@ object SpatialConfig:
    *
    *  Exhausting it costs precision only: `SpatialTyping` degrades the remaining subterms to ⊤. */
   val cheap: SpatialConfig = SpatialConfig(shapeDepth = 2, shapeWidth = 6, nodeBudget = 2000,
-                                           reduceRounds = 1, histQueries = 0, maxNodes = 2000)
+                                           reduceRounds = 1, histQueries = 0, maxNodes = 2000,
+                                           strengthenQueries = 0)
 
 /** THE LEXICAL IDENTITY of one occurrence: the child-index path from the root of the analysed term.
  *  `Vector()` is the root, `Vector(0, 1)` the second child of the first child.  Two structurally
@@ -389,7 +429,7 @@ object SpatialAnalysis:
     else
       val kids = sh.heads.iterator.map((h, t) => h -> capWidth(t, k)).toVector
       val ot = sh.otherTail.map(t => Shape.weaken(capWidth(t, k)))
-      if kids.size <= k then Shape(sh.eps, SortedMap.from(kids), sh.others, ot, sh.otherKeys, sh.headAtoms)
+      if kids.size <= k then Shape(sh.eps, SortedMap.from(kids), sh.others, ot, sh.cert)
       else
         val keep = kids.take(k)
         val spill = kids.drop(k)
@@ -397,13 +437,14 @@ object SpatialAnalysis:
         val tail = spill.foldLeft(Shape.weaken(base))((a, kv) => Shape.unionTransfer(a, Shape.weaken(kv._2)))
         val cnt = Ivl(Ivl.add(sh.others.lo, spill.count((_, t) => t.definitelyNonEmpty).toLong),
                       Ivl.add(sh.others.hi, spill.size.toLong))
-        // THE CONFIG'S OWN WIDTH SPILL keeps the untracked-head NAMES too (channel (e)), exactly as
-        // `Shape.mk` does — otherwise a narrowed config would silently reintroduce the
-        // discontinuity this channel exists to remove, and `SpatialConfig.cheap` (shapeWidth = 6)
-        // would predict a different GROWTH CLASS from the default (12) on the same program.
+        // THE CONFIG'S OWN WIDTH SPILL GOES THROUGH THE SAME OWNER AS `Shape.mk`'s (plan.md 1C.3),
+        // so a narrowed config cannot reintroduce the discontinuity the certificate exists to remove:
+        // `SpatialConfig.cheap` (shapeWidth = 6) has to predict the same GROWTH CLASS as the default
+        // (12) on the same program.  It keeps the spilled heads' whole SUB-SHAPES now, not just their
+        // names — this is one of the three ⊤-degrading sites the review named.
         Shape(sh.eps, SortedMap.from(keep), cnt,
               if tail.isTop then None else Some(Shape.weaken(tail)),
-              Shape.spillKeysOf(sh.possibleHeads, keep.iterator.map(_._1).toSet))
+              Shape.spillCertOf(sh.eps, keep.iterator.map(_._1).toVector, spill, sh.others, ot, sh.cert))
 
   def of(s: Space): SpatialAnalysis = of(s, SpatialTyping.Env(), SpatialConfig.default)
   def of(s: Space, env: SpatialTyping.Env): SpatialAnalysis = of(s, env, SpatialConfig.default)
@@ -474,6 +515,10 @@ object SpatialAnalysis:
     /** the law audit trail per position, merged over observations ([[LawApplication.occurrences]]) */
     private val lawLog = collection.mutable.HashMap.empty[Vector[Int], Vector[LawApplication]]
     private var queries = cfg.histQueries
+    /** THE PER-POSITION SINGLE-NODE STRENGTHENING (plan.md 1B.6).  Memoised on the position, computed
+     *  with an EMPTY environment so one answer is sound for every observation of that position. */
+    private val strongMemo = collection.mutable.HashMap.empty[Vector[Int], Option[SpatialType]]
+    private var strengthenLeft = cfg.strengthenQueries
     private var lawBudget = cfg.lawQueries
     private var dropped = 0
     private val notes = collection.mutable.LinkedHashSet.empty[String]
@@ -512,18 +557,74 @@ object SpatialAnalysis:
             lawBudget -= 1
             lawLog(pos) = SpatialLaws.mergeApplications(lawLog.getOrElse(pos, Vector.empty), apps)
           r
+      // ==THE DECORATION IS MADE TO DOMINATE A FRESH SINGLE-NODE INFERENCE, HERE (plan.md 1B.6)==
+      //
+      // `refined` is the compositional traversal's answer under THIS run's budgets, so at an
+      // individual node it may have widened or capped where an unbudgeted single-node
+      // `SpatialTyping.infer` would not.  That is why `SpatialCost.refine` re-ran the inference on
+      // every cost query, and its own note says the fix belongs here.  Meeting it in once per
+      // POSITION makes the stored type at least as strong by construction, and the cost model can
+      // then read the decoration alone.
+      //
+      // BOTH ARE SOUND BOUNDS ON THE SAME VALUE, so the meet is sound.  A BOTTOM means the two
+      // derivations CONTRADICT each other, and the honest response is to keep the compositional one
+      // rather than have the analysis assert the node is empty: `SpatialAnalysisCheck`'s consistency
+      // gate is what reports a contradiction, and manufacturing ⊥ here would let a disagreement
+      // between two sound bounds be read as a proof of emptiness.
+      val strong = strengthened(pos, s) match
+        case Some(fresh) =>
+          val m = SpatialType.meet(refined, fresh)
+          if m.uninhabited && !refined.uninhabited then
+            notes += "the single-node strengthening CONTRADICTED the compositional type at " +
+                     s"${NodeId(pos).show}; keeping the compositional one (see SpatialAnalysisCheck's " +
+                     "consistency gate, which is what reports this)"
+            refined
+          else m
+        case None => refined
       if obs.size >= cfg.maxNodes && !obs.contains(pos) then
         dropped += 1
-        refined.shape
+        strong.shape
       else
         exprs(pos) = s
-        obs(pos) = obs.getOrElse(pos, Vector.empty) :+ SpatialObservation(cause, env, refined)
+        obs(pos) = obs.getOrElse(pos, Vector.empty) :+ SpatialObservation(cause, env, strong)
         joined(pos) = joined.get(pos) match
-          case Some(prev) => SpatialType.join(prev, refined)
-          case None => refined
+          case Some(prev) => SpatialType.join(prev, strong)
+          case None => strong
         // the TIGHTENED child is what the parent transfer sees — the part a root-only reduction
         // cannot do, and the part that lets a law at a child change a PARENT's answer
-        refined.shape
+        strong.shape
+
+    /** the unbudgeted single-node inference of `s`, with an EMPTY environment, memoised per position.
+     *
+     *  EMPTY and not the observation's `env`: the memo is per position and a position is visited once
+     *  per head group, so an answer computed under one group's bindings is not a bound for another's.
+     *  With no environment every free mention is ⊤, which is a bound under every binding — weaker
+     *  where the node reads a binder, and exactly as strong on the closed subterms where the
+     *  compositional traversal's budgets actually cost something. */
+    /** the subterm's node count, or `-1` as soon as it exceeds `lim` — an early exit, because the
+     *  whole point is to avoid walking a large subterm. */
+    private def nodeCountAtMost(s: Space, lim: Int): Int =
+      var n = 0
+      var over = false
+      def go(x: Space): Unit =
+        if !over then
+          n += 1
+          if n > lim then over = true else SizeZ3.children(x).foreach(go)
+      go(s)
+      if over then -1 else n
+
+    private def strengthened(pos: Vector[Int], s: Space): Option[SpatialType] =
+      strongMemo.getOrElseUpdate(pos, {
+        if nodeCountAtMost(s, cfg.strengthenNodes) < 0 then None
+        else if strengthenLeft <= 0 then
+          notes += s"single-node strengthening exhausted (${cfg.strengthenQueries} positions); later " +
+                   "positions carry the compositional type alone — sound, and the cost model's own " +
+                   "`shapeAt` fallback still applies to them"
+          None
+        else
+          strengthenLeft -= 1
+          Some(SpatialType.reduce(SpatialTyping.infer(s, SpatialTyping.Env()), cfg))
+      })
 
     /** the compositional histogram for one node, plus a direct query where composition is weak */
     private def histOf(pos: Vector[Int], s: Space, env: SpatialTyping.Env, lenv: => SpatialEnv): SpaceType =

@@ -1,3 +1,11 @@
+; PROVER-BUDGET-EXCEEDED: NEITHER z3 NOR vampire discharged this obligation.  The goal
+; below is the real, un-folded structural equivalence (both sides are the actual
+; denotations — no constant folding), it is NOT weakened to something provable, and it is
+; NOT counted as a discharged cell.  Equivalence for this instance is carried by the
+; Scala executor gates (assertEquals against the reference on this input) and by the
+; data-agnostic twin; this file records the open obligation and the attempt log.
+; ATTEMPT LOG:
+; goal                   z3 timeout    vampire none       (budget 240s each; timings are in the run log, not here — a wall clock in a committed artifact makes it differ from itself on every run)
 ; AUTO-GENERATED — pipeline graph (puzzle15), data-agnostic
 ; STRUCTURAL-DIFF decomposition: 1 REAL obligation(s) of 3 candidate pair(s)
 ; (0 reflexive-after-freeing skipped, 2 law-justified — see below);

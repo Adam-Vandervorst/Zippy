@@ -199,6 +199,42 @@ object SpatialRecursion:
                 limits: Limits = Limits()): Summaries =
     new Solver(routines, limits).solve(entry)
 
+  /** ==THE PRODUCTION CONSUMER (plan.md 1D.1)==
+   *
+   *  `SpatialTypeSystem`'s and `SpatialTypes`' `Call` arms analyse a callee INTERPROCEDURALLY —
+   *  bind the parameters to the argument types and run the transfers on the body — and that stops at
+   *  a RECURSIVE call: `env.active(rp)` is what keeps the descent finite, and both arms then returned
+   *  ⊤.  So the whole summary solver existed and no production query consulted it, which is the
+   *  disconnect the review objects to for the same reason as the decorated analysis (item 8).
+   *
+   *  This is the one entry point they call.  Two conditions, and neither is negotiable:
+   *
+   *   - `certified` — the post-fixed-point property, re-checked over the FINAL table.  An uncertified
+   *     table is a schedule that ran out, not a proof, and `Summaries.at` would happily return a
+   *     plausible-looking type from it.  `None` here means the caller keeps its ⊤, which is what it
+   *     had before.
+   *   - the key must be IN the table.  `Summaries.at` returns `SpatialType.top` for a key the solve
+   *     never reached, and that is indistinguishable from "no claim" — returning it as a summary
+   *     would make an unreached key look answered.
+   *
+   *  IT IS NOT MEMOISED HERE, deliberately.  A process-wide table keyed on `(routine, args)` would be
+   *  wrong for the reason `HeadAtoms` was wrong: the answer also depends on the ROUTINE TABLE, which
+   *  is not part of the key and is not hashable, so two analyses with different tables would share an
+   *  entry.  The callers memoise per analysis, where the table is fixed. */
+  def summaryAt(rp: RoutinePtr, args: Args, routines: PartialFunction[RoutinePtr, Routine],
+                limits: Limits = Limits()): Option[SpatialType] =
+    if !routines.isDefinedAt(rp) then None
+    else
+      val key = Key(rp, args)
+      val s = try summarise(key, routines, limits)
+              catch case scala.util.control.NonFatal(_) => return None
+      if s.certified && s.table.contains(key) then Some(s.at(key)) else None
+
+  /** the abstract argument tuple of one call site, from the types the caller already has.  Shared by
+   *  the two `Call` arms so the KEY they look up is the key the solver would have built. */
+  def argsOf(mentionTypes: Vector[SpatialType], paths: Vector[PathArg]): Args =
+    Args(mentionTypes.map(keyType), paths)
+
   private final class Solver(routines: PartialFunction[RoutinePtr, Routine], limits: Limits):
     private val cur = mutable.LinkedHashMap.empty[Key, SpatialType]
     private val ups = mutable.HashMap.empty[Key, Int]
@@ -829,8 +865,13 @@ object SpatialRecursion:
     val fresh = alphaFresh(u, ctr)
     val mmap = r.mentions.zip(mentions).toMap
     val pmap = r.refs.zip(refs).toMap
-    subs(fresh)(spost = { case Space.Mention(m) if mmap.contains(m) => mmap(m) },
-                ppost = { case Path.Deref(pr) if pmap.contains(pr) => pmap(pr) })
+    // THROUGH `Subst`, and SIMULTANEOUSLY over both sorts.  `alphaFresh` above renames `u`'s
+    // binders pre-emptively, which is a second hygiene strategy and is kept — it also makes each
+    // unrolled level's binders distinct, which the summary keying relies on — but it does not make
+    // the substitution itself simultaneous, and a path argument naming a formal mention's binder
+    // (or the reverse) was previously resolved in whichever order the two partial functions ran.
+    // `Subst` also honours shadowing, which the blind walker did not.
+    Subst(fresh, mmap, pmap)
 
   private def safeShow(s: Space): String =
     try s.show.replace('\n', ' ').take(160) catch case _: Throwable => s.toString.take(160)

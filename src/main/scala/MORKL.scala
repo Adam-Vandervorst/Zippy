@@ -1373,7 +1373,11 @@ def asFixpointGeneral(self: RoutinePtr, refs: Vector[PathRef], mentions: Vector[
             val argTag = Path.Constant(PathValue(List("#arg#")))
             val outTag = Path.Constant(PathValue(List("#out#")))
             val cur = Space.Unwrap(Space.Mention(state), argTag)
-            def sub(e: Space): Space = subs(e)(spost = { case Space.Mention(`cm`) => cur })
+            // THROUGH `Subst`: `cur` is `Unwrap(Mention(state), argTag)`, whose free `state` a
+            // binder inside `base` or inside the call's changing argument could capture — and the
+            // whole point of this lowering is that `state` is the fixpoint's OWN binder, so a
+            // capture here would silently make an inner loop read the accumulator.
+            def sub(e: Space): Space = Subst.mention(e, cm, cur)
             val step = Space.Union(Space.Wrap(sub(call.mentions(ci)), argTag), Space.Wrap(sub(base), outTag))
             Some(Space.Unwrap(Space.Fixpoint(Space.Wrap(Space.Mention(cm), argTag), state, step), outTag))
         case _ => None
@@ -1685,23 +1689,39 @@ object Lower:
       // and contributes nothing (matches eval).
       val groups = paths.filter(_.items.nonEmpty).groupMap(_.items.head)(p => PathValue(p.items.tail))
       if groups.isEmpty then Space.Empty
+      // THROUGH `Subst`, NOT `subs`.  This IS a substitution — it binds the `Iteration`'s two
+      // binders to a head and a tail-set — and `subs` is a binder-BLIND walker: a NESTED
+      // `Iteration`/`Fold`/`Fixpoint` inside `template` that rebinds `rest` or `symbol` had its own
+      // occurrences rewritten too, which is a shadowing violation and changes what the inner loop
+      // computes.  Capture cannot happen here (both replacements are closed: a `Literal` and a
+      // `Constant`), but shadowing can, and one of the two halves of hygiene is not hygiene.
+      // See `Subst.scala` for the four implementations this consolidates.
       else groups.toList.sortBy(_._1).map((h, tails) =>
-        subs(template)(spre = { case Space.Mention(`rest`) => Space.Literal(SpaceValue(tails)) },
-                       ppre = { case Path.Deref(`symbol`) => Path.Constant(PathValue(h :: Nil)) }))
+        Subst(template,
+              Map(rest -> Space.Literal(SpaceValue(tails))),
+              Map(symbol -> Path.Constant(PathValue(h :: Nil)))))
         .reduce(Space.Union(_, _))
   })
 
   val IterateSingleton_Deref = subs(_: Space)(PartialFunction.empty, {
     case Space.Iteration(Space.Singleton(Path.first((Path.Deref(spr), rest))), pr, sm, body) if spr.lengthHint == 1 =>
       // iterating a single-item path leaves the tail-set {ε} (NOT ∅): the head is consumed, nothing remains.
-      subs(body)(spost={ case Space.Mention(`sm`) => if rest.isEmpty then Space.Singleton(Path.Constant(PathValue(Nil))) else Space.Singleton(Path.fromFactors(rest)) },
-                 ppost={ case Path.Deref(`pr`) => Path.Deref(spr) })
+      // THROUGH `Subst`: here the replacements are NOT closed — `Path.Deref(spr)` is a free ref of
+      // the source path and `rest`'s factors can carry more — so BOTH halves of hygiene are live.
+      // A binder inside `body` named `spr` would have captured it under the old blind walker.
+      Subst(body,
+            Map(sm -> (if rest.isEmpty then Space.Singleton(Path.Constant(PathValue(Nil)))
+                       else Space.Singleton(Path.fromFactors(rest)))),
+            Map(pr -> Path.Deref(spr)))
     case Space.Iteration(Space.Singleton(Path.first((Path.Constant(PathValue(Nil)), rest))), pr, sm, body) => if rest.isEmpty then Space.Empty else
       Space.Iteration(Space.Singleton(Path.fromFactors(rest)), pr, sm, body)
     case Space.Iteration(Space.Singleton(Path.first((Path.Constant(PathValue(h::tail)), rest))), pr, sm, body) =>
-      subs(body)(spost={ case Space.Mention(`sm`) => if tail.isEmpty then (if rest.isEmpty then Space.Singleton(Path.Constant(PathValue(Nil))) else Space.Singleton(Path.fromFactors(rest)))
-                                                     else Space.Singleton(Path.fromFactors(Path.Constant(PathValue(tail))::rest)) },
-                 ppost={ case Path.Deref(`pr`) => Path.Constant(PathValue(h::Nil)) })
+      Subst(body,
+            Map(sm -> (if tail.isEmpty then
+                         (if rest.isEmpty then Space.Singleton(Path.Constant(PathValue(Nil)))
+                          else Space.Singleton(Path.fromFactors(rest)))
+                       else Space.Singleton(Path.fromFactors(Path.Constant(PathValue(tail)) :: rest)))),
+            Map(pr -> Path.Constant(PathValue(h :: Nil))))
   })
 
   val SingletonConst_Literal = subs(_: Space)(PartialFunction.empty, {
@@ -1821,16 +1841,29 @@ object Lower:
     case Space.TailsUnion(src) => SizeBounds(0, 0, sizeBounds(src, env, rc, stack).hi)
     case Space.TailsIntersection(src) => SizeBounds(0, 0, sizeBounds(src, env, rc, stack).hi)
     case Space.Range(x, a, b) =>
+      // ==ONE `normalize`, AND THIS WAS THE THIRD COPY OF THE ARITHMETIC (plan.md 1D.3)==
+      //
+      // It used to reason about the window itself: a prefix/suffix special case (`a == 0 && b > 0`,
+      // `b == 0 && a < 0`) with everything else falling to a same-sign `b - a` and `INF` on the mixed
+      // signs.  That is a hand-rolled re-derivation of `RangeBounds.normalize`, and the tier already
+      // has the general answer — `SpatialTyping.windowCard` does the BREAKPOINT analysis of
+      // `normalize`'s width over an interval of source sizes, is exhaustively gated by
+      // `RangeCardCheck`, and is the same function `SpatialTypes`' own `Range` arm calls.
+      //
+      // WHY A THIRD COPY WAS A REAL HAZARD AND NOT ONLY DUPLICATION: the width is NOT MONOTONE in the
+      // source size on the mixed-sign forms — `normalize(1, -2, 2)` has width 1 and
+      // `normalize(3, -2, 2)` has width 0 — so any arm that reads one endpoint of the size interval
+      // and applies the arithmetic to it is unsound.  That exact mistake was made and caught in
+      // `Shape.rangeAt` (see its note and `RangeRankCheck`'s C'' witness); this arm avoided it only
+      // by returning `INF` on the mixed signs, i.e. by declining to answer.  Going through
+      // `windowCard` answers AND stays sound, because the breakpoint analysis is what handles the
+      // non-monotonicity.
       val sub = sizeBounds(x, env, rc, stack)
       if a == 0 && b == 0 then sub                                        // the whole space
       else
-        val window = if a == 0 && b > 0 then Some(b.toLong) else if b == 0 && a < 0 then Some(-a.toLong) else None
-        window match
-          case Some(w) => SizeBounds(sub.lo min w, 0, sub.hi min w)        // exactly min(size, w) paths
-          case None =>
-            // same-sign slice: at most b − a paths (Range(count, k, k+1) — the exactly-k idiom)
-            val width = if (a > 0 && b >= a) || (a < 0 && b <= 0 && b >= a) then (b - a).toLong else INF
-            SizeBounds(0, 0, sub.hi min width)
+        val w = SpatialTyping.windowCard(Ivl(sub.lo, sub.hi), a, b)
+        // `loHeaded` stays 0: a positional slice may keep or drop ε, and nothing here decides which.
+        SizeBounds(w.lo, 0, if w.hi >= Ivl.INF then INF else w.hi)
     case Space.Iteration(src, _, rest, body) =>
       val sb = sizeBounds(src, env, rc, stack)
       val benv = if rest.s == "_" then env else env.updated(rest, SizeBounds(0, 0, sb.hi))

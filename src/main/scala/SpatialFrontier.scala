@@ -247,11 +247,14 @@ final case class FrontierConfig(facts: SpatialFacts.Config = SpatialConfig.defau
                                 maxFrames: Int = 512,
                                 /** depths the walk descends (the profile reaches further on its own) */
                                 maxWalkDepth: Int = 64,
-                                /** heads the walk may ENUMERATE when both sides' head sets are
-                                 *  enumerable (`Shape.possibleHeads`).  A WORK bound and not a precision
-                                 *  one — the comparison is `O(|keys|)` over keys already in memory — so
-                                 *  it is set far above `shapeWidth`: whatever makes a head set
-                                 *  enumerable, the relational answer must not expire at a cap. */
+                                /** RETAINED FOR THE CONFIG'S SHAPE ONLY, and read by nothing in the walk
+                                 *  (plan.md 1C.4).  It used to cap how many heads the walk would
+                                 *  ENUMERATE, and that cap was a precision cliff dressed as a work
+                                 *  bound: below it a key-disjoint family's `|Q|` was 0 and above it
+                                 *  `min(K_d, K_d) = n`, for the same program.  `Cert.headsDisjoint`
+                                 *  decides the common case at the top node instead, so there is no
+                                 *  size at which the relational answer expires. */
+                                @deprecated("read by nothing; Cert.headsDisjoint replaced it", "1C.4")
                                 maxKeys: Int = 1 << 17,
                                 /** price the INTERNED `ITrie` algebra instead of the case-returning
                                  *  `Trie` one.  `ITrie` has no `Identity` result to propagate, so it
@@ -420,16 +423,29 @@ object SpatialFrontier:
           // would be the size of the ACTUAL intersection — `SpatialFrontierCheck`'s key-disjoint sweep
           // measures the crossover and LIM-5 records what carrying one costs.
           if !f.x.headsClosed && !f.y.headsClosed then
-            val counted = (f.x.possibleHeads, f.y.possibleHeads) match
-              case (Some(xh), Some(yh)) if xh.size.min(yh.size) <= cfg.maxKeys =>
-                val tracked = f.x.heads.keySet ++ f.y.heads.keySet
-                val shared = if xh.size <= yh.size then xh.count(k => yh.contains(k) && !tracked.contains(k))
-                             else yh.count(k => xh.contains(k) && !tracked.contains(k))
-                shared.toLong min (f.x.others.hi min f.y.others.hi)
-              case _ => f.x.others.hi min f.y.others.hi
+            val tracked = f.x.heads.keySet ++ f.y.heads.keySet
+            // THE `maxKeys` CLIFF IS GONE (plan.md 1C.4).  It expired the relational answer at a fixed
+            // key count, which is the same defect as the certificate's own old `MaxSpillKeys`: a
+            // key-disjoint family's `|Q|` was 0 below the cap and `min(K_d, K_d) = n` above it, for the
+            // same program.  Two things replace it, and neither has a size at which it stops working:
+            // `Cert.headsDisjoint` decides the common case with ONE set intersection at the top node
+            // (O(1) when interning has made the two tries the same object), and the counted
+            // intersection below it walks keys already in memory.
+            val counted =
+              if Cert.headsDisjoint(f.x.langLevel, f.y.langLevel) then 0L
+              else (f.x.possibleHeads, f.y.possibleHeads) match
+                case (Some(xh), Some(yh)) =>
+                  val shared = if xh.size <= yh.size then xh.count(k => yh.contains(k) && !tracked.contains(k))
+                               else yh.count(k => xh.contains(k) && !tracked.contains(k))
+                  shared.toLong min (f.x.others.hi min f.y.others.hi)
+                case _ => f.x.others.hi min f.y.others.hi
             val m = Ivl.mul(f.hi, counted)
-            if m > 0 then next += Frame(Shape.weaken(f.x.otherTail.getOrElse(Shape.top)),
-                                        Shape.weaken(f.y.otherTail.getOrElse(Shape.top)), 0L, m)
+            // AND THE SUMMARY FRAME DESCENDS WITH THE CERTIFICATE.  `weaken(otherTail)` alone is ⊤
+            // below a collapsed level, so a pair whose divergence is deeper than `shapeDepth` could not
+            // be shown head-disjoint — the gap `Shape.capDepth`'s note recorded as OPEN and referred to
+            // Track C.  `untrackedTailBound` meets the summary with the certificate's own tails.
+            if m > 0 then next += Frame(f.x.untrackedTailBound(tracked),
+                                        f.y.untrackedTailBound(tracked), 0L, m)
       // merge equal pairs so an open shape does not explode the frame set
       val merged = next.result().groupBy(f => (f.x, f.y)).iterator
         .map { case ((x, y), fs) => Frame(x, y, fs.map(_.lo).foldLeft(0L)(Ivl.add),
@@ -539,14 +555,17 @@ object SpatialFrontier:
     l.common.nonEmpty && r.exact.exists(_.exists(q => l.common.startsWith(q.items)))
 
   /** HEAD DISJOINTNESS from the two shapes: every head one side may have, the other provably lacks.
-   *  This is the root-level disjoint-reject, and it needs ENUMERABLE head sets on both sides —
-   *  `Shape.possibleHeads`, which today means CLOSED on both sides.  The width spill is what takes that
-   *  away (LIM-5): the proof needs the head NAMES and the spill keeps only their count. */
+   *  This is the root-level disjoint-reject.
+   *
+   *  It needs the head NAMES on both sides, and the width spill is what used to take them away
+   *  (LIM-5).  `Shape.possibleHeads` reads the certificate now, so a spilled shape still answers; the
+   *  `Cert.headsDisjoint` arm is the same question asked of the two tries and is the one that answers
+   *  in O(1) when interning has made them the same object. */
   private def headDisjoint(a: Shape, b: Shape): Boolean =
     a.eps != Presence.Must && b.eps != Presence.Must && {
-      (a.possibleHeads, b.possibleHeads) match
+      Cert.headsDisjoint(a.langLevel, b.langLevel) || ((a.possibleHeads, b.possibleHeads) match
         case (Some(ah), Some(bh)) => !ah.exists(bh.contains)
-        case _ => false
+        case _ => false)
     }
 
   // ================================================================================================
@@ -592,6 +611,10 @@ object SpatialFrontier:
     if exact.isDefined then notes += "both operands pinned to exact values: the case is computed, not bounded"
     if hd then notes += "head-disjoint at the root: " + op.wholeSubtree
     if shared then notes += "shared representation: the pointer-identity short circuit fires"
+    // WHAT THE CERTIFICATE TIER COSTS ON THIS PAIR (plan.md 1C.7).  The tier's benefit is priced
+    // everywhere else in this file — `rebuilt`, `|Q|`, the disjoint reject — so its own construction,
+    // lookup, intersection and retained memory are quoted here rather than left as an assumption.
+    for n <- Cert.costNote(l.shape.cert, r.shape.cert) do notes += n
     if l.contradiction || r.contradiction then
       notes += "an operand's spatial product is contradictory (uninhabited type): no frontier derived"
     if cfg.interned then

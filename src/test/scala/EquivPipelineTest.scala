@@ -207,6 +207,49 @@ class EquivPipelineTest extends FunSuite:
     else
       recordInstance(name, content, zok, vok, List(log))
 
+  /** THE ONE SIZE CAP ON A COMMITTED OBLIGATION, and the reason it is not a weakening.
+   *
+   *  `puzzle15-space` renders to 174 MB — two denotations of ~10^8 characters on two lines.  That is
+   *  past GitHub's 100 MB per-file limit, so the artifact cannot be pushed at all, and it is past
+   *  what any prover consumed: z3 and vampire both hit the 60 s budget on it, which is why the cell
+   *  is OPEN in the first place.  A blob that size is not review material either — it cannot be
+   *  opened, and it is a deterministic function of the corpus and this emitter.
+   *
+   *  So an oversized body is replaced by an ELIDED-GOAL record naming its exact byte count and
+   *  SHA-256, and NOTHING ELSE CHANGES.  In particular: the provers ran on the FULL text (that is
+   *  what the attempt log in the header reports), the goal was NOT weakened to something provable,
+   *  the cell is still OPEN, and it still does not count as discharged.  The full body is written to
+   *  `target/pipeline-elided/` on every run — git-ignored, so a reader who wants the bytes has them
+   *  locally without the tree carrying them.
+   *
+   *  The cap is 2 MB against a largest legitimate artifact of 828 KB (`puzzle3-full-space`), so it
+   *  fires on exactly the one cell that cannot be committed and leaves every other byte-identical.
+   *  A cell that CROSSES the cap will show up as a golden-file change, which is the intent: the
+   *  emitter growing an artifact past what a repository can hold is a fact worth surfacing. */
+  val bodyCapBytes = 2 * 1024 * 1024
+
+  def cappedBody(name: String, body: String): String =
+    if body.length <= bodyCapBytes then body
+    else
+      val bytes = body.getBytes("UTF-8")
+      val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+                  .map(b => f"$b%02x").mkString
+      val spill = new java.io.File(RunEnvironment.repoRoot, "target/pipeline-elided")
+      spill.mkdirs()
+      java.nio.file.Files.write(new java.io.File(spill, name).toPath, bytes)
+      Loaders.note(s"[pipeline] $name: goal body ELIDED (${bytes.length} B > $bodyCapBytes B); " +
+                   s"full text at target/pipeline-elided/$name")
+      "; ELIDED-GOAL: THE OBLIGATION IS NOT IN THIS FILE.  It is too large to commit, and is recorded\n" +
+      "; by identity instead.  IT WAS RENDERED IN FULL AND BOTH PROVERS WERE RUN ON IT — the ATTEMPT\n" +
+      "; LOG above is that run.  The goal was NOT weakened, NOT folded, and is NOT counted as\n" +
+      "; discharged; this cell is OPEN exactly as the header says.\n" +
+      s"; rendered size   ${bytes.length} bytes\n" +
+      s"; sha256          $sha\n" +
+      "; regenerate      ZIPPY_REGENERATE=1 sbt 'testOnly morkl.EquivPipelineTest'\n" +
+      "; full text       target/pipeline-elided/" + name + " (git-ignored; written on every run)\n" +
+      "; WHY: 174 MB of rendered denotation is past GitHub's 100 MB per-file limit and past what\n" +
+      "; either prover consumed.  See `bodyCapBytes` in EquivPipelineTest for the whole argument.\n"
+
   /** Record an instance obligation's outcome: PROVED (with which provers) or, when NEITHER prover
    *  discharged it inside the budget, an honest PROVER-BUDGET-EXCEEDED marker carrying the attempt
    *  log in the file header — never a silently-accepted or weakened goal. */
@@ -214,7 +257,7 @@ class EquivPipelineTest extends FunSuite:
     if zok || vok then
       val hdr = s"; PROVER LOG (both provers are run on every obligation; verdicts also in STATUS.tsv)\n" +
                 log.mkString("\n") + "\n"
-      write(smtDir, name, hdr + content)
+      write(smtDir, name, hdr + cappedBody(name, content))
       statusRows += s"$name\t${if zok then "unsat" else "-"}\t${if vok then "proved" else "-"}\tPROVED"
     else
       realCount -= 1; budgetCount += 1
@@ -226,7 +269,7 @@ class EquivPipelineTest extends FunSuite:
         "; Scala executor gates (assertEquals against the reference on this input) and by the\n" +
         "; data-agnostic twin; this file records the open obligation and the attempt log.\n" +
         "; ATTEMPT LOG:\n" + log.mkString("\n") + "\n"
-      write(smtDir, name, hdr + content)
+      write(smtDir, name, hdr + cappedBody(name, content))
       statusRows += s"$name\t-\t-\tOPEN (prover budget exceeded — see header)"
       Loaders.note(s"[pipeline] $name: OPEN — neither prover discharged the un-folded obligation")
 
@@ -944,6 +987,43 @@ class EquivPipelineTest extends FunSuite:
 
   test("pipeline: 3-puzzle FULL reachable space (the unbounded Fixpoint cornerstone)") {
     pipeline("puzzle3-full", puzzleFixpoint(2, 2), SpaceContextMap(Map.empty), PartialFunction.empty)
+  }
+
+  // 1D.4 — THE BINDER CENSUS IS A GATE, NOT A PRINTOUT.
+  //
+  // `binderKept` / `binderFallback` were PRINTED per stone, which made "the binders survived" a
+  // measured claim rather than a property of the code path — the right first step, and the reason
+  // the two failing stones were visible at all.  It is now a GATE, because a printed census is a
+  // census nobody has to act on, and what it measures is exactly the difference between a stage-1
+  // artifact that certifies THE OPTIMISER and one that certifies THE EXECUTOR: `expand` evaluates
+  // the control flow, so a stone on the fallback path emits a claim about a ground computation.
+  //
+  // IT WENT FROM 5 OF 7 TO 7 OF 7, and not by loosening anything: `expandKeepBinders` now INLINES
+  // an acyclic `Call` through `Subst` (plan.md 1D.4, and 2A.2's first clause) instead of refusing
+  // it.  `puzzle15` and `nqueens` were the two fallbacks and both were a `Call` reading an enclosing
+  // `Iteration`'s variable — which needs a simultaneous capture-avoiding substitution, which is why
+  // it could not be done before Track A.
+  //
+  // A FALLBACK IS STILL POSSIBLE and the gate names it rather than forbidding the shape: a
+  // SELF-RECURSIVE call cannot be inlined, and `Fold`/`Range`/grounded have no inlining at all.  If
+  // one of those appears under a binder the assertion fires with the node and the reason, which is
+  // the actionable form — the alternative (`assert(binderFallback.size <= 2)`) is the allow-list
+  // architecture the review rejected.
+  test("1D.4. every cornerstone reaches the renderers with its BINDERS INTACT") {
+    assertEquals(binderFallback.toVector.sorted, Vector.empty[String],
+      s"${binderFallback.size} cornerstone(s) fell back to the EXECUTED form: " +
+      s"${binderFallback.toVector.sorted.mkString(", ")}.  Their stage-1 artifacts then describe a " +
+      "ground computation rather than the binder structure, so they certify the executor and not " +
+      "the optimiser.  The `[pipeline] … binder-preserving sides UNAVAILABLE` line above names the " +
+      "node that forced each one; `expandKeepBinders` inlines an acyclic Call, so what reaches that " +
+      "refusal is a self-recursive call (residualise it, or lower it to a `Space.Fixpoint`) or a " +
+      "Fold/Range/grounded node under a binder (no renderer models one).")
+    assert(binderKept.size >= 7,
+      s"only ${binderKept.size} stones kept their binders; the pipeline declares seven cornerstones " +
+      "(CornerstoneTypes.scala), so a smaller number means a stone stopped being run at all — which " +
+      "would make the assertion above pass for the wrong reason.")
+    println(s"[pipeline] BINDER CENSUS: ${binderKept.size} of ${binderKept.size + binderFallback.size} " +
+            s"stones keep their binders — ${binderKept.toVector.sorted.mkString(", ")}")
   }
 
   // 0.3 — THE GOLDEN-FILE GATE, declared last so every cornerstone above has emitted.  This suite is

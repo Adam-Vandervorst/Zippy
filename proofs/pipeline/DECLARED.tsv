@@ -42,13 +42,13 @@ proofs/pipeline/gol-zipper.smt2	REAL
 proofs/pipeline/nqueens-graph-agnostic.smt2	TRIVIAL
 proofs/pipeline/nqueens-graph.smt2	IDENT
 proofs/pipeline/nqueens-space-agnostic.smt2	LAW-JUSTIFIED
-proofs/pipeline/nqueens-space.smt2	IDENT
+proofs/pipeline/nqueens-space.smt2	BUDGET
 proofs/pipeline/nqueens-zipper-agnostic.smt2	TRIVIAL
 proofs/pipeline/nqueens-zipper.smt2	BUDGET
 proofs/pipeline/puzzle15-graph-agnostic.smt2	BUDGET
 proofs/pipeline/puzzle15-graph.smt2	IDENT
 proofs/pipeline/puzzle15-space-agnostic.smt2	LAW-JUSTIFIED
-proofs/pipeline/puzzle15-space.smt2	IDENT
+proofs/pipeline/puzzle15-space.smt2	BUDGET
 proofs/pipeline/puzzle15-zipper-agnostic.smt2	TRIVIAL
 proofs/pipeline/puzzle15-zipper.smt2	BUDGET
 proofs/pipeline/puzzle3-full-graph-agnostic.smt2	BUDGET
@@ -89,7 +89,7 @@ zipper-egg-tests/pipeline/nqueens-graph-agnostic.egg	TRIVIAL
 zipper-egg-tests/pipeline/nqueens-graph.egg	REAL
 zipper-egg-tests/pipeline/nqueens-space-agnostic.egg	LAW-JUSTIFIED
 zipper-egg-tests/pipeline/nqueens-space-impl.egg	REAL
-zipper-egg-tests/pipeline/nqueens-space.egg	IDENT
+zipper-egg-tests/pipeline/nqueens-space.egg	BUDGET
 zipper-egg-tests/pipeline/nqueens-zipper-agnostic.egg	TRIVIAL
 zipper-egg-tests/pipeline/nqueens-zipper-virtual.egg	BUDGET
 zipper-egg-tests/pipeline/nqueens-zipper.egg	SINGLE-SIDE
@@ -99,7 +99,7 @@ zipper-egg-tests/pipeline/puzzle15-graph.egg	BUDGET
 zipper-egg-tests/pipeline/puzzle15-space-agnostic.egg	LAW-JUSTIFIED
 zipper-egg-tests/pipeline/puzzle15-space-impl.egg	BUDGET
 zipper-egg-tests/pipeline/puzzle15-space-lit.egg	SINGLE-SIDE
-zipper-egg-tests/pipeline/puzzle15-space.egg	IDENT
+zipper-egg-tests/pipeline/puzzle15-space.egg	BUDGET
 zipper-egg-tests/pipeline/puzzle15-zipper-agnostic.egg	TRIVIAL
 zipper-egg-tests/pipeline/puzzle15-zipper-virtual.egg	BUDGET
 zipper-egg-tests/pipeline/puzzle15-zipper.egg	SINGLE-SIDE
