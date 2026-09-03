@@ -184,7 +184,8 @@ enum ResultChannel:
   case Head(prefix: List[PathItem])
   /** the untracked-head COUNT (`others`) of the shape node at `prefix` */
   case UntrackedCount(prefix: List[PathItem])
-  /** the untracked-head DOMAIN (`otherKeys`, channel (e)) of the shape node at `prefix`: the
+  /** the untracked-head DOMAIN (channel (e) `otherKeys` PLUS channel (f) `headAtoms`, read
+   *  together through `Shape.certNames`) of the shape node at `prefix`: the
    *  certificate names every head the shape does not track, and the value has one it does not name */
   case HeadDomain(prefix: List[PathItem])
   /** the untracked-head TAIL SUMMARY (`otherTail`) of the shape node at `prefix` */
@@ -398,7 +399,7 @@ object SpatialChannels:
       // (e) THE UNTRACKED-HEAD DOMAIN.  γ's fifth clause: every head the shape does not track must be
       // NAMED by the certificate.  Without this arm the mirror reported `channels=` (nothing) on a
       // value γ rejects, which is a mirror that has stopped mirroring.
-      for ks <- sh.otherKeys do
+      for ks <- sh.certNames do
         val unnamed = untracked.keys.filterNot(ks.contains).toVector.sorted
         if unnamed.nonEmpty then
           out += ChannelFailure(ResultChannel.HeadDomain(prefix),
@@ -500,14 +501,15 @@ object SpatialChannels:
       val loOut = Ivl.add(Ivl.relu(a.others.lo - bOnly),
                           a.heads.count((h, t) => !b.heads.contains(h) && t.definitelyNonEmpty).toLong)
       // (e) the ORDER's side of the untracked-head domain: `a` may not permit an untracked head that
-      // `b`'s certificate forbids.  `b.otherKeys = None` is ⊤ and admits everything.
-      for bk <- b.otherKeys do
+      // `b`'s certificate forbids.  An UNBOUNDED certificate (neither channel (e) nor (f)) is ⊤
+      // and admits everything; `certNames` is the two channels read together.
+      for bk <- b.certNames do
         val aOutside: Set[PathItem] =
           if a.others.hi == 0 then Set.empty
-          else a.otherKeys.getOrElse(Set.empty)
+          else a.certNames.getOrElse(Set.empty)
         val extra = (aOutside ++ a.heads.iterator.filter(_._2.possiblyNonEmpty).map(_._1))
           .filterNot(h => b.heads.contains(h) || bk.contains(h))
-        val unnamed = a.others.hi > 0 && a.otherKeys.isEmpty
+        val unnamed = a.others.hi > 0 && !a.certBounded
         if extra.nonEmpty || unnamed then
           out += ChannelFailure(ResultChannel.HeadDomain(prefix),
             if unnamed then "an unnamed untracked head set"
@@ -924,13 +926,13 @@ object SpatialCheck:
   // ---- the bounded exhaustive refuter ------------------------------------------------------------
 
   /** every head item either shape tracks, to a bounded depth */
-  /** Every item the shape can PUT AT A HEAD, tracked or spilled.  The `otherKeys` clause is channel
+  /** Every item the shape can PUT AT A HEAD, tracked or spilled.  The `certNames` clause is channel
    *  (e): past `Shape.MaxHeads` the width spill keeps a COUNT and the NAMES, and those names are as
    *  real an alphabet as the tracked ones — leaving them out made a 16-head type look like a 12-head
    *  one to both the witness universe and [[plan]]'s completeness walk. */
   private def headItems(s: Shape, d: Int): Set[PathItem] =
     if d <= 0 then Set.empty
-    else s.heads.keySet.toSet ++ s.otherKeys.getOrElse(Set.empty) ++
+    else s.heads.keySet.toSet ++ s.certNames.getOrElse(Set.empty) ++
       s.heads.valuesIterator.flatMap(headItems(_, d - 1)).toSet ++
       s.otherTail.iterator.flatMap(headItems(_, d - 1)).toSet
 
@@ -1079,7 +1081,7 @@ object SpatialCheck:
       // A node whose untracked heads are NAMED (channel (e)) is not open in this sense: its alphabet
       // is finite and known, so the walk below can enumerate it and no fresh item stands for it.
       def anyOpen(s: Shape, d: Long): Boolean =
-        d > 0 && ((!s.headsClosed && s.otherKeys.isEmpty) ||
+        d > 0 && ((!s.headsClosed && !s.certBounded) ||
                   s.heads.valuesIterator.exists(anyOpen(_, d - 1)) ||
                   (!s.headsClosed && s.otherTail.exists(anyOpen(_, d - 1))))
       val needFresh: Long = if !anyOpen(a.shape, ln.hi) then 0L else Ivl.mul(sz.hi, ln.hi)
@@ -1123,7 +1125,7 @@ object SpatialCheck:
                   // walking only `s.heads` — what the first version of this did once the certificate
                   // made `under` return `∅` off the certificate — silently dropped every spilled head
                   // and called the resulting path set COMPLETE.
-                  val alt = s.otherKeys match
+                  val alt = s.certNames match
                     case Some(ks) => ks.diff(s.heads.keySet.toSet).toVector.sorted
                     case None => tracked.diff(s.heads.keySet.toSet).toVector.sorted ++ fresh
                   for x <- alt if !over do

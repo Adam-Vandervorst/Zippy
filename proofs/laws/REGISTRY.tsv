@@ -46,6 +46,7 @@ head-set	FILE	laws/law_head_set.smt2	formal.egg head rules
 restrict-self	FILE	laws/law_restrict_self.smt2	formal.egg
 unwrap-merge-set	FILE	laws/law_unwrap_merge.smt2	formal.egg
 iterc-set	FILE	laws/law_iterc_set.smt2	formal.egg IterC rules (incl. the ε-singleton fix)
+iter-set	FILE	laws/law_iter_set.smt2	formal.egg HEAD-DEPENDENT Iter/IterH rules — what lets an `Iteration` BINDER survive into the instance tier instead of being executed by EquivPipeline.expand; the head-SET distributes with src held fixed, whereas the source-union split is FALSE (negative control N05)
 comp-assoc	FILE	laws/law_comp_assoc.smt2	composition associativity
 comp-rdistrib	FILE	laws/law_comp_rdistrib.smt2	composition right (and left) distributivity over ∪
 absorption	FILE	laws/law_absorption.smt2	absorption laws

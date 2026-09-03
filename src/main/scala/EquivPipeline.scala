@@ -127,6 +127,74 @@ object EquivPipeline:
       case other =>                                           // Range / grounded / residual: the trusted
         Literal(eval(other))                                  // executor step, emitted as its result literal
 
+  /** STAGE 0, BINDER-PRESERVING: bind this instance's inputs, but KEEP THE CONTROL FLOW.
+   *
+   *  [[expand]] evaluates `Iteration` and `Fixpoint` into a union of concrete group bodies, so
+   *  every downstream renderer received a precomputed literal and `render(expand(p))` came out
+   *  byte-equal to `render(expand(SC.reduce(p)))` whenever the optimiser only touched the parts the
+   *  expansion evaluates.  That is the `IDENTICAL-STRUCTURE` / `TRIVIAL` verdict filling
+   *  `proofs/pipeline/STATUS.tsv`, and such a cell certifies nothing about the optimiser: the two
+   *  sides are the same literal because the EXECUTOR made them so, not because the rewrite is sound.
+   *
+   *  This does the same input binding — a free `Mention` becomes the instance's `Literal`, a ground
+   *  path becomes a constant — and stops there.  `Iteration` and `Fixpoint` survive as BINDERS, so
+   *  the renderers get a program and the obligation compares two independently rendered programs.
+   *
+   *  WHAT IS AND IS NOT KEPT:
+   *    * `Iteration`, `Fixpoint` — KEPT, with their bound names threaded so the binder's own
+   *      variable is not looked up in the instance environment (which does not contain it);
+   *    * `Fold`, `Call`, `Range`, grounded — still executed, exactly as [[expand]] does, and for
+   *      the same reason: no renderer models them.  They are executed ONLY when closed; a `Fold` or
+   *      a `Range` that reads an enclosing binder's variable cannot be evaluated at all, and this
+   *      says so instead of failing obscurely inside `eval`.
+   *
+   *  GATED BY THE EXECUTOR, like [[expand]]: the caller checks `eval(result) == eval(original)`. */
+  def expandKeepBinders(s: Space)(using pc: PathContext, sc: SpaceContext,
+                                  rc: PartialFunction[RoutinePtr, Routine]): Space =
+    def groundPath(p: Path, bp: Set[String]): Boolean = p match
+      case Path.Deref(pr) => !bp(pr.s)
+      case Path.Concat(l, r) => groundPath(l, bp) && groundPath(r, bp)
+      case _ => true
+    def free(x: Space, bm: Set[String], bp: Set[String]): Boolean =
+      bm.exists(n => AgnosticPipeline.usesMention(x, n)) ||
+        bp.exists(n => AgnosticPipeline.usesPathRef(x, n))
+    def cpath(p: Path): Path = Path.Constant(PathValue(eval(Space.Singleton(p)).paths.head.items))
+    def go(x: Space, bm: Set[String], bp: Set[String]): Space =
+      def sub(y: Space) = go(y, bm, bp)
+      x match
+        case Empty => Empty
+        case Literal(v) => Literal(v)
+        case Mention(m) if bm(m.s) => x                        // the binder's own variable: keep
+        case Mention(m) => Literal(sc.resolve(m))
+        case Singleton(p) if groundPath(p, bp) => Singleton(cpath(p))
+        case Singleton(_) => x                                 // reads a bound head: keep symbolic
+        case Union(a, b) => Union(sub(a), sub(b))
+        case Intersection(a, b) => Intersection(sub(a), sub(b))
+        case Subtraction(a, b) => Subtraction(sub(a), sub(b))
+        case Restriction(a, b) => Restriction(sub(a), sub(b))
+        case Raffination(a, b) => Raffination(sub(a), sub(b))
+        case Composition(a, b) => Composition(sub(a), sub(b))
+        case Wrap(src, p) => Wrap(sub(src), if groundPath(p, bp) then cpath(p) else p)
+        case Unwrap(src, p) => Unwrap(sub(src), if groundPath(p, bp) then cpath(p) else p)
+        case TailsUnion(src) => TailsUnion(sub(src))
+        case TailsIntersection(src) => TailsIntersection(sub(src))
+        case Iteration(src, sym, rest, body) =>
+          Iteration(sub(src), sym, rest, go(body, bm + rest.s, bp + sym.s))
+        case Fixpoint(init, rec, body) =>
+          Fixpoint(sub(init), rec, go(body, bm + rec.s, bp))
+        case other =>
+          // Fold / Call / Range / grounded — the trusted executed steps, as in `expand`.  A closed
+          // one is evaluated; one that reads an enclosing binder cannot be, and saying which is the
+          // difference between an honest limitation and a confusing `eval` failure.
+          if free(other, bm, bp) then
+            throw IllegalStateException(
+              s"expandKeepBinders: ${other.getClass.getSimpleName} reads a variable bound by an " +
+              s"enclosing Iteration/Fixpoint, so it cannot be executed and no renderer models it. " +
+              s"Carrying this node symbolically is the open part of the instance tier (RESOLUTION.md " +
+              s"item 3); the caller must fall back to `expand` and record the marker.")
+          Literal(eval(other))
+    go(s, Set.empty, Set.empty)
+
   // ==============================================================================================
   // Renderers into the three certified egg vocabularies
   // ==============================================================================================
@@ -134,7 +202,23 @@ object EquivPipeline:
     case Path.Constant(v) => Interner.internPath(v.items)
     case other => throw IllegalStateException(s"expand should have made paths constant: $other")
 
-  /** formal.egg vocabulary (set-of-paths reference). */
+  /** ACCUMULATOR for the program-supplied body rules an `Iteration`/`Fixpoint` needs.
+   *
+   *  Both binders are DEFUNCTIONALIZED in the egg vocabularies: the body is a TAG (`BodyK i` /
+   *  `FBodyK i`) and the program supplies one `App`/`FApp` rewrite per tag — the same discipline
+   *  `AgnosticPipeline.RenderCtx` uses for the data-agnostic legs, and the reason `formal.egg` can
+   *  carry a binder at all without the e-graph needing binders. */
+  final class FormalCtx:
+    /** body-rule text keyed by the rule itself, so two occurrences of the same body share a tag */
+    val bodyRules = scala.collection.mutable.LinkedHashMap.empty[String, (Int, String)]
+    var nextId = 0
+    def rule(key: String, mk: Int => String): Int =
+      bodyRules.getOrElseUpdate(key, { val i = nextId; nextId += 1; (i, mk(i)) })._1
+    def text: String = bodyRules.values.map(_._2).mkString("\n")
+
+  /** formal.egg vocabulary (set-of-paths reference), for a term with NO control flow left.  Kept as
+   *  the signature the local-algebra callers use; [[formalOf]] with a [[FormalCtx]] is the one that
+   *  can render an `Iteration`/`Fixpoint` binder. */
   def formalOf(s: Space): String =
     def path(ids: List[Int]): String = ids match
       case Nil => "(Eps)"
@@ -164,6 +248,81 @@ object EquivPipeline:
       case TailsUnion(src) => s"(TailsUnion ${formalOf(src)})"
       case TailsIntersection(src) => s"(TailsIntersection ${formalOf(src)})"
       case other => throw IllegalStateException(s"not local algebra (expand first): $other")
+
+  /** formal.egg vocabulary WITH THE CONTROL-FLOW BINDERS KEPT.
+   *
+   *  This is what makes an instance obligation an obligation.  `EquivPipeline.expand` used to
+   *  evaluate every `Iteration` and `Fixpoint` into a union of concrete group bodies before
+   *  anything was rendered, so `formalOf(expand(p))` and `formalOf(expand(SC.reduce(p)))` came out
+   *  BYTE-EQUAL on every stone whose optimisation touches only the parts the expansion evaluates —
+   *  which is the `IDENTICAL-STRUCTURE` verdict filling `proofs/pipeline/STATUS.tsv`, and it
+   *  certifies nothing about the optimiser.
+   *
+   *  Both binders reach the vocabulary as first-class terms:
+   *    * `Iteration` → `(Iter src (BodyK i))`, with one `(rewrite (App (BodyK i) h t) …)` per
+   *      distinct body.  `h` is the head, `t` the head's group; the four `Iter`/`IterH` rules in
+   *      `formal.egg` (certified by `proofs/laws/law_iter_set.smt2`) are what reduce it.
+   *    * `Fixpoint`  → `(Fix init (FBodyK i))`, with one `(rewrite (FApp (FBodyK i) x) …)` per
+   *      distinct step.  The three `Fix` rules only MERGE e-classes and leastness must be ASKED
+   *      for with `(FixCand f c)`, so the caller declares the candidates and runs the `park`
+   *      ruleset.
+   *
+   *  CAPTURES ARE BAKED IN, not passed.  On the instance tier every free input is already a
+   *  `Literal`, so a body's captured operands are ground and can be inlined into its rule text;
+   *  that is why `BodyK i64` and `FBodyK i64` need no capture lists here, where the agnostic
+   *  `renderZ` needs `BodyK i64 IL ZL`.  The rule KEY is the rendered body with the binder's own
+   *  variables abstracted, so two structurally equal bodies still share one tag. */
+  def formalOf(s: Space, ctx: FormalCtx): String =
+    def path(ids: List[Int]): String = ids match
+      case Nil => "(Eps)"
+      case _ => ids.map(i => s"(Item $i)").reduceRight((a, b) => s"(Concat $a $b)")
+    // A PATH IN THIS RENDERER MAY MIX CONSTANTS AND BOUND HEAD VARIABLES.  The local-algebra
+    // renderer can assume every path is a `Path.Constant`, because `expand` evaluated the binders
+    // away first; here `Singleton`/`Wrap`/`Unwrap` can carry a `Deref` of the enclosing iteration's
+    // head, on its own or inside a `Concat` (`aunt`'s query is `child·$person`, which is exactly
+    // that shape and is what caught the first draft's Deref-only special cases).
+    def pathOf(pt: Path, penv: Map[String, String]): String = pt match
+      case Path.Constant(v) => path(Interner.internPath(v.items))
+      case Path.Deref(pr) => penv.getOrElse(pr.s, throw IllegalStateException(s"unbound path ref ${pr.s}"))
+      case Path.Concat(l, r) =>
+        (pathOf(l, penv), pathOf(r, penv)) match
+          case ("(Eps)", b) => b
+          case (a, "(Eps)") => a
+          case (a, b) => s"(Concat $a $b)"
+      case other => throw IllegalStateException(s"formal renderer: path $other")
+    def go(x: Space, penv: Map[String, String], senv: Map[String, String]): String = x match
+      case Iteration(src, sym, rest, body) =>
+        // the body sees the head as an i64 pattern variable and the group as a Space one
+        val bodyPat = go(body, penv + (sym.s -> "(Item bh)"), senv + (rest.s -> "bt"))
+        val id = ctx.rule("iter|" + bodyPat, i => s"(rewrite (App (BodyK $i) bh bt) $bodyPat)")
+        s"(Iter ${go(src, penv, senv)} (BodyK $id))"
+      case Fixpoint(init, rec, body) =>
+        // MONOTONICITY IS THE SIDE CONDITION, for the reason `AgSmt.fixSym` gives: the executors
+        // iterate `cur := cur ∪ F(cur)`, so inflationarity is free and monotonicity is what buys
+        // LEASTNESS (terminating/fixpoint_is_lfp.smt2, O1).
+        if !AgnosticPipeline.monotoneInMention(body, rec) then
+          throw IllegalStateException(
+            s"formal renderer: Fixpoint body is NOT monotone in ${rec.s} — the recursion variable " +
+            "sits under a complement, so the least-post-fixpoint rules would not denote the executor")
+        val bodyPat = go(body, penv, senv + (rec.s -> "fx"))
+        val id = ctx.rule("fix|" + bodyPat, i => s"(rewrite (FApp (FBodyK $i) fx) $bodyPat)")
+        s"(Fix ${go(init, penv, senv)} (FBodyK $id))"
+      case Mention(m) => senv.getOrElse(m.s, throw IllegalStateException(s"unbound mention ${m.s}"))
+      case Singleton(pt) => s"(Singleton ${pathOf(pt, penv)})"
+      case Wrap(src, pt) => s"(Wrap ${pathOf(pt, penv)} ${go(src, penv, senv)})"
+      case Unwrap(src, pt) => s"(Unwrap ${go(src, penv, senv)} ${pathOf(pt, penv)})"
+      case Union(a, b) => s"(Union ${go(a, penv, senv)} ${go(b, penv, senv)})"
+      case Intersection(a, b) => s"(Intersection ${go(a, penv, senv)} ${go(b, penv, senv)})"
+      case Subtraction(a, b) => s"(Subtraction ${go(a, penv, senv)} ${go(b, penv, senv)})"
+      case Restriction(a, b) => s"(Restriction ${go(a, penv, senv)} ${go(b, penv, senv)})"
+      case Raffination(a, b) => s"(Raffination ${go(a, penv, senv)} ${go(b, penv, senv)})"
+      case Composition(a, b) => s"(Composition ${go(a, penv, senv)} ${go(b, penv, senv)})"
+      case TailsUnion(src) => s"(TailsUnion ${go(src, penv, senv)})"
+      case TailsIntersection(src) => s"(TailsIntersection ${go(src, penv, senv)})"
+      // no binder and no bound path below: the local-algebra renderer already handles these exactly
+      case Empty | Literal(_) => formalOf(x)
+      case other => throw IllegalStateException(s"formal renderer: unsupported $other")
+    go(s, Map.empty, Map.empty)
 
   /** zipper.egg movement vocabulary (Z). */
   def zOf(s: Space): String =
@@ -240,56 +399,23 @@ object EquivPipeline:
   // ==============================================================================================
   // SMT denotation compiler: a local-algebra Space term → a membership define-fun over Path
   // ==============================================================================================
-  final class Smt:
-    private val defs = new StringBuilder
-    private var n = 0
-    def fresh(prefix: String): String = { n += 1; s"${prefix}_$n" }
-    def emit(s: String): Unit = defs.append(s).append('\n')
-    def text: String = defs.toString
-    /** STRUCTURAL SHARING: one macro per DISTINCT subterm, across BOTH sides of an obligation.
-     *  Two effects, both measured on the instance legs (the un-folded sides, 2026-08-31):
-     *    (a) size — puzzle15-zipper 339 895 → 41 172 chars, aunt-zipper 38 775 → 7 115,
-     *        puzzle3-full-graph 711 906 → 56 KB: the two sides of a pipeline obligation share
-     *        almost all of their literal leaves, and the un-shared encoder emitted each copy;
-     *    (b) VACUITY BECOMES DECIDABLE AT THE ENCODER — if the two sides are the same term they
-     *        now get the SAME macro name, so `smtEquivalence` can refuse to emit `(= (m p) (m p))`
-     *        and write an honest marker instead (this is the plan-item-12 failure mode).
-     *  Sharing is a naming change only: a define-fun is a definition, the goal is unchanged, and
-     *  the prover still has to prove it (measured: aunt-space z3 0.02 s shared vs 0.02 s unshared,
-     *  aunt-zipper times out at 120 s in BOTH forms — sharing buys size, not provability). */
-    private val memo = scala.collection.mutable.HashMap.empty[Space, String]
-    /** compile `s`; returns the name of a (define-fun <name> ((p Path)) Bool ...). */
-    def den(s: Space): String = memo.getOrElseUpdate(s, denRaw(s))
-    private def denRaw(s: Space): String =
-      def pathTerm(ids: List[Int]): String = ids.foldRight("nil")((k, acc) => s"(cons $k $acc)")
-      val name = fresh("m")
-      val body = s match
-        case Empty => "false"
-        case Literal(v) =>
-          val ps = v.paths.toList.map(p => Interner.internPath(p.items)).sortBy(_.mkString(","))
-          if ps.isEmpty then "false" else ps.map(ids => s"(= p ${pathTerm(ids)})").mkString("(or ", " ", ")")
-        case Singleton(pt) => s"(= p ${pathTerm(itemsOf(pt))})"
-        case Union(a, b) => s"(or (${den(a)} p) (${den(b)} p))"
-        case Intersection(a, b) => s"(and (${den(a)} p) (${den(b)} p))"
-        case Subtraction(a, b) => s"(and (${den(a)} p) (not (${den(b)} p)))"
-        case Composition(a, b) =>
-          s"(exists ((q Path) (r Path)) (and (= p (append q r)) (${den(a)} q) (${den(b)} r)))"
-        case Restriction(x, y) =>
-          s"(and (${den(x)} p) (exists ((r Path)) (and (${den(y)} r) (isPrefix r p))))"
-        case Raffination(x, y) => return den(Subtraction(x, Restriction(x, y)))
-        case Wrap(src, pt) =>
-          val inner = den(src); val ids = itemsOf(pt)
-          // p = ids ++ q ∧ inner q — tester-free (vampire-friendly) existential form
-          s"(exists ((q Path)) (and (= p ${ids.foldRight("q")((k, acc) => s"(cons $k $acc)")}) ($inner q)))"
-        case Unwrap(src, pt) => s"(${den(src)} ${itemsOf(pt).foldRight("p")((k, acc) => s"(cons $k $acc)")})"
-        case TailsUnion(src) => s"(exists ((h Int)) (${den(src)} (cons h p)))"
-        case TailsIntersection(src) =>
-          val inner = den(src)
-          s"(and (exists ((h Int) (q Path)) ($inner (cons h q))) " +
-            s"(forall ((h Int)) (=> (exists ((q Path)) ($inner (cons h q))) ($inner (cons h p)))))"
-        case other => throw IllegalStateException(s"not local algebra: $other")
-      emit(s"(define-fun $name ((p Path)) Bool $body)")
-      name
+  // `EquivPipeline.Smt` — a SECOND, local-algebra-only membership compiler — USED TO LIVE HERE.
+  // It had one caller, [[smtEquivalence]], and it threw on `Iteration` and `Fixpoint`, which is why
+  // `expand` had to execute both binders away before an instance obligation could be emitted at
+  // all — and that is what made the two sides of those obligations precomputed literals.
+  //
+  // It is gone.  [[smtEquivalence]] now compiles with `AgnosticPipeline.AgSmt`, the compiler the
+  // data-agnostic legs already use: it handles every local-algebra arm the deleted class did, PLUS
+  // `Iteration` (the group predicate inlined by its `expandTails` pass), `Fixpoint` (the two
+  // post-fixpoint axioms plus Park induction) and `Range`.  Keeping two compilers meant the
+  // instance tier was permanently the weaker of the two for no reason anybody had written down.
+  //
+  // ONE THING THE DELETED CLASS DID BETTER, AND HOW IT IS REPLACED.  Its per-subterm macro memo
+  // decided structural identity of the two sides for free — equal terms got the same macro name —
+  // and that is what let [[smtEquivalence]] refuse to emit `(= (m p) (m p))`.  `AgSmt` shares by
+  // `System.identityHashCode`, so it cannot.  [[smtEquivalence]] therefore decides identity in
+  // Scala, with `SmtDiff.alphaNorm` — equality MODULO BINDER NAMES, which is strictly stronger
+  // than the macro test could ever be, since the macro test could not see binders at all.
 
   /** A full SMT equivalence file for two local-algebra programs.  With `obs` empty the goal is the
    *  ∀-path equivalence (the STRONGER statement, and measured cheaper for z3 on every stone that
@@ -302,26 +428,49 @@ object EquivPipeline:
    *  `(= (m p) (m p))` is `true` by macro expansion and the prover does no work — that vacuity
    *  is plan item 12, and it must be recorded, not emitted as a fake obligation. */
   def smtEquivalence(title: String, a: Space, b: Space, obs: List[List[Int]] = Nil): String =
-    val smt = new Smt
-    val na = smt.den(a); val nb = smt.den(b)
-    if na == nb then
+    // IDENTITY, DECIDED IN SCALA AND MODULO BINDER NAMES.  `(= (m p) (m p))` is `true` by macro
+    // expansion and no prover does any work on it, so a cell where the two sides really are the
+    // same term must say so instead of shipping a fake goal (plan item 12).  `alphaNorm` is the
+    // right test now that the binders SURVIVE to here: two iterations differing only in the names
+    // of `sym`/`rest` are the same program, and a syntactic `==` would have called them different
+    // and emitted an obligation that is trivial for a reason the file did not state.
+    if SmtDiff.alphaNorm(a) == SmtDiff.alphaNorm(b) then
       return s"""; AUTO-GENERATED — $title
-; IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION: the two sides compile to the SAME shared
-; membership macro — they are the same local-algebra term, so `(= ($na p) ($nb p))` expands to
-; `true` and no prover would do any work on it.  The structural identity IS the equivalence
-; result for this cell (it is checked in Scala, not asserted here); the optimiser/transpiler
-; comparison that is NOT definitional for this stone is carried by the -agnostic twin.
+; IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION: the two sides are the SAME term after
+; alpha-normalisation — including their `Iteration`/`Fixpoint` binders — so the goal would expand
+; to `true` and no prover would do any work on it.  The structural identity IS the equivalence
+; result for this cell (decided in Scala, not asserted here); the optimiser/transpiler comparison
+; that is NOT definitional for this stone is carried by the -agnostic twin.
 """
+    val smt = new AgnosticPipeline.AgSmt
+    val fa = smt.den(a, "p", Map.empty, Map.empty)
+    val fb = smt.den(b, "p", Map.empty, Map.empty)
+    // name both roots so a fixpoint on ONE side can take the OTHER side as its Park candidate —
+    // the case that matters when `SC.reduce` collapses one side to a literal and the other keeps
+    // the binder, which is exactly what happens on puzzle3-full
+    smt.emitDef(s"(define-fun sideA ((p Path)) Bool $fa)")
+    smt.emitDef(s"(define-fun sideB ((p Path)) Bool $fb)")
+    smt.emitParkInstances(List("sideA", "sideB"))
     val goal =
-      if obs.isEmpty then s"(assert (not (forall ((p Path)) (= ($na p) ($nb p)))))"
+      if obs.isEmpty then "(assert (not (forall ((p Path)) (= (sideA p) (sideB p)))))"
       else obs.map(ids => ids.foldRight("nil")((k, acc) => s"(cons $k $acc)"))
-              .map(pt => s"(= ($na $pt) ($nb $pt))").mkString("(assert (not (and ", " ", ")))")
-    val body = s"${smt.text}\n$goal"
+              .map(pt => s"(= (sideA $pt) (sideB $pt))").mkString("(assert (not (and ", " ", ")))")
+    val body = s"${smt.decls.mkString("\n")}\n${smt.defsText}\n$goal"
+    // PRUNE THE PRELUDE.  `append` is reachable only from `Composition` and `isPrefix` only from
+    // `Restriction`/`Raffination`, so a file using neither carried SIX unused quantified axioms —
+    // one with a nested existential — which is pure saturation fuel for vampire and exactly the
+    // noise the pruning was introduced to remove.  Moving this leg onto `AgSmt` dropped the pruning
+    // (that compiler serves the data-agnostic legs, which quantify over free inputs and cannot
+    // decide statically which operators a model will need, so it uses the full prelude); MEASURED,
+    // dropping it cost `gol-zipper` its vampire verdict.
     s"""; AUTO-GENERATED — $title
-; Both sides compiled to their denotational membership formulas over the same inputs;
-; the goal (negated): the programs produce the SAME OUTPUT — ${if obs.isEmpty then "equal membership at EVERY path"
+; INSTANCE leg: the inputs are this instance's literals, but the CONTROL FLOW IS NOT EXECUTED —
+; `Iteration` stays a binder (its group predicate inlined) and `Fixpoint` stays the least
+; post-fixpoint predicate with the two axioms plus Park induction, so the two sides are
+; independently rendered PROGRAMS rather than the same precomputed literal.
+; The goal (negated): the programs produce the SAME OUTPUT — ${if obs.isEmpty then "equal membership at EVERY path"
                                                               else s"equal membership at the ${obs.size} observation path(s)"}.
-${prunedPrelude(body)}
+${EquivPipeline.prunedPrelude(body)}
 $body
 (check-sat)
 """
@@ -803,12 +952,27 @@ object AgnosticPipeline:
         s"(Fix ${rz(init)} (BodyK $id $il $zl))"
       case other => throw IllegalStateException(s"agnostic renderer: unsupported $other")
 
+  /** IS THE PATH REF `name` FREE IN `s`?  THE MATCH IS TOTAL, AND IT HAS TO BE.
+   *
+   *  `Fold`, `Call`, `GroundedPS` and `GroundedSS` used to fall through a `case _ => false`, so a
+   *  `Fold` whose body reads a variable, or a `Call` passing it as an argument, was reported as NOT
+   *  USING IT.  That is not a cosmetic gap: [[monotoneInMention]] decides variance with
+   *  `case other => !free(other)`, so a `Fold`/`Call`/grounded node over the recursion variable came
+   *  out MONOTONE — the opposite of the intended conservative answer — and monotonicity is the side
+   *  condition under which an emitter may write a first-class least-post-fixpoint `Fix`
+   *  (terminating/fixpoint_is_lfp.smt2, O1).  `src/test/scala/FreeVarsCheck.scala` is the
+   *  regression, and it also pins the BINDER rules below rather than leaving them to inspection.
+   *
+   *  The binders, once: `Iteration` binds `symbol` (a path ref) over `templates` only; `Fold` binds
+   *  `acc` AND `symbol` over `templates` and `update`, while `initial` is outside them; `Fixpoint`
+   *  binds only a space mention, so it shadows no path ref at all. */
   def usesPathRef(s: Space, name: String): Boolean =
     def up(p: Path): Boolean = p match
       case Path.Deref(pr) => pr.s == name
       case Path.Concat(l, r) => up(l) || up(r)
       case _ => false
     s match
+      case Empty | Literal(_) | Mention(_) => false
       case Singleton(p) => up(p)
       case Wrap(src, p) => up(p) || usesPathRef(src, name)
       case Unwrap(src, p) => up(p) || usesPathRef(src, name)
@@ -822,10 +986,19 @@ object AgnosticPipeline:
       case TailsIntersection(src) => usesPathRef(src, name)
       case Iteration(src, sym, _, body) => usesPathRef(src, name) || (sym.s != name && usesPathRef(body, name))
       case Fixpoint(init, _, body) => usesPathRef(init, name) || usesPathRef(body, name)
+      case Fold(src, initial, acc, sym, _, body, upd) =>
+        val bound = acc.s == name || sym.s == name
+        usesPathRef(src, name) || up(initial) || (!bound && (usesPathRef(body, name) || up(upd)))
+      case Call(_, refs, ms) => refs.exists(up) || ms.exists(usesPathRef(_, name))
+      case GroundedPS(p, _) => up(p)
+      case GroundedSS(src, _) => usesPathRef(src, name)
       case Range(x, _, _) => usesPathRef(x, name)
-      case _ => false
 
+  /** IS THE SPACE MENTION `name` FREE IN `s`?  Total, for the reason [[usesPathRef]] gives — this is
+   *  the function [[monotoneInMention]]'s `free` is, so a missing arm here weakened the
+   *  monotonicity gate rather than merely under-reporting. */
   def usesMention(s: Space, name: String): Boolean = s match
+    case Empty | Literal(_) | Singleton(_) | GroundedPS(_, _) => false
     case Mention(m) => m.s == name
     case Union(a, b) => usesMention(a, name) || usesMention(b, name)
     case Intersection(a, b) => usesMention(a, name) || usesMention(b, name)
@@ -839,8 +1012,11 @@ object AgnosticPipeline:
     case TailsIntersection(src) => usesMention(src, name)
     case Iteration(src, _, rest, body) => usesMention(src, name) || (rest.s != name && usesMention(body, name))
     case Fixpoint(init, rec, body) => usesMention(init, name) || (rec.s != name && usesMention(body, name))
+    case Fold(src, _, _, _, rest, body, _) =>
+      usesMention(src, name) || (rest.s != name && usesMention(body, name))
+    case Call(_, _, ms) => ms.exists(usesMention(_, name))
+    case GroundedSS(src, _) => usesMention(src, name)
     case Range(x, _, _) => usesMention(x, name)
-    case _ => false
 
   // ==============================================================================================
   // SMT compiler with free inputs and binder parameters
@@ -850,13 +1026,33 @@ object AgnosticPipeline:
     val decls = scala.collection.mutable.LinkedHashSet.empty[String]
     private var n = 0
     def fresh(p: String): String = { n += 1; s"${p}_$n" }
-    private val shared = scala.collection.mutable.HashMap.empty[Int, String]
+    private val shared = scala.collection.mutable.HashMap.empty[Space, String]
     /** compile to a formula string over path term `pt`, with binder env (path var → SMT Int term). */
     def den(s: Space, pt: String, penv: Map[String, String], senv: Map[String, String]): String =
       // SHARE binder-free subterms as named define-funs: the k-unrolled programs duplicate large
       // subtrees (e.g. datalog's all/delta), and inlining them per occurrence is exponential.
+      // LITERALS AND MENTIONS ARE NOT SHARED, AND SHARING THEM WAS TRIED AND MEASURED WORSE.
+      //
+      // A `Mention` is already one applied symbol, so a macro adds only a name.  A `Literal` is a
+      // ground disjunction `(or (= p …) …)`, and the reasonable-looking idea — the instance legs'
+      // inputs ARE literals, so sharing them should shrink the formula — makes the obligations
+      // HARDER rather than bigger: MEASURED on `aunt-zipper`, sharing every literal of more than two
+      // paths produced 69 tiny macros in a 9.5 KB file and BOTH provers then failed at 240 s where
+      // z3 had discharged it in seconds.  A ground disjunction is directly usable by E-matching; the
+      // same disjunction behind a `define-fun` application is an indirection to unfold first, and 69
+      // of them obscure the goal.  Size was never the problem for literals — the size win came from
+      // sharing the NON-literal subterms structurally, which `shared` does.
       if penv.isEmpty && senv.isEmpty && !s.isInstanceOf[Space.Literal] && !s.isInstanceOf[Space.Mention] then
-        val key = System.identityHashCode(s)
+        // SHARED STRUCTURALLY, NOT BY IDENTITY.  The key was `System.identityHashCode(s)`, so two
+        // EQUAL subterms reached by different routes got two macros and the formula carried both.
+        // That is most of an obligation's size, because the two sides of a pipeline obligation share
+        // almost all of their subtrees while being built independently: MEASURED when this compiler
+        // took over the instance legs from the deleted structural-sharing `Smt`, three cells that
+        // had been discharged (`aunt-zipper`, `nqueens-zipper`, `puzzle3-full-space`) went to
+        // PROVER-BUDGET-EXCEEDED and `gol-graph` lost its vampire verdict — purely from formula
+        // size, since the goals were unchanged.  `Space` is a case-class tree, so `==`/`hashCode`
+        // are structural and this is the same key the old `Smt` memo used.
+        val key = s
         val name = shared.getOrElseUpdate(key, {
           val n = fresh("s")
           val body = denRaw(s, "p", Map.empty, Map.empty)

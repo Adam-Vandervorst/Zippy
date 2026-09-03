@@ -1,4 +1,4 @@
-# prog_matrix.tsv — ts=2026-09-02T16:48:09Z; git=f6832fc-dirty; cpu=Intel(R) Xeon(R) 6975P-C; cores=16; mem=247GiB; os=Linux 6.17.0-1019-aws; jvm=OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu); heap=24.0GiB; scala=3.8.1; literalByRef=true patriciaOps=true; programs=1000000; min-nodes=12
+# prog_matrix.tsv — ts=2026-09-02T19:56:00Z; git=9b818f3-dirty; clean=no(103); cpu=Intel(R) Xeon(R) 6975P-C; cores=16; mem=247GiB; os=Linux 6.17.0-1019-aws; jvm=OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu); heap=24.0GiB; scala=3.8.1; sbt=2.0.8; build=scalac 3.8.1 -source:3.3 -feature -explain; tools=z3=Z3 version 5.1.0 - 64 bit  vampire=Vampire 5.1.0 (Release build, commit 7b2f410 on 2026-08-13 10:17:34 +0200)  egglog=egglog 3.0.0_2026-09-02_e5dea2d5; literalByRef=true patriciaOps=true; programs=1000000; min-nodes=12
 row	Mention	Literal	Singleton	Union	Intersection	Subtraction	Restriction	Raffination	Composition	Wrap	Unwrap	TailsUnion	TailsIntersection	Range	Iteration	Constant	Deref	Concat
 Singleton.path	0	0	0	0	0	0	0	0	0	0	0	0	0	0	0	2206575	928095	532689
 Union.l	320061	77809	107909	82425	84418	84077	84632	84113	317684	85739	84830	42954	41961	42998	175213	0	0	0

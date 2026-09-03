@@ -28,6 +28,7 @@ executable and machine-checked counterpart of that paper.
 | [`docs/residuals.md`](docs/residuals.md) | Why the residuated-division operators are omitted from the algebra. |
 | [`docs/TRUSTED.md`](docs/TRUSTED.md) | **The complete trusted base**: every assumption a `PROVED` verdict rests on, and the three open obligations that are gaps rather than assumptions. |
 | [`RESOLUTION.md`](RESOLUTION.md) | Item-by-item response to the acceptance review of `f6832fc`, with what is resolved, partial and open. |
+| [`PLAN.md`](PLAN.md) | The open items, sequenced, with the gate that decides each step and what would change the order. |
 
 ## Requirements
 
@@ -124,7 +125,11 @@ discharged an actual equivalence goal. A `TRIVIAL` or `IDENTICAL-STRUCTURE` cell
 sides came out as the same term and there was **no obligation to discharge**; `LAW-JUSTIFIED`
 means every differing pair was replayed as an instance of a certified law rather than proved per
 program; `OPEN (prover budget exceeded)` means neither prover reached it, with the attempt log in
-the file. Only the first counts as certified equivalence for that cell. As of this commit a
+the file. And `BOUNDED-UNROLLING (k=…)` means the cell carries a real goal whose sides contain a
+**residual cut** — a recursive call no lowering recognised, replaced past depth *k* by a fresh free
+input — so its claim is about the *k*-unrollings at those depths and **not** about the recursion;
+lifting it needs registry row O10b (all *k* plus omega-continuity), which is open. Only the first
+counts as certified equivalence for that cell. As of this commit a
 minority of the 42 cells are `PROVED`, and the reason most of the instance cells are markers is
 recorded rather than hidden: `EquivPipeline.expand` evaluates control flow on **both** sides, so
 the two renderings are literal-vs-literal — see `RESOLUTION.md` items 1 and 3 for what that costs

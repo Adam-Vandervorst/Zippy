@@ -107,6 +107,15 @@ class EquivPipelineTest extends FunSuite:
 
   var trivialCount = 0; var realCount = 0; var budgetCount = 0; var lawCount = 0; var identCount = 0
   var singleSideCount = 0
+  /** which stones reached the renderers with their control flow INTACT, and which fell back to the
+   *  executed form — printed at the end, so "the binders survived" is a measured claim per stone
+   *  rather than a property of the code path. */
+  val binderKept = scala.collection.mutable.Set.empty[String]
+  val binderFallback = scala.collection.mutable.Set.empty[String]
+  /** cells whose sides carry a residual cut, so their claim is about the k-unrollings and not about
+   *  the recursion (O10b).  Printed at the end and stamped into each file. */
+  val boundedUnrolled = scala.collection.mutable.Set.empty[String]
+  private var ident1Last = false
 
   /** file <TAB> z3 <TAB> vampire <TAB> verdict — the same 4 columns as proofs/STATUS.tsv, written
    *  to proofs/pipeline/STATUS.tsv so a SINGLE-prover result stays VISIBLE instead of implied. */
@@ -304,6 +313,31 @@ class EquivPipelineTest extends FunSuite:
                    smtA0: Space = null, smtB0: Space = null): Unit =
     val (sideA, sideB) = (SmtDiff.alphaNorm(sideA0), SmtDiff.alphaNorm(sideB0))
     val (smtA, smtB) = (Option(smtA0).getOrElse(sideA), Option(smtB0).getOrElse(sideB))
+    // O10b — WHAT A CELL WITH A RESIDUAL CUT ACTUALLY CLAIMS.
+    //
+    // `unrollControl` cuts a recursive call it cannot lower past depth `k` and replaces it with a
+    // fresh free input, so the obligation such a cell states is "the two k-UNROLLINGS agree for all
+    // values of that input" — NOT "the two recursions agree".  Getting from one to the other needs
+    // k-unrolling equivalence for ALL k plus omega-continuity, which is registry row O10b and is
+    // OPEN: the pipeline emits k = 1 and k = 2 only, so the antecedent is never established.
+    //
+    // The claim was correct in the registry and OVERSTATED everywhere else — such a cell counted as
+    // REAL and fed the end-to-end wording in README.md.  It is now stamped in the file, given its own
+    // kind in proofs/pipeline/DECLARED.tsv, and excluded from any end-to-end equivalence claim.
+    val cuts = AgnosticPipeline.residualsOf(smtA) ++ AgnosticPipeline.residualsOf(smtB)
+    val boundedNote =
+      if cuts.isEmpty then ""
+      else
+        val ks = cuts.values.map(_.depth).toVector.distinct.sorted
+        val descs = cuts.values.map(_.canonical).toVector.sorted.mkString("\n;   ")
+        s"; BOUNDED-UNROLLING (k=${ks.mkString(",")}): the sides carry ${cuts.size} residual cut(s):\n" +
+        s";   $descs\n" +
+        "; so this cell's claim is about the k-UNROLLINGS at those depths, quantified over the cuts'\n" +
+        "; free inputs, and NOT about the recursion.  Lifting it to the recursion needs k-unrolling\n" +
+        "; equivalence for ALL k plus omega-continuity — terminating/REGISTRY.tsv row O10b, OPEN,\n" +
+        "; because only k=1 (smt) and k=2 (egg) are emitted.  This cell does NOT support an\n" +
+        "; end-to-end equivalence claim for this stone.\n"
+    if boundedNote.nonEmpty then boundedUnrolled += s"$name-$stage"
     randomGate(s"$name-$stage", sideA, sideB)
     // DIFF-DECOMPOSED egg leg (mirrors the smt design): the sides are identical except at the
     // optimiser-rewritten subterm pairs; each SMALL pair is checked observationally with its
@@ -316,11 +350,13 @@ class EquivPipelineTest extends FunSuite:
     val sb = new StringBuilder
     if ms.isEmpty then
       sb.append(s"; AUTO-GENERATED pipeline $stage ($name) — DATA-AGNOSTIC.\n")
+      sb.append(boundedNote)
       sb.append(s"; TRIVIAL-NO-OBLIGATION: sides are syntactically identical after alpha-normalisation —\n")
       sb.append(s"; the transformation is structure-preserving here; nothing to prove.\n")
       runEggFile(s"$name-$stage-agnostic.egg", sb.toString)
     else
       val ctx = new AgnosticPipeline.RenderCtx
+      sb.append(boundedNote)
       sb.append(s"; AUTO-GENERATED pipeline $stage ($name) — DATA-AGNOSTIC, DIFF-DECOMPOSED: ${ms.size}\n")
       sb.append(s"; optimiser-rewritten subterm pair(s), each checked OBSERVATIONALLY under the certified\n")
       sb.append(s"; movement rules with surrounding binders freed (fresh items / opaque sources); the\n")
@@ -481,16 +517,50 @@ class EquivPipelineTest extends FunSuite:
     assertEquals(eval(eP)(using pc0, SpaceContextMap(Map.empty), PartialFunction.empty), reference, s"$name: optimised expansion changed semantics")
     val resT = ITrie.fromSpaceValue(reference)
 
+    // ---- THE BINDER-PRESERVING INSTANCE SIDES.  `expand` executes `Iteration`/`Fixpoint`, so
+    // `formalOf(expand(prog))` and `formalOf(expand(SC.reduce(prog)))` are byte-equal on every
+    // stone whose optimisation only touches the parts the expansion evaluates — the
+    // `IDENTICAL-STRUCTURE` verdict, which certifies nothing about the optimiser.
+    // `expandKeepBinders` binds this instance's INPUTS and stops, so the two sides reach the
+    // renderers as PROGRAMS.  It throws where a `Fold`/`Range`/grounded node reads an enclosing
+    // binder's variable — no renderer models that — and the fallback is the executed form with the
+    // reason recorded, never a silent downgrade.
+    val binderSides: Option[(Space, Space)] =
+      try
+        val bO = EquivPipeline.expandKeepBinders(prog)
+        val bP = EquivPipeline.expandKeepBinders(optProg)
+        assertEquals(eval(bO)(using pc0, SpaceContextMap(Map.empty), PartialFunction.empty), reference,
+                     s"$name: binder-preserving expansion changed semantics")
+        assertEquals(eval(bP)(using pc0, SpaceContextMap(Map.empty), PartialFunction.empty), reference,
+                     s"$name: optimised binder-preserving expansion changed semantics")
+        Some((bO, bP))
+      catch case e: IllegalStateException =>
+        // PRINTED, not noted.  WHICH node forces a stone back onto the executed form is the precise
+        // remaining gap in the instance tier, and it belongs in the run log rather than behind
+        // `-Dsc.verbose`.
+        println(s"[pipeline] $name: binder-preserving sides UNAVAILABLE — ${e.getMessage}")
+        binderFallback += name
+        None
+    val (s1O, s1P) = binderSides.getOrElse((eO, eP))
+    if binderSides.isDefined then binderKept += name
+
     // ---- stage 1: Space/term vs optimised, in the set-of-paths reference system.
     // Equality is MEMBERSHIP-observational (ElemP at every member + boundary non-member, both
     // sides against the executor's ground truth): whole-set e-class equality needs the ACU comm
     // closure, which is factorial at program-sized unions; ElemP is structural and scales. ----
-    val vocab1 = collectKeys(eO) ++ collectKeys(eP)
+    val vocab1 = collectKeys(s1O) ++ collectKeys(s1P)
     val (mem1, non1) = observations(resT, vocab1, cap = 25)   // spot check; full semantics gated in Scala + agnostic legs
     val sb1 = new StringBuilder
-    val origStr = EquivPipeline.formalOf(eO)
-    val optStr = EquivPipeline.formalOf(eP)
+    // ONE ctx for BOTH sides, so two structurally equal bodies share a `BodyK`/`FBodyK` tag and the
+    // rules are emitted once — and so an `App` rule written for one side is in scope for the other.
+    val fctx = new EquivPipeline.FormalCtx
+    val origStr = EquivPipeline.formalOf(s1O, fctx)
+    val optStr = EquivPipeline.formalOf(s1P, fctx)
     val ident1 = origStr == optStr
+    ident1Last = ident1
+    // `Fix` only MERGES e-classes; leastness has to be ASKED for, so each side is declared as the
+    // other's Park candidate and the schedule runs the `park` ruleset.
+    val hasFix1 = origStr.contains("(Fix ") || optStr.contains("(Fix ")
     def fpath(ids: List[Int]): String = ids.map(i => s"(Item $i)").reduceRight((a, b) => s"(Concat $a $b)")
     if ident1 then
       // ground control-flow expansion evaluated both sides to the SAME term: byte-equal in egg,
@@ -504,12 +574,14 @@ class EquivPipelineTest extends FunSuite:
       sb1.append(s"; is NOT emitted.  The optimiser comparison for this stone is carried by the\n")
       sb1.append(s"; $name-space-agnostic legs.  Below: membership observations of the one encoding.\n")
       sb1.append("(include \"formal-elem-prelude.egg\")\n")
+      if fctx.text.nonEmpty then sb1.append(fctx.text).append('\n')
       sb1.append(s"(let $$orig $origStr)\n")
       for (ids, i) <- mem1.zipWithIndex do
         sb1.append(s"(let $$mo$i (ElemP ${fpath(ids)} $$orig))\n")
       for (ids, i) <- non1.zipWithIndex do
         sb1.append(s"(let $$no$i (ElemP ${fpath(ids)} $$orig))\n")
-      sb1.append("\n(run-schedule (repeat ROUNDS (run) (saturate paths) (run neg)))\n\n")
+      sb1.append(if hasFix1 then "\n(run-schedule (repeat ROUNDS (run) (saturate paths) (run neg) (run park)))\n\n"
+                 else "\n(run-schedule (repeat ROUNDS (run) (saturate paths) (run neg)))\n\n")
       for i <- mem1.indices do sb1.append(s"(check (= $$mo$i (ET)))\n")
       for i <- non1.indices do sb1.append(s"(check (= $$no$i (EF)))\n")
     else
@@ -517,13 +589,19 @@ class EquivPipelineTest extends FunSuite:
       sb1.append(s"; (SC.reduce), proved equivalent under the eager set-of-paths rewrite system by membership\n")
       sb1.append(s"; observation (every member ElemP=ET in BOTH, every boundary non-member EF in BOTH).\n")
       sb1.append("(include \"formal-elem-prelude.egg\")\n")   // rotation-free: ElemP checks are shape-free
+      if fctx.text.nonEmpty then sb1.append(fctx.text).append('\n')
       sb1.append(s"(let $$orig $origStr)\n")
       sb1.append(s"(let $$opt $optStr)\n")
+      if hasFix1 then
+        sb1.append("; the two sides are each other's Park candidate: `Fix` rules only merge, so\n")
+        sb1.append("; leastness must be ASKED for and both directions are needed for equality.\n")
+        sb1.append("(FixCand $orig $opt)\n(FixCand $opt $orig)\n")
       for (ids, i) <- mem1.zipWithIndex do
         sb1.append(s"(let $$mo$i (ElemP ${fpath(ids)} $$orig))\n(let $$mp$i (ElemP ${fpath(ids)} $$opt))\n")
       for (ids, i) <- non1.zipWithIndex do
         sb1.append(s"(let $$no$i (ElemP ${fpath(ids)} $$orig))\n(let $$np$i (ElemP ${fpath(ids)} $$opt))\n")
-      sb1.append("\n(run-schedule (repeat ROUNDS (run) (saturate paths) (run neg)))\n\n")
+      sb1.append(if hasFix1 then "\n(run-schedule (repeat ROUNDS (run) (saturate paths) (run neg) (run park)))\n\n"
+                 else "\n(run-schedule (repeat ROUNDS (run) (saturate paths) (run neg)))\n\n")
       for i <- mem1.indices do sb1.append(s"(check (= $$mo$i (ET))) (check (= $$mp$i (ET)))\n")
       for i <- non1.indices do sb1.append(s"(check (= $$no$i (EF))) (check (= $$np$i (EF)))\n")
     if ident1 then identCount += 1
@@ -537,9 +615,24 @@ class EquivPipelineTest extends FunSuite:
       sbF.append(s"; AUTO-GENERATED pipeline stage 1 ($name) — INSTANCE spot check in the eager-TRIE\n")
       sbF.append(s"; reference (bridge impl recursion; the eager-SET reference did not converge here).\n")
       sbF.append("(include \"bridge-prelude.egg\")\n")
-      sbF.append(s"(let $$opt (Reflect ${EquivPipeline.implOfSpace(eP)}))\n")
-      sbF.append(s"(let $$want (Reflect ${EquivPipeline.tnodeOf(resT)}))\n")
-      emitObsPairs(sbF, "$opt", "$want", mem1, non1, resT)
+      val implStr = EquivPipeline.implOfSpace(eP)
+      val wantStr = EquivPipeline.tnodeOf(resT)
+      sbF.append(s"(let $$opt (Reflect $implStr))\n")
+      // BYTE-EQUAL SIDES ARE A SINGLE-SIDE OBSERVATION, NOT AN EQUIVALENCE.  The optimised side of
+      // this fallback is the EXECUTED form and the reference is the executor's own output, so on a
+      // stone where the two render to the same trie term `$opt` and `$want` bind identical text and
+      // the checks compare a term with itself — vacuous by hash-consing under two names.
+      // `scripts/audit_pipeline_markers.py` catches exactly that shape and it caught this one the
+      // first time `puzzle3-full` fell through to here (the principal now carries binders and no
+      // longer converges, so the fallback is newly REACHED rather than newly wrong).  Passing the
+      // same name makes `emitObsPairs` stamp the honest SINGLE-SIDE-OBSERVATION marker.
+      if implStr == wantStr then
+        sbF.append("; the optimised side and the reference render to the SAME trie term, so there is\n")
+        sbF.append("; no equivalence obligation here — one side is observed against itself.\n")
+        emitObsPairs(sbF, "$opt", "$opt", mem1, non1, resT)
+      else
+        sbF.append(s"(let $$want (Reflect $wantStr))\n")
+        emitObsPairs(sbF, "$opt", "$want", mem1, non1, resT)
       if !runEggFileOpt(s"$name-space-impl.egg", sbF.toString) then
         // even the optimised side alone exceeds the eager budget (very large expansions):
         // instance equivalence is carried by the Scala gates; this file checks the reference
@@ -556,7 +649,7 @@ class EquivPipelineTest extends FunSuite:
     // stage-0 expansion `isGround` holds AT THE ROOT, so both sides collapsed to the SAME literal
     // and the goal macro-expanded to `true` — measured: z3 0.00-0.01 s, still `unsat` with the
     // ENTIRE prelude deleted.  The sides below are the actual structural denotations.
-    runInstanceSmt(s"$name-space.smt2", s"pipeline stage 1 ($name): original vs optimised", eO, eP, mem1 ++ non1)
+    runInstanceSmt(s"$name-space.smt2", s"pipeline stage 1 ($name): original vs optimised", s1O, s1P, mem1 ++ non1)
 
     // ---- stage 2: the VIRTUAL zipper program (Iter/BodyK binders over the INPUT literals — not
     // pre-materialised) observed by movement against the reference output, plus the Scala executor
@@ -671,6 +764,16 @@ class EquivPipelineTest extends FunSuite:
     // LAW-JUSTIFIED (proof-carrying), or BUDGET (recorded, certificate carried elsewhere).
     Loaders.note(s"[pipeline] $name markers so far: real=$realCount trivial=$trivialCount " +
                  s"law-justified=$lawCount budget=$budgetCount identical=$identCount single-side=$singleSideCount")
+    // THE BINDER CENSUS, PRINTED.  Whether an instance obligation compares two PROGRAMS or two
+    // precomputed literals is the difference between a cell that certifies the optimiser and one
+    // that certifies the executor, so it is reported per stone rather than inferred from the code.
+    if boundedUnrolled.nonEmpty then
+      println(s"[pipeline] BOUNDED-UNROLLING so far (claim is about the k-unrollings, not the " +
+              s"recursion — O10b): ${boundedUnrolled.toVector.sorted.mkString(", ")}")
+    println(f"[pipeline] $name%-12s control flow: " +
+            (if binderKept(name) then "BINDERS KEPT (Iteration/Fixpoint reach the renderers)"
+             else "EXECUTED (fell back to `expand` — see the note above for which node forced it)") +
+            f"   |  stage-1 sides ${if ident1Last then "IDENTICAL after alpha-normalisation" else "DIFFER — a real obligation"}")
     writeStatus()
 
   /** observation pairs: both sides Term-checked at every member (T), boundary non-member (F).

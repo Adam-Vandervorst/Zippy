@@ -55,15 +55,18 @@ correctness failure and not a slow one.
 
 | environment | value |
 |---|---|
-| timestamp (UTC) | 2026-09-02T16:47:09Z |
-| git commit | f6832fc-dirty |
+| timestamp (UTC) | 2026-09-02T19:55:17Z |
+| git commit | 9b818f3-dirty |
 | cpu | Intel(R) Xeon(R) 6975P-C (16 logical cores) |
 | memory | 247 GiB |
 | os | Linux 6.17.0-1019-aws |
 | jvm | OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu) |
 | jvm args | -Xmx24G -Xss16M -Dfile.encoding=UTF-8 |
 | max heap | 24.0 GiB |
-| scala | 3.8.1 |
+| scala (runtime library) | 3.8.1 |
+| build | sbt 2.0.8; scalac 3.8.1 -source:3.3 -feature -explain |
+| external tools | z3=Z3 version 5.1.0 - 64 bit  vampire=Vampire 5.1.0 (Release build, commit 7b2f410 on 2026-08-13 10:17:34 +0200)  egglog=egglog 3.0.0_2026-09-02_e5dea2d5 |
+| source tree | DIRTY — 103 modified path(s); `9b818f3-dirty` does NOT identify the code that produced these numbers |
 | tuning | literalByRef=true patriciaOps=true |
 | timing | best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source) |
 | interner | WARM — `Interner` and the literal memo carry every id from earlier rows of the same run |
@@ -79,10 +82,10 @@ overall max depth is fixed by a different branch; n-queens has no invariant inne
 
 | program | exec off ms | exec on ms | speedup | depth off | depth on |
 |---|---:|---:|---:|---:|---:|
-| invariant-inner N=150  |      0.07 |      0.03 |    2.4x |     2 |     1 |
-| invariant-inner N=400  |      0.19 |      0.08 |    2.4x |     2 |     1 |
-| sliding expandStep 3x3 |      0.29 |      0.09 |    3.4x |    17 |    17 |
-| n-queens place(6)      |      1.62 |      1.59 |    1.0x |     7 |     7 |
+| invariant-inner N=150  |      0.07 |      0.03 |    2.2x |     2 |     1 |
+| invariant-inner N=400  |      0.20 |      0.08 |    2.4x |     2 |     1 |
+| sliding expandStep 3x3 |      0.33 |      0.09 |    3.6x |    17 |    17 |
+| n-queens place(6)      |      1.58 |      1.58 |    1.0x |     7 |     7 |
 
 <!-- END benchmark:subgraph-hoisting -->
 
@@ -91,15 +94,18 @@ overall max depth is fixed by a different branch; n-queens has no invariant inne
 
 | environment | value |
 |---|---|
-| timestamp (UTC) | 2026-09-02T16:47:37Z |
-| git commit | f6832fc-dirty |
+| timestamp (UTC) | 2026-09-02T19:55:34Z |
+| git commit | 9b818f3-dirty |
 | cpu | Intel(R) Xeon(R) 6975P-C (16 logical cores) |
 | memory | 247 GiB |
 | os | Linux 6.17.0-1019-aws |
 | jvm | OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu) |
 | jvm args | -Xmx24G -Xss16M -Dfile.encoding=UTF-8 |
 | max heap | 24.0 GiB |
-| scala | 3.8.1 |
+| scala (runtime library) | 3.8.1 |
+| build | sbt 2.0.8; scalac 3.8.1 -source:3.3 -feature -explain |
+| external tools | z3=Z3 version 5.1.0 - 64 bit  vampire=Vampire 5.1.0 (Release build, commit 7b2f410 on 2026-08-13 10:17:34 +0200)  egglog=egglog 3.0.0_2026-09-02_e5dea2d5 |
+| source tree | DIRTY — 103 modified path(s); `9b818f3-dirty` does NOT identify the code that produced these numbers |
 | tuning | literalByRef=true patriciaOps=true |
 | timing | best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source) |
 | interner | WARM — `Interner` and the literal memo carry every id from earlier rows of the same run |
@@ -113,13 +119,13 @@ decr/idr number relations + `Range` counting), so it lowers and optimizes like t
 
 | domain | evalI ms | execT unopt ms | execT opt ms | opt speedup | execT opt(no-hoist) ms | hoist |
 |---|---:|---:|---:|---:|---:|---:|
-| aunt (lot.metta)   |     0.01 |      0.01 |      0.00 |    1.6x |      0.00 |   0.9x |
+| aunt (lot.metta)   |     0.01 |      0.01 |      0.01 |    1.5x |      0.01 |   1.0x |
 (royal92_simple.metta not found — aunt(royal92) row skipped)
-| n-queens n=7       |    16.33 |     12.18 |      6.60 |    1.8x |      6.63 |   1.0x |
-| temperature 4096   |     0.00 |      0.00 |      0.00 |    1.0x |      0.00 |   0.9x |
-| datalog tc (n=80)  |    14.71 |     14.24 |     14.34 |    1.0x |     14.27 |   1.0x |
-| sliding 3x3 step   |     1.93 |      0.39 |      0.08 |    5.0x |      0.31 |   3.9x |
-| gol step 12x12     |     3.92 |      2.70 |      1.04 |    2.6x |      1.00 |   1.0x |
+| n-queens n=7       |    15.93 |     12.00 |      6.62 |    1.8x |      6.55 |   1.0x |
+| temperature 4096   |     0.00 |      0.00 |      0.00 |    1.0x |      0.00 |   1.0x |
+| datalog tc (n=80)  |    14.77 |     15.11 |     14.87 |    1.0x |     14.50 |   1.0x |
+| sliding 3x3 step   |     1.85 |      0.42 |      0.09 |    4.7x |      0.31 |   3.5x |
+| gol step 12x12     |     4.00 |      2.68 |      1.08 |    2.5x |      0.95 |   0.9x |
 
 <!-- END benchmark:sc-domains -->
 
@@ -128,15 +134,18 @@ decr/idr number relations + `Range` counting), so it lowers and optimizes like t
 
 | environment | value |
 |---|---|
-| timestamp (UTC) | 2026-09-02T16:46:35Z |
-| git commit | f6832fc-dirty |
+| timestamp (UTC) | 2026-09-02T19:54:20Z |
+| git commit | 9b818f3-dirty |
 | cpu | Intel(R) Xeon(R) 6975P-C (16 logical cores) |
 | memory | 247 GiB |
 | os | Linux 6.17.0-1019-aws |
 | jvm | OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu) |
 | jvm args | -Xmx24G -Xss16M -Dfile.encoding=UTF-8 |
 | max heap | 24.0 GiB |
-| scala | 3.8.1 |
+| scala (runtime library) | 3.8.1 |
+| build | sbt 2.0.8; scalac 3.8.1 -source:3.3 -feature -explain |
+| external tools | z3=Z3 version 5.1.0 - 64 bit  vampire=Vampire 5.1.0 (Release build, commit 7b2f410 on 2026-08-13 10:17:34 +0200)  egglog=egglog 3.0.0_2026-09-02_e5dea2d5 |
+| source tree | DIRTY — 103 modified path(s); `9b818f3-dirty` does NOT identify the code that produced these numbers |
 | tuning | literalByRef=true patriciaOps=true |
 | timing | best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source) |
 | interner | WARM — `Interner` and the literal memo carry every id from earlier rows of the same run |
@@ -152,21 +161,21 @@ for it execT(opt) is the executor-ready form.
 
 | program | evalI ms | exec ms | execT ms | execT(opt) ms | execT(inline+opt) ms | vs evalI |
 |---|---:|---:|---:|---:|---:|---:|
-| aunt n=150           |      0.9 |     26.5 |      0.5 |       0.3 |           0.4 |     0.49 |
-| aunt n=400           |      0.9 |    240.4 |      0.9 |       0.6 |           0.6 |     0.67 |
-| n-queens n=6         |      7.4 |     95.9 |     14.8 |       8.6 |           2.1 |     0.28 |
-| n-queens n=7         |     22.0 |    261.3 |     25.7 |      26.6 |           9.2 |     0.42 |
-| temperature 4096     |      0.0 |      1.2 |      0.0 |       0.0 |           0.0 |     1.36 |
-| temperature 16384    |      0.0 |      3.5 |      0.0 |       0.0 |           0.0 |     1.00 |
-| gol step 12x12       |      4.7 |     42.3 |     15.5 |       5.7 |           1.3 |     0.27 |
+| aunt n=150           |      0.7 |     25.7 |      0.4 |       0.4 |           0.3 |     0.43 |
+| aunt n=400           |      0.7 |    202.7 |      0.9 |       0.6 |           0.8 |     1.05 |
+| n-queens n=6         |      3.6 |     44.5 |      6.3 |       8.3 |          11.6 |     3.19 |
+| n-queens n=7         |     27.1 |    236.6 |     22.8 |      22.2 |           6.6 |     0.25 |
+| temperature 4096     |      0.0 |      1.2 |      0.0 |       0.0 |           0.0 |     1.53 |
+| temperature 16384    |      0.0 |      4.5 |      0.0 |       0.0 |           0.0 |     1.65 |
+| gol step 12x12       |      4.4 |     19.0 |      3.8 |       4.0 |           1.5 |     0.34 |
 
 **GoL grid-as-argument** (field is a runtime input ⇒ one compiled graph runs any grid):
-compile = 7.42 ms ONCE, run = 1.223 ms/step.  Amortized comp+run over K steps =
-compile/K + run → 1.223 ms (vs the compiled-in literal, recompiled per grid: 8.64 ms each).
+compile = 1.31 ms ONCE, run = 1.443 ms/step.  Amortized comp+run over K steps =
+compile/K + run → 1.443 ms (vs the compiled-in literal, recompiled per grid: 2.75 ms each).
 
-| union_iter           |      0.1 |      0.7 |      0.0 |       0.0 |           0.0 |     0.12 |
-| datalog tc n=40        |      2.7 |        — |      1.2 |       1.1 |           1.1 |     0.41 |
-| datalog tc n=80        |     27.7 |        — |     16.1 |      16.2 |          16.2 |     0.59 |
+| union_iter           |      0.0 |      0.5 |      0.0 |       0.0 |           0.0 |     0.39 |
+| datalog tc n=40        |      1.7 |        — |      1.4 |       1.4 |           1.4 |     0.84 |
+| datalog tc n=80        |     26.9 |        — |     17.2 |      16.1 |          16.1 |     0.60 |
 
 ### Compile time + improvement per pass (executor-ready build)
 
@@ -177,18 +186,18 @@ means it was OPTIMIZED AWAY — the whole graph evaluated to a constant at compi
 
 | program | transpile ms | push_out ms | hoist | optimize_sharing ms | cse | compile ms | compile+run ms |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| aunt n=150           |      0.12 |     0.65 |       8 |      3.94 |       4 |     5.09 |      5.54 |
-| aunt n=400           |      0.08 |     0.46 |       8 |      0.16 |       4 |     0.74 |      1.37 |
-| n-queens n=6         |      1.29 |     1.34 |     184 |      0.72 |     200 |     3.58 |      5.67 |
-| n-queens n=7         |      0.24 |     1.50 |     215 |      3.69 |     234 |     5.56 |     14.78 |
-| temperature 4096     |      0.08 |     0.02 |       0 |      0.01 |       1 |     0.15 |      0.15 |
-| temperature 16384    |      0.32 |     0.05 |       0 |      0.01 |       1 |     0.40 |      0.40 |
-| gol step 12x12       |      2.26 |     0.83 |     102 |      0.27 |     221 |     3.47 |      4.74 |
-| union_iter           |      0.01 |     0.05 |       2 |      0.02 |       0 |     0.08 |      0.09 |
-| datalog tc n=40        |      0.02 |     0.03 |       0 |      0.01 |       0 |     0.05 |      1.18 |
-| datalog tc n=80        |      0.02 |     0.01 |       0 |      0.01 |       0 |     0.04 |     16.24 |
+| aunt n=150           |      0.10 |     5.25 |       8 |      0.25 |       4 |     6.82 |      7.13 |
+| aunt n=400           |      0.06 |     3.86 |       8 |      0.19 |       4 |     4.14 |      4.90 |
+| n-queens n=6         |      0.37 |     1.31 |     184 |      1.37 |     200 |     3.22 |     14.77 |
+| n-queens n=7         |      3.81 |     1.55 |     215 |      0.71 |     234 |     6.20 |     12.84 |
+| temperature 4096     |      0.08 |     0.04 |       0 |      0.01 |       1 |     0.18 |      0.18 |
+| temperature 16384    |      0.53 |     0.08 |       0 |      0.04 |       1 |     0.68 |      0.68 |
+| gol step 12x12       |      0.36 |     1.03 |     102 |      0.45 |     221 |     2.03 |      3.52 |
+| union_iter           |      0.01 |     0.06 |       2 |      0.02 |       0 |     0.10 |      0.11 |
+| datalog tc n=40        |      0.02 |     0.10 |       0 |      0.01 |       0 |     0.14 |      1.57 |
+| datalog tc n=80        |      0.02 |     0.03 |       0 |      0.01 |       0 |     0.07 |     16.17 |
 
-**comp+run geomean = 1.790 ms ; run-only geomean = 0.270 ms** over 10 benchmarks (literalByRef=true patriciaOps=true).
+**comp+run geomean = 2.464 ms ; run-only geomean = 0.316 ms** over 10 benchmarks (literalByRef=true patriciaOps=true).
 
 <!-- END benchmark:op-graph-backend -->
 
@@ -197,15 +206,18 @@ means it was OPTIMIZED AWAY — the whole graph evaluated to a constant at compi
 
 | environment | value |
 |---|---|
-| timestamp (UTC) | 2026-09-02T16:48:15Z |
-| git commit | f6832fc-dirty |
+| timestamp (UTC) | 2026-09-02T19:56:15Z |
+| git commit | 9b818f3-dirty |
 | cpu | Intel(R) Xeon(R) 6975P-C (16 logical cores) |
 | memory | 247 GiB |
 | os | Linux 6.17.0-1019-aws |
 | jvm | OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu) |
 | jvm args | -Xmx24G -Xss16M -Dfile.encoding=UTF-8 |
 | max heap | 24.0 GiB |
-| scala | 3.8.1 |
+| scala (runtime library) | 3.8.1 |
+| build | sbt 2.0.8; scalac 3.8.1 -source:3.3 -feature -explain |
+| external tools | z3=Z3 version 5.1.0 - 64 bit  vampire=Vampire 5.1.0 (Release build, commit 7b2f410 on 2026-08-13 10:17:34 +0200)  egglog=egglog 3.0.0_2026-09-02_e5dea2d5 |
+| source tree | DIRTY — 103 modified path(s); `9b818f3-dirty` does NOT identify the code that produced these numbers |
 | tuning | literalByRef=true patriciaOps=true |
 | timing | best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source) |
 | interner | WARM — `Interner` and the literal memo carry every id from earlier rows of the same run |
@@ -213,32 +225,32 @@ means it was OPTIMIZED AWAY — the whole graph evaluated to a constant at compi
 
 | domain | scale | eval ms | evalT ms | evalI ms | evalI/eval | evalI/evalT | note |
 |---|---|---:|---:|---:|---:|---:|---|
-| datalog-TC       | chain n=16 (|TC|=136) |       6.1 |       0.9 |       0.2 |    31.8x |    4.4x |  |
-| datalog-TC       | chain n=32 (|TC|=528) |      32.8 |       5.5 |       1.3 |    25.2x |    4.2x |  |
-| datalog-TC       | chain n=64 (|TC|=2080) |     477.5 |      34.8 |       8.6 |    55.5x |    4.0x |  |
-| datalog-TC       | chain n=128 (|TC|=8256) |    5836.5 |     157.4 |      32.5 |   179.5x |    4.8x |  |
-| aunt-query       | family n=150         |      18.8 |       1.4 |       0.1 |   133.5x |    9.7x |  |
-| aunt-query       | family n=400         |     154.8 |       5.2 |       0.7 |   228.0x |    7.7x |  |
-| aunt-query       | family n=800         |     624.3 |      20.3 |       1.0 |   611.5x |   19.8x |  |
-| aunt-query       | family n=1600        |    2738.0 |      94.8 |       3.8 |   724.3x |   25.1x |  |
-| game-of-life     | 16x16 2 steps (68 live) |      28.7 |       9.4 |       6.1 |     4.7x |    1.5x |  |
-| game-of-life     | 24x24 2 steps (193 live) |     114.1 |      24.1 |      15.9 |     7.2x |    1.5x |  |
-| game-of-life     | 32x32 2 steps (321 live) |     301.8 |      43.5 |      28.7 |    10.5x |    1.5x |  |
-| temperature      | 1024 cells (resident) |       0.1 |       0.0 |       0.0 |   321.0x |    3.3x |  |
-| temperature      | 4096 cells (resident) |       0.5 |       0.0 |       0.0 |  1434.0x |    3.8x |  |
-| temperature      | 16384 cells (resident) |       3.3 |       0.0 |       0.0 |  8079.6x |    3.8x |  |
-| sliding-puzzle   | 2x2 depth 6 (pure)   |      28.6 |      14.3 |       9.9 |     2.9x |    1.4x |  |
-| sliding-puzzle   | 3x3 depth 4 (pure)   |     141.7 |      53.2 |      39.1 |     3.6x |    1.4x |  |
-| n-queens         | n=6 (4 sols, pure)   |      27.0 |       4.2 |       2.3 |    11.8x |    1.8x |  |
-| n-queens         | n=7 (40 sols, pure)  |     162.8 |      18.9 |      10.4 |    15.6x |    1.8x |  |
-| n-queens         | n=8 (92 sols, pure)  |     933.8 |      86.6 |      53.9 |    17.3x |    1.6x |  |
-| join-all         | k=200 m=200          |       0.0 |      -1.0 |       0.0 |     0.6x |    0.0x | reduce(union) vs joinAll |
+| datalog-TC       | chain n=16 (|TC|=136) |       3.1 |       0.8 |       0.2 |    16.3x |    4.3x |  |
+| datalog-TC       | chain n=32 (|TC|=528) |      31.8 |       5.0 |       1.2 |    26.2x |    4.1x |  |
+| datalog-TC       | chain n=64 (|TC|=2080) |     431.9 |      32.5 |       7.8 |    55.6x |    4.2x |  |
+| datalog-TC       | chain n=128 (|TC|=8256) |    5283.5 |     151.3 |      32.6 |   162.1x |    4.6x |  |
+| aunt-query       | family n=150         |      17.4 |       1.5 |       0.1 |   124.5x |   10.9x |  |
+| aunt-query       | family n=400         |     136.2 |      10.5 |       0.4 |   324.6x |   25.0x |  |
+| aunt-query       | family n=800         |     591.4 |      41.7 |       1.1 |   554.0x |   39.1x |  |
+| aunt-query       | family n=1600        |    2575.8 |     166.9 |       2.4 |  1078.1x |   69.9x |  |
+| game-of-life     | 16x16 2 steps (68 live) |      26.8 |       9.5 |       6.4 |     4.2x |    1.5x |  |
+| game-of-life     | 24x24 2 steps (193 live) |     107.1 |      24.0 |      16.4 |     6.5x |    1.5x |  |
+| game-of-life     | 32x32 2 steps (321 live) |     279.6 |      43.1 |      29.9 |     9.4x |    1.4x |  |
+| temperature      | 1024 cells (resident) |       0.1 |       0.0 |       0.0 |   321.9x |    3.5x |  |
+| temperature      | 4096 cells (resident) |       0.5 |       0.0 |       0.0 |  1293.6x |    3.5x |  |
+| temperature      | 16384 cells (resident) |       2.4 |       0.0 |       0.0 |  5355.7x |    3.3x |  |
+| sliding-puzzle   | 2x2 depth 6 (pure)   |      28.8 |      13.6 |       9.5 |     3.0x |    1.4x |  |
+| sliding-puzzle   | 3x3 depth 4 (pure)   |     139.9 |      51.2 |      38.8 |     3.6x |    1.3x |  |
+| n-queens         | n=6 (4 sols, pure)   |      26.0 |       4.0 |       2.2 |    11.9x |    1.8x |  |
+| n-queens         | n=7 (40 sols, pure)  |     155.6 |      17.8 |      10.0 |    15.6x |    1.8x |  |
+| n-queens         | n=8 (92 sols, pure)  |     978.5 |      79.4 |      45.2 |    21.7x |    1.8x |  |
+| join-all         | k=200 m=200          |       0.0 |      -1.0 |       0.0 |     0.8x |    0.0x | reduce(union) vs joinAll |
 | join-all         | k=800 m=300          |       0.1 |      -1.0 |       0.2 |     0.3x |    0.0x | reduce(union) vs joinAll |
-| meet-all         | k=40 core=400 +tiny  |       0.0 |      -1.0 |       0.0 |     1.2x |    0.0x | reduce(meet) vs meetAll |
-| meet-all         | k=120 core=600 +tiny |       0.0 |      -1.0 |       0.0 |     0.7x |    0.0x | reduce(meet) vs meetAll |
+| meet-all         | k=40 core=400 +tiny  |       0.0 |      -1.0 |       0.0 |     0.7x |    0.0x | reduce(meet) vs meetAll |
+| meet-all         | k=120 core=600 +tiny |       0.0 |      -1.0 |       0.0 |     0.4x |    0.0x | reduce(meet) vs meetAll |
 
-Geometric-mean evalI speedup over the six example domains: 59.2x vs the
-reference Set, and 3.5x vs the TreeMap trie (evalT). All six
+Geometric-mean evalI speedup over the six example domains: 57.0x vs the
+reference Set, and 4.1x vs the TreeMap trie (evalT). All six
 domains are pure algebra; PathItems are interned to Ints before evaluation (no PathItem
 is touched during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.
 
@@ -250,15 +262,18 @@ is touched during evaluation), and the ring ops use IntMap's unionWith/intersect
 
 | environment | value |
 |---|---|
-| timestamp (UTC) | 2026-09-02T16:46:34Z |
-| git commit | f6832fc-dirty |
+| timestamp (UTC) | 2026-09-02T19:54:21Z |
+| git commit | 9b818f3-dirty |
 | cpu | Intel(R) Xeon(R) 6975P-C (16 logical cores) |
 | memory | 247 GiB |
 | os | Linux 6.17.0-1019-aws |
 | jvm | OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu) |
 | jvm args | -Xmx24G -Xss16M -Dfile.encoding=UTF-8 |
 | max heap | 24.0 GiB |
-| scala | 3.8.1 |
+| scala (runtime library) | 3.8.1 |
+| build | sbt 2.0.8; scalac 3.8.1 -source:3.3 -feature -explain |
+| external tools | z3=Z3 version 5.1.0 - 64 bit  vampire=Vampire 5.1.0 (Release build, commit 7b2f410 on 2026-08-13 10:17:34 +0200)  egglog=egglog 3.0.0_2026-09-02_e5dea2d5 |
+| source tree | DIRTY — 103 modified path(s); `9b818f3-dirty` does NOT identify the code that produced these numbers |
 | tuning | literalByRef=true patriciaOps=true |
 | timing | best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source) |
 | interner | WARM — `Interner` and the literal memo carry every id from earlier rows of the same run |
@@ -272,11 +287,11 @@ graph-optimize.  All stages verified equal to the reference.
 
 | example | eval(def) | evalI(def) | evalI(SC) | execT(opt) | execT(SC+opt) |
 |---|---:|---:|---:|---:|---:|
-| aunt (lot)         |    0.062 |    0.021 |    0.216 |    0.207 |    0.202 |
-| datalog tc (n=15)  |    1.506 |    0.878 |    0.023 |    0.901 |    0.057 |
-| gol step (glider)  |    1.004 |    8.899 |    0.489 |    2.626 |    1.641 |
-| sliding 3x3 step   |    7.410 |    4.428 |    0.064 |   53.956 |    1.231 |
-| n-queens n=6       |   71.070 |   13.561 |    4.955 |    6.238 |    7.432 |
-| temperature 1024   |    0.105 |    0.065 |    0.063 |    0.127 |    0.080 |
+| aunt (lot)         |    0.058 |    0.020 |    0.117 |    0.183 |    0.159 |
+| datalog tc (n=15)  |    1.679 |    0.666 |    0.027 |    0.484 |    0.042 |
+| gol step (glider)  |    0.943 |    0.962 |    0.525 |    1.693 |    1.454 |
+| sliding 3x3 step   |    7.380 |    4.310 |    0.073 |   47.786 |    1.556 |
+| n-queens n=6       |   38.800 |    9.611 |    5.210 |    6.688 |    7.391 |
+| temperature 1024   |    0.158 |    0.062 |    0.058 |    0.152 |    0.078 |
 
 <!-- END benchmark:pipeline-ablation -->

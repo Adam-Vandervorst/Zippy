@@ -400,7 +400,7 @@ object SpatialGamma:
 
   /** the shape half of [[leq]] — the STRONG-γ reading.  One implementation, in the domain that owns
    *  the carrier: [[Shape.leqStrong]] (its may-only sibling is `Shape.leq`, and the table on those two
-   *  states the four channels where the readings differ). */
+   *  states the channels where the readings differ). */
   def leqShape(a: Shape, b: Shape): Boolean = Shape.leqStrong(a, b)
 
   // ==============================================================================================

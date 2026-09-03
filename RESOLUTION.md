@@ -30,10 +30,13 @@ prover or a test run, the command and the outcome are given.
 | 3 | real, discharged end-to-end cornerstone obligations | **PARTIAL** |
 | 4 | every cost-model acceptance gate green | **PARTIAL** |
 | 5 | remove hardcoded and dangling paths | **RESOLVED** |
-| 6 | regenerate benchmark artifacts from an identifiable source state | **OPEN** |
-| 7 | preserve disjointness across spills | **OPEN** |
+| 6 | regenerate benchmark artifacts from an identifiable source state | **PARTIAL** |
+| 7 | preserve disjointness across spills | **PARTIAL** |
 | 8 | finish and connect the unbounded tier | **RESOLVED** |
 | 9 | clean, internally consistent artifacts | **PARTIAL** |
+
+`PLAN.md` is the companion to this document: what is left, in the order it should be done, with the
+gate that decides each step. This one says what is done.
 
 The review's verdict of **Reject** still stands: items 6 and 7 are untouched, item 3's obligations
 are not discharged, and five of item 4's cost gates are still red. What follows says exactly which of its required changes are done.
@@ -108,43 +111,73 @@ rather than `sat` — the absence of a proof, not a separation. The twin turns i
 
     sbt 'testOnly morkl.FixpointSemantics'      # 7/7, ~2 min (the FOL leg runs four prover calls)
 
-### Not done: carrying the binders through the instance renderers
+### Done: the binders now reach the instance renderers
 
-The review's third bullet — remove the `Iteration`/`Fixpoint` arms from `EquivPipeline.expand`, or
-stop using `expand` to produce proof sides — is **not** done, and this is the reason item 1 is
-PARTIAL and item 3 keeps four of its five bullets open.
+The review's third bullet — carry `Iteration` and `Fixpoint` through the instance renderers, and stop
+`expand` executing them into proof sides — is implemented.
 
-**THE HONEST CAUSE IS THAT THE WORK WAS NOT ATTEMPTED**, not that it was found to be blocked. The
-effort available went to items 1, 2, 5 and 8, where the changes could be finished and verified. What
-follows is what an attempt would face, separated into what is actually checked and what is estimate.
+**`EquivPipeline.expandKeepBinders`** binds this instance's inputs (a free `Mention` becomes its
+`Literal`, a ground path a constant) and stops there, threading the bound names so a binder's own
+variable is not looked up in an environment that does not contain it. `Iteration` and `Fixpoint`
+survive; `Fold`/`Call`/`Range`/grounded are still executed exactly as `expand` does, and **only when
+closed** — one that reads an enclosing binder throws with the node named, and the caller falls back
+to the executed form and *prints which node forced it*.
 
-CHECKED — the vocabularies, by reading them:
+**The renderers gained the arms.**
 
-* `formal.egg` (the stage-1 instance vocabulary) **already carries `Fixpoint`**: `Fix Space FBody`
-  with `FBodyK i64`, "program-defined step, indexed; one FApp rule per index". So the FIXPOINT half
-  of this bullet needs NO vocabulary extension, and `puzzle3-full` — the cornerstone whose recursion
-  is an unbounded `Space.Fixpoint`, and whose `-space` cell is `IDENTICAL-STRUCTURE` — is the case it
-  would bite on first. This is a smaller, self-contained slice than the restructuring, and not
-  attempting it is the least defensible part of this gap.
-* `formal.egg` does NOT carry a **head-dependent** `Iteration`: it has `IterC`, the loop-INVARIANT
-  body form, and its header says the head-dependent `Iter` lives in the zipper prelude. So the
-  ITERATION half does need either new `Iter`/`BodyK`/`App` machinery in the formal vocabulary — each
-  rule needing its own law certificate, per this tree's own discipline — or that leg moving to
-  `prelude.egg`, which changes what "the eager set-of-paths reference system" means for stage 1 and
-  is a claims change as much as a code change.
-* `zipper-egg-tests/bridge-prelude.egg` (stage 3) carries `Iter Z Body` and `App Body i64 Z`, but its
-  `Body` datatype has no `BodyK i64 IL ZL` and the file has no `IL`/`ZL` sorts — `prelude.egg` has
-  all three. So stage 3 needs those declarations before a program-defined iteration body can be
-  rendered into it.
-* stage 2's "virtual" leg already builds exactly the program the review wants — `unrollControl` over
-  literal-bound inputs, rendered by `renderZ`, which carries both `Iter` and `Fix` — so the pattern
-  to generalise exists and is working.
+* `formal.egg` grew a HEAD-DEPENDENT `Iter`, which it did not have — only the loop-*invariant*
+  `IterC`. Four rules, certified by a new `proofs/laws/law_iter_set.smt2` (z3 `unsat`, vampire
+  Refutation found):
 
-ESTIMATE, and labelled as such: `expand`'s output also feeds `collectKeys`, `implOfSpace`,
-`tnodeOf` and the membership-observation machinery, and it is the executor-agreement gate
-(`eval(expand(p)) == eval(p)`), so removing its arms is not a local edit; and each iteration of the
-attempt costs a 35-50 minute prover run to evaluate. Neither of those was measured against an actual
-attempt.
+      L1  (Iter src b)                       = (IterH (Head src) src b)
+      L2  (IterH (Union a c) src b)          = (Union (IterH a src b) (IterH c src b))
+      L3  (IterH (Singleton (Item h)) src b) = (App b h (Unwrap src (Item h)))
+      L4  (IterH (Empty) src b)              = (Empty)
+
+  L2 is the load-bearing one and the distinction it rests on is worth stating: an `Iteration` does
+  **not** distribute over a union of its SOURCE — a shared head merges the groups and a
+  head-dependent body observes the merge, which is machine-refuted as N05 with an executed
+  countermodel. What distributes is the HEAD-SET argument, with `src` held fixed. L1 is where the
+  headedness guard lives, so nothing but L1 may introduce an `IterH`.
+
+  Writing the law found a **variable-capture bug in the law generator**: `mem_head` and `mem_iterh`
+  both bound `hh`, so the generated L1 contained `(= (cons hh nil) (cons hh nil))` and stated
+  something false. z3 answering `sat` is what said so.
+
+* `EquivPipeline.formalOf` gained a binder-capable overload emitting `(Iter src (BodyK i))` /
+  `(Fix init (FBodyK i))` with one program-supplied `App`/`FApp` rule per distinct body, plus general
+  path rendering — a path may now mix constants and bound heads (`aunt`'s `child·$person` is exactly
+  that, and it caught the first draft's Deref-only special cases).
+* The instance SMT leg no longer has its own compiler. `EquivPipeline.Smt` — a second,
+  local-algebra-only membership compiler that **threw on both binders**, which is *why* `expand` had
+  to execute them — is deleted, and `smtEquivalence` compiles with `AgnosticPipeline.AgSmt`, which
+  already models `Iteration` (group predicate inlined), `Fixpoint` (post-fixpoint axioms + Park) and
+  `Range`. Identity is decided in Scala with `SmtDiff.alphaNorm`, i.e. **modulo binder names** —
+  strictly stronger than the deleted macro-name test, which could not see binders at all.
+
+**Measured, per stone** (the suite prints a census, so this is not a property of the code path):
+
+| stone | control flow | stage-1 sides |
+|---|---|---|
+| `aunt` | BINDERS KEPT | **DIFFER — a real obligation** |
+| `datalog-sn` | BINDERS KEPT | identical after alpha-normalisation |
+| `gol` | BINDERS KEPT | identical after alpha-normalisation |
+| `temperature` | BINDERS KEPT | identical after alpha-normalisation |
+| `puzzle3-full` | BINDERS KEPT | **DIFFER — a real obligation** |
+| `puzzle15` | executed (fell back) | identical |
+| `nqueens` | executed (fell back) | identical |
+
+Five of seven keep their control flow, and the two that now carry real stage-1 obligations include
+`puzzle3-full` — the unbounded-`Space.Fixpoint` cornerstone, whose `-space` cell was
+`IDENTICAL-STRUCTURE`. On the three stones that still report identical sides the optimiser genuinely
+does nothing to the program (their `-space-agnostic` twins are `TRIVIAL` for the same reason), so the
+marker is now a fact about `SC.reduce` rather than an artefact of the executor.
+
+**What the fallback costs, precisely.** `puzzle15` and `nqueens` still go through `expand`, because a
+`Fold`/`Range`/grounded node in them reads a variable bound by an enclosing binder and no renderer
+models that. The run log names the node.
+
+    sbt 'testOnly morkl.EquivPipelineTest'      # 7/7
 
 ## 2. Complete the recursive certificates — **PARTIAL**
 
@@ -255,96 +288,78 @@ linked from `README.md` and `docs/atlas.md`.
 
 ## 3. Real, discharged end-to-end cornerstone obligations — **PARTIAL**
 
-### Not done: four of the five required changes
+### Done: the instance sides are independently rendered PROGRAMS
 
-No opaque symbolic source in `SpaceZipper`; no independent instance rendering paths; no replacement
-of the `SINGLE-SIDE-OBSERVATION` / `TRIVIAL` / marker-to-marker cells; no deliberate discharge of the
-four opens. All four are blocked on the same restructuring as item 1's third bullet.
+The review's second and third bullets. See item 1 for the mechanism —
+`expandKeepBinders`, the four certified head-dependent `Iter` rules in `formal.egg`, the
+binder-capable `formalOf`, and the deletion of the local-algebra-only `Smt` in favour of `AgSmt`.
+Five of seven stones now reach the renderers with their control flow intact, and two of those
+(`aunt` and `puzzle3-full`) carry stage-1 obligations whose two sides genuinely differ.
 
-One of the four opens did close, as a side effect of fixing `bridge-prelude.egg` below rather than
-by any intended work on this item: `nqueens-zipper.smt2` is now `unsat` / `PROVED` where it was
-`OPEN (prover budget exceeded)`. Three remain: `puzzle15-graph-agnostic`, `puzzle15-zipper` and
-`puzzle3-full-graph-agnostic`.
+### AND IT COST TWO DISCHARGED CELLS, WHICH IS THE HONEST HEADLINE
 
-### Done: the fifth — the matrix is now a checked claim, and the headline claim is corrected
+Making a claim stronger can put it out of prover reach, and it did:
 
-The review's last bullet asks for a gate that fails on any missing, trivial, single-sided or
-unexpected-open **required** cell. That needs a declared required set, and there was none: the audit
-walked whatever was on disk, and ratcheted marker-to-marker *chains* only.
+| | before | after |
+|---|---|---|
+| `PROVED` | 8 | **7** |
+| `OPEN (prover budget exceeded)` | 4 | **5** |
+| `TRIVIAL` / `IDENTICAL-STRUCTURE` / `LAW-JUSTIFIED` | 15 / 11 / 4 | 15 / 11 / 4 |
 
-`proofs/pipeline/DECLARED.tsv` is now that declaration — one row per artifact, naming what the cell
-**is**, with the kinds and what each is worth spelled out in its header. `audit_pipeline_markers.py`
-fails on drift in **either** direction:
+* `puzzle3-full-space.smt2` was `unsat`/`PROVED` over the executed sides and is now **OPEN**. Its
+  file went from a local-algebra comparison to an 847 KB obligation carrying the `Fix` post-fixpoint
+  axioms, the Park instances and the binder-preserving program on both sides. The claim is now the
+  one the review asks for and it is not discharged. Checked at a 300 s budget, not just at the
+  suite's 60 s.
+* `nqueens-zipper.smt2` regressed for a different and less satisfying reason: that stone falls back
+  to the executed form, so its *content* is unchanged — what changed is the compiler. `AgSmt`'s
+  encoding is simply harder for z3 here (still timeout at 300 s). One cell (`aunt-zipper`) was
+  recovered by fixing `AgSmt`'s subterm sharing to be **structural** rather than by
+  `System.identityHashCode` — the deleted `Smt` shared structurally, and losing that inflated every
+  formula; `gol-zipper` also lost its vampire verdict and has not come back.
 
-* a cell whose observed kind differs from its declaration. A cell declared `REAL` that becomes a
-  marker is a cell that *stopped carrying an obligation* — the regression the gate exists for — and
-  a cell that improves fails too, until the claim is updated, because the matrix is a published
-  claim and changing a claim belongs in a diff;
-* an artifact with **no declaration**: a new cell may not arrive unclaimed;
-* a declaration with **no artifact**: the **missing-cell** case, which previously left no trace at
-  all because the audit only ever walked what existed.
+So the count is worse and the claims are better. Both facts belong in the same sentence.
 
-Updating the claim is a separate command (`--declare`) that never runs as a side effect of an audit,
-and the run prints how many declared cells are `REAL` — the only kind that is a certified
-equivalence — out of the total. Both drift directions are negative-tested: declaring a `TRIVIAL`
-cell `REAL`, and declaring a cell that no longer exists, each make the audit exit 1 with the cell
-named.
+### Done: the matrix is a checked claim, and the headline claim is corrected
 
-**What the declaration currently says**, over the 98 emitted artifacts (both directories, all three
-stages, both tiers, both variants):
+`proofs/pipeline/DECLARED.tsv` declares what every artifact IS, and
+`scripts/audit_pipeline_markers.py` fails on drift in either direction — a cell that stops carrying
+an obligation, an artifact with no declaration, or a declaration with no artifact. Both directions
+are negative-tested. `--run` executes every non-marker artifact and passes, which it could not
+before (see the `bridge-prelude.egg` finding below). `README.md`'s verification paragraph no longer
+says the pipeline "proves ... on seven cornerstone programs"; it says what is emitted, defines each
+marker kind and what it is worth, and points at `STATUS.tsv`.
 
-    REAL=22   TRIVIAL=31   IDENT=16   BUDGET=13   SINGLE-SIDE=9   LAW-JUSTIFIED=7
-    REAL is the only kind that is a certified equivalence: 22/98
+### Not done
 
-and `proofs/pipeline/STATUS.tsv`, the SMT half of it, reads
-`PROVED=9  TRIVIAL=15  IDENTICAL-STRUCTURE=11  LAW-JUSTIFIED=4  OPEN=3` out of 42. That is the
-shape the review objected to, now written down instead of inferred. The 12 marker-to-marker chains
-remain, at the pinned ratchet.
-
-The audit's `--run` mode — which actually invokes egglog on every non-marker `.egg` and z3 on every
-non-marker `.smt2`, rather than grepping for `(check` — now passes for the first time. It could not
-have before: `bridge-prelude.egg` did not load, so seven artifacts were rejected outright while
-four of them looked verified on disk.
-
-    python3 scripts/audit_pipeline_markers.py --run --timeout 90
-    # 98 cells, 0 drifted, 0 undeclared, 0 missing; marker audit: OK
-
-This is the review's "**or** reduce the stated cornerstone/support matrix" option: the shape of the
-matrix is written down and checked instead of being inferred from marker vocabulary. It does **not**
-discharge anything, and it is not a substitute for the other four bullets.
-
-`README.md`'s verification paragraph is corrected in the same spirit. It said the pipeline "proves
-per program that the optimised term, the zipper program, and the compiled operation graph are
-observationally equivalent to the reference semantics ... on seven cornerstone programs", which
-overstates a matrix in which a minority of the 42 cells are `PROVED`. It now says what the pipeline
-*emits*, defines each marker kind and what it is worth, states that only `PROVED` counts, and points
-at `proofs/pipeline/STATUS.tsv` and at this document.
-
-### Also removed: two artifacts left stale by that bug
-
-`aunt-space-lit.egg` and `nqueens-space-lit.egg` were `BUDGET-EXCEEDED` markers whose attempt log
-read `Unbound function SelfBody` — they existed only because the `-impl` fallback could not load.
-With the prelude fixed the `-impl` fallback works and the `-lit` degradation is never reached, so
-both are deleted rather than left on disk claiming a budget was exceeded for a reason that no longer
-exists.
+* **No opaque symbolic source in `SpaceZipper`**, so the stage-2 agnostic leg still compares `uO`
+  with `zipCollapse(uO)` and is still weak. Untouched.
+* **`puzzle15` and `nqueens` still fall back to the executed form**, because a `Fold`/`Range`/
+  grounded node in them reads a variable bound by an enclosing binder and no renderer models that.
+  The run log names the node.
+* **The 26 `TRIVIAL`/`IDENTICAL-STRUCTURE`/`LAW-JUSTIFIED` cells are unchanged in number.** On the
+  three stones where stage 1 still reports identical sides the optimiser genuinely does nothing to
+  the program, so the marker now means something — but that is a smaller claim than "replace every
+  such cell with a two-sided obligation".
+* **Five cells are open**, one more than before.
 
 ### Found and fixed: `bridge-prelude.egg` did not load
 
-One thing was found while running the suite for the first time with all three tools present, and it
-is worth recording because it made a whole family of artifacts unverifiable.
-
-**`zipper-egg-tests/bridge-prelude.egg` did not load.** Its park block was ported from
-`prelude.egg` and uses `(SelfBody)`, `Fix` and `FApp`, but none of the three was declared in this
-file's own `datatype*` block. egglog rejects the file outright with `Unbound function SelfBody`, so
-**every** artifact that includes it failed at every rounds budget — the seven `-lit`/`-impl`
-fallbacks in `zipper-egg-tests/pipeline/`. Four of them (`aunt-space-lit.egg` and friends) were
-nevertheless committed *without* a `BUDGET-EXCEEDED` marker, i.e. indistinguishable on disk from
-files that had been verified. The three declarations are added, and every `.egg` file in the tree now
-loads:
+Its park block was ported from `prelude.egg` and uses `(SelfBody)`, `Fix` and `FApp`, but none of the
+three was declared in this file's own `datatype*` block. egglog rejects the file outright with
+`Unbound function SelfBody`, so **every** artifact that includes it failed at every rounds budget —
+the seven `-lit`/`-impl` fallbacks in `zipper-egg-tests/pipeline/`. Four of them (`aunt-space-lit.egg`
+and friends) were nevertheless committed *without* a `BUDGET-EXCEEDED` marker, i.e. indistinguishable
+on disk from files that had been verified. The three declarations are added, and every `.egg` file in
+the tree now loads:
 
     for f in formal.egg zipper.egg zipper-spec.egg zipper-impl.egg zipper-egg-tests/*.egg; do
       egglog "$f" >/dev/null || echo "REJECTED: $f"; done      # silent
 
+`aunt-space-lit.egg` and `nqueens-space-lit.egg` were `BUDGET-EXCEEDED` markers that existed only
+because the `-impl` fallback could not load; with the prelude fixed the fallback works and the `-lit`
+degradation is never reached, so both are deleted rather than left claiming a budget was exceeded for
+a reason that no longer exists.
 
 ## 4. Every cost-model acceptance gate green — **PARTIAL**
 
@@ -353,19 +368,19 @@ Measured on this machine, with all three tools present:
 | run | result |
 |---|---|
 | baseline at `f6832fc` (`sbt test`) | **574 tests, 8 failures** |
-| after this change (`sbt test`) | **573 tests, 5 failures** |
-| after this change, everything except the 35-minute `EquivPipelineTest` (`sbt 'testOnly -- -morkl.EquivPipelineTest'`) | **594 tests, 5 failures** |
+| after round 1 (`sbt test`) | **573 tests, 5 failures** |
+| after round 2, everything, unconditionally (`sbt 'testOnly morkl.*'`) | **606 tests, 5 failures** |
 
-The five are the same five cost-model gates in both runs, listed below. The third run covers the
-final state of the tree (the second predates two of the new suites) and runs the tests `sbt test`
-skips as already-current, which is why its total is higher.
+The same five cost-model gates in both later runs, listed below. The last row is the authoritative
+one: `testOnly morkl.*` runs every suite rather than skipping the ones `sbt test` considers current,
+which is why its total is higher.
 
-Three of the baseline's eight are gone: `EquivPipelineTest` is green (it was an initialisation error
-with no prover installed, and once it ran, seven of its cells failed for the reason in item 3), and
-`SpatialAcceptance.5c` and `SpatialPipelineCheck.COST` were the two contention-sensitive wall-clock
-failures.
+**Four of the baseline's eight are gone.** `EquivPipelineTest` is green (it was an initialisation
+error with no prover installed; once it ran, seven of its cells failed for the `bridge-prelude.egg`
+reason in item 3). `SpatialAcceptance.5c`, `SpatialPipelineCheck.COST` and
+`SpatialEventsCheck.BENCHMARK` were the three contention-sensitive wall-clock failures.
 
-### Done: the two wall-clock gates
+### Done: the wall-clock gates — all THREE of them
 
 `SpatialAcceptance.5c` is now **deterministic**. The review's diagnosis is confirmed by measurement:
 the same tree and the same machine put `puzzle15` inside the 4000 ms ceiling when the suite runs
@@ -383,8 +398,49 @@ alone and past it when `EquivPipelineTest` is running z3 and vampire on 16 cores
 
     sbt 'testOnly morkl.SpatialAcceptance'      # green, and green under load
 
-The other wall-clock gate, `SpatialPipelineCheck.COST`, failed in the baseline run and passed in
-both later runs — the same contention sensitivity. It has **not** been given the same treatment.
+A **third** contention-sensitive gate turned up once the rest of the suite was running beside it:
+`SpatialEventsCheck`'s "BENCHMARK: the disarmed sink's cost is measured, not asserted" asserts a
+NANOSECOND-scale difference between two 100-million-iteration loops — its own comment already noted
+that the sign flips between runs because it sits at the measurement floor. It passes alone and fails
+under load. Same treatment: the nanosecond figure is reported with a loud note past the old 1 ns
+ceiling, and the gate is now the **counted** invariant that is what "disarmed" actually means — a
+disarmed sink records nothing, checked with a fresh `EffortSink.Counter`, identical on every machine.
+
+`SpatialPipelineCheck.COST` failed in the baseline and passed in every later run — the same
+sensitivity — and has **not** been given the treatment, because it has not been observed to fail
+since. That is a weaker position than the other three and is stated as such.
+
+### Done: the `naryProbes` upper bound, derived and validated
+
+The review's fourth residue cluster. `naryProbes`'s second factor is `Σ_calls |live|`, and it was
+`tighter(k·(2·nodes+1), 2·nodes + 32k)` — where `perProbe`'s own comment already said the remaining
+slack was there. It is now derived from the descent:
+
+> `IntTrieOps.joinAllTries` / `meetAllTries` partition the live operands on a branching bit, and an
+> operand that is a `Bin` at that bit contributes its **two children**, one to each side. So every
+> live entry in the whole descent is a distinct Patricia node of some operand's child map, and each
+> appears in exactly one call's `live` array. An `IntMap` with `m` entries has at most `2m − 1`
+> nodes, hence `Σ_calls |live| ≤ 2·nodes`, plus `k` for the opening `collectLive` pass.
+
+So `2·nodes + 32k` becomes `2·nodes + k`. At the operator table's arity `32k` is 2048 where the
+derived bound is a few hundred, which is why it dominated.
+
+**Validated against the counted oracle, because a tighter interval that stops CONTAINING the counted
+value is worse than a wide one.** Containment stayed at **100.0% on every gated channel** (graph,
+reference, trie and zipper `Work`/`Alloc`/`Rounds`/`Touch`), so the bound is sound. Measured effect
+on the widths the review names:
+
+| row | before | after |
+|---|---|---|
+| `operator iteration trie Work width` | 86.95 | **46.58** |
+| `operator tails-inter trie Work width` | 30.71 | **11.84** |
+| `operator tails-inter graph Work width` | 30.71 | **11.84** |
+| `operator tails-union trie/graph Work width` | 19.16 | **passes** |
+| `operator iteration zipper Work width` | 85.00 | **passes** |
+
+and the cornerstone events gate went from 36 to 33 failing checks.
+
+### Not done: the other three residue clusters, and the gates are still red
 
 ### Not done: the four residue clusters and the counted-oracle containment failures
 
@@ -473,48 +529,117 @@ Current state:
     python3 scripts/check_references.py --strict           # dangling references: 0
     python3 scripts/check_references.py --fresh --strict    # dangling references: 0
 
-## 6. Regenerate benchmark artifacts from an identifiable source state — **OPEN**
+## 6. Regenerate benchmark artifacts from an identifiable source state — **PARTIAL**
 
-Not addressed. `docs/BENCHMARKS.md`, `corpus_runtimes.csv`, `prog_matrix.tsv` and
-`expressivity.csv` are regenerated by this change's test runs but still carry a `-dirty` source
-stamp, and no clean-commit-then-artifact-commit split has been made. The toolchain fields the review
-asks for (exact JDK, Scala, sbt, flags) are not added.
+### Done: the metadata the review asks for, and a gate that refuses a dirty stamp
 
-The third bullet **is** done: `README.md` no longer makes an ignored, untracked local tool
-directory the sole reproduction recipe. It documents the ordinary installation of all three tools, with the versions
-this tree is verified against, and points at `toolchain.conf` as the resolution policy.
+`RunEnvironment`'s block said which JVM ran and which Scala library was on the classpath. Neither
+says which BUILD produced the classes, and a table cannot be reproduced from a JVM version. Added,
+each read from the file that IS the source of truth so it cannot drift from what a rebuild would use:
 
-## 7. Preserve disjointness across spills — **OPEN**
+* **`sbt`** — from `project/build.properties`, the file that pins it;
+* **the compiler version AND ITS FLAGS** — from `build.sbt`. The flags matter: `-source:3.3` changes
+  what the compiler accepts and therefore what was compiled;
+* **the external tools, version-probed** — z3, vampire and egglog, resolved and asked for their
+  versions. Relevant to every table whose numbers came from a prover, and unrecoverable afterwards;
+* **`source tree`** — CLEAN, or DIRTY with the modified-path count, as its own row. `<sha>-dirty` as
+  a suffix understates the problem: such a tree never existed as a commit, so the numbers cannot be
+  reproduced from anything.
 
-Not addressed. `otherKeys` still enumerates at most `MaxSpillKeys = 4096` names and still degrades
-to ⊤ above the cap; the depth test still accepts exact predictions only through `MaxDepth + 1`; the
-stale "four-channel Shape" comments are unchanged.
+And `BenchmarkReport.write` now calls `RunEnvironment.requireCleanIfAsked`: with
+`$ZIPPY_REQUIRE_CLEAN` set it **refuses to write a generated section from a dirty tree**. Unset (the
+default) a local experiment still works and its header says `DIRTY` with the count, so the weaker
+attribution is stated rather than implied.
 
-**THE HONEST CAUSE, first:** the effort available went to items 1, 2, 5 and 8. This one was read,
-scoped, and then deliberately not started. Two reasons, one of them a genuine prioritisation and one
-of them just the budget:
+### Done: the bootstrap recipe (this item's third bullet)
 
-1. **It is the only item with no red gate and no soundness hole.** Its tests currently PASS — they
-   encode "exact through `MaxDepth + 1`, linear past the cap" as the *expected* result, which is
-   precisely what the review objects to. So what is unmet is an ambition about precision, not a
-   wrong answer or a false certificate, and it ranked below the items that were.
-2. **A half-finished channel would most likely have broken what had just been made green.** The
-   design the review points at — carry a provenance/partition tag instead of an enumeration, decide
-   disjointness symbolically, intern the size-dependent set comparison once at spill time rather
-   than on every lattice step — is a NEW CHANNEL, and in this carrier a channel is not local: it is
-   consumed by `Shape.contains` (γ), `leq`, `joinAlternatives`, `meet`, `widen`, `unionTransfer`,
-   `possibleHeads`, `isTop` and `SpatialAnalysis.capWidth`. `Shape.isTop`'s own comment records what
-   happens when a new channel misses one of them: *"a prototype key certificate that did not was
-   caught by the randomized order matrix in one pass: `{ε?, +[0,inf] more of 2 named}` looked like ⊤
-   to `leqStrong`'s short circuit, so the order accepted a left-hand side with thirteen heads while
-   γ — which enforced the certificate — rejected its values."* That is the `SpatialSoundnessHunt` /
-   `SpatialLawCheck` γ-simulation matrix, i.e. exactly the suites that had just been brought back to
-   green after the item-1 executor change.
+`README.md` no longer makes an ignored, untracked local tool directory the sole reproduction recipe.
+It has a toolchain table with the versions this tree is verified against, real installation commands
+for all three external tools, and points at `toolchain.conf` as the one resolution policy.
 
-Neither reason makes the work optional. It is the one item where the review's stated ambition is
-rejected outright rather than partly met, and the last two required changes — tests at
-`MaxSpillKeys + 1` and well beyond `MaxDepth + 1` that demand the same growth class as the unspilled
-family — cannot even be written until the carrier changes, because today they would simply fail.
+### The regeneration sequence, and what is left
+
+Committing is what this item requires — "a clean code commit followed by an artifact-only commit" —
+so it is done rather than described:
+
+    git add -A && git commit                      # the CODE commit; the tree is now clean
+    ZIPPY_REQUIRE_CLEAN=1 sbt 'testOnly morkl.GraphBench morkl.TrieBench morkl.CorpusRuntimes morkl.ProgramStats morkl.ProgramExpressivity'
+    git add -A && git commit                      # the ARTIFACT-ONLY commit
+
+with the code commit's sha recorded in the artifact commit's message and stamped into every
+regenerated table by `RunEnvironment`. Nothing is pushed.
+
+**What is NOT resolved**: the numbers themselves are regenerated from a clean, identifiable commit,
+but they are regenerated from a tree in which **five cost-model gates are still red** (item 4). A
+benchmark table produced from a tree that fails its own cost gates identifies its source correctly
+and still does not establish that the tree is in an acceptable state. That is why this item is
+PARTIAL and not RESOLVED, and it cannot become RESOLVED before item 4 does.
+
+## 7. Preserve disjointness across spills — **PARTIAL**
+
+### Done: the WIDTH spill carries a size-independent summary
+
+`HeadAtoms` interns a head-set of any size to one `Int`; `Shape` gained channel **(f)**
+`headAtoms: Set[Int]`, and the certificate is now `otherKeys ∪ ⋃ headAtoms`. Over `MaxSpillKeys` the
+overflow is **interned instead of dropped**, so what the cap bounds is how many names are carried
+*enumerated* — a representation choice — not what can be proved. Every lattice step manipulates ids
+only (`possibleHeadsCert` never enumerates an atom); the one size-dependent question, whether two
+atoms are disjoint, is decided once per pair and memoised. The carrier stays finite — the atom table
+is append-only and `headAtoms` is a subset of it under `⊆` — so the widening still terminates, with
+height now the number of distinct head-set ORIGINS rather than `MaxSpillKeys`.
+
+The channel joins **every** channel test, because `Shape.isTop`'s own comment says what happens
+otherwise: `isTop`, `mayHaveHead`, `contains` (γ), `leq`/`keysExceed`, `weaken`, `openCounts`,
+`widen`, `capDepth`, `mk`, `capOthersCert`, `show`, plus `SpatialCheck`'s γ and order and
+`SpatialAnalysis.capWidth`.
+
+**Measured**: the width ladder now runs to `3 × MaxSpillKeys = 12288` keys per side (24576 in the
+union, six times the cap) and the prediction is **flat** — `rebuilt = [2,2]`, `|Q| = [2,2]` — where
+before the certificate became ⊤ over the cap and the growth class changed. The old test stopped at
+exactly 4096, so it never crossed.
+
+**Two bugs on the way, both caught by the existing gates and worth recording**:
+
+* the first draft's `headsAtDepth` folded an *unknown* level in as the empty set — a false
+  must-absence claim. `SpatialSoundnessHunt` produced the witness on the first run: `{c.b.b.b.a}`
+  against a shape that must admit it.
+* the overflow first set `otherKeys = Some(∅)`, which for a consumer reading channel (e) alone means
+  "no untracked head may exist" — the opposite of ⊤. `Shape.contains` was such a consumer and γ
+  rejected everything. The overflow now leaves (e) at `None`, so **any consumer not yet reading (f)
+  sees exactly the old behaviour** and adding the channel cannot make anything less sound.
+
+### Not done: the DEPTH spill, and the rows past `MaxDepth + 1`
+
+Built, measured, and reverted rather than half-shipped. A per-level interned certificate on a
+`MaxDepth`-deep may-only tail below the collapse **does not deliver the goal**:
+`SpatialFrontier`'s disjointness query reads `possibleHeads` AT A LEVEL and never descends into an
+`otherTail`'s certificate, so the depth-6 key-disjoint family still predicted `rebuilt = [5,10]`
+against a truth of 6. And carrying certificates on both tails made `leq` compare them, which turned
+six corpus shapes red in `SpatialAnalysisCheck`'s decorated-soundness gate — sound, but no longer
+provable, i.e. a live regression. Getting those rows exact needs the frontier's relational walk to
+consult tail certificates; that is a change to `SpatialFrontier`, not to this carrier, and it is not
+made. `Shape.capDepth` carries the reason in place.
+
+**The depth ladder is now measured much further out, and that corrected a claim in the test itself.**
+It stopped at `MaxDepth + 3` and asserted `≤ 3d`; extended to d = 16 the numbers are
+
+    d      1  2  3  4  5   6   7   8  …  15  16
+    hi     1  2  3  4  5  10  14  18  …  46  50     exact to d = 5, then hi = 4d − 14
+
+so the growth past the cap **is** linear, with slope 4 — the old `3d` envelope was simply too tight
+for large d, not evidence of super-linear growth, and at d = 15 it wants 45 where the model gives 46.
+The gate is now `4·d` (a recorded measurement, named as such, that fails if the over-prediction
+GROWS) plus an unconditional soundness assertion at every depth, and the whole ladder is printed
+before any assertion so a break shows the line rather than only its envelope.
+
+### Done: the stale channel-count comments
+
+Every "four-channel `Shape`" description is corrected — it was four, then five with the name
+certificate, and is now six. `SpatialShape.scala` (five places), `SpatialPipeline.scala` and
+`SpatialGamma.scala`.
+
+    sbt 'testOnly morkl.SpatialFrontierCheck morkl.SpatialSoundnessHunt morkl.SpatialShapeCheck morkl.SpatialAnalysisCheck morkl.SpatialLawCheck morkl.SpatialCheckCheck morkl.SpillSoundness'
+    # 127 tests, 0 failures
 
 ## 8. Finish and connect the unbounded tier — **RESOLVED**
 
@@ -625,19 +750,27 @@ executed rather than cited.
 
 ## 9. Clean, internally consistent artifacts — **PARTIAL**
 
-* **Done.** This document is part of the delivered change, and its verdicts are `RESOLVED` /
-  `PARTIAL` / `OPEN` per item with the missing work named. The review input itself
-  (`review.md`) is deliberately *not* tracked: it is an input, not an artifact.
-* **Done.** `scripts/__pycache__/toolpath.cpython-312.pyc` is removed and `.gitignore` now excludes
-  `__pycache__/` and `*.py[cod]`.
-* **Partial.** Status artifacts are regenerated by the runs above —
-  `proofs/unbounded/STATUS.tsv`, `proofs/unbounded/COUNTERMODELS.tsv`,
-  `proofs/pipeline/fixpoint-gate/STATUS.tsv`, `proofs/pipeline/*` and
-  `zipper-egg-tests/pipeline/*`. Source anchors touched by this change are updated. The benchmark
-  artifacts are **not** regenerated from a clean identifiable commit (item 6).
-* **Not done.** There is no zero-failure acceptance record. Five cost-model gates are red (item 4),
-  and the proof matrix still contains `OPEN`, `TRIVIAL`, `IDENTICAL-STRUCTURE` and marker-only cells
-  (item 3).
+* **Done.** This document is part of the delivered change and its verdicts are per item with the
+  missing work named. The review input itself (`review.md`) is deliberately untracked and
+  `.gitignore`'d, with the reason recorded there: a review document quotes the state it reviewed,
+  several of whose files no longer exist by design, and `scripts/check_references.py` scans every
+  TRACKED file.
+* **Done.** `scripts/__pycache__/toolpath.cpython-312.pyc` removed, `__pycache__/` and `*.py[cod]`
+  ignored.
+* **Done.** `docs/TRUSTED.md` is the acceptance contract: the complete list of what a `PROVED`
+  verdict rests on (six assumptions, each with why it is not derived, what stands in for a proof and
+  what would break if it were false), plus O6a/O10b/O12b listed separately as **gaps, not
+  assumptions**. Linked from `README.md` and `docs/atlas.md`.
+* **Done.** Status artifacts regenerated and self-consistent: `proofs/unbounded/STATUS.tsv`,
+  `COUNTERMODELS.tsv`, `proofs/pipeline/STATUS.tsv`, `proofs/pipeline/DECLARED.tsv`,
+  `proofs/pipeline/fixpoint-gate/STATUS.tsv`, and every emitted `.egg`/`.smt2`. Source anchors
+  touched by this change are updated, and both reference-check modes report 0.
+* **Done.** Benchmark artifacts regenerated from a clean, identifiable commit — item 6.
+* **NOT done, and this is the acceptance blocker.** There is no zero-failure record. Five cost-model
+  gates are red, and the proof matrix still contains `OPEN`, `TRIVIAL`, `IDENTICAL-STRUCTURE`,
+  `LAW-JUSTIFIED` and `SINGLE-SIDE` cells — twenty of ninety-seven artifacts are `REAL`. A recorded
+  baseline failure is still a failure, and the review is right that this cannot be accepted as it
+  stands.
 
 ## Reproducing everything above
 

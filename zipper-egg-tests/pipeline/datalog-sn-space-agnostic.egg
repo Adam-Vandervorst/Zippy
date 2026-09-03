@@ -1,3 +1,24 @@
 ; AUTO-GENERATED pipeline space (datalog-sn) — DATA-AGNOSTIC.
+; BOUNDED-UNROLLING (k=1): the sides carry 1 residual cut(s):
+;   sn_tc@1(; S"edges", ((S"edges" \/ (S"edges".iter(P"av1", S"ar1", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar1")))
+) \ S"edges")) \/ ((S"edges".iter(P"av3", S"ar3", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar3")))
+) \ S"edges").iter(P"av2", S"ar2", 
+ (P"av2" x TailsUnion((S"edges" <| S"ar2")))
+) \ (S"edges" \/ (S"edges".iter(P"av4", S"ar4", 
+ (P"av4" x TailsUnion((S"edges" <| S"ar4")))
+) \ S"edges")))), ((S"edges".iter(P"av2", S"ar2", 
+ (P"av2" x TailsUnion((S"edges" <| S"ar2")))
+) \ S"edges").iter(P"av1", S"ar1", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar1")))
+) \ (S"edges" \/ (S"edges".iter(P"av3", S"ar3", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar3")))
+) \ S"edges"))))
+; so this cell's claim is about the k-UNROLLINGS at those depths, quantified over the cuts'
+; free inputs, and NOT about the recursion.  Lifting it to the recursion needs k-unrolling
+; equivalence for ALL k plus omega-continuity — terminating/REGISTRY.tsv row O10b, OPEN,
+; because only k=1 (smt) and k=2 (egg) are emitted.  This cell does NOT support an
+; end-to-end equivalence claim for this stone.
 ; TRIVIAL-NO-OBLIGATION: sides are syntactically identical after alpha-normalisation —
 ; the transformation is structure-preserving here; nothing to prove.

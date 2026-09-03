@@ -305,7 +305,8 @@ object SpatialType:
               Some(Shape(eps, scala.collection.immutable.SortedMap.from(kept.filter(_._2.possiblyNonEmpty)),
                          if hi == 0 then Ivl.zero else Ivl(s.others.lo, hi),
                          if hi == 0 then None else ot,
-                         if hi == 0 then Some(Set.empty) else s.otherKeys))
+                         if hi == 0 then Some(Set.empty) else s.otherKeys,
+                         if hi == 0 then Set.empty else s.headAtoms))
 
   /** H4.  The space is known NON-EMPTY (from the histogram); if the shape leaves exactly one place a
    *  path could be, that place is forced — a MUST claim the count domain paid for.  `None` =

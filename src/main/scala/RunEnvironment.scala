@@ -85,6 +85,78 @@ object RunEnvironment:
   /** the ablation toggles that change what is being measured */
   lazy val tuning: String = s"literalByRef=${Tuning.literalByRef} patriciaOps=${Tuning.patriciaOps}"
 
+  // ---------------------------------------------------------------------------------------------
+  // THE BUILD, NOT JUST THE RUNTIME.  `jvm` and `scala` said which VM ran and which library was on
+  // the classpath; neither said which BUILD produced the classes, and a table cannot be reproduced
+  // from a JVM version alone.  All three of these are read from the files that ARE the source of
+  // truth, so they cannot drift from what a rebuild would use.
+  // ---------------------------------------------------------------------------------------------
+  /** the sbt version, from `project/build.properties` — the file that pins it */
+  lazy val sbtVersion: String =
+    firstLineOf("project/build.properties", "sbt.version=").map(_.stripPrefix("sbt.version=").trim)
+      .getOrElse("unknown")
+
+  /** the compiler version and flags, from `build.sbt` — likewise the pinning file.  The flags matter:
+   *  `-source:3.3` changes what the compiler accepts and therefore what was compiled. */
+  lazy val scalacConfig: String =
+    val lines = linesOf("build.sbt")
+    val ver = lines.collectFirst { case l if l.contains("scalaVersion") && l.contains(":=") =>
+      l.split(":=").last.trim.stripPrefix("\"").stripSuffix("\"") }.getOrElse("unknown")
+    val flags = lines.filter(l => l.contains("scalacOptions") && l.contains("+="))
+      .map(_.split("\\+=").last.trim.stripPrefix("\"").stripSuffix("\""))
+    s"scalac $ver" + (if flags.isEmpty then "" else s" ${flags.mkString(" ")}")
+
+  /** the external tools, resolved and version-probed — relevant to every table whose numbers came
+   *  from a prover or the e-graph engine, and unrecoverable after the fact. */
+  lazy val externalTools: String =
+    Tools.all.map { tl =>
+      tl.path match
+        case None => s"${tl.name}=ABSENT"
+        case Some(bin) =>
+          val v =
+            try
+              val pb = new ProcessBuilder(bin, tl.versionFlag).redirectErrorStream(true)
+              val pr = pb.start()
+              val out = new String(pr.getInputStream.readAllBytes()).linesIterator.take(1).mkString.trim
+              pr.waitFor()
+              out.replaceAll("[|;]", " ").trim
+            catch case _: Throwable => "?"
+          s"${tl.name}=${if v.isEmpty then "?" else v}"
+    }.mkString("  ")
+
+  /** how many tracked paths differ from HEAD — `0` is a clean tree.  Reported as a NUMBER rather
+   *  than folded into the commit string, because "how dirty" is what a reader needs to judge
+   *  whether `<sha>-dirty` can be reconstructed at all. */
+  lazy val dirtyFileCount: Int =
+    gitLines("status", "--porcelain").map(_.count(_.trim.nonEmpty)).getOrElse(-1)
+
+  def sourceClean: Boolean = dirtyFileCount == 0
+
+  /** ARTIFACT GENERATION CAN BE GATED ON A CLEAN TREE.  With `$ZIPPY_REQUIRE_CLEAN` set, a generated
+   *  table refuses to be written from a dirty working tree — because `<sha>-dirty` does not identify
+   *  the code that produced the numbers, so such a table cannot be reproduced from any commit and
+   *  cannot establish what the tree does.  Unset (the default) a dirty run is allowed and SAYS SO in
+   *  its own header, which is what a local experiment wants; the release regeneration sets it. */
+  def requireCleanIfAsked(what: String): Unit =
+    if sys.env.get("ZIPPY_REQUIRE_CLEAN").exists(v => v != "0" && v.nonEmpty) && !sourceClean then
+      throw new IllegalStateException(
+        s"$what: refusing to generate from a DIRTY working tree ($dirtyFileCount modified path(s)). " +
+        s"`$gitCommit` does not identify the code that produced the numbers. Commit the code first, " +
+        s"then regenerate — or unset ZIPPY_REQUIRE_CLEAN for a local run whose header will say `dirty`.")
+
+  private def linesOf(rel: String): List[String] =
+    try scala.io.Source.fromFile(new java.io.File(repoRoot, rel)).getLines().toList
+    catch case _: Throwable => Nil
+  private def firstLineOf(rel: String, key: String): Option[String] =
+    linesOf(rel).find(_.trim.startsWith(key)).map(_.trim)
+  private def gitLines(args: String*): Option[List[String]] =
+    try
+      val pb = new ProcessBuilder(("git" +: args)*).directory(repoRoot).redirectErrorStream(true)
+      val pr = pb.start()
+      val out = new String(pr.getInputStream.readAllBytes())
+      if pr.waitFor() == 0 then Some(out.linesIterator.toList) else None
+    catch case _: Throwable => None
+
   /** THE BLOCK.  Markdown, one row per field, emitted directly above every generated table.
    *
    *  `extra` carries the run-shaped configuration the caller owns and this object cannot know:
@@ -99,7 +171,12 @@ object RunEnvironment:
       "jvm" -> jvm,
       "jvm args" -> jvmArgs,
       "max heap" -> s"$heapMaxGiB GiB",
-      "scala" -> scalaVersion,
+      "scala (runtime library)" -> scalaVersion,
+      "build" -> s"sbt $sbtVersion; $scalacConfig",
+      "external tools" -> externalTools,
+      "source tree" -> (if sourceClean then "CLEAN (the commit above identifies it)"
+                        else s"DIRTY — $dirtyFileCount modified path(s); `$gitCommit` does NOT " +
+                             "identify the code that produced these numbers"),
       "tuning" -> tuning,
     ) ++ extra
     val sb = new StringBuilder
@@ -109,9 +186,12 @@ object RunEnvironment:
 
   /** the same facts on one line, for a CSV/TSV header comment or a console banner */
   def oneLine(extra: Seq[(String, String)] = Nil): String =
-    (Seq(s"ts=${timestamp()}", s"git=$gitCommit", s"cpu=${cpu.replace(',', ' ')}", s"cores=$cores",
+    (Seq(s"ts=${timestamp()}", s"git=$gitCommit",
+         s"clean=${if sourceClean then "yes" else s"no($dirtyFileCount)"}",
+         s"cpu=${cpu.replace(',', ' ')}", s"cores=$cores",
          s"mem=${memGiB}GiB", s"os=$os", s"jvm=$jvm", s"heap=${heapMaxGiB}GiB",
-         s"scala=$scalaVersion", tuning) ++ extra.map((k, v) => s"$k=$v")).mkString("; ")
+         s"scala=$scalaVersion", s"sbt=$sbtVersion", s"build=${scalacConfig.replace(';', ' ')}",
+         s"tools=${externalTools.replace(';', ' ')}", tuning) ++ extra.map((k, v) => s"$k=$v")).mkString("; ")
 end RunEnvironment
 
 
@@ -140,6 +220,12 @@ object BenchmarkReport:
   /** Replace (or append) the `slug` section of `file` with `heading` + provenance + `body`. */
   def write(file: File, slug: String, heading: String, body: String,
             extra: Seq[(String, String)] = Nil): Unit =
+    // A GENERATED ARTIFACT MUST NAME THE CODE THAT PRODUCED IT.  `<sha>-dirty` does not: the tree it
+    // describes never existed as a commit, so the numbers cannot be reproduced from anything and
+    // cannot establish what the tree does.  With `$ZIPPY_REQUIRE_CLEAN` set this refuses; unset, a
+    // dirty run is allowed and the metadata block above the section says `DIRTY` with the modified
+    // path count, so the weaker attribution is stated rather than implied by a suffix.
+    RunEnvironment.requireCleanIfAsked(s"BenchmarkReport.write($slug)")
     val section =
       s"""${beginMarker(slug)}
 ## $heading

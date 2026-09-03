@@ -98,6 +98,46 @@ def mem_iterc(s, b, p):
     return f"(and (exists ((hh Int) (tt Path)) {s('(cons hh tt)')}) {b(p)})"
 
 
+# ---- HEAD-DEPENDENT iteration (Space.Iteration), and the head-set fold it lowers to ------------
+# The body of a head-dependent iteration sees `(head, tails-of-that-head-in-src)`.  The tail set is
+# DETERMINED by the head and by `src`, and `src` is the same term on both sides of every law below,
+# so the body's result at head `h` is a function of `h` alone: the predicate `Bd h p`.  That is the
+# whole reason these laws are statable in first-order logic at all — quantifying over the body as a
+# function of a SET would need second order.
+#
+#   Iter(src)      = { p : EXISTS h. h is a head of src   AND Bd h p }
+#   IterH(hs, src) = { p : EXISTS h. (cons h nil) in hs   AND Bd h p }
+#
+# `IterH` deliberately does NOT re-check headedness: that guard is discharged once, by `Iter`'s own
+# rule supplying `Head src` — which contains exactly the one-item paths of src's heads — and law L1
+# below is where it is discharged.  An `IterH` whose head-set argument came from anywhere else would
+# apply the body at a head with an EMPTY group, so nothing but the `Iter` rule may introduce one.
+# NOTE THE BINDER NAMES.  `mem_head` binds `hh` internally, so `mem_iterh` must NOT — nesting them
+# under a shared name SHADOWS the outer quantifier and silently drops the link between the head the
+# body is applied at and the head that is present in `src`.  Measured on the first draft of L1: the
+# generated form contained `(= (cons hh nil) (cons hh nil))`, trivially true, and the law it stated
+# was `Iter(A) = { p : EXISTS h. (EXISTS h'. headed h' A) AND Bd h p }` — false, and it is z3
+# answering `sat` that says so rather than anything in this file.
+def mem_iter(s, p):
+    return (f"(exists ((gh Int)) (and (exists ((tt Path)) {s('(cons gh tt)')}) "
+            f"(Bd gh {p})))")
+
+
+def mem_iterh(hs, p):
+    return f"(exists ((gh Int)) (and {hs('(cons gh nil)')} (Bd gh {p})))"
+
+
+def ITER(s):
+    return lambda p: mem_iter(s, p)
+
+
+def ITERH(hs):
+    return lambda p: mem_iterh(hs, p)
+
+
+BODYK = "(declare-fun Bd (Int Path) Bool)\n"
+
+
 A = lambda p: f"(A {p})"
 B = lambda p: f"(B {p})"
 C = lambda p: f"(C {p})"
@@ -305,6 +345,27 @@ law("law_iterc_set", "IterC (invariant body over heads): ∅ source, ε-singleto
          "(forall ((h Int) (t Path)) " + eq(ITERC(SING("(cons h t)"), B), B) + ")",
          eq(ITERC(UNION(A, C), B), UNION(ITERC(A, B), ITERC(C, B)))),
     decls=SETS)
+# ---- HEAD-DEPENDENT iteration: the four rules that let formal.egg carry an `Iteration` BINDER
+# instead of the executor's pre-computed union of group bodies.
+#
+#   L1  Iter(src)                  = IterH(Head src)            the headedness guard, discharged
+#   L2  IterH(Union hs1 hs2)       = Union(IterH hs1, IterH hs2) the HEAD SET distributes...
+#   L3  IterH(Singleton (Item h))  = Bd h                        ...down to one head at a time
+#   L4  IterH(Empty)               = Empty
+#
+# L2 IS THE LOAD-BEARING ONE, AND IT IS WHY THIS WORKS.  `Iteration` itself does NOT distribute over
+# a union of its SOURCE — a head shared between the two operands merges their groups, and the
+# machine-checked witness that the split is false is proofs/unbounded/negative/not_iter_split.p
+# (N05), with an executed countermodel in proofs/unbounded/COUNTERMODELS.tsv.  What distributes here
+# is the HEAD-SET argument, with `src` — the term the groups are computed from — held fixed.  That
+# is the distinction the invariant-body `IterC` rules did not have to make, because an invariant
+# body cannot observe a group at all.
+law("law_iter_set", "head-dependent Iteration as a fold over Head(src): the headedness guard (Iter = IterH∘Head), head-set ∪-distribution with src HELD FIXED (the source-union split is FALSE — N05), single-head unfolding, ∅ head set",
+    conj(eq(ITER(A), ITERH(HEAD(A))),
+         eq(ITERH(UNION(B, C)), UNION(ITERH(B), ITERH(C))),
+         "(forall ((h0 Int)) " + eq(ITERH(SING("(cons h0 nil)")), lambda p: f"(Bd h0 {p})") + ")",
+         eq(ITERH(EMPTY), EMPTY)),
+    decls=SETS + BODYK)
 law("law_guard_hoist", "hoisting an invariant wrap / composition factor / body-union out of IterC",
     conj(eq(ITERC(A, WRAP("w", B)), WRAP("w", ITERC(A, B))),
          eq(ITERC(A, UNION(B, C)), UNION(ITERC(A, B), ITERC(A, C))),
@@ -482,6 +543,8 @@ REG = [
     ("restrict-self", "FILE", "laws/law_restrict_self.smt2", "formal.egg"),
     ("unwrap-merge-set", "FILE", "laws/law_unwrap_merge.smt2", "formal.egg"),
     ("iterc-set", "FILE", "laws/law_iterc_set.smt2", "formal.egg IterC rules (incl. the ε-singleton fix)"),
+    ("iter-set", "FILE", "laws/law_iter_set.smt2",
+     "formal.egg HEAD-DEPENDENT Iter/IterH rules — what lets an `Iteration` BINDER survive into the instance tier instead of being executed by EquivPipeline.expand; the head-SET distributes with src held fixed, whereas the source-union split is FALSE (negative control N05)"),
     # the extended algebra (previously-missing laws, enumerated)
     ("comp-assoc", "FILE", "laws/law_comp_assoc.smt2", "composition associativity"),
     ("comp-rdistrib", "FILE", "laws/law_comp_rdistrib.smt2", "composition right (and left) distributivity over ∪"),

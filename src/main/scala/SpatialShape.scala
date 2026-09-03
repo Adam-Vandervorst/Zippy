@@ -10,10 +10,16 @@ import scala.collection.immutable.SortedMap
  *  Head grouping is the semantics of `Iteration`, prefix sharing is the dominant fact about a trie,
  *  and both are invisible to a histogram.  This domain adds them.
  *
- *  ==THE CARRIER AND ITS γ (the four channels)==
+ *  ==THE CARRIER AND ITS γ (SIX channels)==
+ *
+ *  IT WAS FOUR, THEN FIVE, AND IT IS SIX.  (a)-(d) are the original shape/count channels; (e) is
+ *  the untracked-head NAME certificate that made head-disjointness survive a width spill; (f) is
+ *  the interned form of the same certificate, which makes it survive a spill of ANY width instead
+ *  of degrading to ⊤ at `MaxSpillKeys`.  Every "four-channel" description in this tree was stale
+ *  and is corrected where it appeared.
  *  A `Shape` abstracts a `SpaceValue` (a finite set of `PathValue`).  Write `groups(V)` for
  *  `{h ↦ {t : h::t ∈ V}}` and `U(V) = groups(V).keys ∖ heads.keys` (the UNTRACKED heads).
- *  `V ∈ γ(sh)` iff all four channels hold:
+ *  `V ∈ γ(sh)` iff every channel holds:
  *
  *    (a) EPSILON.  `eps = No` ⇒ ε ∉ V;  `eps = Must` ⇒ ε ∈ V;  `eps = May` ⇒ either.
  *    (b) TRACKED HEADS.  for every `h ↦ c` in `heads`: `groups(V)(h) ∈ γ(c)` (with `∅` when `h` is
@@ -59,7 +65,7 @@ import scala.collection.immutable.SortedMap
  *
  *  | law                                   | the one implementation      | who delegates to it                      |
  *  |---------------------------------------|-----------------------------|------------------------------------------|
- *  | γ (full membership, four channels)    | [[Shape.contains]]          | `SpatialGamma.gammaShape`, `SpatialType.accepts` |
+ *  | γ (full membership, six channels)     | [[Shape.contains]]          | `SpatialGamma.gammaShape`, `SpatialType.accepts` |
  *  | the ORDER `γ_may(a) ⊆ γ_may(b)`       | [[Shape.leq]]               | `SpatialGamma.leqShape`, `SpatialRecursion.leq`  |
  *  | the JOIN (lub of alternatives)        | [[Shape.joinAlternatives]]  | `SpatialGamma.lubShape`, `SpatialType.join`      |
  *  | the MEET (glb / reduction)            | [[Shape.meet]]              | `SpatialType.meet`, `SpatialType.reduce`         |
@@ -78,7 +84,7 @@ import scala.collection.immutable.SortedMap
  *  ==============================================================================================
  *  Four soundness bugs were found bringing this domain up and every one was the same family: an
  *  operation that can DELETE members (`∩`, `∖`, `<|`, `Range`, an iteration group that need not run,
- *  anything meeting ⊤) leaking MUST information through one of the four channels.  The previous fix
+ *  anything meeting ⊤) leaking MUST information through one of the channels.  The previous fix
  *  was to make the whole domain may-only.  Below, MUST is restored channel by channel with the
  *  argument that licenses it; where no argument exists the entry says MAY-ONLY and why.
  *
@@ -141,6 +147,62 @@ enum Presence:
     case (Presence.Must, _) | (_, Presence.Must) => Some(Presence.Must)
     case _ => Some(Presence.May)
 
+/** ==============================================================================================
+ *  INTERNED HEAD SETS — the size-independent half of the untracked-head certificate.
+ *
+ *  Channel (e) of [[Shape]] names the heads an open shape's untracked bucket may hold, and its whole
+ *  purpose is DISJOINTNESS: two shapes whose possible-head sets are disjoint can be unioned by
+ *  concatenation rather than by a merge, which is the difference between a `Θ(1)` and a `Θ(n)`
+ *  predicted rebuild.  Enumerating the names works, but only up to [[Shape.MaxSpillKeys]]; above
+ *  that the certificate used to degrade to ⊤ and the disjointness argument was lost at a fixed
+ *  cutoff — so a key-disjoint family's predicted asymptotic still CHANGED at a cap, just a later
+ *  one than the `MaxHeads` cutoff that made the problem visible in the first place.
+ *
+ *  AN ATOM IS A NAME FOR A WHOLE SET.  `intern` hands back one `Int` for a set of any size; the set
+ *  itself lives here, not in the carrier. A `Shape` then carries `headAtoms: Set[Int]`, whose size
+ *  is the number of DISTINCT ORIGINS its untracked heads came from — bounded by the program, not by
+ *  the data. Every lattice step manipulates ids only, and the one size-dependent computation,
+ *  deciding whether two atoms are disjoint, happens ONCE per unordered pair and is memoised.
+ *
+ *  WHY THIS KEEPS THE CARRIER FINITE, which is what the widening needs. The atom table is
+ *  append-only and an atom is only ever minted from a set the analysis already holds, so within a
+ *  run the id space is finite; `headAtoms` is a subset of it and the two lattice operations on it
+ *  are set union and subset. That is a finite lattice under `⊆`, exactly as the capped name set was,
+ *  and the widening's ascending chain still terminates — but its height is now the number of
+ *  distinct head-set ORIGINS rather than [[Shape.MaxSpillKeys]].
+ *  ============================================================================================== */
+object HeadAtoms:
+  private val byId = scala.collection.mutable.ArrayBuffer.empty[Set[PathItem]]
+  private val ids = scala.collection.mutable.HashMap.empty[Set[PathItem], Int]
+  /** memoised pairwise disjointness, keyed on the ORDERED pair (a ≤ b) so each pair is decided once */
+  private val disjCache = scala.collection.mutable.HashMap.empty[(Int, Int), Boolean]
+  private val subCache = scala.collection.mutable.HashMap.empty[(Int, Int), Boolean]
+
+  def intern(s: Set[PathItem]): Int = synchronized {
+    ids.getOrElseUpdate(s, { byId += s; byId.length - 1 })
+  }
+  def setOf(id: Int): Set[PathItem] = synchronized(byId(id))
+  def size(id: Int): Int = synchronized(byId(id).size)
+  def contains(id: Int, h: PathItem): Boolean = synchronized(byId(id).contains(h))
+  def count: Int = synchronized(byId.length)
+
+  /** are the two atoms' sets disjoint?  Decided once per pair, then O(1) forever. */
+  def disjoint(a: Int, b: Int): Boolean =
+    if a == b then setOf(a).isEmpty
+    else
+      val k = if a < b then (a, b) else (b, a)
+      synchronized(disjCache.getOrElseUpdate(k, (setOf(k._1) intersect setOf(k._2)).isEmpty))
+
+  /** is atom `a`'s set contained in atom `b`'s?  The `leq` direction, memoised the same way. */
+  def subsetOf(a: Int, b: Int): Boolean =
+    if a == b then true
+    else synchronized(subCache.getOrElseUpdate((a, b), setOf(a).subsetOf(setOf(b))))
+
+  /** a readable rendering for `Shape.show` — the ORIGIN, not the members, because the whole point is
+   *  that the member list may be arbitrarily large */
+  def show(id: Int): String = s"@$id/${size(id)}"
+end HeadAtoms
+
 final case class Shape(eps: Presence,
                        heads: SortedMap[PathItem, Shape],
                        others: Ivl,
@@ -167,7 +229,25 @@ final case class Shape(eps: Presence,
                         *  `others.hi := |ks|`, and `under(h)` for `h ∈ ks` must still return the
                         *  WEAKENED `otherTail` — reading a must claim out of the untracked side is
                         *  the ⊤-meets-must leak the per-operator table below keeps warning about. */
-                       otherKeys: Option[Set[PathItem]] = None):
+                       otherKeys: Option[Set[PathItem]] = None,
+                       /** (f) THE SIZE-INDEPENDENT HALF OF THE SAME CERTIFICATE — [[HeadAtoms]] ids.
+                        *
+                        *  The certificate is the UNION of channel (e)'s named set and every atom
+                        *  here: `U(V) ⊆ otherKeys.getOrElse(∅) ∪ ⋃ headAtoms`, and it is a claim at
+                        *  all only when [[certBounded]] — i.e. when (e) is `Some` or (f) is
+                        *  non-empty.  Both empty-and-`None` is ⊤, unchanged.
+                        *
+                        *  WHY IT EXISTS.  (e) alone is capped at [[Shape.MaxSpillKeys]] and above
+                        *  the cap it becomes ⊤, so the disjointness argument — the only thing the
+                        *  certificate is for — was lost at a fixed size.  Interning the set gives
+                        *  ONE id for a set of any size, so a spill of a million keys keeps a usable
+                        *  certificate; what the cap now bounds is only how many names are carried
+                        *  ENUMERATED, which is a representation choice rather than a cliff in what
+                        *  can be proved.
+                        *
+                        *  IT JOINS EVERY CHANNEL TEST, because [[isTop]]'s comment is right about
+                        *  what happens otherwise. */
+                       headAtoms: Set[Int] = Set.empty):
   import Lower.LenBounds
 
   /** number of levels below this node — memoised so [[Shape.capDepth]] is a no-op when it can be */
@@ -190,7 +270,37 @@ final case class Shape(eps: Presence,
    *  `min(K_d, K_d) = n` paired keys where the truth is 0. */
   def possibleHeads: Option[Set[PathItem]] =
     val live = heads.iterator.filter(_._2.possiblyNonEmpty).map(_._1).toSet
-    if others.hi == 0 then Some(live) else otherKeys.map(ks => live union ks)
+    if others.hi == 0 then Some(live) else certNames.map(ks => live union ks)
+
+  /** is the untracked bucket BOUNDED at all — i.e. is there a certificate to reason with? */
+  def certBounded: Boolean = otherKeys.isDefined || headAtoms.nonEmpty
+
+  /** [[possibleHeads]] WITHOUT ENUMERATING THE ATOMS: `(names, atoms)`, meaning the complete head
+   *  set is inside `names ∪ ⋃atoms`; `(None, ∅)` is ⊤.  This is the form every lattice operation
+   *  uses, so a join or a meet costs one set-union of ids and never touches an atom's members —
+   *  which is what makes the certificate size-independent in the place that matters.  The
+   *  enumerating [[possibleHeads]] stays for γ and for the frontier's disjointness query. */
+  def possibleHeadsCert: (Option[Set[PathItem]], Set[Int]) =
+    val live = heads.iterator.filter(_._2.possiblyNonEmpty).map(_._1).toSet
+    if others.hi == 0 then (Some(live), Set.empty)
+    else if !certBounded then (None, Set.empty)
+    else (Some(otherKeys.getOrElse(Set.empty) ++ live), headAtoms)
+
+  /** the certificate's members, ENUMERATED.  `None` is ⊤.  Enumerating an atom is the one
+   *  size-dependent step and it is deliberately confined to the queries that genuinely need the
+   *  names ([[possibleHeads]], γ); the lattice operations never call it. */
+  def certNames: Option[Set[PathItem]] =
+    if !certBounded then None
+    else Some(otherKeys.getOrElse(Set.empty) ++ headAtoms.flatMap(HeadAtoms.setOf))
+
+  /** does the certificate admit `h` as an untracked head?  O(1) in the atom sizes. */
+  def certAdmits(h: PathItem): Boolean =
+    !certBounded || otherKeys.exists(_.contains(h)) || headAtoms.exists(HeadAtoms.contains(_, h))
+
+  /** an upper bound on how many untracked heads the certificate allows.  `Long.MaxValue` when ⊤. */
+  def certSize: Long =
+    if !certBounded then Ivl.INF
+    else otherKeys.map(_.size.toLong).getOrElse(0L) + headAtoms.toVector.map(a => HeadAtoms.size(a).toLong).sum
   /** no information at all — the fixed point of every widening, and the recursion stopper.
    *
    *  ANY NEW CHANNEL HAS TO JOIN THIS TEST.  A prototype key certificate that did not was caught by
@@ -199,7 +309,7 @@ final case class Shape(eps: Presence,
    *  thirteen heads while γ — which enforced the certificate — rejected its values. */
   def isTop: Boolean =
     eps == Presence.May && heads.isEmpty && others == Ivl.unknown && otherTail.isEmpty &&
-      otherKeys.isEmpty
+      otherKeys.isEmpty && headAtoms.isEmpty
 
   /** the number of DISTINCT heads: the group count of an `Iteration` over this space.  The lower
    *  bound counts MUST-present heads (a tracked head whose tail-set is definitely non-empty, plus
@@ -282,7 +392,7 @@ final case class Shape(eps: Presence,
    *  shape could be `h` and the carrier cannot say otherwise (see [[possibleHeads]]). */
   def mayHaveHead(h: PathItem): Boolean = heads.get(h) match
     case Some(c) => c.possiblyNonEmpty
-    case None => others.hi > 0 && otherKeys.forall(_.contains(h))
+    case None => others.hi > 0 && certAdmits(h)
 
   /** may this space contain a path starting with `items`? — `false` is a PROOF of absence */
   def mayHavePrefix(items: List[PathItem]): Boolean = items match
@@ -306,10 +416,15 @@ final case class Shape(eps: Presence,
       val hs = heads.iterator.filter(_._2.possiblyNonEmpty).map((h, t) => s"${h}·${t.show}").toVector
       val o =
         if others.hi == 0 then Vector.empty
-        else otherKeys match
-          case Some(ks) if ks.size <= 6 => Vector(s"+${others.show} more of {${ks.toVector.sorted.mkString(",")}}")
-          case Some(ks) => Vector(s"+${others.show} more of ${ks.size} named")
-          case None => Vector(s"+${others.show} more")
+        else
+          val named = otherKeys match
+            case Some(ks) if ks.size <= 6 => s" of {${ks.toVector.sorted.mkString(",")}}"
+            case Some(ks) => s" of ${ks.size} named"
+            case None => ""
+          val at = if headAtoms.isEmpty then ""
+                   else headAtoms.toVector.sorted.map(HeadAtoms.show).mkString(if named.isEmpty then " of " else "+", "+", "")
+          if named.isEmpty && at.isEmpty then Vector(s"+${others.show} more")
+          else Vector(s"+${others.show} more$named$at")
       "{" + (e ++ hs ++ o).mkString(", ") + "}"
 
 object Shape:
@@ -326,7 +441,13 @@ object Shape:
    *  recursive `Shape` per key, walked by `leq`/`meet`/`union`/`lub` — while this bounds NAMES, one
    *  interned reference each and one set operation per lattice step.  `SpatialFrontier.maxKeys`
    *  (1 << 17) already sets the precedent that key ENUMERATION is a work bound, not a precision one.
-   *  Above the cap the channel degrades to `None` = ⊤, which is the safe direction. */
+   *
+   *  ABOVE THE CAP THE CERTIFICATE IS NO LONGER LOST.  It used to degrade to `None` = ⊤ — safe, but
+   *  it meant a key-disjoint family's predicted asymptotic still CHANGED at a fixed size, just at
+   *  `MaxSpillKeys` instead of at the `MaxHeads` cutoff that made the problem visible.  Over the cap
+   *  the name set is now INTERNED as a [[HeadAtoms]] atom and carried in channel (f) instead, which
+   *  is one `Int` for a set of any size.  So this cap bounds how many names are carried ENUMERATED —
+   *  a representation choice — and no longer bounds what can be proved. */
   val MaxSpillKeys: Int = SpatialConfig.default.spillKeys
 
   /** the certificate of a CLOSED head set: there are no untracked heads at all */
@@ -349,10 +470,64 @@ object Shape:
   private def kJoin(a: Option[Set[PathItem]], b: Option[Set[PathItem]]): Option[Set[PathItem]] =
     for x <- a; y <- b yield x union y
 
+  /** THE (e)+(f) CERTIFICATE, JOINED.  Two shapes' certificates combine by unioning both halves —
+   *  and unlike [[kJoin]] alone, `None` on the enumerated half does NOT absorb, because the atom
+   *  half may still carry a bound.  Returns `(names, atoms)`; `(None, ∅)` is ⊤.
+   *
+   *  The enumerated half is re-capped: if the union outgrows [[MaxSpillKeys]] it is interned into an
+   *  atom rather than dropped, which is the whole point of channel (f). */
+  private def certJoin(a: Shape, b: Shape): (Option[Set[PathItem]], Set[Int]) =
+    val atoms = a.headAtoms union b.headAtoms
+    (a.otherKeys, b.otherKeys) match
+      case (Some(x), Some(y)) => reCap(x union y, atoms)
+      // one side's enumerated half is ⊤.  Its ATOMS may still bound it; if it has none, the union is
+      // unbounded on that side and the join is ⊤ on the enumerated half — but the other side's atoms
+      // are still a fact about the other side and must not be presented as a bound on the union.
+      case (Some(x), None) => if b.certBounded then reCap(x, atoms) else (None, Set.empty)
+      case (None, Some(y)) => if a.certBounded then reCap(y, atoms) else (None, Set.empty)
+      case (None, None) => if a.certBounded && b.certBounded then (None, atoms) else (None, Set.empty)
+
+  /** THE COMPLETE-HEAD-SET JOIN, symbolically.  `⊤` on either side makes the union `⊤`; otherwise
+   *  the enumerated halves union (re-capped into an atom on overflow) and the atom halves union. */
+  private def certJoinH(a: Shape, b: Shape): (Option[Set[PathItem]], Set[Int]) =
+    val (an, aa) = a.possibleHeadsCert
+    val (bn, ba) = b.possibleHeadsCert
+    (an, bn) match
+      case (Some(x), Some(y)) => reCap(x union y, aa union ba)
+      case _ => (None, Set.empty)
+
+  /** THE COMPLETE-HEAD-SET MEET, symbolically.  A meet is inside BOTH operands, so any sound bound
+   *  works: the enumerated halves intersect (the tighter answer) and both atom sets are kept, since
+   *  an atom bounding either operand bounds the meet. */
+  private def certMeetH(a: Shape, b: Shape): (Option[Set[PathItem]], Set[Int]) =
+    val (an, aa) = a.possibleHeadsCert
+    val (bn, ba) = b.possibleHeadsCert
+    (kMeet(an, bn), aa union ba)
+
+  /** the MEET's certificate.  A meet's untracked heads are inside BOTH bounds, so either is sound;
+   *  the enumerated halves are intersected (the tighter answer, as before) and the atoms are kept —
+   *  an atom that bounds one operand bounds the meet. */
+  private def certMeet(a: Shape, b: Shape): (Option[Set[PathItem]], Set[Int]) =
+    (kMeet(a.otherKeys, b.otherKeys), a.headAtoms union b.headAtoms)
+
+  /** re-establish the enumerated cap: over [[MaxSpillKeys]] the names become ONE atom.
+   *
+   *  THE ENUMERATED CHANNEL IS LEFT AT `None` (⊤) ON OVERFLOW, NOT AT `Some(∅)`.  Both would be
+   *  correct for a consumer that reads channels (e) and (f) TOGETHER, but they are opposites for one
+   *  that reads only (e): `None` is "no claim" and `Some(∅)` is "no untracked head may exist".  The
+   *  first draft used `Some(∅)` and `Shape.contains` — which still read (e) alone — rejected every
+   *  value with an untracked head. `SpatialSoundnessHunt` produced the witness immediately
+   *  (`{c.b.b.b.a}` against a shape that must admit it). Degrading (e) to ⊤ means any consumer not
+   *  yet reading (f) sees exactly the OLD behaviour, and only the updated ones get the tighter bound
+   *  the atom carries — so adding this channel cannot make anything less sound than it was. */
+  private def reCap(ks: Set[PathItem], atoms: Set[Int]): (Option[Set[PathItem]], Set[Int]) =
+    if ks.size <= MaxSpillKeys then (Some(ks), atoms)
+    else (None, atoms + HeadAtoms.intern(ks))
+
   // -----------------------------------------------------------------------------------------------
   // γ  (a local copy of SpatialGamma.gammaShape, so this domain's own gate is self-contained)
   // -----------------------------------------------------------------------------------------------
-  /** `contains(sh, v)` decides `v ∈ γ(sh)` over the four channels documented on [[Shape]]. */
+  /** `contains(sh, v)` decides `v ∈ γ(sh)` over the six channels documented on [[Shape]]. */
   def contains(sh: Shape, v: SpaceValue): Boolean = contains(sh, v, 64)
   private def contains(sh: Shape, v: SpaceValue, d: Int): Boolean =
     if d <= 0 then true
@@ -378,7 +553,7 @@ object Shape:
             case None => true) &&
           // (e) THE UNTRACKED-HEAD DOMAIN: every head the shape does not track must be NAMED in the
           // certificate.  `None` is ⊤ and admits everything.
-          sh.otherKeys.forall(ks => untracked.keysIterator.forall(ks.contains))
+          sh.certNames.forall(ks => untracked.keysIterator.forall(ks.contains))
 
   // -----------------------------------------------------------------------------------------------
   // structural utilities
@@ -391,7 +566,7 @@ object Shape:
     // (e) SURVIVES WEAKENING: it is a ∀-untracked-head MAY claim, not a must claim and not a count,
     // and dropping MUST information cannot introduce a head that was not already possible.
     else Shape(s.eps.weak, SortedMap.from(s.heads.view.mapValues(weaken)), Ivl(0, s.others.hi),
-               s.otherTail.map(weaken), s.otherKeys)
+               s.otherTail.map(weaken), s.otherKeys, s.headAtoms)
 
   /** open every COUNT channel.  Head-set membership and closedness are union-closed facts, but "at
    *  most k untracked heads" is not, so this is what survives aggregating an unknown number of sets
@@ -402,9 +577,10 @@ object Shape:
     // a union of an UNKNOWN NUMBER of sets each of whose heads lie in `ks` still has its heads in
     // `ks`.  Opening the count is not opening the domain.
     else
-      val cnt = if s.others.hi == 0 then Ivl.zero else capOthers(Ivl(0, Ivl.INF), s.otherKeys)
+      val cnt = if s.others.hi == 0 then Ivl.zero
+                else capOthersCert(Ivl(0, Ivl.INF), s.otherKeys, s.headAtoms)
       Shape(s.eps.weak, SortedMap.from(s.heads.view.mapValues(openCounts)), cnt,
-            s.otherTail.map(openCounts), s.otherKeys)
+            s.otherTail.map(openCounts), s.otherKeys, s.headAtoms)
 
   /** collapse everything below level `d` into an untracked-head count.  Sound in both directions:
    *  `headCount` brackets the real number of heads and the tails become ⊤. */
@@ -417,13 +593,38 @@ object Shape:
       // possible-head set (tracked ∪ certificate), not `None`.  Same measured discontinuity — a
       // key-disjoint union under a shared prefix went from `rebuilt = [d,d]` at depth ≤ MaxDepth to
       // `[5,9]` at depth 5 — and the same one-line cause.
-      val ks = capKeys(s.possibleHeads)
+      val (ks, at) = capKeys2(s.possibleHeads)
+      // THE COLLAPSED LEVEL'S certificate survives, and now survives at ANY WIDTH: `capKeys2` puts
+      // the overflow in channel (f) instead of degrading to ⊤ at `MaxSpillKeys`.
+      //
+      // WHAT IS *NOT* DONE HERE, AND WHY, because the acceptance review asks for it: the levels
+      // BELOW the collapse still get `otherTail = None` = ⊤, so a pair whose divergence is deeper
+      // than the collapse cannot be shown head-disjoint.  A per-level interned certificate on a
+      // `MaxDepth`-deep may-only tail was built and MEASURED, and it does not work:
+      //   * it does not achieve the goal.  `SpatialFrontier`'s disjointness query goes through
+      //     `possibleHeads` AT A LEVEL and never descends into an `otherTail`'s certificate, so the
+      //     depth-6 key-disjoint family still predicted `rebuilt = [5, 10]` against a truth of 6.
+      //     Fixing that needs `SpatialFrontier` to consult the tail certificates too — a change to
+      //     the frontier's relational walk, not to this carrier.
+      //   * it made the ORDER incomplete where the analysis depends on it.  With a certificate on
+      //     both tails, `leq(a.otherTail, b.otherTail)` starts comparing them, and
+      //     `SpatialAnalysisCheck`'s "every decorated node admits the real value" gate went red on
+      //     six corpus shapes — sound, but no longer provable, which is a live regression.
+      // So the depth half of the review's ambition is OPEN and recorded in RESOLUTION.md item 7
+      // rather than half-built.
       if hc.hi == 0 then Shape(s.eps, SortedMap.empty, Ivl.zero, None, noUntracked)
-      else Shape(s.eps, SortedMap.empty, hc, None, ks)
+      else Shape(s.eps, SortedMap.empty, hc, None, ks, at)
     else Shape(s.eps, SortedMap.from(s.heads.view.mapValues(capDepth(_, d - 1))), s.others,
-               s.otherTail.map(capDepth(_, d - 1)), s.otherKeys)
+               s.otherTail.map(capDepth(_, d - 1)), s.otherKeys, s.headAtoms)
 
-  /** enforce [[MaxSpillKeys]]: above the cap the certificate degrades to ⊤ */
+  /** enforce [[MaxSpillKeys]] on the ENUMERATED half, moving the overflow into an atom rather than
+   *  dropping it.  Returns `(names, atoms)`. */
+  private def capKeys2(k: Option[Set[PathItem]]): (Option[Set[PathItem]], Set[Int]) = k match
+    case None => (None, Set.empty)
+    case Some(ks) => reCap(ks, Set.empty)
+
+  /** enforce [[MaxSpillKeys]]: above the cap the ENUMERATED half degrades to ⊤.  Kept for the call
+   *  sites that only want the enumerated half; the overflow-preserving form is [[capKeys2]]. */
   private def capKeys(k: Option[Set[PathItem]]): Option[Set[PathItem]] =
     k.filter(_.size <= MaxSpillKeys)
 
@@ -432,6 +633,12 @@ object Shape:
    *  that spills tracked heads by hand. */
   private[morkl] def spillKeysOf(complete: Option[Set[PathItem]], tracked: Set[PathItem]): Option[Set[PathItem]] =
     capKeys(complete.map(_ -- tracked))
+
+  /** the same spill certificate, KEEPING THE OVERFLOW as an atom — what a caller that can store
+   *  channel (f) should use.  `SpatialAnalysis.capWidth` is the one other place in the tree that
+   *  spills tracked heads by hand. */
+  private[morkl] def spillCertOf(complete: Option[Set[PathItem]], tracked: Set[PathItem]): (Option[Set[PathItem]], Set[Int]) =
+    capKeys2(complete.map(_ -- tracked))
 
   /** THE CONSISTENCY LAW BETWEEN (c) AND (e): a certificate naming `k` untracked heads caps the
    *  untracked COUNT at `k`.  Without it the carrier can hold `others = [0, ∞]` beside
@@ -446,12 +653,22 @@ object Shape:
       Ivl(others.lo min hi, hi)
     case None => others
 
+  /** the count cap against the WHOLE (e)+(f) certificate — the consistency law between channel (c)
+   *  and the certificate, now that the certificate has two halves.  A certificate naming `k` heads
+   *  in total caps the untracked COUNT at `k`, and an atom's size counts. */
+  private def capOthersCert(others: Ivl, names: Option[Set[PathItem]], atoms: Set[Int]): Ivl =
+    if names.isEmpty && atoms.isEmpty then others
+    else
+      val n = names.map(_.size.toLong).getOrElse(0L) + atoms.toVector.map(a => HeadAtoms.size(a).toLong).sum
+      val hi = others.hi min n
+      Ivl(others.lo min hi, hi)
+
   /** THE normalising smart constructor.  Establishes every representation invariant:
    *  children are ≤ `MaxDepth-1` deep and never definitely-empty (a definitely-absent head is
    *  simply not tracked), `otherTail` is may-only and never definitely-empty, `others` is a
    *  consistent interval, and at most `MaxHeads` heads are tracked. */
   private def mk(eps: Presence, hs: Iterable[(PathItem, Shape)], others0: Ivl, ot0: Option[Shape],
-                 allHeads: Option[Set[PathItem]] = None): Shape =
+                 allHeads: Option[Set[PathItem]] = None, allAtoms: Set[Int] = Set.empty): Shape =
     val live = hs.iterator.map((h, t) => h -> capDepth(t, MaxDepth - 1))
       .filter(_._2.possiblyNonEmpty).toVector.sortBy(_._1)
     val ot1 = ot0.map(t => weaken(capDepth(t, MaxDepth - 1)))
@@ -471,9 +688,10 @@ object Shape:
     val complete: Option[Set[PathItem]] =
       if hiC == 0 then Some(live.iterator.map(_._1).toSet) else allHeads
     if live.size <= MaxHeads then
-      val ok = capKeys(complete.map(_ -- live.iterator.map(_._1)))
-      val cnt0 = capOthers(others, ok)
-      Shape(eps, SortedMap.from(live), cnt0, if cnt0.hi == 0 then None else ot, ok)
+      val (ok, oa) = spillCertOf(complete, live.iterator.map(_._1).toSet)
+      val atoms = if complete.isEmpty && allAtoms.isEmpty then Set.empty[Int] else oa union allAtoms
+      val cnt0 = capOthersCert(others, ok, atoms)
+      Shape(eps, SortedMap.from(live), cnt0, if cnt0.hi == 0 then None else ot, ok, atoms)
     else
       val keep = live.take(MaxHeads); val spill = live.drop(MaxHeads)
       val base = if hiC == 0 then empty else ot.getOrElse(top)
@@ -483,13 +701,19 @@ object Shape:
       // THE WIDTH SPILL.  The count and the per-head tail summary survive as before; what USED to be
       // lost here — and what channel (e) now keeps — is the head NAMES.  `complete` already holds
       // them for a closed input (the common case: every `Shape.of` of a literal), so the spilled keys
-      // are recovered exactly, and above `MaxSpillKeys` the certificate degrades to ⊤ rather than
-      // growing without bound.
-      val ok = capKeys(complete.map(_ -- keep.iterator.map(_._1)))
-      val cnt2 = capOthers(cnt, ok)
+      // are recovered exactly.
+      //
+      // AND ABOVE `MaxSpillKeys` THE CERTIFICATE IS NO LONGER LOST.  It used to degrade to ⊤ there,
+      // so a key-disjoint family's predicted rebuild still jumped from `Θ(1)` to `Θ(n)` at a fixed
+      // size — just at 4096 keys rather than at `MaxHeads`.  `spillCertOf` interns the overflow as
+      // ONE [[HeadAtoms]] atom in channel (f) instead, so the disjointness argument survives a spill
+      // of any width and the enumerated cap is a representation choice rather than a cliff.
+      val (ok, oa) = spillCertOf(complete, keep.iterator.map(_._1).toSet)
+      val atoms = if complete.isEmpty && allAtoms.isEmpty then Set.empty[Int] else oa union allAtoms
+      val cnt2 = capOthersCert(cnt, ok, atoms)
       Shape(eps, SortedMap.from(keep), cnt2,
             if cnt2.hi == 0 || tail.isTop then None else Some(weaken(capDepth(tail, MaxDepth - 1))),
-            ok)
+            ok, atoms)
 
   /** the ORDER: `leq(a, b)` ⇒ every value `b`'s may channels reject, `a`'s reject too, i.e.
    *  `γ_may(a) ⊆ γ_may(b)`.  Conservative and incomplete — a `false` on a genuine inclusion only
@@ -538,17 +762,27 @@ object Shape:
 
   /** does `a` permit an untracked head that `b`'s certificate forbids?  `true` REFUTES `a ⊑ b`.
    *  Conservative: an unknown left-hand certificate against a named right-hand one is a refusal. */
-  private def keysExceed(a: Shape, b: Shape): Boolean = b.otherKeys match
-    case None => false                                  // ⊤ on the right admits every head
-    case Some(bk) =>
+  private def keysExceed(a: Shape, b: Shape): Boolean =
+    if !b.certBounded then false                        // ⊤ on the right admits every head
+    else
+      // `b` admits `h` as an untracked head iff its (e)+(f) certificate does.  Using `certAdmits`
+      // rather than `otherKeys.contains` is what makes an ATOM-carried certificate participate in
+      // the order at all; without it a shape whose names spilled into channel (f) would be treated
+      // as ⊤ by `b` and as unnamed by `a`, and the order would accept pairs γ rejects — the exact
+      // failure `isTop`'s comment records for the first key-certificate prototype.
+      def bAdmits(h: PathItem): Boolean = b.heads.contains(h) || b.certAdmits(h)
       if a.others.hi == 0 then
         // `a` is closed: its heads are exactly its live keys, and every one b does not track must be named
-        a.heads.iterator.exists((h, c) => c.possiblyNonEmpty && !b.heads.contains(h) && !bk.contains(h))
-      else a.otherKeys match
-        case None => true                               // `a` may have an unnamed untracked head
-        case Some(ak) =>
-          ak.exists(h => !b.heads.contains(h) && !bk.contains(h)) ||
-            a.heads.iterator.exists((h, c) => c.possiblyNonEmpty && !b.heads.contains(h) && !bk.contains(h))
+        a.heads.iterator.exists((h, c) => c.possiblyNonEmpty && !bAdmits(h))
+      else if !a.certBounded then true                  // `a` may have an unnamed untracked head
+      else
+        // `a`'s enumerated names, plus its atoms.  An atom is checked WHOLE against `b`'s atoms
+        // first (memoised, O(1)); only if that fails is it enumerated, and only then at a cost
+        // proportional to the atom rather than to every lattice step.
+        a.otherKeys.exists(_.exists(h => !bAdmits(h))) ||
+          a.headAtoms.exists(aa => !b.headAtoms.exists(bb => HeadAtoms.subsetOf(aa, bb)) &&
+                                   HeadAtoms.setOf(aa).exists(h => !bAdmits(h))) ||
+          a.heads.iterator.exists((h, c) => c.possiblyNonEmpty && !bAdmits(h))
 
   /** the STRONG-γ order: `leqStrong(a, b)` ⇒ `γ(a) ⊆ γ(b)` with the must channels included.  Sound
    *  and deliberately INCOMPLETE — it does not attempt the integer-partition reasoning a spill bucket
@@ -655,7 +889,7 @@ object Shape:
     else if d <= 0 then
       Shape(if a.eps == b.eps then a.eps else Presence.May, SortedMap.empty,
             Ivl(0, a.headCount.hi max b.headCount.hi), None,
-            capKeys(kJoin(a.possibleHeads, b.possibleHeads)))
+            certJoinH(a, b)._1, certJoinH(a, b)._2)
     else
       val keys = a.heads.keySet ++ b.heads.keySet
       val hs = keys.toVector.map(h => h -> lub(a.under(h), b.under(h), d - 1))
@@ -669,7 +903,7 @@ object Shape:
           if t.isTop then None else Some(t)
       // (e) A JOIN ADMITS BOTH SIDES, so the head-set bound is the UNION of the two.
       mk(if a.eps == b.eps then a.eps else Presence.May, hs, others, ot,
-         kJoin(a.possibleHeads, b.possibleHeads))
+         certJoinH(a, b)._1, certJoinH(a, b)._2)
 
   /** the WIDENING for the `Fixpoint` Kleene chain: open every count channel and every head set, so
    *  the only remaining growth is the (finite) tracked key sets and the (3-valued) ε channel. */
@@ -680,8 +914,8 @@ object Shape:
     // — and it cannot block convergence: the channel is a finite lattice of height
     // `MaxSpillKeys + 1` under `⊆`, and the widening is applied to a chain that only grows.
     else
-      val cnt = capOthers(Ivl(s.others.lo, Ivl.INF), s.otherKeys)
-      Shape(s.eps, SortedMap.from(s.heads.view.mapValues(widen)), cnt, None, s.otherKeys)
+      val cnt = capOthersCert(Ivl(s.others.lo, Ivl.INF), s.otherKeys, s.headAtoms)
+      Shape(s.eps, SortedMap.from(s.heads.view.mapValues(widen)), cnt, None, s.otherKeys, s.headAtoms)
   /** the old spelling of [[widen]] */
   @deprecated("use Shape.widen", "consolidation")
   def widenShape(s: Shape): Shape = widen(s)
@@ -731,7 +965,7 @@ object Shape:
           val hc = Ivl(a.headCount.lo max b.headCount.lo, a.headCount.hi min b.headCount.hi)
           if hc.lo > hc.hi then None
           else if hc.hi == 0 then Some(Shape(e, SortedMap.empty, Ivl.zero, None, noUntracked))
-          else Some(Shape(e, SortedMap.empty, hc, None, capKeys(kMeet(a.possibleHeads, b.possibleHeads))))
+          else Some(Shape(e, SortedMap.empty, hc, None, certMeetH(a, b)._1, certMeetH(a, b)._2))
         else
           val keys = a.heads.keySet ++ b.heads.keySet
           val kids = Vector.newBuilder[(PathItem, Shape)]
@@ -756,7 +990,7 @@ object Shape:
               // (e) BOTH claims hold of a value in γ(a) ∩ γ(b), so the bounds INTERSECT — the
               // standard reduced-product step.  An empty intersection with a FORCED untracked head
               // is a contradiction: there is nowhere for that head to be.
-              val ks = kMeet(a.possibleHeads, b.possibleHeads)
+              val (ks, kAtoms) = certMeetH(a, b)
               if ks.exists(_.isEmpty) && others.lo > 0 then None
               else Some(mk(e, kids.result(), others, ot, ks))
 
@@ -804,7 +1038,7 @@ object Shape:
     else if d <= 0 then
       Shape(a.eps.or(b.eps), SortedMap.empty,
             Ivl(a.headCount.lo max b.headCount.lo, Ivl.add(a.headCount.hi, b.headCount.hi)), None,
-            capKeys(kJoin(a.possibleHeads, b.possibleHeads)))
+            certJoinH(a, b)._1, certJoinH(a, b)._2)
     else
       val ak = a.heads.keySet; val bk = b.heads.keySet
       val hs = (ak ++ bk).toVector.map(h => h -> union(a.under(h), b.under(h), d - 1))
@@ -824,14 +1058,14 @@ object Shape:
           val u = union(at, bt, d - 1)
           if u.isTop then None else Some(u)
       // (e) `heads(A ∪ B) = heads(A) ∪ heads(B)` — exactly.
-      mk(a.eps.or(b.eps), hs, others, ot, kJoin(a.possibleHeads, b.possibleHeads))
+      mk(a.eps.or(b.eps), hs, others, ot, certJoinH(a, b)._1, certJoinH(a, b)._2)
 
   def inter(a: Shape, b: Shape): Shape = inter(a, b, MaxDepth)
   private def inter(a: Shape, b: Shape, d: Int): Shape =
     if a.definitelyEmpty || b.definitelyEmpty then empty
     else if d <= 0 then
       Shape(a.eps.and(b.eps), SortedMap.empty, Ivl(0, a.headCount.hi min b.headCount.hi), None,
-            capKeys(kMeet(a.possibleHeads, b.possibleHeads)))
+            certMeetH(a, b)._1, certMeetH(a, b)._2)
     else
       // a head survives only if BOTH sides may have it; either side being closed closes the result
       val keys =
@@ -847,7 +1081,7 @@ object Shape:
           val i = inter(a.otherTail.getOrElse(top), b.otherTail.getOrElse(top), d - 1)
           if i.isTop then None else Some(weaken(i))
       // (e) `heads(A ∩ B) ⊆ heads(A) ∩ heads(B)`; one side's bound alone is still an upper bound.
-      mk(a.eps.and(b.eps), hs, others, ot, kMeet(a.possibleHeads, b.possibleHeads))
+      mk(a.eps.and(b.eps), hs, others, ot, certMeetH(a, b)._1, certMeetH(a, b)._2)
 
   def sub(a: Shape, b: Shape): Shape = sub(a, b, MaxDepth)
   private def sub(a: Shape, b: Shape, d: Int): Shape =
@@ -982,7 +1216,7 @@ object Shape:
       // (e) `heads(x <| p) ⊆ heads(x) ∩ heads(p)`: a surviving path starts with an x-head that is
       // also the head of some accepted prefix (the ε-prefix case is handled by the arms above).
       mk(Presence.No, hs, others, if others.hi == 0 then None else x.otherTail.map(weaken),
-         kMeet(x.possibleHeads, prefixes.possibleHeads))
+         certMeetH(x, prefixes)._1, certMeetH(x, prefixes)._2)
 
   /** COMPOSITION — graft `y` at every leaf of `x`.  `{p ++ q : p ∈ x, q ∈ y}` splits as
    *  `⋃_h h·(tails_x(h) · y)  ∪  (if ε ∈ x then y)`, which is exactly the recursion below. */

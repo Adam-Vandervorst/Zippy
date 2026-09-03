@@ -946,7 +946,8 @@ object SpatialPipeline:
    *  ==WHAT THIS USED TO BE, AND WHY THAT WAS THE COMPLAINT==
    *  Two rewrites: `provablyEmpty` -> `Empty`, and `SpatialFacts.exactValue` -> `Literal`.  Both read
    *  the SIZE of a node's type and nothing else.  Meanwhile the analysis derives, at every node, a
-   *  `SpatialType` with a four-channel `Shape`, a per-node `Fact` vector, and — for every binary ring
+   *  `SpatialType` with a six-channel `Shape` (the two head-set certificate channels included), a
+   *  per-node `Fact` vector, and — for every binary ring
    *  node — a `SpatialFrontier` summary that is the analysis-side mirror of `Trie.AlgebraicResult`.
    *  A census of the consumers was blunt: of the eleven `Fact` cases, exactly ONE (`ExactHeadSet`)
    *  was read anywhere outside `SpatialTypeSystem`, and that read was inside a Trie-backend-only
@@ -1007,7 +1008,7 @@ object SpatialPipeline:
    *  exactly what rewriting inside a binder body requires (the same argument [[exactEdits]] uses).
    *
    *  NOTE FOR THE WIDTH SPILL: `headDisjoint` goes through `Shape.possibleHeads`, so this rewrite's
-   *  yield is bounded by whether the head set is enumerable — which is what the `otherKeys`
+   *  yield is bounded by whether the head set is enumerable — which is what the `otherKeys`/`headAtoms`
    *  certificate restored past `Shape.MaxHeads`. */
   private def frontierEdits(d: SpatialAnalysis, ann: SpatialAnnotations)
       : Vector[(NodeId, Space, Rewrite)] =

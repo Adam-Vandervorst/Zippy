@@ -9,6 +9,8 @@
 (datatype FBody
   (FSelf)                   
   (FBodyK i64))
+(datatype Body
+  (BodyK i64))
 (datatype Space
   (Empty)
   (Singleton Path)
@@ -24,6 +26,9 @@
   (TailsIntersection Space)
   (Raffination Space Space)
   (IterC Space Space)       
+  (Iter Space Body)         
+  (IterH Space Space Body)  
+  (App Body i64 Space)      
   (Fix Space FBody)         
   (FApp FBody Space))
 (relation drop-prefix (Path Path Space))
@@ -148,6 +153,10 @@
 (rewrite (IterC (Singleton (Item h)) b) b)
 (rewrite (IterC (Singleton (Concat (Item h) t)) b) b)
 (rewrite (IterC (Union s t) b) (Union (IterC s b) (IterC t b)))
+(rewrite (Iter src b) (IterH (Head src) src b))
+(rewrite (IterH (Empty) src b) (Empty))
+(rewrite (IterH (Union a c) src b) (Union (IterH a src b) (IterH c src b)))
+(rewrite (IterH (Singleton (Item h)) src b) (App b h (Unwrap src (Item h))))
 (ruleset park)
 (relation FixCand (Space Space))
 (rewrite (FApp (FSelf) x) x)

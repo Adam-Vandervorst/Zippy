@@ -1,4 +1,4 @@
-# expressivity.csv — ts=2026-09-02T16:46:20Z; git=f6832fc-dirty; cpu=Intel(R) Xeon(R) 6975P-C; cores=16; mem=247GiB; os=Linux 6.17.0-1019-aws; jvm=OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu); heap=24.0GiB; scala=3.8.1; literalByRef=true patriciaOps=true; target=100000; bank=100; seed=12345
+# expressivity.csv — ts=2026-09-02T19:54:06Z; git=9b818f3-dirty; clean=no(103); cpu=Intel(R) Xeon(R) 6975P-C; cores=16; mem=247GiB; os=Linux 6.17.0-1019-aws; jvm=OpenJDK 64-Bit Server VM 21.0.12 (Ubuntu); heap=24.0GiB; scala=3.8.1; sbt=2.0.8; build=scalac 3.8.1 -source:3.3 -feature -explain; tools=z3=Z3 version 5.1.0 - 64 bit  vampire=Vampire 5.1.0 (Release build, commit 7b2f410 on 2026-08-13 10:17:34 +0200)  egglog=egglog 3.0.0_2026-09-02_e5dea2d5; literalByRef=true patriciaOps=true; target=100000; bank=100; seed=12345
 uniqueOut,entropy,nEmpty,nSpace,nPath,respSpace,respPath,respFrac,avgSize,nodes
 1,0.0000,100,2,2,0,0,0.0000,0.000,15
 46,4.8726,0,2,1,0,1,0.3333,1.000,33

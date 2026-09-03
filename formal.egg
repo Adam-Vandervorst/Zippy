@@ -30,6 +30,13 @@
   (FSelf)                   ; F(X) = X
   (FBodyK i64))             ; program-defined step, indexed; one FApp rule per index
 
+; ITERATION BODIES, defunctionalized the same way.  A HEAD-DEPENDENT body sees `(head, tails-of-that
+; -head)`, so its application takes both: `(App b h grp)`.  Like `FBodyK`, the body itself is a TAG
+; and the program supplies `(rewrite (App (BodyK i) h t) …)` — one rule per index.  Mentions no
+; Space, so it needs no `datatype*` either.
+(datatype Body
+  (BodyK i64))              ; program-defined head-dependent body, indexed; one App rule per index
+
 (datatype Space
   (Empty)
   (Singleton Path)
@@ -45,6 +52,9 @@
   (TailsIntersection Space)
   (Raffination Space Space)
   (IterC Space Space)       ; Iter src b: union of a loop-INVARIANT body b over the heads of src
+  (Iter Space Body)         ; HEAD-DEPENDENT iteration: the body sees each head and its tail set
+  (IterH Space Space Body)  ; …as a fold over a HEAD SET (arg 1) with the SOURCE held fixed (arg 2)
+  (App Body i64 Space)      ; head-dependent body application: b at head h over group grp
   (Fix Space FBody)         ; LEAST post-fixpoint of F above init — FIRST-CLASS, never unrolled
   (FApp FBody Space))       ; step application, F(x)
 
@@ -198,6 +208,38 @@
 (rewrite (IterC (Union s t) b) (Union (IterC s b) (IterC t b)))   ; proof: proofs/laws/law_iterc_set.smt2
 ; the singleton case is split on head shape: a {ε} source has NO heads, so iterating over it is
 ; EMPTY — stating laws/law_iterc_set.smt2 exposed the unguarded (Singleton p) → b as false at p=ε.
+
+; --- HEAD-DEPENDENT Iter: the four rules that let an `Space.Iteration` BINDER reach this vocabulary
+; instead of being executed away first.  `EquivPipeline.expand` used to evaluate every `Iteration`
+; into a union of concrete group bodies before anything was rendered, so both sides of an instance
+; obligation came out as the same literal and the cell certified nothing.
+;
+;   L1  (Iter src b)                  = (IterH (Head src) src b)
+;   L2  (IterH (Union a c) src b)     = (Union (IterH a src b) (IterH c src b))
+;   L3  (IterH (Singleton (Item h)) src b) = (App b h (Unwrap src (Item h)))
+;   L4  (IterH (Empty) src b)         = (Empty)
+;
+; L2 IS THE LOAD-BEARING RULE, AND THE DISTINCTION IT RESTS ON IS SUBTLE ENOUGH TO STATE.  An
+; `Iteration` does NOT distribute over a union of its SOURCE: a head shared between the two operands
+; merges their groups, and the body — which can see a group — observes the merge.  That split is
+; machine-REFUTED, as proofs/unbounded/negative/not_iter_split.p (N05), with an executed
+; countermodel in proofs/unbounded/COUNTERMODELS.tsv.  What distributes here is the HEAD-SET
+; argument, with `src` — the term the groups are computed from — held FIXED in every branch.  The
+; invariant-body rules above never had to make the distinction, because an invariant body cannot
+; observe a group at all.
+;
+; L1 IS WHERE THE HEADEDNESS GUARD LIVES.  `IterH` deliberately does not re-check that its head is
+; present in `src`; it is `Head src` that contains exactly the one-item paths of src's heads.  So
+; NOTHING BUT L1 MAY INTRODUCE AN `IterH`: one built any other way would apply the body at a head
+; whose group is empty.
+;
+; L3's group is `(Unwrap src (Item h))`, which is this vocabulary's own tails-under-a-prefix — so
+; the group the body is handed is the same set `eval` hands it, by the Unwrap rules below rather
+; than by assumption.
+(rewrite (Iter src b) (IterH (Head src) src b))   ; proof: proofs/laws/law_iter_set.smt2
+(rewrite (IterH (Empty) src b) (Empty))   ; proof: proofs/laws/law_iter_set.smt2
+(rewrite (IterH (Union a c) src b) (Union (IterH a src b) (IterH c src b)))   ; proof: proofs/laws/law_iter_set.smt2
+(rewrite (IterH (Singleton (Item h)) src b) (App b h (Unwrap src (Item h))))   ; proof: proofs/laws/law_iter_set.smt2
 
 ; --- Fix model: (Fix i b) IS the LEAST post-fixpoint of F = FApp b above i.  Three rules and NO
 ; UNROLLING rule — an unrolling rewrite (Fix i b) → (Union i (FApp b (Fix i b))) would generate a

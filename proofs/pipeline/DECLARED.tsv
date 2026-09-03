@@ -44,7 +44,7 @@ proofs/pipeline/nqueens-graph.smt2	IDENT
 proofs/pipeline/nqueens-space-agnostic.smt2	LAW-JUSTIFIED
 proofs/pipeline/nqueens-space.smt2	IDENT
 proofs/pipeline/nqueens-zipper-agnostic.smt2	TRIVIAL
-proofs/pipeline/nqueens-zipper.smt2	REAL
+proofs/pipeline/nqueens-zipper.smt2	BUDGET
 proofs/pipeline/puzzle15-graph-agnostic.smt2	BUDGET
 proofs/pipeline/puzzle15-graph.smt2	IDENT
 proofs/pipeline/puzzle15-space-agnostic.smt2	LAW-JUSTIFIED
@@ -54,7 +54,7 @@ proofs/pipeline/puzzle15-zipper.smt2	BUDGET
 proofs/pipeline/puzzle3-full-graph-agnostic.smt2	BUDGET
 proofs/pipeline/puzzle3-full-graph.smt2	IDENT
 proofs/pipeline/puzzle3-full-space-agnostic.smt2	LAW-JUSTIFIED
-proofs/pipeline/puzzle3-full-space.smt2	REAL
+proofs/pipeline/puzzle3-full-space.smt2	BUDGET
 proofs/pipeline/puzzle3-full-zipper-agnostic.smt2	TRIVIAL
 proofs/pipeline/puzzle3-full-zipper.smt2	REAL
 proofs/pipeline/temperature-graph-agnostic.smt2	TRIVIAL
@@ -106,7 +106,8 @@ zipper-egg-tests/pipeline/puzzle15-zipper.egg	SINGLE-SIDE
 zipper-egg-tests/pipeline/puzzle3-full-graph-agnostic.egg	REAL
 zipper-egg-tests/pipeline/puzzle3-full-graph.egg	REAL
 zipper-egg-tests/pipeline/puzzle3-full-space-agnostic.egg	LAW-JUSTIFIED
-zipper-egg-tests/pipeline/puzzle3-full-space.egg	REAL
+zipper-egg-tests/pipeline/puzzle3-full-space-impl.egg	REAL
+zipper-egg-tests/pipeline/puzzle3-full-space.egg	BUDGET
 zipper-egg-tests/pipeline/puzzle3-full-zipper-agnostic.egg	TRIVIAL
 zipper-egg-tests/pipeline/puzzle3-full-zipper-virtual.egg	BUDGET
 zipper-egg-tests/pipeline/puzzle3-full-zipper.egg	SINGLE-SIDE

@@ -46,7 +46,8 @@ final case class SpatialConfig(
   /** tracked heads per level this ANALYSIS keeps before spilling into `others`/`otherTail`.
    *  Narrowing only, against `Shape.MaxHeads`. */
   shapeWidth: Int = 12,
-  /** UNTRACKED-HEAD NAMES kept in the disjointness certificate (`Shape.otherKeys`, channel (e))
+  /** UNTRACKED-HEAD NAMES kept in the disjointness certificate (`Shape.otherKeys`, channel (e),
+   *  with the overflow interned into `Shape.headAtoms`, channel (f), rather than dropped)
    *  before it degrades to ⊤.  Far above `shapeWidth` on purpose — see `Shape.MaxSpillKeys`: this
    *  bounds NAMES (one reference, one set operation per lattice step), `shapeWidth` bounds tracked
    *  SUB-SHAPES.  This one is read only through `Shape.MaxSpillKeys`, i.e. it is a domain-wide cap
@@ -388,7 +389,7 @@ object SpatialAnalysis:
     else
       val kids = sh.heads.iterator.map((h, t) => h -> capWidth(t, k)).toVector
       val ot = sh.otherTail.map(t => Shape.weaken(capWidth(t, k)))
-      if kids.size <= k then Shape(sh.eps, SortedMap.from(kids), sh.others, ot, sh.otherKeys)
+      if kids.size <= k then Shape(sh.eps, SortedMap.from(kids), sh.others, ot, sh.otherKeys, sh.headAtoms)
       else
         val keep = kids.take(k)
         val spill = kids.drop(k)

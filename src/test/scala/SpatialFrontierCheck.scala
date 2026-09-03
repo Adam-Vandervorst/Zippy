@@ -42,6 +42,14 @@ class SpatialFrontierCheck extends FunSuite:
   def pv(items: PathItem*): PathValue = PathValue(items.toList)
   def sv(ps: Iterable[PathValue]): SpaceValue = SpaceValue(ps.toSet)
   def ty(v: SpaceValue): SpatialType = SpatialType.of(v)
+
+  /** The over-prediction ceiling for the key-disjoint depth ladder PAST `Shape.MaxDepth + 1`, as a
+   *  multiple of the true rebuild count `d`.  A RECORDED MEASUREMENT, not a design target: the rows
+   *  past the cap are the open half of RESOLUTION.md item 7, and this constant exists so the gate
+   *  fails when the over-prediction GROWS rather than only when the bound becomes unsound.  MEASURED
+   *  over d = 1..16: exact to d = `MaxDepth + 1`, then `hi = 4d - 14` — a line of slope 4, so `4·d`
+   *  holds at every row.  Lower it whenever the measurement improves. */
+  val RebuiltRatioPastCap = 4L
   def tr(v: SpaceValue): Trie = Trie.fromSpaceValue(v)
 
   /** the complete `arity`-ary trie of depth `depth`, hung under `prefix`: `arity^depth` paths */
@@ -234,7 +242,14 @@ class SpatialFrontierCheck extends FunSuite:
     // THIS TEST IS THE GATE ON IT: the assertion is now unconditional, so a regression that drops the
     // certificate anywhere on the path — `Shape.mk`, `capDepth`, `widen`, `SpatialAnalysis.capWidth`
     // or `SpatialTypeSystem.constrainShape` — turns this row red instead of merely printing wider.
-    val ns = Vector(4, 8, 12, 13, 16, 24, 64, 256, 1024, 4096)
+    // ...AND PAST `MaxSpillKeys` TOO.  The list used to stop at 4096, which is exactly the cap, so
+    // it never crossed it: each side's level-1 certificate was `Some` of exactly `MaxSpillKeys`
+    // names and the row stayed flat for a reason that would have failed one key later.  Over the cap
+    // the enumerated certificate used to degrade to ⊤ and this family's prediction jumped growth
+    // class again — the same cliff as `MaxHeads`, one cap further out.  Channel (f) interns the
+    // overflow instead (`Shape.headAtoms`, `HeadAtoms`), so the rows below the cap and above it are
+    // now the same prediction.
+    val ns = Vector(4, 8, 12, 13, 16, 24, 64, 256, 1024, 4096, Shape.MaxSpillKeys + 1, 3 * Shape.MaxSpillKeys)
     var shown = Vector.empty[String]
     for n <- ns do
       val l = sv((0 until n).map(i => pv("g", s"x${2 * i}")))
@@ -268,28 +283,56 @@ class SpatialFrontierCheck extends FunSuite:
     //    were available and were thrown away.  The certificate recovers them and the row is now
     //    EXACT.  That is the discontinuity, and it is gone.
     //  * d > MaxDepth + 1 — the divergent keys land BELOW the collapsed level.  Both sides' shapes
-    //    truncate to the same shared prefix head, so no certificate can help: the domain genuinely
-    //    cannot see where they diverge.  That is the DEPTH BUDGET, an honest precision limit, and
-    //    the prediction stays sound and LINEAR in d (a bounded factor over the truth `d`) rather
-    //    than becoming a product.  The assertion below says exactly that and no more.
+    //    truncate to the same shared prefix head, so the prediction stays sound and LINEAR in d
+    //    rather than becoming a product.
+    //
+    // THE ACCEPTANCE REVIEW ASKS FOR THIS ROW TO BE EXACT TOO, AND IT IS NOT.  A per-level interned
+    // certificate below the collapse was built and measured and did not deliver it: the frontier's
+    // disjointness query reads `possibleHeads` AT A LEVEL and never descends into an `otherTail`'s
+    // certificate, so d = 6 still predicted `rebuilt = [5, 10]` against a truth of 6 — and carrying
+    // certificates on both tails made `leq` compare them, which turned six corpus shapes in
+    // `SpatialAnalysisCheck`'s decorated-soundness gate red.  Getting this row exact needs
+    // `SpatialFrontier`'s relational walk to consult tail certificates, which is a change to the
+    // frontier and not to the shape carrier.  Recorded in RESOLUTION.md item 7; the range below
+    // still runs well past the cap, so the shape of the remaining gap is visible in the printout.
     var shown = Vector.empty[String]
-    for d <- 1 to Shape.MaxDepth + 3 do
+    var rows = Vector.empty[(Int, FrontierSummary)]
+    for d <- 1 to 3 * Shape.MaxDepth + 4 do
       val pre = (1 until d).map(i => s"p$i").toList
       val l = sv((0 until 4).map(i => PathValue(pre :+ s"a$i")))
       val r = sv((0 until 4).map(i => PathValue(pre :+ s"b$i")))
       val s = SpatialFrontier.binary(FrontierOp.Union, ty(l), ty(r))
       shown :+= f"depth=$d%-3d rebuilt=${s.rebuilt.show}%-14s |Q|=${s.depth.pairedTotal.show}%-14s src=${s.source.show}"
+      rows :+= (d, s)
+    // PRINT THE WHOLE LADDER BEFORE ASSERTING.  A failure part-way through used to abort before the
+    // printout, which is the one thing a reader needs to see when a growth claim breaks.
+    println(s"  KEY-DISJOINT union across the depth cap (Shape.MaxDepth = ${Shape.MaxDepth}) — " +
+            s"exact to d = ${Shape.MaxDepth + 1}; past it the review's ambition is UNMET (see the " +
+            s"comment above) and what the model actually gives is recorded below:")
+    for l <- shown do println("    " + l)
+    for (d, s) <- rows do
+      // SOUNDNESS IS THE HARD GATE AT EVERY DEPTH.
+      assert(s.rebuilt.hi >= d.toLong, s"depth=$d: UNSOUND, below the truth $d: ${s.show}")
       if d <= Shape.MaxDepth + 1 then
         assertEquals(s.rebuilt.hi, d.toLong,
                      s"depth=$d: the rebuild count must be EXACT up to Shape.MaxDepth + 1 " +
                      s"(= ${Shape.MaxDepth + 1}) — the collapsed level's names are available: ${s.show}")
       else
-        assert(s.rebuilt.hi >= d.toLong, s"depth=$d: unsound, below the truth $d: ${s.show}")
-        assert(s.rebuilt.hi <= 3L * d,
-               s"depth=$d: past the depth budget the bound must stay LINEAR in d (<= 3d), not " +
-               s"become a product: ${s.show}")
-    println(s"  KEY-DISJOINT union across the depth cap (Shape.MaxDepth = ${Shape.MaxDepth}) — " +
-            s"exact to d = ${Shape.MaxDepth + 1}, linear past it:")
+        // PAST THE CAP THE OVER-PREDICTION IS LINEAR IN d, AND EXTENDING THE RANGE IS WHAT SHOWS IT.
+        // MEASURED over d = 1..16 (the test used to stop at `MaxDepth + 3`, three rows past the cap):
+        //
+        //     d      1  2  3  4  5   6   7   8  …  15  16
+        //     hi     1  2  3  4  5  10  14  18  …  46  50        exact to d = 5, then hi = 4d - 14
+        //
+        // so the line has SLOPE 4 and the old `<= 3d` envelope was simply too tight for large d
+        // rather than evidence of super-linear growth — at d = 15 it wants 45 and the model gives 46.
+        // The ceiling below is `4·d`, which the measurement supports at every row, and the ladder is
+        // printed above so the line is visible instead of only its envelope.  The rows past the cap
+        // being over-predicted AT ALL is the open half of RESOLUTION.md item 7.
+        assert(s.rebuilt.hi <= RebuiltRatioPastCap * d,
+               s"depth=$d: the over-prediction past the depth cap exceeded the recorded ceiling " +
+               s"(${RebuiltRatioPastCap}·d) — it grew, which is a regression in the depth budget " +
+               s"even though the bound stays sound: ${s.show}")
     for l <- shown do println("    " + l)
   }
 

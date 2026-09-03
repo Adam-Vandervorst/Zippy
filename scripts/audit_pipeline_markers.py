@@ -3,6 +3,11 @@
 
 Classifies every file under zipper-egg-tests/pipeline/ and proofs/pipeline/ as exactly one of
   REAL            — carries actual checks/goals (egg `(check …)`; smt `(assert (not …))` goal)
+  BOUNDED-UNROLLING — carries a real goal, but its sides contain a RESIDUAL CUT, so the claim is
+                    about the k-unrollings at the stamped depths and quantified over the cut's free
+                    input — NOT about the recursion.  Lifting it needs registry row O10b (all k plus
+                    omega-continuity), which is OPEN.  Counted separately so it cannot be read as an
+                    end-to-end equivalence.
   TRIVIAL         — explicit TRIVIAL-NO-OBLIGATION marker (identical sides; nothing to prove)
   IDENT           — IDENTICAL-LITERAL / IDENTICAL-STRUCTURE marker: both sides materialised to the
                     same term, so no equivalence obligation exists here; requires a REAL twin
@@ -109,7 +114,8 @@ def write_declared(observed):
     body += [f"{k}\t{v}" for k, v in sorted(observed.items())]
     DECLARED_FILE.write_text("\n".join(body) + "\n")
 
-counts = {"REAL": 0, "TRIVIAL": 0, "LAW-JUSTIFIED": 0, "BUDGET": 0, "IDENT": 0, "SINGLE-SIDE": 0}
+counts = {"REAL": 0, "TRIVIAL": 0, "LAW-JUSTIFIED": 0, "BUDGET": 0, "IDENT": 0, "SINGLE-SIDE": 0,
+          "BOUNDED-UNROLLING": 0}
 problems = []
 expected_open = []
 costly = []
@@ -304,11 +310,15 @@ for d in dirs:
         elif "BUDGET-EXCEEDED" in text:
             kind = "BUDGET"
         else:
-            kind = "REAL"
+            # A REAL GOAL WHOSE SIDES CARRY A RESIDUAL CUT IS NOT AN END-TO-END EQUIVALENCE.  The
+            # stamp is written by EquivPipelineTest.agnosticLegs from `AgnosticPipeline.residualsOf`;
+            # counting it apart from REAL is what stops registry row O10b's open antecedent being
+            # read as a discharged one.
+            kind = "BOUNDED-UNROLLING" if "BOUNDED-UNROLLING (k=" in text else "REAL"
             has_goal = ("(check" in text) if f.suffix == ".egg" else bool(
                 re.search(r"\(assert \(not ", text))
             if not has_goal:
-                problems.append(f"{f.relative_to(root)}: claims REAL but contains no check/goal")
+                problems.append(f"{f.relative_to(root)}: claims {kind} but contains no check/goal")
             if f.suffix == ".egg":
                 dup = duplicate_big_lets(text)
                 if dup:

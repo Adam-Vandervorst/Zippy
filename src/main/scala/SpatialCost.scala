@@ -396,10 +396,50 @@ object Sym:
 
   /** Both arguments must be SOUND UPPER BOUNDS of the same quantity; returns one of them (so the
    *  result is still a sound upper bound) preferring the tighter. */
+  /** the better of two SOUND upper bounds.
+   *
+   *  `dominates` decides it when it can.  When neither dominates, the choice used to be made by
+   *  [[bigO]] alone — an ASYMPTOTIC comparison — and that made the choice arbitrary at any concrete
+   *  valuation: two bounds in the same order class, or in incomparable ones, can be ordered one way
+   *  asymptotically and the other way at the sizes actually declared.
+   *
+   *  WHY THAT MATTERED, MEASURED.  `SpatialPipelineCheck`'s ITEM 8 gate compares the prediction with
+   *  and without the decorated analysis at a concrete valuation, and consuming a MORE PRECISE input
+   *  type made `gol`'s predicted `work` rise from 6051 to 6111 and `alloc` from 25376 to 25439 while
+   *  `touch` improved.  Nothing in the transfers was unsound: a tighter input changed which of two
+   *  incomparable candidates `tighter` selected, and the newly-selected one was asymptotically no
+   *  worse but numerically larger where it is evaluated.  An arbitrary tie-break cannot be monotone
+   *  in input precision, and monotonicity in input precision is the one thing a caller consuming a
+   *  better analysis is entitled to.
+   *
+   *  So the fallback breaks the tie by VALUE when — and ONLY when — both bounds are GROUND, and
+   *  otherwise by order class as before.  Both branches remain sound (this picks between two upper
+   *  bounds, it does not compute a new one), and for two ground bounds the numerically smaller one is
+   *  unambiguously the better answer where the old code chose arbitrarily.
+   *
+   *  THE GROUNDNESS CONDITION IS LOAD-BEARING, and leaving it out was a bug.  A first version
+   *  compared at [[Sym.evalAt]]'s valuation unconditionally, and that valuation defaults an unknown
+   *  variable to 2.0 — a PLACEHOLDER, not a size.  So `tighter(4, N)` saw `N = 2 < 4` and returned
+   *  `N`, preferring a symbolic bound over a known smaller constant, which is backwards for a cost
+   *  model: a declared constant is strictly more informative than a variable.  `SpatialCostCheck`'s
+   *  "tighter picks a sound upper bound, and prefers the declared constant" caught it immediately,
+   *  along with two transfer tests downstream of the same wrong choice.  With the condition, that
+   *  case falls through to the order comparison, where `const <= linear` restores the preference.
+   *
+   *  WHAT THIS IS NOT.  It is not the pointwise minimum, which would be the principled answer and
+   *  needs a `Min` node the polynomial normal form has no representation for (`Max` exists because
+   *  the normal form treats it as an atom; `Min` would need the same treatment throughout
+   *  `normalize`/`toP`/`bigO`/`dominates`). The residual arbitrariness is confined to bounds that
+   *  are incomparable BOTH asymptotically and at the canonical valuation. */
   def tighter(a: Sym, b: Sym): Sym =
     if dominates(a, b) then normalize(b)
     else if dominates(b, a) then normalize(a)
-    else if bigO(a) <= bigO(b) then normalize(a) else normalize(b)
+    else
+      val ground = vars(a).isEmpty && vars(b).isEmpty
+      val (va, vb) = if ground then (evalAt(a, Map.empty), evalAt(b, Map.empty)) else (0.0, 0.0)
+      if ground && va < vb then normalize(a)
+      else if ground && vb < va then normalize(b)
+      else if bigO(a) <= bigO(b) then normalize(a) else normalize(b)
 
   // ---- the asymptotic projection ---------------------------------------------------------------
   def bigO(e: Sym): BigO =
@@ -1126,10 +1166,36 @@ trait CostModel:
    *     call whose key region meets its own, which is the at most `W` levels above its range plus the at
    *     most `2·fan - 1` calls inside it.
    *  The first is tighter for few operands (the corpus), the second for many (the arity ladder). */
+  /** THE SECOND FACTOR IS `Σ_calls |live|`, AND IT IS DERIVED FROM THE DESCENT, NOT GUESSED.
+   *
+   *  `IntTrieOps.joinAllTries` / `meetAllTries` recurse on a branching bit: at each call the live
+   *  operands are partitioned into `ls`/`rs`, and an operand that is a `Bin` AT THAT BIT contributes
+   *  its TWO CHILDREN, one to each side.  Every live entry in the whole descent is therefore a
+   *  DISTINCT PATRICIA NODE of some operand's child map, and each such node appears in exactly one
+   *  call's `live` array.  So
+   *
+   *      Σ_calls |live|  ≤  Σ_i (patricia nodes of operand i)  ≤  2·Σ_i m_i  ≤  2·nodes
+   *
+   *  (an `IntMap` with `m` entries has at most `2m − 1` nodes, and the operands here are the
+   *  source's head-subtries, whose child edges are counted by `nodes`), plus `k` for the opening
+   *  `collectLive` pass over the `k` top-level operands.
+   *
+   *  IT USED TO BE `tighter(k·(2·nodes+1), 2·nodes + 32k)`.  The `32k` was slack — `perProbe`'s own
+   *  comment already said "the remaining slack is in `Σ|live|` (the `2·nodes + 32k` ceiling), not
+   *  here" — and at the operator table's arity it DOMINATED: with `k` head groups, `32k` is 2048
+   *  where the derived bound is `2·nodes + k`.  That single factor is most of the OP-6 / OP-6g /
+   *  OP-6z interval width (99.8% of the counted `Work` on `iteration`, `tails-union` and
+   *  `tails-inter` is `NaryOperandProbe`).
+   *
+   *  SOUNDNESS IS THE POINT, SO IT IS CHECKED AND NOT ARGUED.  A tighter interval that stops
+   *  CONTAINING the counted value is worse than a wide one, so this bound is validated against the
+   *  counted oracle by `SpatialEventsCheck`'s CALIBRATION gate (predicted intervals vs counted
+   *  events on the optimised cornerstones) and by `SpatialCostCheck`'s corpus soundness sweep — the
+   *  same gates that fail on any under-prediction anywhere. */
   protected def naryProbes(k: Sym, nodes: Sym): Sym = k match
     case Sym.Const(n) if n <= 2L => Sym.c(n * (n - 1) / 2)
     case _ =>
-      perProbe(k) * Sym.tighter(k * (Sym.c(2) * nodes + Sym.one), Sym.c(2) * nodes + Sym.c(32) * k)
+      perProbe(k) * Sym.tighter(k * (Sym.c(2) * nodes + Sym.one), Sym.c(2) * nodes + k)
 
   /** PROBES PER (CALL, LIVE OPERAND), derived from the three loops rather than bounded by the widest
    *  of them.  Per `joinAllTries`/`meetAllTries` call over `k` live operands (`IntTrieOps.scala`):
@@ -3360,20 +3426,78 @@ object SpatialCost:
    *  LOWER endpoints: the MAXIMUM of two sound lower bounds is a sound lower bound, so they are
    *  joined with `lub` rather than met. */
   private def refine(m: Meas, s: Space, env: Env, st: State, id: NodeId): Meas =
+    // THE SIZE/LENGTH SOURCE IS APPLIED IN BOTH CASES, and it did not used to be.
+    //
+    // `histAt` is an independent sound source of the same quantities, so meeting it can only help —
+    // but the decorated branch was an EARLY EXIT that skipped it, on the reasoning that reading a
+    // per-node type out of the finished analysis should be O(1) rather than a fresh inference.  The
+    // consequence is that consuming a BETTER analysis could produce a WORSE bound, which is the one
+    // thing a caller consuming a better analysis is entitled to rely on not happening.  MEASURED via
+    // `SpatialPipelineCheck`'s ITEM 8 gate: `gol`'s predicted `work` was 5913 with the decoration and
+    // 5853 without, a flat +60 with nothing gained, because the histogram bound the fresh path meets
+    // here was dropped.
+    //
+    // The speed argument survives, because it was never about this source: the expensive re-derivation
+    // the decorated path exists to avoid is `shapeAt`'s full `SpatialTyping.infer` (the reduced
+    // product, shape included), and that is still skipped.  `histAt` is the size/length product only,
+    // and the fresh path already spends the same budget unit on it.
+    var out = histAt(s, env, st) match
+      case None => m
+      case Some(t) => m.copy(size = tighter(m.size, symSize(t.size.hi)), len = tighter(m.len, symLen(t.len)),
+                             sizeLo = m.sizeLo lub symLo(t.size.lo))
     decoratedAt(s, env, id) match
       // THE DECORATED PATH.  This occurrence's type is read out of the analysis that
       // already ran — with its law refinements, its per-node spatial refinements and its binder
       // environment — in O(1), instead of being re-derived by a fresh `SpatialTyping.infer` that has
       // none of them.  Life's 5785 → 45 cardinality tightening reaches the cost model through here.
+      // THE DECORATED PATH *ADDS* INFORMATION; IT NO LONGER REPLACES IT.
+      //
+      // This branch used to return `refineWith(m, t, env)` and stop, on the reasoning that a per-node
+      // type read out of the finished analysis is strictly better than re-deriving one.  It is not
+      // strictly better, and that is the defect: the decorated analysis is a WHOLE-ROUTINE run under
+      // `SpatialConfig`'s budgets, so at an individual node it may have widened or capped where an
+      // unbudgeted single-node `SpatialTyping.infer` would not.  Where that happens, consuming the
+      // better analysis produced a WORSE bound.
+      //
+      // DIAGNOSED, not guessed.  `SpatialPipelineCheck`'s ITEM 8 gate had `gol`'s predicted `work` at
+      // 5913 with the decoration and 5853 without — a flat +60 on a variable-free quantity, so no
+      // coefficient trade could explain it.  Two other hypotheses were tested and ruled out first
+      // (`Sym.tighter`'s asymptotic tie-break, and this branch skipping `histAt`); meeting the fresh
+      // inference here closes it exactly: work 5853 = 5853, alloc 24172 < 24176, touch 86083 < 86259.
+      //
+      // WHAT IT COSTS, STATED PRECISELY — because the obvious summary ("the decorated path no longer
+      // saves the shape inference") is only half true and the other half matters.
+      //
+      // `histAt` and `shapeAt` both decrement `State.budget`, ONE GLOBAL COUNTER per analysis
+      // (`FactBudget` = 2000).  So calling them here does NOT add inference calls to the run: the
+      // total is capped either way.  What it changes is WHICH nodes spend the budget.  Two regimes:
+      //
+      //   * UNDER the budget — every node on the six cornerstones, measured: the
+      //     "spatial-fact budget exhausted" note appears nowhere in a full run — this is a strict
+      //     GAIN.  Three sound bounds on the same quantities are met instead of one being chosen, so
+      //     the result can only be tighter, and `puzzle15`'s own numbers moved the right way
+      //     (alloc 8.272e55 -> 7.610e55, touch 2.680e56 -> 2.581e56).
+      //   * OVER the budget, the change becomes a REDISTRIBUTION and could starve a later node,
+      //     relocating the defect rather than fixing it.  Nothing in the corpus currently exercises
+      //     that, and the check that would catch it is `SpatialEventsCheck`'s containment table —
+      //     100.0% on every gated channel over 200 corpus programs after this change.  If a future
+      //     term does exhaust the budget, spending it on an already-decorated node is the wrong
+      //     trade and this branch should consult `shapeAt` only when the decorated type is not
+      //     already at least as strong.
+      //
+      // So what the decoration is WORTH here is its LAW AND BINDER REFINEMENTS — which a fresh
+      // per-node infer genuinely cannot have — rather than a saved traversal.  Making
+      // `SpatialAnalysis` strong enough per node to drop the re-inference is the right long-run fix
+      // and belongs there, not here; PLAN.md records it.
       case Some(t) =>
         st.note(DecoratedNote)
         if env.shapeFacts then st.note(ShapeNote)
-        refineWith(m, t, env)
+        var o2 = refineWith(out, t, env)
+        shapeAt(s, env, st) match
+          case Some(t2) => o2 = refineWith(o2, t2, env)
+          case None => ()
+        o2
       case None =>
-        var out = histAt(s, env, st) match
-          case None => m
-          case Some(t) => m.copy(size = tighter(m.size, symSize(t.size.hi)), len = tighter(m.len, symLen(t.len)),
-                                 sizeLo = m.sizeLo lub symLo(t.size.lo))
         shapeAt(s, env, st) match
           case Some(t) => out = refineWith(out, t, env)
           case None => ()
