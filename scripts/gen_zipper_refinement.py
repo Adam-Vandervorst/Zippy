@@ -14,7 +14,7 @@ schema alone.  `proofs/run.sh` runs each file as ONE `(check-sat)` -- it reads t
 multi-goal file would let an early `sat` hide behind a final `unsat` -- which is the other reason.
 
 WHAT IS AND IS NOT COVERED.  `TailsUnion`/`TailsIntersection` need the set of PRESENT heads, which an
-uninterpreted `Trie` sort does not carry; the two `threeway_tails*_trie.smt2` legs certify those over
+uninterpreted `Trie` sort does not carry; `threeway_tailsunion_trie.smt2` and `threeway_tailsinter_trie.smt2` certify those over
 concrete key lists, and the FULL theorem over every constructor is
 `proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement`, of which these files are the first-order
 shadow.  The `% MECHANIZED-IN:` marker on the main file points at it.
@@ -145,7 +145,7 @@ def main():
                  "; concludes by the schema alone.  See scripts/gen_zipper_refinement.py for why ten files.\n"
                  ";\n"
                  "; OUT OF SCOPE HERE: TailsUnion/TailsIntersection (they need the set of PRESENT heads, which an\n"
-                 "; uninterpreted Trie sort does not carry; `threeway_tails*_trie.smt2` certify them over key lists).\n"
+                 "; uninterpreted Trie sort does not carry; threeway_tailsunion_trie.smt2 / threeway_tailsinter_trie.smt2 certify them over key lists).\n"
                  "; The FULL theorem over every constructor, boundaries named, is the Lean theorem:\n"
                  ";\n"
                  "; % MECHANIZED-IN: proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement\n"

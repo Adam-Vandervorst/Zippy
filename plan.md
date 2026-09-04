@@ -1,5 +1,9 @@
 # plan.md — addressing the acceptance review in full
 
+> **Successor:** `docs/ACCEPTANCE.md` (task 3.3) — one row per review item, assigned only by its
+> acceptance sentence and gate command, with the measured verdict.  This file is the plan; that file is
+> the status.
+
 The review is deliberately untracked (`review.md`, see `.gitignore`): it is an input. This file is the
 plan against it. Sequenced by **dependency**, not by tractability. Every task names its files and
 the command that proves it done; every item is done when its own "Acceptance requires …" sentence

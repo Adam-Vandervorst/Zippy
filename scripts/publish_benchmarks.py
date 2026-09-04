@@ -292,8 +292,11 @@ def validate(commit, ts):
                 problems.append(f"{rel}: the SET of generated sections changed "
                                 f"({sorted(set(oldb) ^ set(begins))}) -- a publication regenerates "
                                 "sections in place, it does not add or drop them")
-            if f"git={commit}" not in "\n".join(lines):
-                problems.append(f"{rel}: no section carries the manifest's commit")
+            # `BenchmarkReport` records the commit as a provenance TABLE ROW (`| git commit | <sha> |`),
+            # not as the `git=` token the CSV headers use.  An earlier revision looked for `git=` here,
+            # which no section ever carries -- so the md validation could never have passed.
+            if not re.search(r"\|\s*git commit\s*\|\s*" + re.escape(commit) + r"\s*\|", "\n".join(lines)):
+                problems.append(f"{rel}: no section's provenance row names the manifest's commit {commit}")
 
     for p in problems:
         print(f"  FAIL  {p}")
@@ -339,8 +342,133 @@ def report():
           "review the diff above and commit it yourself.")
 
 
+# =============================================================================================
+# REPRODUCE (plan.md 3.1).  The published outputs name ONE commit; a reader must be able to check that
+# commit out, re-run the gates and the generation, and get the same tables back.  This mode does
+# exactly that, in a throwaway `git worktree`, and reports the diff in the terms that matter:
+#
+#   * PROVENANCE: all four outputs name the same commit, and it is not `-dirty` -- a `-dirty` identity
+#     names no tree anyone can check out, so there is nothing to reproduce (that is the state of the
+#     tree before the first publication, and this mode says so instead of pretending).
+#   * GATES at that commit, with that commit's own gate list (`scripts/gates.py --run` inside the
+#     worktree), because a gate added later is not a condition the published numbers were held to.
+#   * GENERATION at that commit, under a manifest naming it, into the worktree.
+#   * THE DIFF, structurally: same schema row, same row set (key column), same section set, same
+#     commit in the provenance.  Measurement VALUES (timings) are expected to differ between two runs
+#     and are reported as churn, not failed on.
+#
+# Exit 0 means: the commit the outputs name reproduces their structure under its own gates.
+# =============================================================================================
+def output_commit(rel, text):
+    """the commit a published output names, or None"""
+    if OUTPUTS[rel]["kind"] == "md":
+        found = set(re.findall(r"\|\s*git commit\s*\|\s*([0-9a-f]{7,}(?:-dirty)?)\s*\|", text))
+        return found if found else None
+    first = text.splitlines()[0] if text else ""
+    m = re.search(r"git=([0-9a-f]{7,}(?:-dirty)?)", first)
+    return {m.group(1)} if m else None
+
+
+def reproduce(runner_hint):
+    step(0, "REPRODUCE the publication the four outputs name")
+    named = {}
+    for rel in sorted(OUTPUTS):
+        f = ROOT / rel
+        if not f.is_file():
+            die(f"{rel}: missing; there is no publication to reproduce")
+        c = output_commit(rel, f.read_text())
+        if not c:
+            die(f"{rel}: carries no `git=<commit>` provenance")
+        if len(c) > 1:
+            die(f"{rel}: names more than one commit ({sorted(c)}) -- one publication is one commit")
+        named[rel] = next(iter(c))
+        print(f"  {rel:24s} git={named[rel]}")
+    commits = set(named.values())
+    if len(commits) != 1:
+        die(f"the four outputs name DIFFERENT commits: {sorted(commits)}.  They were not produced by "
+            "one publication and cannot be reproduced as one.")
+    sha = commits.pop()
+    if sha.endswith("-dirty"):
+        die(f"the outputs name `{sha}`: a DIRTY tree, which no one can check out.  This is the "
+            "pre-publication state; run the publisher (without --reproduce) once the gates are green.")
+    if subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", f"{sha}^{{commit}}"],
+                      capture_output=True).returncode != 0:
+        die(f"commit {sha} is not in this repository")
+    wt = pathlib.Path(tempfile.mkdtemp(prefix="zippy-reproduce-")) / "tree"
+    git("worktree", "add", "--detach", str(wt), sha)
+    print(f"  worktree at {wt} for {sha}")
+    try:
+        step(1, "GATES at the named commit (its own gate list)")
+        r = subprocess.run(["sbt", "--server", "--batch", "exportTestRuntime"], cwd=wt,
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            die(f"`sbt exportTestRuntime` failed in the worktree:\n{r.stdout[-1500:]}")
+        r = subprocess.run([sys.executable, "scripts/gates.py", "--run"], cwd=wt, capture_output=True, text=True)
+        print("\n".join("  " + l for l in r.stdout.splitlines() if l.startswith(("  PASS", "  FAIL", "PASS", "FAIL"))))
+        if r.returncode != 0:
+            die(f"the named commit's own gates are not green; its published numbers were not held to "
+                f"them.  Tail:\n" + "\n".join(r.stdout.splitlines()[-8:]))
+        step(2, "GENERATE at the named commit")
+        cp = (wt / "target/test-runtime/classpath.txt").read_text().strip()
+        env = dict(os.environ, ZIPPY_CP=cp)
+        envrec = subprocess.run(["java", "-cp", cp, "morkl.RunEnvironmentMain"], capture_output=True,
+                                text=True, cwd=wt, env=env)
+        if envrec.returncode != 0:
+            die(f"could not capture the environment record in the worktree: {envrec.stderr[:300]}")
+        ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        mf = wt.parent / "manifest.properties"
+        mf.write_text(f"commit={sha[:7]}\ntimestamp={ts}\nenv={envrec.stdout.strip()}\n"
+                      f"outputs={','.join(sorted(OUTPUTS))}\n")
+        wrunner = [str(wt / "target/test-runtime/run-suite.sh")]
+        genv = dict(env, ZIPPY_PUBLISH_MANIFEST=str(mf))
+        for suite in GENERATORS:
+            r = subprocess.run(wrunner + [suite], capture_output=True, text=True, cwd=wt, env=genv)
+            print(f"  {'PASS' if r.returncode == 0 else 'FAIL'}  {suite}")
+            if r.returncode != 0:
+                die(f"generator {suite} failed in the worktree:\n{r.stdout[-1500:]}")
+        step(3, "DIFF the regenerated outputs against the published ones (structure must match)")
+        problems = []
+        for rel, spec in sorted(OUTPUTS.items()):
+            new = (wt / rel).read_text()
+            old = git("show", f"{sha}:{rel}")
+            if spec["kind"] in ("csv", "tsv"):
+                ol, nl = old.splitlines(), new.splitlines()
+                if len(ol) < 2 or len(nl) < 2 or ol[1] != nl[1]:
+                    problems.append(f"{rel}: schema row differs")
+                sep = "\t" if spec["kind"] == "tsv" else ","
+                def keys(ls):
+                    body = [l for l in ls if l.strip() and not l.startswith("#")]
+                    return [l.split(sep, 1)[0] for l in body[1:]]
+                ko, kn = keys(ol), keys(nl)
+                if ko != kn:
+                    problems.append(f"{rel}: row set differs ({len(set(ko) ^ set(kn))} key(s))")
+                if f"git={sha[:7]}" not in nl[0]:
+                    problems.append(f"{rel}: regenerated provenance does not name {sha[:7]}")
+                changed = sum(1 for a, b in zip(ol[2:], nl[2:]) if a != b)
+                print(f"  {rel:24s} {len(ko)} rows, {changed} row value(s) differ (measurement churn)")
+            else:
+                so = re.findall(r"<!-- BEGIN benchmark:([\w-]+) -->", old)
+                sn = re.findall(r"<!-- BEGIN benchmark:([\w-]+) -->", new)
+                if set(so) != set(sn):
+                    problems.append(f"{rel}: section set differs ({sorted(set(so) ^ set(sn))})")
+                if not re.search(r"\|\s*git commit\s*\|\s*" + re.escape(sha[:7]) + r"\s*\|", new):
+                    problems.append(f"{rel}: no regenerated section names {sha[:7]}")
+                print(f"  {rel:24s} {len(sn)} sections, same set: {set(so) == set(sn)}")
+        for pb in problems:
+            print(f"  FAIL  {pb}")
+        if problems:
+            die(f"{len(problems)} structural difference(s): the named commit does NOT reproduce its publication")
+        print(f"\nREPRODUCED: commit {sha} regenerates all four outputs with the same schema, row sets and "
+              "sections under its own green gates; only measurement values moved.")
+    finally:
+        subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(wt)], capture_output=True)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--reproduce", action="store_true",
+                    help="plan.md 3.1: check out the commit the four outputs name in a worktree, re-run its "
+                         "gates and generation, and diff the result structurally (exit 0 = reproduced)")
     ap.add_argument("--dry-run", action="store_true",
                     help="preflight and gates only; report what blocks publication and stop")
     ap.add_argument("--runner", default=os.environ.get("ZIPPY_RUNNER", ""),
@@ -348,6 +476,9 @@ def main():
                          "target/test-runtime/run-suite.sh written by `sbt exportTestRuntime`, "
                          "then to $ZIPPY_RUNNER")
     a = ap.parse_args()
+    if a.reproduce:
+        reproduce(a.runner)
+        return
     # THE IN-TREE RUNNER IS THE DEFAULT, and $ZIPPY_RUNNER is now only an override.  Requiring an
     # environment variable put a variable between the repository and its own acceptance gates: a
     # reader who checked out this commit could not run them, and two runs could disagree because

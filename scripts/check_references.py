@@ -88,14 +88,17 @@ DECLARING_FILE = "scripts/check_references.py"      # where TOKEN_EXCEPTIONS bel
 SEARCH_ROOTS = [
     "", "docs", "scripts", "proofs", "proofs/laws", "proofs/spatial", "proofs/spatial-semantic",
     "proofs/pipeline", "proofs/unbounded", "proofs/unbounded/negative",
-    "proofs/pipeline/fixpoint-gate", "src/main/scala", "src/test/scala", "src/test/resources",
+    "proofs/pipeline/fixpoint-gate", "proofs/lean", "proofs/lean/Zippy",
+    "src/main/scala", "src/test/scala", "src/test/resources",
     "terminating", "zipper-egg-tests", "zipper-egg-tests/generated", "zipper-egg-tests/pipeline",
 ]
 
 # Extensions that make a token a file reference.  `.sh` and `.p` are only honoured when the token
 # also contains a `/`: bare `a.sh` is overwhelmingly a Scala field access (`a.show` abbreviated to
 # `.sh`), and bare `x.p` is a variable.
-ALWAYS = (".md", ".scala", ".py", ".egg", ".smt2", ".tsv", ".csv", ".png", ".sbt", ".ser", ".rle")
+# `.lean` (plan.md 3.2): proofs/lean is where every mechanized theorem lives and docs/TRUSTED.md,
+# the registries and the SMT files cite its modules by path, so a renamed module must fail here.
+ALWAYS = (".md", ".scala", ".py", ".egg", ".smt2", ".tsv", ".csv", ".png", ".sbt", ".ser", ".rle", ".lean")
 PATH_ONLY = (".sh", ".p", ".txt", ".json", ".jsonl")
 
 # EXTERNAL DATASETS.  Not in the tree by design: the suites resolve them through `Loaders.resolve`
@@ -175,7 +178,7 @@ TOKEN_EXCEPTIONS = {
     # `impl_wrap/unwrap/head.smt2` means impl_wrap.smt2 + impl_unwrap.smt2 + impl_head.smt2.  Each
     # of the named files DOES exist; the token is prose shorthand, not a path.
     ("build.log", "gol/nqueens/puzzle15/temperature-space.egg"):
-        "(c) shorthand for gol-space.egg, nqueens-space.egg, puzzle15-space.egg, temperature-space.egg",
+        "(c) shorthand for the four stones' -space egg cells of the previous matrix (deleted in 2A.2)",
     ("build.log", "impl_wrap/unwrap/head.smt2"):
         "(c) shorthand for impl_wrap.smt2, impl_unwrap.smt2, impl_head.smt2",
     # `review.md` is a REVIEW INPUT and is deliberately untracked (see .gitignore): a review
@@ -190,6 +193,43 @@ TOKEN_EXCEPTIONS = {
     #     (0.2 check_determinism.sh, 0.3 ArtifactSink.scala, 0.4 gates.py, 0.5 check_lean.sh,
     #      0.6 AlphaNormCheck.scala, 0.8 Certified.scala + proofs/pipeline/CLAIMS.tsv)
     #     TRACK A IS DONE, so 1A.1's `Subst.scala` entry is gone too.
+    # (f') GENERATED WITNESS TABLES UNDER `target/` (2E.4 / 0.5): written by check_asserts.py and
+    #      check_lean.sh, read by proof_closure.py; git-ignored like every build output.
+    ("scripts/check_asserts.py", "target/assert-closure.tsv"): "(f') the assert-closure witness this script writes",
+    ("scripts/check_asserts.py", "assert-closure.tsv"): "(f') the same table, by its bare name in the docstring",
+    ("scripts/proof_closure.py", "target/assert-closure.tsv"): "(f') the assert-closure witness this script reads",
+    ("scripts/proof_closure.py", "assert-closure.tsv"): "(f') the same table, by its bare name",
+    ("scripts/gates.py", "target/assert-closure.tsv"): "(f') the assert-closure witness the gate order depends on",
+    ("scripts/gates.py", "target/lean-mechanized.tsv"): "(f') the Lean witness the gate order depends on",
+    ("docs/TRUSTED.md", "target/assert-closure.tsv"): "(f') the assert-closure witness, named where the marker taxonomy is specified",
+    ("build.log", "target/assert-closure.tsv"): "(f') the assert-closure witness, named in the Phase 2 record",
+    ("scripts/publish_benchmarks.py", "target/test-runtime/classpath.txt"): "(f') the runner's classpath file `sbt exportTestRuntime` writes, read by --reproduce",
+    ("docs/ACCEPTANCE.md", "target/test-runtime/run-suite.sh"): "(f') the in-tree runner `sbt exportTestRuntime` writes; the gate commands are quoted verbatim",
+    # (g') TRANSIENT PROBE FILES named by the scripts that create and remove them
+    ("scripts/check_lean.sh", ".axioms_probe.lean"): "(g') the transient #print-axioms probe this script writes and removes",
+    # (h) HISTORY AND SHORTHAND in build.log (append-only): a renamed Lean module, a Mathlib path
+    #     inside the git-ignored `.lake` checkout, two slash-shorthands, a deleted artifact.
+    ("build.log", "Core.lean"): "(h) the Lean module later folded into Pointwise.lean (Phase 0/1 record)",
+    ("build.log", "Mathlib/Order/WellFoundedSet.lean"): "(h) a Mathlib source path under the git-ignored .lake checkout",
+    ("build.log", "check_lean.sh/proof_closure.py"): "(h) slash shorthand for two scripts",
+    ("build.log", "nqueens-zipper-virtual.egg"): "(h) an artifact of the previous matrix, deleted in 2A.2",
+    # (i) MATHLIB'S OWN CONFIG FILE NAME, recorded by lake in the manifest
+    ("proofs/lean/lake-manifest.json", "lakefile.lean"): "(i) the config file name of a dependency inside .lake",
+    # (j) SYNTHETIC NAMES of selftest (e): an in-memory name set that deliberately disagrees with the disk
+    ("scripts/check_references.py", "docs/in-set-only.md"): "(j) selftest (e) synthetic name",
+    ("scripts/check_references.py", "in-set-only.md"): "(j) selftest (e) synthetic name",
+    ("scripts/check_references.py", "docs/Plan.md"): "(j) selftest (e) synthetic name",
+    ("scripts/check_references.py", "docs/plan.md"): "(j) selftest (e) synthetic name (case variant)",
+    ("scripts/check_references.py", "scripts/x.py"): "(j) selftest (e) synthetic name",
+    ("scripts/check_references.py", "../scripts/x.py"): "(j) selftest (e) synthetic relative name",
+    ("scripts/check_references.py", "docs/readme.md"): "(j) selftest (e) synthetic origin",
+    ("scripts/check_references.py", "on-disk-only.md"): "(j) selftest (e) synthetic file that IS on disk and must not resolve",
+
+    # (g) THE IGNORE FILE'S OWN TOKENS (plan.md 3.2 — a per-token exception replaces the former
+    #     whole-file skip).  Each names a TRANSIENT file a script creates and removes; the ignore
+    #     exists so a mid-run `git add -A` cannot catch it, and the path is absent by design.
+    (".gitignore", "proofs/unbounded/.probe.p"): "(g) run.sh's transient vacuity probe, removed by run.sh",
+    (".gitignore", "proofs/lean/.axioms_probe.lean"): "(g) check_lean.sh's transient #print-axioms probe, removed by it",
     # (f) GENERATED PATHS UNDER `target/`, which is gitignored (a build output, never committed).
     #     These are not dangling references: each one is written by a task in this tree and the text
     #     that names it says which.  They cannot be resolved by the checker, because the whole point
@@ -226,12 +266,8 @@ TOKEN_EXCEPTIONS = {
     # 2A.4 / 2A.6 (2026-09-04): the zipper refinement obligation and the pipeline coverage table now
     # exist, so plan.md's tokens for them resolve and their two exceptions are gone.
 
-    # The ELIDED-GOAL record in the one over-cap pipeline artifact names where the full 174 MB
-    # obligation is written on every run.  That path is under `target/`, which is git-ignored on
-    # purpose (see `bodyCapBytes` in EquivPipelineTest): the whole point of the elision is that those
-    # bytes do NOT enter the tree.  The token is a real, reproducible local path, not a dangling one.
-    ("proofs/pipeline/puzzle15-space.smt2", "target/pipeline-elided/puzzle15-space.smt2"):
-        "(g) git-ignored spill path named by the ELIDED-GOAL record; written by every run",
+    # (The ELIDED-GOAL exception for puzzle15-space.smt2 is gone: since 2A.3 that cell is a trace
+    # record, not a 174 MB denotation, and nothing is elided.)
 
     ("build.log", "review.md"): "(b) as above, cited by the narrative entries that acted on it",
     ("build.log", ".tools/env.sh"):
@@ -259,13 +295,11 @@ DATA_FILES = {
     "prog_matrix.tsv": "generated measurement rows",
     "proofs/laws/MINED.tsv": "mined law candidates; the `file` column names files that resolve, the rest are terms",
     "datalog-morkl.txt": "generated program dump",
-    # A GITIGNORE IS PATTERNS, NOT POINTERS.  Its whole job is to name paths that are ABSENT from
-    # the tree, so a reference sweep over it inverts the test: every line that works is a line this
-    # checker would flag.  (The case in point is the transient vacuity probe that
-    # `proofs/unbounded/run.sh` creates and removes; the ignore exists so a `git add -A` landing
-    # mid-run cannot catch it.)
-    ".gitignore": "ignore PATTERNS, which name paths precisely because they are not tracked",
 }
+# `.gitignore` is NO LONGER a whole-file skip (plan.md 3.2).  Its lines are patterns naming paths
+# that are absent BY DESIGN, and each such token is excused individually in TOKEN_EXCEPTIONS with
+# the reason it is absent -- so a pattern that names a path which is neither tracked nor declared
+# absent (a typo, or a stale ignore for a file that moved) fails like any other dangling reference.
 
 # ABSOLUTE PATHS ARE A HARD FAILURE EVERYWHERE, including in the data files above and in build.log.
 # This is the check that `laws.diff` (removed) and the personal paths in `build.log` and
@@ -525,6 +559,36 @@ def selftest():
     got = run(tmp, "head")
     if any("selftest-Plan.md" in g and "does not exist" in g for g in got):
         failures.append(f"(d) the correctly-cased name must resolve, got {got}")
+    _sh.rmtree(tmp, ignore_errors=True)
+
+    # (e) `resolves()` IS SET MEMBERSHIP, WITH THE FILESYSTEM DISAGREEING (plan.md 3.2).  The
+    #     regressions above run the whole scanner against git snapshots; this one calls `resolves`
+    #     directly against an in-memory name set inside a directory whose contents CONTRADICT it,
+    #     so the test discriminates the checker's own resolution from anything Linux answers:
+    #       * a name in the set that is NOT on disk must resolve;
+    #       * a file on disk that is NOT in the set must not;
+    #       * a case-only variant of a set member must not, whatever the filesystem says.
+    tmp = fresh_repo()
+    (tmp / "on-disk-only.md").write_text("present on disk, absent from the set\n")
+    names = {"docs/in-set-only.md", "docs/Plan.md", "scripts/x.py"}
+    global ROOT
+    keep = ROOT
+    ROOT = tmp
+    try:
+        if not resolves("in-set-only.md", "docs/readme.md", names):
+            failures.append("(e) a name in the set (not on disk) did not resolve")
+        if not resolves("docs/in-set-only.md", "README.md", names):
+            failures.append("(e) a repo-relative name in the set did not resolve from the root")
+        if resolves("on-disk-only.md", "README.md", names):
+            failures.append("(e) a file present on disk but absent from the set resolved")
+        if resolves("docs/plan.md", "README.md", names):
+            failures.append("(e) a case-only variant of a set member resolved")
+        if not resolves("../scripts/x.py", "docs/readme.md", names):
+            failures.append("(e) a relative path into another directory of the set did not resolve")
+        if not resolves("scripts", "README.md", names):
+            failures.append("(e) a directory implied by a set member did not resolve")
+    finally:
+        ROOT = keep
     _sh.rmtree(tmp, ignore_errors=True)
 
     for f in failures:

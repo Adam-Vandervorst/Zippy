@@ -6,7 +6,7 @@
 ; concludes by the schema alone.  See scripts/gen_zipper_refinement.py for why ten files.
 ;
 ; OUT OF SCOPE HERE: TailsUnion/TailsIntersection (they need the set of PRESENT heads, which an
-; uninterpreted Trie sort does not carry; `threeway_tails*_trie.smt2` certify them over key lists).
+; uninterpreted Trie sort does not carry; threeway_tailsunion_trie.smt2 / threeway_tailsinter_trie.smt2 certify them over key lists).
 ; The FULL theorem over every constructor, boundaries named, is the Lean theorem:
 ;
 ; % MECHANIZED-IN: proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement

@@ -27,6 +27,7 @@ executable and machine-checked counterpart of that paper.
 | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | Executor, op-graph and zipper benchmark results, each stamped with the machine, toolchain and configuration it was produced on. |
 | [`docs/residuals.md`](docs/residuals.md) | Why the residuated-division operators are omitted from the algebra. |
 | [`docs/TRUSTED.md`](docs/TRUSTED.md) | **The complete trusted base**: every assumption a `PROVED` verdict rests on, and the three open obligations that are gaps rather than assumptions. |
+| [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) | **The acceptance status**: one row per review item, assigned only by its acceptance sentence and gate command, with the measured verdict (plan.md's successor). |
 | [`plan.md`](plan.md) | The plan against the acceptance review: every task with its files, its gate command and its dependencies; sequenced by dependency. |
 
 ## Requirements

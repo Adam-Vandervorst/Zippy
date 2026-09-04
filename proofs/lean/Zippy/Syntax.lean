@@ -2,12 +2,12 @@
 ==================================================================================================
 THE MORKL SYNTAX WITH VARIABLES AND BINDERS.
 
-`Core.lean` models the CLOSED pointwise fragment, which is all its two theorems need.  Substitution
+The pointwise module (`Pointwise.lean`, once a separate `Core` module) models the CLOSED pointwise fragment, which is all its two theorems need.  Substitution
 is about variables and binders, so this module adds them: the two variable forms (`Space.mention`, a
 space variable; `Path.deref`, a path variable) and the three binding forms, mirroring
 `src/main/scala/MORKL.scala` constructor for constructor.
 
-WHY A SEPARATE MODULE.  `Core.lean`'s `Space` has no binders at all, and its `denote` is therefore
+WHY A SEPARATE MODULE.  The pointwise module's `Space` had no binders at all, and its `denote` is therefore
 environment-free — which is what makes `unwrap_wrap` a one-line statement.  Adding binders forces
 `denote` to take an environment, and an environment-passing semantics for `Fixpoint` needs a least
 fixpoint, which is `2E.1`'s subject and not `1E.1`'s.  Splitting keeps `Core`'s theorems stated in

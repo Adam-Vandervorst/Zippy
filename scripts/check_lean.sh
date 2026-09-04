@@ -19,7 +19,7 @@
 #      declared.  This is checked BEFORE the build and reported as its own failure.
 #   3. `lake build` -- the whole package, from `Zippy.lean`'s import closure.
 #   4. EVERY `% MECHANIZED-IN:` MARKER RESOLVES.  A proof file may carry
-#          % MECHANIZED-IN: proofs/lean/Zippy/Core.lean#Zippy.Space.unwrap_wrap
+#          % MECHANIZED-IN: proofs/lean/Zippy/Pointwise.lean#Zippy.Space.unwrap_wrap
 #      which is what lets `scripts/proof_closure.py` lift that file's row from `PROVED-MODULO T1` to
 #      unqualified `PROVED`.  A marker naming a file that does not exist, or a theorem that is not in
 #      it, would lift a status on the strength of a typo -- so every marker is resolved here and an
@@ -128,7 +128,7 @@ echo "LEAN: resolving \`% MECHANIZED-IN:\` markers"
 # SMT `;` comment.  The scan is deliberately restricted to that, because a wider one reads PROSE
 # ABOUT the marker as a marker -- twice, measured:
 #
-#   * `proofs/lean/Zippy/Core.lean`'s own header quotes the syntax, and an early scan came back with
+#   * `proofs/lean/Zippy/Pointwise.lean`'s own header quotes the syntax, and an early scan came back with
 #     a lone backtick as a "malformed marker";
 #   * `docs/TRUSTED.md`'s specification table contains the literal
 #     `| `% MECHANIZED-IN: <file>#<thm>` | ...`, and the next scan came back with the PLACEHOLDER

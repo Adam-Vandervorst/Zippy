@@ -6495,3 +6495,48 @@ TRACK A′ — cornerstone coverage (item 4).
   run only when `SCReport.leanCovered` (0 fallbacks, 0 alphabet escapes — true on the seeded drives
   and asserted in WhistleTrace); T7 is not dischargeable and every row asserting a counting axiom
   now says PROVED-MODULO T7.  Phase 3 (publication, item 7 residual) is untouched.
+
+  CORRECTION (same day): the four `proofs/pipeline/fixpoint-gate/fix-*.smt2` files were RESTORED.
+  They are not orphans: the subdirectory's README documents them as the gate's hand-written positive
+  and NEGATIVE controls (three deliberately-false statements that must stay OPEN), with measured
+  verdicts, and they are excluded from the audit's glob by design.  What they lacked was the 2E.4
+  marker on their Park instances, which they now carry (`; DERIVED-FROM:` the fixpoint theorem).
+  Deleting a documented negative control because no test regenerates it was the wrong inference.
+
+====================================================================================================
+## 2026-09-04 — PR finalization 4, PHASE 3 (plan.md "Closure")
+====================================================================================================
+
+  3.1  Item 6.  `publish_benchmarks.py --reproduce` implemented: reads the commit the four outputs
+       name (CSV/TSV `git=` header; BENCHMARKS.md's `| git commit |` provenance row — the publisher's
+       validate() looked for `git=` in the markdown, which no section ever carries, so its md check
+       could never have passed; fixed), refuses a `-dirty` identity, checks the commit out in a
+       throwaway `git worktree`, runs THAT commit's own gate list (`scripts/gates.py --run`), runs the
+       five generators under a manifest naming it, and diffs structurally (schema row, key set,
+       section set, provenance) — measurement values are reported as churn, not failed on.
+       MEASURED:  `publish_benchmarks.py --dry-run` aborts at PREFLIGHT on the uncommitted Phase 3
+       edits (correct: a number from a dirty tree is unreproducible); with the tree committed it
+       aborts at step 2 on the four item-1 suites (SpatialCostCheck 1, SpatialEventsCheck 2,
+       SpatialScaleCheck 1, SpatialPipelineCheck 1 failing requirement(s); the puzzle15 1e12 bound
+       and 2 of 3000 counted values outside a predicted interval).  `--reproduce` aborts at step 0:
+       all four committed outputs name `9b818f3-dirty`, the pre-publication state.  The acceptance
+       sentence of item 6 ("exit 0 at the artifact commit") is NOT met and cannot be until item 1's
+       gate is green; the publisher refusing is the plan's own design.  Nothing was published.
+  3.2  Item 7 residual.  `check_references.py`: vocabulary widened to `.lean` (search roots gain
+       proofs/lean and proofs/lean/Zippy); `.gitignore` is no longer a whole-file skip — its two
+       transient-probe tokens are per-token exceptions and any other pattern naming an absent path
+       now fails; selftest (e) calls `resolves()` directly against an in-memory name set inside a
+       directory whose contents contradict it (a set member absent from disk resolves, a file on disk
+       absent from the set does not, a case variant does not).  Widening surfaced 54 dangling `.lean`
+       and `target/` references, all resolved: renamed-module prose (Core → Pointwise), shorthand
+       tokens, generated witness tables under target/ (exceptions (f')), and the four fixpoint-gate
+       controls restored (see the correction above).  MEASURED: 0 dangling, 52/52 exceptions used,
+       selftest PASS.
+  3.3  `docs/ACCEPTANCE.md` is plan.md's successor: one row per review item, assigned ONLY by its
+       acceptance sentence and gate command, with the 2026-09-04 verdict — items 3, 4, 7, 8 GREEN;
+       items 2 and 5 green at their Phase 1 commit and not re-measured here; items 1 and 6 RED (one
+       cause).  `recorded` figures: the four item-1 suites report 0 STALE FIGURE rows this run, so
+       every ledger figure is re-derived within 0.7's 2% tolerance.
+
+  GATES THIS RUN:  `python3 scripts/gates.py --run --scripts-only` — all 9 script gates PASS (the
+  determinism check included); the 4 Scala gate suites RED as recorded under 3.1.
