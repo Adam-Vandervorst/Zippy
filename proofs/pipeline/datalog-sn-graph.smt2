@@ -1,20 +1,55 @@
-; PROVER LOG (both provers are run on every obligation; verdicts also in STATUS.tsv)
-; ∀-path goal            z3 unsat      vampire refutation (budget 60s each; timings are in the run log, not here — a wall clock in a committed artifact makes it differ from itself on every run)
-; AUTO-GENERATED — pipeline stage 3 (datalog-sn): graph vs space (∀ paths)
-; INSTANCE leg: the inputs are this instance's literals, but the CONTROL FLOW IS NOT EXECUTED —
-; `Iteration` stays a binder (its group predicate inlined) and `Fixpoint` stays the least
-; post-fixpoint predicate with the two axioms plus Park induction, so the two sides are
-; independently rendered PROGRAMS rather than the same precomputed literal.
-; The goal (negated): the programs produce the SAME OUTPUT — equal membership at EVERY path.
-(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
+; TRUSTS: -
+; INSTANCE-DIFFERENTIAL: GraphExec.runGraphT(optimize(transpile(program))) == eval(program) on this input
+; (Scala assertEquals); the obligation below is the instance (data-agnostic obligation + differential) one, which covers this input.
 
-
-(define-fun s_2 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 17 nil)))) (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil))))))
-(define-fun s_1 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 18 (cons 17 nil)))) (s_2 p)))
-(define-fun s_5 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil)))) (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil))))))
-(define-fun s_4 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 17 nil)))) (s_5 p)))
-(define-fun s_3 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 18 (cons 17 nil)))) (s_4 p)))
-(define-fun sideA ((p Path)) Bool (s_1 p))
-(define-fun sideB ((p Path)) Bool (s_3 p))
-(assert (not (forall ((p Path)) (= (sideA p) (sideB p)))))
-(check-sat)
+; BOUNDARY: graph
+; RESIDUAL CUT (k=2) LIFTED: the sides carry 1 residual cut(s), the SAME on both sides:
+;   sn_tc@2(; S"edges", (((S"edges" \/ (S"edges".iter(P"av1", S"ar2", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar2")))
+) \ S"edges")) \/ ((S"edges".iter(P"av5", S"ar6", 
+ (P"av5" x TailsUnion((S"edges" <| S"ar6")))
+) \ S"edges").iter(P"av3", S"ar4", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar4")))
+) \ (S"edges" \/ (S"edges".iter(P"av7", S"ar8", 
+ (P"av7" x TailsUnion((S"edges" <| S"ar8")))
+) \ S"edges")))) \/ (((S"edges".iter(P"av13", S"ar14", 
+ (P"av13" x TailsUnion((S"edges" <| S"ar14")))
+) \ S"edges").iter(P"av11", S"ar12", 
+ (P"av11" x TailsUnion((S"edges" <| S"ar12")))
+) \ (S"edges" \/ (S"edges".iter(P"av15", S"ar16", 
+ (P"av15" x TailsUnion((S"edges" <| S"ar16")))
+) \ S"edges"))).iter(P"av9", S"ar10", 
+ (P"av9" x TailsUnion((S"edges" <| S"ar10")))
+) \ ((S"edges" \/ (S"edges".iter(P"av17", S"ar18", 
+ (P"av17" x TailsUnion((S"edges" <| S"ar18")))
+) \ S"edges")) \/ ((S"edges".iter(P"av21", S"ar22", 
+ (P"av21" x TailsUnion((S"edges" <| S"ar22")))
+) \ S"edges").iter(P"av19", S"ar20", 
+ (P"av19" x TailsUnion((S"edges" <| S"ar20")))
+) \ (S"edges" \/ (S"edges".iter(P"av23", S"ar24", 
+ (P"av23" x TailsUnion((S"edges" <| S"ar24")))
+) \ S"edges")))))), (((S"edges".iter(P"av5", S"ar6", 
+ (P"av5" x TailsUnion((S"edges" <| S"ar6")))
+) \ S"edges").iter(P"av3", S"ar4", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar4")))
+) \ (S"edges" \/ (S"edges".iter(P"av7", S"ar8", 
+ (P"av7" x TailsUnion((S"edges" <| S"ar8")))
+) \ S"edges"))).iter(P"av1", S"ar2", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar2")))
+) \ ((S"edges" \/ (S"edges".iter(P"av9", S"ar10", 
+ (P"av9" x TailsUnion((S"edges" <| S"ar10")))
+) \ S"edges")) \/ ((S"edges".iter(P"av13", S"ar14", 
+ (P"av13" x TailsUnion((S"edges" <| S"ar14")))
+) \ S"edges").iter(P"av11", S"ar12", 
+ (P"av11" x TailsUnion((S"edges" <| S"ar12")))
+) \ (S"edges" \/ (S"edges".iter(P"av15", S"ar16", 
+ (P"av15" x TailsUnion((S"edges" <| S"ar16")))
+) \ S"edges"))))))
+; so this cell's claim is quantified over the cut's free input, and holds for EVERY value of it;
+; the recursion is identical on both sides, so by proofs/lean/Zippy/Positive.lean#
+; Zippy.Space.fixpoint_denT_eq_of_step_eq (2E.1) the claim about the unrollings IS the claim
+; about the recursion.  (Formerly stamped BOUNDED-UNROLLING under O10b, which is now mechanized.)
+; AUTO-GENERATED — pipeline graph (datalog-sn), instance (data-agnostic obligation + differential)
+; TRIVIAL-NO-OBLIGATION: the two sides are syntactically identical after alpha-normalisation
+; (0 candidate pair(s), 0 reflexive after freeing binders).  Recorded as a
+; no-obligation marker; the runner counts these and invokes no prover on them.

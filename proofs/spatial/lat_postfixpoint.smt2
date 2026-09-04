@@ -28,16 +28,20 @@
 ; γ: a concrete count n is described by an interval
 (define-fun inG ((n Int) (a Ivl)) Bool (and (cle (lo a) (fin n)) (cle (fin n) (hi a))))
 (declare-fun F (Ivl) Ivl)
+; PREMISE: F# is monotone (certified separately: lat_transfer_mono)
 (assert (forall ((a Ivl) (b Ivl)) (=> (ile a b) (ile (F a) (F b)))))   ; F# monotone (lat_transfer_mono)
 (declare-fun X (Int) Ivl)                                              ; the Kleene iterates
 (declare-const init Ivl)
 (declare-const T Ivl)
 (assert (= (X 0) init))
 (assert (forall ((n Int)) (=> (>= n 0) (= (X (+ n 1)) (ijoin (X n) (F (X n)))))))
+; PREMISE: init ⊑ T — the analysis checks this before it trusts the post-fixpoint
 (assert (ile init T))                                                  ; the analysis checks both
+; PREMISE: F#(T) ⊑ T — T is a post-fixpoint; the analysis checks this too
 (assert (ile (F T) T))                                                 ; of these premises
 ; explicit nat-induction schema instance at P
 (define-fun P ((n Int)) Bool (ile (X n) T))
+; ASSUMED: T8
 (assert (=> (and (P 0) (forall ((n Int)) (=> (and (>= n 0) (P n)) (P (+ n 1)))))
             (forall ((n Int)) (=> (>= n 0) (P n)))))
 (assert (not (forall ((n Int)) (=> (>= n 0) (ile (X n) T)))))

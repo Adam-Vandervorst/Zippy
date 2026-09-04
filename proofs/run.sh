@@ -94,7 +94,10 @@ run_family "" pointwise wrap1 restriction keyfolds \
          keys_intersection keys_subtraction keys_composition keys_restriction keys_filter_exact \
          isempty_finite keyfold_tailsinter keyfold_head keyfold_iter join_spec \
          refine_kmerge refine_kinter refine_clu refine_consif \
-         refine_cli refine_cls
+         refine_cli refine_cls \
+         zipper_refinement_leaf zipper_refinement_tunion zipper_refinement_tinter zipper_refinement_tsub \
+         zipper_refinement_tcomp zipper_refinement_twrap zipper_refinement_tunwrap zipper_refinement_trestr \
+         zipper_refinement_traff zipper_refinement
 if [ -d laws ]; then
   run_family "laws/" $(ls laws/law_*.smt2 2>/dev/null | sed 's|laws/||;s|\.smt2$||')
 fi

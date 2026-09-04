@@ -45,6 +45,11 @@ ap = argparse.ArgumentParser()
 ap.add_argument("--run", action="store_true",
                 help="actually invoke egglog/z3 on every non-marker artifact and fail on rejection")
 ap.add_argument("--timeout", type=int, default=60, help="per-file prover/egglog budget in seconds")
+ap.add_argument("--accept", action="store_true",
+                help="plan.md 2A.6: hold every cell to proofs/pipeline/CLAIMS.tsv — artifact present, kind "
+                     "acceptable for the declared kind, `; TRUSTS:` header a subset of the permitted set, "
+                     "no undeclared artifact, no SINGLE-SIDE/BUDGET/BOUNDED cell at all, and every "
+                     "COVERAGE.tsv row backed by the artifact it names")
 ap.add_argument("--declare", action="store_true",
                 help="rewrite proofs/pipeline/DECLARED.tsv from the OBSERVED state, then exit.  "
                      "Changing what the matrix claims should be a deliberate diff, so this is a "
@@ -411,6 +416,141 @@ else:
     print("  declared kinds: " + "  ".join(f"{k}={v}" for k, v in sorted(kinds.items())) +
           f"   (REAL is the only kind that is a certified equivalence: "
           f"{kinds.get('REAL', 0)}/{len(declared)})")
+
+# ==================================================================================================
+# 2A.6 — THE CLAIMS AUDIT.  proofs/pipeline/CLAIMS.tsv was written BEFORE the emitter (2A.1); this
+# holds the emitted matrix to it.  `DECLARED.tsv` above is the regression guard on observed kinds; this
+# is the check against the CLAIM, which is the only one that can catch a cell that was never meant
+# to be what it is.
+# ==================================================================================================
+CLAIMS_FILE = root / "proofs" / "pipeline" / "CLAIMS.tsv"
+COVERAGE_FILE = root / "proofs" / "pipeline" / "COVERAGE.tsv"
+LAWS_REGISTRY = root / "proofs" / "laws" / "REGISTRY.tsv"
+TRUSTS_RE = re.compile(r"^\s*[;%]\s*TRUSTS:\s*(.*)$", re.M)
+TRUST_TOKEN = re.compile(r"^(T\d+|O\d+[a-z]?|law:[A-Za-z0-9_*-]+|outside:[A-Za-z0-9_-]+)$")
+# what an EMITTED kind may be, per DECLARED kind: a prover run where a law chain was declared, or
+# identical sides where either was declared, is STRONGER evidence and accepted; anything else is not
+ACCEPTABLE = {
+    "REAL": {"REAL", "LAW-JUSTIFIED", "TRIVIAL"},
+    "LAW-JUSTIFIED": {"REAL", "LAW-JUSTIFIED", "TRIVIAL"},
+    "TRIVIAL": {"TRIVIAL"},
+    "IDENT": {"IDENT"},
+}
+
+def read_claims():
+    rows = []
+    for line in CLAIMS_FILE.read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        cols = line.split("\t")
+        if len(cols) != 7:
+            problems.append(f"CLAIMS.tsv: row has {len(cols)} columns, not 7: {line[:60]}")
+            continue
+        rows.append(dict(zip(("cornerstone", "boundary", "form", "claim", "trusts", "artifact", "kind"), cols)))
+    return rows
+
+def registry_laws():
+    out = set()
+    if LAWS_REGISTRY.exists():
+        for line in LAWS_REGISTRY.read_text().splitlines():
+            if line.strip() and not line.startswith("#"):
+                out.add(line.split("\t")[0])
+    return out
+
+def permitted_set(tok_list, laws):
+    """the permitted trusts, with `law:*` expanded to the registry"""
+    out = set()
+    for t in tok_list:
+        if t == "law:*":
+            out |= {"law:" + l for l in laws}
+        else:
+            out.add(t)
+    return out
+
+if args.accept:
+    claims = read_claims()
+    laws = registry_laws()
+    declared_artifacts = {c["artifact"] for c in claims}
+    accepted = 0
+    for c in claims:
+        art = root / c["artifact"]
+        cell = f"{c['cornerstone']}/{c['boundary']}/{c['form']}"
+        if not art.exists():
+            problems.append(f"CLAIM {cell}: artifact {c['artifact']} NOT EMITTED")
+            continue
+        obs = observed.get(c["artifact"])
+        if obs is None:
+            problems.append(f"CLAIM {cell}: artifact {c['artifact']} was not classified (not an .egg/.smt2 under the two dirs?)")
+            continue
+        if c["kind"] not in ACCEPTABLE:
+            problems.append(f"CLAIM {cell}: declared kind `{c['kind']}` is not a declarable kind")
+            continue
+        if obs not in ACCEPTABLE[c["kind"]]:
+            problems.append(f"CLAIM {cell}: declared {c['kind']} but the artifact is {obs} — weaker than its claim")
+            continue
+        text = art.read_text()
+        m = TRUSTS_RE.search(text)
+        if not m:
+            problems.append(f"CLAIM {cell}: {c['artifact']} has NO `; TRUSTS:` header (a missing header is a failure, not an empty list)")
+            continue
+        raw = m.group(1).strip()
+        toks = [] if raw == "-" else [t.strip() for t in raw.split(",")]
+        bad = [t for t in toks if not TRUST_TOKEN.match(t)]
+        if bad:
+            problems.append(f"CLAIM {cell}: malformed trust token(s) {bad} in {c['artifact']}")
+            continue
+        if "law:*" in toks:
+            problems.append(f"CLAIM {cell}: an EMITTED artifact may not trust `law:*`; it must name its laws")
+            continue
+        perm_raw = [] if c["trusts"].strip() == "-" else [t.strip() for t in c["trusts"].split(",")]
+        perm = permitted_set(perm_raw, laws)
+        extra = sorted(set(toks) - perm)
+        if extra:
+            problems.append(f"CLAIM {cell}: {c['artifact']} trusts {extra}, which its declaration does not permit (permitted: {c['trusts']})")
+            continue
+        unknown_laws = sorted(t for t in toks if t.startswith("law:") and t[4:] not in laws)
+        if unknown_laws:
+            problems.append(f"CLAIM {cell}: {c['artifact']} trusts {unknown_laws}, not in proofs/laws/REGISTRY.tsv")
+            continue
+        accepted += 1
+    # every emitted artifact must be a declared cell
+    for a in sorted(observed):
+        if a not in declared_artifacts:
+            problems.append(f"{a}: emitted but has NO ROW in CLAIMS.tsv (2A.1 declares every cell before it is built)")
+    # the plan's gate sentence: 0 SINGLE-SIDE, 0 BUDGET, 0 BOUNDED, 0 marker-to-marker chains
+    for kind_bad in ("SINGLE-SIDE", "BUDGET", "BOUNDED-UNROLLING"):
+        if counts.get(kind_bad, 0):
+            problems.append(f"--accept: {counts[kind_bad]} {kind_bad} cell(s); the gate requires 0")
+    if expected_open:
+        problems.append(f"--accept: {len(expected_open)} marker-to-marker chain(s); the gate requires 0")
+    # ---- COVERAGE.tsv: every exercised construct appears in a checked chain (2A.6)
+    if not COVERAGE_FILE.exists():
+        problems.append(f"{COVERAGE_FILE.relative_to(root)} is missing — the emitter must write the coverage census")
+    else:
+        cov_rows = 0
+        by_stone = {}
+        for line in COVERAGE_FILE.read_text().splitlines():
+            if not line.strip() or line.startswith("#"):
+                continue
+            cols = line.split("\t")
+            if len(cols) != 4:
+                problems.append(f"COVERAGE.tsv: row has {len(cols)} columns, not 4: {line[:60]}"); continue
+            stone, kind, item, where = cols
+            cov_rows += 1
+            by_stone.setdefault(stone, set()).add(kind)
+            wp = root / where
+            if not wp.exists():
+                problems.append(f"COVERAGE {stone}/{kind}/{item}: names {where}, which does not exist"); continue
+            if item not in wp.read_text():
+                problems.append(f"COVERAGE {stone}/{kind}/{item}: {where} does not mention `{item}` — the construct is not in a checked chain")
+        stones = {c["cornerstone"] for c in claims}
+        for st in sorted(stones):
+            kinds = by_stone.get(st, set())
+            for need in ("constructor", "boundary"):
+                if need not in kinds:
+                    problems.append(f"COVERAGE {st}: no `{need}` row — the census does not cover this stone")
+        print(f"\ncoverage census: {cov_rows} row(s) over {len(by_stone)} stone(s), each backed by the artifact it names")
+    print(f"\nclaims audit: {accepted} of {len(claims)} declared cells accepted")
 
 if len(expected_open) > MAX_MARKER_CHAINS:
     problems.append(f"{len(expected_open)} marker-to-marker chains, above the pinned ratchet of "

@@ -1,18 +1,17 @@
-; PROVER LOG (both provers are run on every obligation; verdicts also in STATUS.tsv)
-; ∀-path goal            z3 unsat      vampire refutation (budget 60s each; timings are in the run log, not here — a wall clock in a committed artifact makes it differ from itself on every run)
-; AUTO-GENERATED — pipeline stage 2 (datalog-sn): zipper vs space (∀ paths)
-; INSTANCE leg: the inputs are this instance's literals, but the CONTROL FLOW IS NOT EXECUTED —
-; `Iteration` stays a binder (its group predicate inlined) and `Fixpoint` stays the least
-; post-fixpoint predicate with the two axioms plus Park induction, so the two sides are
-; independently rendered PROGRAMS rather than the same precomputed literal.
-; The goal (negated): the programs produce the SAME OUTPUT — equal membership at EVERY path.
-(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
+; TRUSTS: law:zipper-refinement
 
-
-(define-fun s_3 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil)))) (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil))))))
-(define-fun s_2 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 17 nil)))) (s_3 p)))
-(define-fun s_1 ((p Path)) Bool (or (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 18 (cons 17 nil)))) (s_2 p)))
-(define-fun sideA ((p Path)) Bool (or (= p (cons 15 (cons 16 nil))) (= p (cons 17 (cons 15 nil))) (= p (cons 17 (cons 16 nil))) (= p (cons 18 (cons 15 nil))) (= p (cons 18 (cons 16 nil))) (= p (cons 18 (cons 17 nil)))))
-(define-fun sideB ((p Path)) Bool (s_1 p))
-(assert (not (forall ((p Path)) (= (sideA p) (sideB p)))))
-(check-sat)
+; BOUNDARY: zipper
+; AUTO-GENERATED pipeline stage 2 (datalog-sn) — INSTANCE: transpileZ(program) vs the program.
+; LAW-JUSTIFIED-NO-RESIDUAL: an INSTANCE of the universal zipper refinement theorem —
+;   proofs/zipper_refinement.smt2 (first-order, over the key-free local algebra; PROVED) and
+;   proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement (every constructor, boundaries named).
+; SHELL: 1 node(s) transpiled with EVERY source opaque (SpaceZipper.Opaque); read back
+; SHELL CONSTRUCTORS: Mention
+; PROGRAM CONSTRUCTORS: Call, Mention
+; BINDERS: 
+; CALLS: sn_tc
+; through spaceOfZipper it is alpha-EQUAL to the shell.
+; HOLES (materialised by transpileZ and evaluated by the executor on BOTH sides — the theorem's
+; `lit` boundaries): 1
+;   #hole0 = Call
+; INSTANCE-DIFFERENTIAL: SpaceZipper.materialize(transpileZ(program)) == eval(program) on this input (Scala assertEquals).

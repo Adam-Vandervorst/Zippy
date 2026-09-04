@@ -600,7 +600,15 @@ object AgnosticPipeline:
         // monotone in `src` only if the body is monotone in the tails it binds (a bigger source
         // yields bigger tail-sets as well as more head groups)
         (!free(src) || (go(src) && monotoneInMention(body, rest))) && (rest.s == m.s || go(body))
-      case Fixpoint(init, rec, body) => go(init) && (rec.s == m.s || go(body))
+      // THE BODY MUST BE MONOTONE IN ITS OWN RECURSION VARIABLE TOO (proofs/lean/Zippy/Positive.lean,
+      // `posB`'s fixpoint arm): the fixpoint's value is monotone in an OUTER variable only if each
+      // approximant is, and `chain (n+1) = init ∪ body[rec := chain n]` grows with the outer
+      // variable only when `body` grows with `rec`.  The renderers refused a non-monotone body
+      // separately (`fixSym`, `formalOf`); this arm now says it here as well, so the Scala decision
+      // procedure IMPLIES the Lean one arm for arm (`Zippy.Space.posB_of_notFree` covers the
+      // `!free` shortcut).  Strictly more conservative than before.
+      case Fixpoint(init, rec, body) =>
+        !free(x) || (go(init) && monotoneInMention(body, rec) && (rec.s == m.s || go(body)))
       case other => !free(other)                            // Range / Call / grounded: unknown variance
     go(s)
 
@@ -1292,6 +1300,8 @@ object AgnosticPipeline:
     // monotonicity would stop being sufficient (fixpoint_is_lfp.smt2:47-50 is the counterexample)
     // and these axioms would be false of the executor's output.  Regression:
     // src/test/scala/FixpointSemantics.scala.
+    /** the Lean theorem every first-class `Fix` clause is derived from (see [[fixSym]]) */
+    val FixpointTheorem = "proofs/lean/Zippy/Positive.lean#Zippy.Space.fixpoint_is_lfp"
     private val fixMemo = scala.collection.mutable.HashMap.empty[(Space, Map[String, String], Map[String, String]), String]
     private val fixes = scala.collection.mutable.ArrayBuffer.empty[(String, Space, Space, SpaceMention, Map[String, String], Map[String, String])]
     def fixSym(fx: Space, init: Space, rec: SpaceMention, body: Space,
@@ -1306,7 +1316,15 @@ object AgnosticPipeline:
         val f = fresh("fix")
         decls += s"(declare-fun $f (Path) Bool)"
         emitDef(s"; FIXPOINT $f — first-class: the LEAST post-fixpoint above init (never unrolled)")
+        // THE MARKER `scripts/check_asserts.py` READS (plan.md 2E.4).  These two clauses and the
+        // Park instance below say the executor's fixpoint is the least post-fixpoint of
+        // `X ↦ init ∪ body[rec := X]`; that it IS one is `Zippy.Space.fixpoint_is_lfp`
+        // (proofs/lean/Zippy/Positive.lean), whose hypothesis — the body positive in `rec` — is the
+        // `monotoneInMention` check this method just made.  So the clauses are DERIVED from a
+        // Lean theorem, not assumed, and the marker says which.
+        emitDef(s"; DERIVED-FROM: $FixpointTheorem")
         emitDef(s"(assert (forall ((zq Path)) (=> ${den(init, "zq", penv, senv)} ($f zq))))")
+        emitDef(s"; DERIVED-FROM: $FixpointTheorem")
         emitDef(s"(assert (forall ((zq Path)) (=> ${den(body, "zq", penv, senv + (rec.s -> f))} ($f zq))))")
         fixes += ((f, init, body, rec, penv, senv))
         f
@@ -1328,6 +1346,7 @@ object AgnosticPipeline:
         val premInit = s"(forall ((zr Path)) (=> ${den(initF, "zr", pe, se)} ($g zr)))"
         val premStep = s"(forall ((zr Path)) (=> ${den(bodyF, "zr", pe, se + (recF.s -> g))} ($g zr)))"
         emitDef(s"; PARK INDUCTION $f ⊑ $g — leastness of $f; BOTH premises are obligations")
+        emitDef(s"; DERIVED-FROM: $FixpointTheorem")
         emitDef(s"(assert (=> (and $premInit $premStep) (forall ((zq Path)) (=> ($f zq) ($g zq)))))")
 
     /** replace (MARK t) applications with den(src, (cons h t)). */
@@ -1631,14 +1650,30 @@ ${smt.defsText}
     "union-chain-tailsu" -> "proofs/laws/law_union_chain_tailsu.smt2")
 
   def justify(l: Space, r: Space): Option[String] =
+    // EVERY comparison is modulo alpha-renaming: the two sides of a pair were alpha-normalised as
+    // parts of two different whole programs, so their binder names differ even when the terms are
+    // the same — measured on puzzle15's graph residual (2A.5), whose one-law-each-side join was
+    // missed for exactly that reason and cost 240 s of prover time per prover.
+    def same(a: Space, b: Space): Boolean = a == b || alphaNorm(a) == alphaNorm(b)
     def onceMatches(from: Space, to: Space): Option[String] =
-      SC.sourceLaws.collectFirst { case (nm, fn) if fn(from) == to => nm }
+      SC.sourceLaws.collectFirst { case (nm, fn) if same(fn(from), to) => nm }
     onceMatches(l, r).orElse(onceMatches(r, l)).orElse {
       // two-step composition (reduce applies laws to fixpoint; a pair may combine two laws)
       SC.sourceLaws.iterator.flatMap { (n1, f1) =>
         val mid = f1(l)
         if mid == l then Iterator.empty
-        else SC.sourceLaws.iterator.collect { case (n2, f2) if f2(mid) == r => s"$n1 + $n2" }
+        else SC.sourceLaws.iterator.collect { case (n2, f2) if same(f2(mid), r) => s"$n1 + $n2" }
+      }.nextOption()
+    }.orElse {
+      // MEET IN THE MIDDLE: one law on each side reaching the same term.  A law is an EQUATION, so a
+      // rewrite the optimiser applied right-to-left (the graph optimiser pushes a composition INTO an
+      // iteration; the source law `iter-comp-right-hoist` is written hoisting it OUT) is justified by
+      // applying the law to the OTHER side.  This is the case `SC.reduce`-based replay cannot see,
+      // because it only ever rewrites left-to-right.
+      SC.sourceLaws.iterator.flatMap { (n1, f1) =>
+        val ml = f1(l)
+        if ml == l then Iterator.empty
+        else SC.sourceLaws.iterator.collect { case (n2, f2) if f2(r) != r && same(ml, f2(r)) => s"join: $n1 + $n2" }
       }.nextOption()
     }.orElse {
       // REPLAY/JOIN: the laws are LOCAL bottom-up traversals, so SC.reduce restricted to the
@@ -1662,7 +1697,7 @@ ${smt.defsText}
     }
 
   def certificateOf(law: String): String =
-    val parts = law.stripPrefix("replay: ").stripPrefix("reduce-join: ").split(" \\+ ").toList
+    val parts = law.stripPrefix("replay: ").stripPrefix("reduce-join: ").stripPrefix("join: ").split(" \\+ ").toList
     parts.map(p => s"$p ⟶ ${lawCertificates.getOrElse(p, "certified law set")}").mkString("; ")
 
   /** Recursive pair refinement: an unjustified pair is NORMALISED on both sides by the certified

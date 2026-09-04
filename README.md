@@ -39,6 +39,7 @@ executable and machine-checked counterpart of that paper.
 | [z3](https://github.com/Z3Prover/z3) | 5.1.0 | `$Z3`, then `$ZIPPY_TOOLS`, then `PATH` |
 | [Vampire](https://vprover.github.io) | 5.1.0 | `$VAMPIRE`, then `$ZIPPY_TOOLS`, then `PATH` |
 | [egglog](https://github.com/egraphs-good/egglog) | 3.0.0 | `$EGGLOG`, then `$ZIPPY_TOOLS`, then `PATH` |
+| [Lean 4](https://lean-lang.org) via `elan` | `leanprover/lean4:v4.33.1` (`proofs/lean/lean-toolchain`), Mathlib `v4.33.1` (`proofs/lean/lake-manifest.json`) | `$LAKE`, then `$ZIPPY_TOOLS`, then `PATH`, then `${ELAN_HOME:-~/.elan}/bin` |
 
 Library dependencies (munit, scala-collection-contrib) are resolved by sbt from `build.sbt`.
 Every pipeline proof obligation must be discharged by **both** provers.
@@ -52,6 +53,10 @@ curl -fsSLO https://github.com/Z3Prover/z3/releases/download/z3-5.1.0/z3-5.1.0-x
 curl -fsSLO https://github.com/vprover/vampire/releases/download/v5.1.0/vampire-Linux-X64.zip
 # egglog 3.0.0 — needs a Rust toolchain and a C linker (`apt-get install build-essential`)
 cargo install --locked --git https://github.com/egraphs-good/egglog egglog
+# Lean 4.33.1 + Mathlib (the mechanized theorems under proofs/lean; `scripts/check_lean.sh` is a gate)
+curl -sSf https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain leanprover/lean4:v4.33.1
+~/.elan/bin/elan toolchain install leanprover/lean4:v4.33.1      # elan is lazy; pin it now
+(cd proofs/lean && ~/.elan/bin/lake exe cache get && ~/.elan/bin/lake build)   # Mathlib oleans (~5 GB), then the package
 ```
 
 Then point the tree at them, EITHER per tool or with one directory:

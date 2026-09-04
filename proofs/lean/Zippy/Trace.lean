@@ -2,7 +2,7 @@
 ==================================================================================================
 GENERATED — the correspondence trace (plan.md 1E.2).  DO NOT EDIT.
 
-Regenerate with `ZIPPY_REGENERATE=1 sbt 'testOnly morkl.SubstTrace'`; without the flag the suite
+Regenerate with `ZIPPY_REGENERATE=1 sbt --server 'testOnly morkl.SubstTrace'`; without the flag the suite
 writes to `target/artifact-scratch` and DIFFS against this file, so a drift in EITHER
 implementation fails.  `src/main/scala/LeanRender.scala` is the emitter and explains the design.
 

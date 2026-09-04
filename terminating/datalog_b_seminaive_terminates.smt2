@@ -31,8 +31,10 @@
   (=> (forall ((x Node)) (= (mem x a) (mem x b))) (= a b))))
 (assert (forall ((x Node)) (not (mem x empty))))
 (assert (forall ((x Node)) (mem x top)))
+; ASSUMED: T7
 (assert (forall ((a NSet)) (>= (card a) 0)))
 (assert (= (flag empty) 0))
+; DEFINITION
 (assert (forall ((a NSet)) (=> (distinct a empty) (= (flag a) 1))))
 ; the shared semi-naive transition and its measure
 (assert (forall ((a NSet) (dl NSet)) (= (allp a dl) (cup a (setminus (d dl) a)))))
@@ -40,11 +42,16 @@
 (assert (forall ((a NSet) (dl NSet))
   (= (mu a dl) (+ (* 2 (card (setminus top a))) (flag dl)))))
 ; stepping stones (re-proved from the axioms above in datalog_b_seminaive_lemmas.smt2)
+; DERIVED-FROM: datalog_b_seminaive_lemmas.smt2
 (assert (forall ((a NSet) (dl NSet)) (subset a (allp a dl))))
+; DERIVED-FROM: datalog_b_seminaive_lemmas.smt2
 (assert (forall ((a NSet) (dl NSet)) (subset (allp a dl) top)))
+; DERIVED-FROM: datalog_b_seminaive_lemmas.smt2
 (assert (forall ((a NSet) (dl NSet)) (=> (= (allp a dl) a) (= (deltap a dl) empty))))
+; DEFINITION
 (assert (forall ((a NSet)) (and (>= (flag a) 0) (<= (flag a) 1))))
 ; proved in bounded_growth_decrease.smt2 (and .p), imported as a premise
+; ASSUMED: T7
 (assert (forall ((r NSet) (s NSet) (u NSet))
   (=> (and (subset r s) (subset s u) (distinct s r))
       (< (card (setminus u s)) (card (setminus u r))))))

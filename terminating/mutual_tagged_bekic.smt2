@@ -72,13 +72,16 @@
 (declare-fun leq (L L) Bool)
 (assert (forall ((x L)) (leq x x)))
 (assert (forall ((x L) (y L) (z L)) (=> (and (leq x y) (leq y z)) (leq x z))))
+; DEFINITION
 (assert (forall ((x L) (y L)) (=> (and (leq x y) (leq y x)) (= x y))))
 
 ; --- the SCC bodies: arbitrary, monotone in both components.
 (declare-fun B1 (L L) L)
 (declare-fun B2 (L L) L)
+; PREMISE: B1 is monotone (the components of a monotone system)
 (assert (forall ((x1 L) (y1 L) (x2 L) (y2 L))
   (=> (and (leq x1 x2) (leq y1 y2)) (leq (B1 x1 y1) (B1 x2 y2)))))
+; PREMISE: B2 is monotone (the components of a monotone system)
 (assert (forall ((x1 L) (y1 L) (x2 L) (y2 L))
   (=> (and (leq x1 x2) (leq y1 y2)) (leq (B2 x1 y1) (B2 x2 y2)))))
 
@@ -89,6 +92,7 @@
 (declare-fun pi2 (L) L)
 (assert (forall ((x L) (y L)) (! (= (pi1 (mk x y)) x) :pattern ((mk x y)))))
 (assert (forall ((x L) (y L)) (! (= (pi2 (mk x y)) y) :pattern ((mk x y)))))
+; DERIVED-FROM: tagged_order.smt2
 (assert (forall ((x1 L) (y1 L) (x2 L) (y2 L)) (!
   (= (leq (mk x1 y1) (mk x2 y2)) (and (leq x1 x2) (leq y1 y2)))
   :pattern ((leq (mk x1 y1) (mk x2 y2))))))
@@ -130,6 +134,7 @@
 ; without comment — actually happens: the goals below mention `B1 z1 z2` and
 ; `B2 z1 z2` but never `mk z1 z2`, and without this the tagged leastness axiom
 ; has nothing to match on and z3 times out at 40 s (measured).
+; DERIVED-FROM: tagged_order.smt2
 (assert (forall ((z1 L) (z2 L)) (!
   (= (leq (Psi (mk z1 z2)) (mk z1 z2)) (and (leq (B1 z1 z2) z1) (leq (B2 z1 z2) z2)))
   :pattern ((B1 z1 z2) (B2 z1 z2)))))
@@ -141,7 +146,9 @@
 ; =============================================================================
 (declare-const Sfix L)
 (assert (= (Psi Sfix) Sfix))
+; DERIVED-FROM: tagged_projection.smt2
 (assert (= (mk (pi1 Sfix) (pi2 Sfix)) Sfix))            ; Psi's output is a tagged pair
+; PREMISE: Sfix is the least tagged pre-fixpoint
 (assert (forall ((z1 L) (z2 L))
   (=> (leq (Psi (mk z1 z2)) (mk z1 z2)) (leq Sfix (mk z1 z2)))))
 ; --- the projections solve the system...
@@ -159,6 +166,7 @@
 (assert (not (and (leq (pi1 Sfix) w1) (leq (pi2 Sfix) w2))))
 (check-sat) ; expect unsat
 (pop)
+; STONE: checked above with skolem constants w1, w2
 (assert (forall ((z1 L) (z2 L)) (!
   (=> (and (leq (B1 z1 z2) z1) (leq (B2 z1 z2) z2)) (and (leq (pi1 Sfix) z1) (leq (pi2 Sfix) z2)))
   :pattern ((B1 z1 z2) (B2 z1 z2)))))
@@ -191,6 +199,7 @@
 (assert (not (and (leq E v1) (leq (B2 E E) v2))))
 (check-sat) ; expect unsat
 (pop)
+; STONE: checked above with skolem constants
 (assert (forall ((z1 L) (z2 L)) (!
   (=> (and (leq (B1 z1 z2) z1) (leq (B2 z1 z2) z2)) (and (leq E z1) (leq (B2 E E) z2)))
   :pattern ((B1 z1 z2) (B2 z1 z2)))))

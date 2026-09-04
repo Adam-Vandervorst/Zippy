@@ -96,6 +96,25 @@ object SpaceZipper:
    *  node's ENTIRE child map (`IntMap.transform`) and allocates one wrapper per entry, which is why it
    *  emits one [[ZipperDemandEvent.LitTransformEntry]] per entry on top of the single
    *  [[EffortEvent.ZipperCursorRead]] the whole operation has always counted. */
+  /** AN OPAQUE SOURCE (plan.md 2A.4): a space the transpiler knows only by NAME.  It cannot be
+   *  materialised — every cursor operation throws — and that is the point: it exists so that
+   *  `transpileZ` can run DATA-AGNOSTICALLY, producing the zipper PROGRAM (the shell of virtual nodes
+   *  over named sources) that `EquivPipelineTest` reads back with `spaceOfZipper` and checks against the
+   *  universal refinement theorem (proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement, whose `lit` is
+   *  exactly "a source known by its set", opaque or not).  Before this existed the only way to run
+   *  `transpileZ` was on a fully bound context, so every stage-2 obligation compared MATERIALISED
+   *  tries — the executor's own output — and the agnostic zipper leg was TRIVIAL on all seven stones
+   *  (EquivPipelineTest, stage-2 comment, 2026-08).  An unbound mention used to become ∅ SILENTLY
+   *  (`ic.getOrElse(m, ITrie.empty)`); it is now this node, so a missing binding is a loud failure at
+   *  the first cursor read rather than a wrong answer. */
+  final case class Opaque(m: SpaceMention) extends SpaceZipper:
+    private def cannot: Nothing =
+      throw IllegalStateException(s"opaque zipper source `${m.s}` cannot be materialised: it is a name, " +
+        "not a trie.  Bind it in the transpile context, or read the program back with spaceOfZipper.")
+    def terminal = cannot
+    def children = cannot
+    def descend(k: Int) = cannot
+
   final case class Lit(t: ITrie) extends SpaceZipper:
     def terminal = { effort(EffortEvent.ZipperCursorRead); t.terminal }
     def children =
@@ -225,9 +244,15 @@ object SpaceZipper:
    *  is a `Lit` — and restriction by `{ε}` is one `terminal` read with no result node at all.  Note that
    *  `RestrictionNode.terminal` is a literal `false`: it reads neither operand and counts nothing. */
   def restriction(x: SpaceZipper, prefixes: SpaceZipper): SpaceZipper =
-    if prefixes.terminal then x else RestrictionNode(x, prefixes)
+    // over an OPAQUE prefix cursor `terminal` cannot be asked, and the node below is correct in both
+    // cases (its `terminal` is `x.terminal && prefixes.terminal`), so the shell keeps the node
+    if containsOpaque(prefixes) then RestrictionNode(x, prefixes)
+    else if prefixes.terminal then x else RestrictionNode(x, prefixes)
   final case class RestrictionNode(x: SpaceZipper, prefixes: SpaceZipper) extends SpaceZipper:
-    def terminal = false                                     // no prefix matched yet ⇒ x-value here is not kept
+    // `[] ∈ x <| p  ⇔  [] ∈ x ∧ [] ∈ p`.  Was a literal `false`, which is right only because the smart
+    // constructor never built this node with a terminal prefix cursor; the conjunction is right
+    // unconditionally, which the symbolic shell (2A.4) needs and proofs/lean/Zippy/Zipper.lean states.
+    def terminal = x.terminal && prefixes.terminal
     def children =
       effort(EffortEvent.ZipperCursorRead)
       val xc = x.children; val pc = prefixes.children
@@ -263,7 +288,33 @@ object SpaceZipper:
 
   /** Unwrap: strip a (constant) prefix — pure navigation, O(|p|) descents; the resulting cursor IS the
    *  unwrap (no re-traversal, no materialization). */
-  def unwrap(src: SpaceZipper, p: List[Int]): SpaceZipper = p.foldLeft(src)((z, k) => z.descend(k))
+  def unwrap(src: SpaceZipper, p: List[Int]): SpaceZipper =
+    if p.isEmpty then src
+    else if containsOpaque(src) then Descend(src, p)        // cannot descend a name: keep the descent as a node
+    else p.foldLeft(src)((z, k) => z.descend(k))
+
+  /** A DEFERRED DESCENT (2A.4): `Unwrap` over a source that contains an opaque name.  Semantically it
+   *  IS `src.descend(k₁)…descend(kₙ)`, and that is what it does the moment it is read; it exists so the
+   *  symbolic shell can hold an `Unwrap` without materialising its source. */
+  final case class Descend(src: SpaceZipper, remaining: List[Int]) extends SpaceZipper:
+    private lazy val target: SpaceZipper = remaining.foldLeft(src)((z, k) => z.descend(k))
+    def terminal = target.terminal
+    def children = target.children
+    def descend(k: Int) = target.descend(k)
+
+  /** does the cursor tree reach an [[Opaque]] source?  Structural, never reads a cursor. */
+  def containsOpaque(z: SpaceZipper): Boolean = z match
+    case Opaque(_) => true
+    case Lit(_) => false
+    case Union(a, b) => containsOpaque(a) || containsOpaque(b)
+    case Intersection(a, b) => containsOpaque(a) || containsOpaque(b)
+    case Subtraction(a, b) => containsOpaque(a) || containsOpaque(b)
+    case Composition(a, b) => containsOpaque(a) || containsOpaque(b)
+    case Prefix(_, src) => containsOpaque(src)
+    case RestrictionNode(x, p) => containsOpaque(x) || containsOpaque(p)
+    case TailsUnion(src) => containsOpaque(src)
+    case TailsIntersection(src) => containsOpaque(src)
+    case Descend(src, _) => containsOpaque(src)
 
 /** Lift a Space into a fused [[SpaceZipper]] tree.  The LOCAL set-algebra operators become virtual zippers
  *  (one fused traversal); control-flow / positional operators materialize via [[evalI]] (the "call"
@@ -275,7 +326,8 @@ def transpileZ(s: Space)(using pc: PathContext, ic: Map[SpaceMention, ITrie], rc
     case Space.Empty => SpaceZipper.empty
     case Space.Singleton(p) => traversal(ITrie.singleton(pathItemsI(p)))
     case Space.Literal(sv) => traversal(iLiteral(sv))
-    case Space.Mention(m) => traversal(ic.getOrElse(m, ITrie.empty))
+    // an UNBOUND mention is an opaque source, never a silent ∅ (see `SpaceZipper.Opaque`)
+    case Space.Mention(m) => ic.get(m) match { case Some(t) => traversal(t); case None => SpaceZipper.Opaque(m) }
     case Space.Union(x, y) => union(transpileZ(x), transpileZ(y))
     case Space.Intersection(x, y) => intersection(transpileZ(x), transpileZ(y))
     case Space.Subtraction(x, y) => subtraction(transpileZ(x), transpileZ(y))

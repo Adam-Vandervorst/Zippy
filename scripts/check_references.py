@@ -223,8 +223,8 @@ TOKEN_EXCEPTIONS = {
 
     # `CLAIMS.tsv`'s (e) entry is GONE: 0.8 created `proofs/pipeline/CLAIMS.tsv` (the format; 2A.1
     # declares the rows), so plan.md's bare `CLAIMS.tsv` token resolves and the exception is unused.
-    ("plan.md", "COVERAGE.tsv"): "(e) proposed by plan.md task 2A.6; delete when it exists",
-    ("plan.md", "proofs/zipper_refinement.smt2"): "(e) proposed by plan.md task 2A.4; delete when it exists",
+    # 2A.4 / 2A.6 (2026-09-04): the zipper refinement obligation and the pipeline coverage table now
+    # exist, so plan.md's tokens for them resolve and their two exceptions are gone.
 
     # The ELIDED-GOAL record in the one over-cap pipeline artifact names where the full 174 MB
     # obligation is written on every run.  That path is under `target/`, which is git-ignored on

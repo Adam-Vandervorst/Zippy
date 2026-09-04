@@ -51,12 +51,20 @@ GATE_SCRIPTS = [
     ("reference checking on one snapshot (item 7)",
      ["check_references.py", "--snapshot=index", "--strict"]),
     ("reference-checker self-test (item 7)", ["check_references.py", "--selftest"]),
-    ("proof status vs the trusted base (item 8)", ["proof_closure.py", "--check"]),
     ("pipeline marker/declaration audit (item 4)", ["audit_pipeline_markers.py"]),
     ("law certificates discharged (item 3/4)", ["check_laws.py"]),
     ("cited obligations discharged (item 3/4)", ["check_obligations.py"]),
     ("counted columns are run-order independent (0.2)", ["check_determinism.sh"]),
     ("mechanized theorems build (0.5)", ["check_lean.sh"]),
+    # AFTER check_lean.sh, and not before: the closure check lifts a `PROVED-MODULO` row only on the
+    # strength of the witness `check_lean.sh` writes (`target/lean-mechanized.tsv`), so on a clean
+    # checkout the closure check run FIRST reports every mechanized row as a problem.  Measured
+    # (2026-09-04): 4 problems on a fresh clone with the tables byte-identical to a passing run.
+    # the assert-level closure of the SMT tiers writes target/assert-closure.tsv, which the closure
+    # check below reads; an unclassified assert fails here (2E.4).
+    ("every SMT assert classified: goal, definition, derived, or a named assumption (2E.4)",
+     ["check_asserts.py"]),
+    ("proof status vs the trusted base (item 8)", ["proof_closure.py", "--check"]),
 ]
 
 

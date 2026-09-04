@@ -37,12 +37,14 @@
 (assert (forall ((b Bool) (l FKV)) (= (wfT (fnode b l)) (wfK l))))
 ; shadowing lemma by its own induction schema:  notin(j,l) ⇒ getk(l,j) = empty node
 (define-fun PG ((l FKV)) Bool (forall ((j Int)) (=> (notin j l) (= (getk l j) (fnode false fknil)))))
+; ASSUMED: T1
 (assert (=> (and (PG fknil) (forall ((i Int) (v FTrie) (r FKV)) (=> (PG r) (PG (fkcons i v r)))))
             (forall ((l FKV)) (PG l))))
 ; main mutual induction
 (define-fun PT ((t FTrie)) Bool (=> (wfT t) (= (isEmptyT t) (forall ((p Path)) (not (memT t p))))))
 (define-fun PK ((l FKV)) Bool
   (=> (wfK l) (= (allEmptyK l) (forall ((k Int) (p Path)) (not (memT (getk l k) p))))))
+; ASSUMED: T1
 (assert (=> (and (PK fknil)
                  (forall ((j Int) (v FTrie) (r FKV)) (=> (and (PT v) (PK r)) (PK (fkcons j v r))))
                  (forall ((b Bool) (l FKV)) (=> (PK l) (PT (fnode b l)))))

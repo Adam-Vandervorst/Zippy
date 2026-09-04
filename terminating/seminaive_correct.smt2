@@ -186,6 +186,7 @@
   (=> (subset x y) (and (= (cup x y) y) (subset (J x) (J y)))))))
 (check-sat) ; expect unsat
 (pop)
+; PREMISE: F is monotone (as fixpoint_is_lfp.smt2; O3d)
 (assert (forall ((x NSet) (y NSet)) (! (=> (subset x y) (subset (J x) (J y))) :pattern ((J x) (J y)))))
 
 ; =============================================================================
@@ -234,6 +235,7 @@
 (check-sat) ; expect unsat
 (pop)
 ; --- BRIDGE (the induction principle; base and step above are its premises).
+; ASSUMED: T8
 (assert (forall ((n Int)) (!
   (=> (>= n 0) (and (= (A n) (N n)) (= (N n) (cup (P n) (D n))) (subset (J (P n)) (N n))))
   :pattern ((N n)))))
@@ -277,6 +279,7 @@
 (assert (not (forall ((y NSet)) (=> (and (subset seed y) (subset (J y) y)) (subset (N (+ k3 1)) y)))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T8
 (assert (forall ((n Int) (y NSet)) (!
   (=> (and (>= n 0) (subset seed y) (subset (J y) y)) (subset (N n) y))
   :pattern ((N n) (J y)))))
@@ -293,6 +296,7 @@
 (assert (not (subset seed (N (+ k4 1)))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T8
 (assert (forall ((n Int)) (! (=> (>= n 0) (subset seed (N n))) :pattern ((N n)))))
 
 ; --- CONCLUSION: at a stationary index the semi-naive `all` IS the least

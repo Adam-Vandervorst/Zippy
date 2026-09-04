@@ -25,13 +25,16 @@
 (define-fun P ((r KList)) Bool (forall ((j Int) (p Path))
   (= (mem (tif (kcons j r)) p)
      (and (mem (child Z j) p) (forall ((h Int)) (=> (inK h r) (mem (child Z h) p)))))))
+; ASSUMED: T1
 (assert (=> (and (P knil) (forall ((j2 Int) (r KList)) (=> (P r) (P (kcons j2 r)))))
             (forall ((r KList)) (P r))))                     ; explicit schema instance (valid for KList)
 ; KS: SOUND (every listed child nonempty) and COMPLETE (every nonempty child listed), NONEMPTY
 (declare-fun KS () KList)
 (declare-const k0 Int)
 (declare-fun KR () KList)
+; PREMISE: the head list is non-empty (the empty case is trivial and not stated here)
 (assert (= KS (kcons k0 KR)))
+; DEFINITION
 (assert (forall ((h Int)) (=> (inK h KS) (exists ((p Path)) (mem (child Z h) p)))))
 (assert (forall ((h Int)) (=> (exists ((p Path)) (mem (child Z h) p)) (inK h KS))))
 (assert (not (and (forall ((r KList)) (P r))

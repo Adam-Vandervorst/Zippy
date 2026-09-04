@@ -13,6 +13,7 @@
 (assert (= (len nil) 0))
 (assert (forall ((h Int) (t Path)) (= (len (cons h t)) (+ 1 (len t)))))
 (define-fun P ((p Path)) Bool (>= (len p) 0))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((p Path)) (P p))))
 (assert (not (forall ((p Path)) (>= (len p) 0))))
 (check-sat)

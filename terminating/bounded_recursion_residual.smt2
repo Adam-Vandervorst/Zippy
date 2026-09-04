@@ -58,10 +58,13 @@
 ; need.
 ; =============================================================================
 (declare-const L Int)
+; PREMISE: L ≥ 0 (the measured initial value)
 (assert (>= L 0))
 (declare-fun mu (Int) Int)                        ; mu(k) = the measure at depth k
 (assert (= (mu 0) L))
+; PREMISE: mu is natural-valued (O11a's hypothesis)
 (assert (forall ((k Int)) (! (=> (>= k 0) (>= (mu k) 0)) :pattern ((mu k)))))          ; natural
+; PREMISE: mu strictly drops at every level (O11a's hypothesis)
 (assert (forall ((k Int)) (! (=> (>= k 0) (<= (mu (+ k 1)) (- (mu k) 1))) :pattern ((mu (+ k 1))))))
 
 ; =============================================================================
@@ -81,6 +84,7 @@
 (check-sat) ; expect unsat
 (pop)
 ; --- BRIDGE (the induction principle, as in no_infinite_descent.smt2).
+; ASSUMED: T8
 (assert (forall ((k Int)) (! (=> (>= k 0) (<= (mu k) (- L k))) :pattern ((mu k)))))
 ; --- CONSEQUENCE: depth L+1 is unreachable, so unrolling L+1 levels is enough.
 ; (mu(L+1) <= -1 contradicts mu >= 0.)
@@ -128,6 +132,7 @@
 ; shape "if conc k were forced empty by the summary alone then every space
 ; would be empty".)
 (declare-const ne Space)
+; PREMISE: ne is a non-empty space
 (assert (distinct ne emptysp))
 (push)
 (assert (= (absAt 999) bot))

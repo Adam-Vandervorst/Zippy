@@ -52,6 +52,7 @@
 ; LEAST relation closed under [edge x y -> Q x y] and [edge x z & Q z y ->
 ; Q x y]; this schema instance says: if path2 also satisfies those two
 ; closure conditions, path must be contained in path2.
+; ASSUMED: T1
 (assert (=>
   (and
     (forall ((x Node) (y Node)) (=> (edge x y) (path2 x y)))
@@ -65,6 +66,7 @@
 ; the axioms directly): closure under edge follows straight from path's
 ; second defining axiom (both base and step cases below), so path's
 ; minimality then hands us transitivity as its conclusion.
+; ASSUMED: T1
 (assert (=>
   (and
     (forall ((x Node) (y Node))
@@ -79,6 +81,7 @@
 ; instantiation above: path2 is the least relation closed under [edge x y ->
 ; Q x y] and [Q x z & Q z y -> Q x y] (self-composition, not edge-composition);
 ; path satisfies both once we have path's own transitivity in hand.
+; ASSUMED: T1
 (assert (=>
   (and
     (forall ((x Node) (y Node)) (=> (edge x y) (path x y)))

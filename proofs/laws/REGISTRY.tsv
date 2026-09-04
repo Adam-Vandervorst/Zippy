@@ -32,6 +32,7 @@ sub-empty	FILE	laws/law_sub_empty.smt2	formal.egg
 inter-distrib	FILE	laws/law_inter_distrib.smt2	formal.egg
 sub-distrib	FILE	laws/law_sub_distrib.smt2	formal.egg
 demorgan-sub	FILE	laws/law_demorgan_sub.smt2	formal.egg + the De Morgan family
+zipper-refinement	FILE	zipper_refinement.smt2	transpileZ ≡ eval over the syntax; Lean: Zippy.Zip.refinement (all constructors)
 singleton-disq	FILE	laws/law_singleton_disq.smt2	formal.egg (neg ruleset)
 append-assoc	FILE	laws/law_append_assoc.smt2	path monoid (schema instance)
 append-inj	FILE	laws/law_append_inj.smt2	lemma: left cancellation (schema instance)

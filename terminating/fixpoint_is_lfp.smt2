@@ -115,10 +115,12 @@
 (assert (forall ((x Node) (a NSet) (b NSet)) (= (mem x (setminus a b)) (and (mem x a) (not (mem x b))))))
 (assert (forall ((a NSet) (b NSet)) (= (subset a b) (forall ((x Node)) (=> (mem x a) (mem x b))))))
 (assert (forall ((a NSet) (b NSet)) (=> (forall ((x Node)) (= (mem x a) (mem x b))) (= a b))))
+; ASSUMED: T7
 (assert (forall ((a NSet)) (>= (card a) 0)))
 ; NOTE: card_strict_decrease deliberately carries NO explicit trigger.  Pinning
 ; it to `((subset a b) (mem w b))` blocks the witness instantiation S1 needs and
 ; makes S1 time out at 60 s (measured); z3's own trigger for it is correct.
+; ASSUMED: T7
 (assert (forall ((a NSet) (b NSet) (w Node))
   (=> (and (subset a b) (mem w b) (not (mem w a))) (< (card a) (card b)))))
 
@@ -177,8 +179,10 @@
 ; =============================================================================
 (declare-fun F (NSet) NSet)
 (declare-const init NSet)
+; PREMISE: F is monotone — discharged by the syntactic gate MORKL.mono/monoIn/monotoneInMention, whose soundness is terminating/mono_soundness.smt2 (O3d), and mechanized as Zippy.Space.denT_mono (Positive.lean)
 (assert (forall ((x NSet) (y NSet)) (!
   (=> (subset x y) (subset (F x) (F y))) :pattern ((F x) (F y)))))            ; MONOTONE
+; PREMISE: init ⊆ F(init) — holds BY CONSTRUCTION for Space.Fixpoint (the iterated operator is X ↦ init ∪ body[rec := X])
 (assert (subset init (F init)))                                               ; INFLATIONARY AT I
 
 (declare-fun C (Int) NSet)                                    ; C_k = `cur` after k rounds
@@ -233,6 +237,7 @@
 (pop)
 ; --- BRIDGE (the induction principle, asserted exactly as a hand proof invokes
 ; it; the base and step above are its two machine-checked premises).
+; ASSUMED: T2
 (assert (forall ((n Int)) (! (=> (>= n 0) (subset (C n) (C (+ n 1)))) :pattern ((C (+ n 1))))))
 
 ; =============================================================================
@@ -252,6 +257,7 @@
 (assert (not (= (A (+ k1 1)) (C (+ k1 1)))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T2
 (assert (forall ((n Int)) (! (=> (>= n 0) (= (A n) (C n))) :pattern ((A n)))))
 
 ; =============================================================================
@@ -269,6 +275,7 @@
 (assert (not (subset init (C (+ k2 1)))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T2
 (assert (forall ((n Int)) (! (=> (>= n 0) (subset init (C n))) :pattern ((C n)))))
 
 ; --- every iterate is below every pre-fixpoint Y >= I - induction on k with Y
@@ -285,6 +292,7 @@
 (assert (not (forall ((y NSet)) (=> (and (subset init y) (subset (F y) y)) (subset (C (+ k3 1)) y)))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T2
 (assert (forall ((n Int) (y NSet)) (!
   (=> (and (>= n 0) (subset init y) (subset (F y) y)) (subset (C n) y))
   :pattern ((C n) (F y)))))

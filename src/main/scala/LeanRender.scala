@@ -153,7 +153,7 @@ object LeanRender:
 ==================================================================================================
 GENERATED — the correspondence trace (plan.md 1E.2).  DO NOT EDIT.
 
-Regenerate with `ZIPPY_REGENERATE=1 sbt 'testOnly morkl.SubstTrace'`; without the flag the suite
+Regenerate with `ZIPPY_REGENERATE=1 sbt --server 'testOnly morkl.SubstTrace'`; without the flag the suite
 writes to `target/artifact-scratch` and DIFFS against this file, so a drift in EITHER
 implementation fails.  `src/main/scala/LeanRender.scala` is the emitter and explains the design.
 
@@ -215,4 +215,34 @@ private def F : FreshSupply := FreshSupply.byLength
   private def leanPaths(ps: Vector[(String, Path)]): String =
     if ps.isEmpty then "[]"
     else ps.map((n, t) => s"(${str(n)}, ${path(t)})").mkString("[", ", ", "]")
+
+  /** `proofs/lean/Zippy/WhistleTrace.lean` (plan.md 2E.3): one `example` per recorded whistle comparison,
+   *  re-decided by `Zippy.Whistle.embedsB` on the label trees `Matching.toLabel` renders. */
+  def renderWhistle(entries: Vector[Matching.WhistleTrace.Entry], dropped: Int, origin: String): String =
+    val sb = new StringBuilder
+    val emitted = entries.filter(_.renderable)
+    val skipped = entries.length - emitted.length
+    sb.append("/-\n")
+    sb.append("==================================================================================================\n")
+    sb.append("GENERATED — the whistle correspondence trace (plan.md 2E.3).  DO NOT EDIT.\n\n")
+    sb.append("Regenerate with `ZIPPY_REGENERATE=1 sbt --server 'testOnly morkl.WhistleTrace'`; without the flag the suite\n")
+    sb.append("writes to `target/artifact-scratch` and DIFFS against this file.\n\n")
+    sb.append("WHAT THIS FILE IS.  Each `example` below is a pair of configurations `Matching.embeds` ACTUALLY\n")
+    sb.append(s"compared while running $origin, rendered as label trees by `Matching.toLabel` (the alphabet\n")
+    sb.append("`Matching.labelOf` fixes), with the verdict the Scala returned.  `Zippy.Whistle.embedsB` re-decides\n")
+    sb.append("each one; `embedsB_iff` proves `embedsB` IS the relation `kruskal` shows to be a well-quasi-order,\n")
+    sb.append("so an agreeing trace is what makes that theorem a statement about the implemented whistle.\n\n")
+    sb.append(s"  pairs recorded            ${entries.length}\n")
+    sb.append(s"  emitted as EXAMPLES       ${emitted.length}\n")
+    sb.append(s"  dropped, grounded         $skipped   (a Grounded* closure's identity is not reproducible)\n")
+    sb.append(s"  dropped, over the cap     $dropped\n")
+    sb.append("==================================================================================================\n-/\n")
+    sb.append("import Zippy.Whistle\n\nnamespace Zippy.WhistleTrace\nopen Zippy.Whistle\n\n")
+    for (e, i) <- emitted.zipWithIndex do
+      sb.append(s"/-- pair ${i + 1} (litAtoms = ${e.litAtoms}) -/\n")
+      sb.append(s"example : embedsB\n    ${Matching.toLabel(e.a, e.litAtoms)}\n    ${Matching.toLabel(e.b, e.litAtoms)}\n")
+      sb.append(s"  = ${e.verdict} := by simp [embedsB, zipAll]\n\n")
+    sb.append("end Zippy.WhistleTrace\n")
+    sb.toString
+
 end LeanRender

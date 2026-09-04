@@ -13,7 +13,9 @@
   (= (subset a b) (forall ((x Node)) (=> (mem x a) (mem x b))))))
 (assert (forall ((a NSet) (b NSet))
   (=> (forall ((x Node)) (= (mem x a) (mem x b))) (= a b))))
+; ASSUMED: T7
 (assert (forall ((a NSet)) (>= (card a) 0)))
+; ASSUMED: T7
 (assert (forall ((a NSet) (b NSet) (w Node))
   (=> (and (subset a b) (mem w b) (not (mem w a))) (< (card a) (card b)))))
 (assert (not (forall ((r NSet) (s NSet) (u NSet))

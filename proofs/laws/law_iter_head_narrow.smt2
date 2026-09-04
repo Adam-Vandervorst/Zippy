@@ -22,6 +22,7 @@
 ; PH = Head(E): the 1-item children of E
 (assert (forall ((u Int)) (= (PH u) (exists ((q Path)) (E (cons u q))))))
 ; STRICTNESS: the iteration body denotes nothing when the witness unwrap at h is empty
+; PREMISE: the body is STRICT in its witness (the law's side condition, checked by the optimiser before it fires)
 (assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h q)))) (not (Bd h p)))))
 (assert (not (forall ((p Path)) (= (exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) (exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) (exists ((u Int)) (and (PH u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))))
 (check-sat)

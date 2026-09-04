@@ -11,6 +11,7 @@
   (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
 ; explicit structural-induction schema instance (valid for the Path datatype)
 (define-fun P ((w Path)) Bool (forall ((p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((w Path)) (P w))))
 (assert (not (forall ((w Path) (p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q)))))
 (check-sat)

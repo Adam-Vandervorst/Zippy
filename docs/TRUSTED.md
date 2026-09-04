@@ -32,6 +32,23 @@ directions unfalsifiable.
 | `% TRUSTED-ENTRY: T<n>` | an axiom file with an `% ASSUMED` block | *this file asserts* entry T\<n\> | `proof_closure.py --check` |
 | `; TRUSTS: <list>` | an **emitted artifact** (SMT, egglog, TPTP) | *this artifact's claim rests on* these entries | `proof_closure.py`, `audit_pipeline_markers.py` |
 | `% MECHANIZED-IN: <file>#<thm>` | the file that *asserts* an entry | *that entry is a Lean-checked theorem*, so it is no longer assumed | `check_lean.sh`, then `proof_closure.py` |
+| `MECHANIZED-IN: <file>#<thm>` | an entry's section **in this file** | *the entry's schema itself* is a Lean-checked theorem, so every row reaching the entry is discharged at once | `check_lean.sh`, then `proof_closure.py` |
+| `; ASSUMED: T<n>` / `; PREMISE: …` / `; DERIVED-FROM: <file>` / `; DEFINITION` / `; STONE` / `; GOAL` | the comment **directly above one `(assert …)`** in an SMT obligation | what that one assert *is*: a trusted entry, a hypothesis of the stated theorem, a lemma certified elsewhere, a characterisation of a declared symbol, an in-file stepping stone, the negated goal | `scripts/check_asserts.py` (plan.md 2E.4), which writes the SMT tiers' closure table for `proof_closure.py` |
+
+**The per-assert markers exist because the SMT tiers had no closure at all.** SMT-LIB has no
+`include`; an obligation carries its axioms inline, and `proof_closure.py` could not tell a
+`(declare-fun append …)` characterisation from an asserted induction schema. Measured on 2026-09-04:
+the six SMT corpora hold 1686 top-level asserts, 52 of which were structural-induction schema
+instances (the SMT twin of T1, over `Path`, `KList`, `KV` and the mutual `FKV`/`FTrie`) or
+bridging inductions over a chain index (T8) with no marker and no entry, plus the counting facts
+T7 names and a few dozen per-file premises. `scripts/check_asserts.py` now classifies every one
+mechanically (goal, in-file stepping stone, characterisation of a declared symbol, the two
+prelude lemmas by formula) or by marker, **fails on an unclassified assert**, and writes
+`target/assert-closure.tsv` — one row per obligation with the trusted entries its asserts reach,
+transitively through `; DERIVED-FROM:` edges — which `proof_closure.py --check` consumes exactly
+as it consumes the TPTP include closure. The generators (`gen_law_obligations.py`,
+`gen_spatial_obligations.py`, `gen_spatial_semantic_obligations.py`, `AgSmt` in
+`EquivPipeline.scala`, `FixpointSemantics.scala`) emit the markers, so regeneration keeps them.
 
 The first two **declare** a dependency; the third **discharges** one. A discharge that silently
 deleted a declaration would leave nothing to audit, which is why `% MECHANIZED-IN:` never edits a
@@ -99,9 +116,9 @@ Two things are deliberately *not* on this list, because they are checked rather 
 Each entry says what is assumed, why it cannot be derived here, what stands in for a proof, and what
 would break if it were false.
 
-## Two entries are DISCHARGED (plan.md 1E.3)
+## Four entries are DISCHARGED (plan.md 1E.3, 2E.3, 2E.4)
 
-**T1 and T2 are no longer assumed.** Both are induction principles over free algebras — the reason
+**T1, T2, T3 and T8 are no longer assumed.** Both are induction principles over free algebras — the reason
 each is here is a limitation of first-order logic, not a fact anyone doubted — and both are now
 theorems in `proofs/lean`, checked by Lean's kernel with no axiom of its own beyond `propext` /
 `Quot.sound` (`path_induction` uses **none**). `scripts/check_lean.sh` witnesses them and
@@ -113,6 +130,8 @@ theorems in `proofs/lean`, checked by Lean's kernel with no axiom of its own bey
 | `wrap_roundtrip` | `proofs/unbounded/STATUS.tsv` | `PROVED` (T1 discharged) |
 | `fixpoint_is_lfp` | `terminating/STATUS.tsv` | `PROVED` (T2 discharged) |
 | `card_wrap` | `proofs/unbounded/STATUS.tsv` | `PROVED-MODULO T7` — T1 discharged, **T7 remains** |
+| every SMT row whose asserts reach only T1 / T2 / T8 (115 files reach T1) | the five SMT tables | `PROVED` once `check_asserts.py` and `check_lean.sh` have run; `PROVED-MODULO T7` where a counting fact is also asserted |
+| O12d / T3 | `terminating/REGISTRY.tsv` | `MECHANIZED (proofs/lean/Zippy/Whistle.lean)` — per run, when `SCReport.leanCovered` |
 
 The entries stay in this file rather than being deleted, because they are still what the TPTP and
 SMT corpora assert: a reader of `_path_induction.p` needs to know what it is and where it is
@@ -129,10 +148,24 @@ the case without making the call.
 
 ---
 
-## T1. Structural induction over `path`, at one predicate
+## T1. Structural induction over the free datatypes, at one predicate
+
+MECHANIZED-IN: proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction
+MECHANIZED-IN: proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction
+MECHANIZED-IN: proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction
+MECHANIZED-IN: proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction
 
 > **DISCHARGED** by `proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction` — the schema, for
-> **every** predicate, depending on **no axioms at all**. That file reproduces this entry's
+> **every** predicate, depending on **no axioms at all** — and, for the SMT tier's other datatypes,
+> by `list_induction` (generic in the element type: `KList`, `KV`) and `ftrie_induction` (the
+> mutual `FKV`/`FTrie` pair of `isempty_finite.smt2`, declared in Lean as SMT declares it). The
+> three lines above are what `proof_closure.py` reads to lift every row reaching T1 at once.
+>
+> **Scope, widened on 2026-09-04.** This entry used to say "over `path`" because the TPTP tier was
+> the only place the schema was *marked*. `scripts/check_asserts.py` found it asserted 43 more times
+> across the SMT corpora (`; ASSUMED: T1` now sits above each), over `Path` in the laws and bridge
+> files and over `KList`/`KV`/`FKV`/`FTrie` in the trie-implementation files. Same schema, same
+> discharge; the count is in `target/assert-closure.tsv`. That file reproduces this entry's
 > derivation rather than shortcutting to the conclusion: `_paths.p`'s three freeness axioms as
 > theorems, the schema generically in `Phi`, both premises at the cancellation predicate, the
 > instance stated verbatim, then `mon_cancel`. Proving only the conclusion would have left the
@@ -165,6 +198,8 @@ hand proof invokes it (T2).
 
 ## T2. The four bridging induction principles of `fixpoint_is_lfp.smt2`
 
+MECHANIZED-IN: proofs/lean/Zippy/Fixpoint.lean#Zippy.Kleene.stationary_is_lfp
+
 > **DISCHARGED** by `proofs/lean/Zippy/Fixpoint.lean#Zippy.Kleene.stationary_is_lfp` and the four
 > theorems it composes — `chain_ascends`, `acc_eq_chain`, `init_subset_chain`,
 > `chain_below_prefixpoint`. Over `Nat` the bridge is `Nat.rec`; the SMT file needs it asserted
@@ -193,8 +228,28 @@ now conservative (rows O3d-X1, O3d-X2).
 
 ## T3. The whistle terminates (Kruskal's tree theorem)
 
+MECHANIZED-IN: proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.kruskal
+MECHANIZED-IN: proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.whistle_terminates
+
+> **DISCHARGED** (plan.md 2E.3) by `proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.kruskal` —
+> Kruskal's tree theorem, proved from Mathlib's Higman lemma by Nash-Williams' minimal bad sequence,
+> because the pinned Mathlib has Higman and not Kruskal (`scripts/check_lean.sh --probe-kruskal`) —
+> and `whistle_terminates`: extending a whistle-free path is a well-founded relation.
+>
+> **What the theorem needs, and where the implementation now supplies it.** Kruskal needs the label
+> relation to be a well-quasi-order; over a finite alphabet, equality is one. `Matching.coupledS`
+> compared canonical bound names, full `RoutinePtr`s, `Range` bounds and closure identities by
+> equality over *unbounded* sets, so the whistle as implemented was **not** a well-quasi-order (an
+> infinite antichain of nested `Iteration`s exists) and this entry's statement was false of the
+> code. `Matching.labelOf` fixes the alphabet the whistle couples over (all variables of a sort share
+> a label; a call is labelled by its *original* routine and arities) and `SC.State` checks per run
+> that no label outside the inputs' alphabet was minted (`alphabetEscapes`) and that every blow was
+> acted on (`whistleFallbacks`, the coarse whistle vs the fine generalizer). `SCReport.leanCovered`
+> says whether a run is inside the theorem. Coverage is therefore **per run and reported**, not
+> assumed; what remains operational is the `Deadline`, for runs the report says are not covered.
+
 **Registry row:** `terminating/REGISTRY.tsv` O12d · **Code:** `Supercompiler.scala` (homeomorphic
-embedding whistle) · **Status: ADMITTED**
+embedding whistle) · **Status: MECHANIZED, per run**
 
 The homeomorphic embedding on the configuration signature is a well-quasi-order, hence driving
 terminates.
@@ -303,7 +358,12 @@ refuse a recursion variable under a grounded node.
 > A model is the positive statement and does not expire.
 
 **File:** `proofs/unbounded/_card.p` · **Used by:** `card_wrap.p`, and anything whose closure
-reaches it
+reaches it · **SMT-tier instances (`; ASSUMED: T7`, 2E.4):** the `card ≥ 0` and strict-monotonicity
+axioms of `terminating/{fixpoint_is_lfp, asfixpoint_sound, bounded_growth_decrease, datalog_*,
+reachable_decrease, scc_decrease}.smt2`, the per-length-class count facts of
+`proofs/spatial/sp_class_{bounds,ie_tighter}.smt2`, and the measure facts of
+`proofs/spatial-semantic/gsem_join_union_sound.smt2` — the same counting facts, about a
+`card`/count that is uninterpreted there too, so the same entry and the same non-discharge.
 
 Six clauses, and `_card.p`'s own header is the authoritative list of them:
 
@@ -330,6 +390,31 @@ own conclusions.
 
 ---
 
+## T8. Induction over the natural-number chain index
+
+MECHANIZED-IN: proofs/lean/Zippy/PathInduction.lean#Zippy.nat_induction
+
+> **DISCHARGED** by `proofs/lean/Zippy/PathInduction.lean#Zippy.nat_induction` — the schema in the
+> guarded-`Int` form the SMT files assert, `(=> (and (P 0) (∀ n ≥ 0. P n → P (n+1))) (∀ n ≥ 0. P n))`,
+> from `Nat.rec` through the coercion a non-negative `Int` is.
+
+**Files:** `terminating/asfixpoint_sound.smt2` (5), `bounded_recursion_residual.smt2` (1),
+`seminaive_correct.smt2` (3), `unroll_vs_kleene.smt2` (1), `proofs/spatial/lat_postfixpoint.smt2`
+(1) · **Marker:** `; ASSUMED: T8` above each
+
+**What it is.** The same discipline as T2 — base and step machine-checked in `(push)`/`(pop)` blocks,
+then the bridging principle asserted "exactly as a hand proof invokes it" — at predicates other than
+T2's four. T2 names the four of `fixpoint_is_lfp.smt2`; these are the rest. Found by
+`scripts/check_asserts.py` on 2026-09-04, when they were asserted with no marker and no entry, which
+made every one of those rows an unqualified `PROVED` resting on an induction principle first-order
+logic cannot state.
+
+**Why it is not derived.** As T2: the chain index is an unguarded `Int` with a `>= n 0` side
+condition, not a well-founded type, so the prover has no induction rule to apply.
+
+**If it were false**, the five files' conclusions about their chains would lose their premise. They
+would not: `Nat.rec` is a theorem of Lean's kernel and `nat_induction` is its transport.
+
 ## Open obligations, which are *not* trusted assumptions
 
 These are gaps, recorded as gaps. A claim that depends on one is not "proved modulo an assumption" —
@@ -338,8 +423,8 @@ it is open, and the registries say so.
 | row | statement | what stands in for it |
 |---|---|---|
 | O6a | beta-soundness of capture-avoiding inlining | the semantic half is PROVED (`call_unfold.p`, U63); the syntactic half is the randomized differential `src/test/scala/SubstConformance.scala`, which found three real bugs |
-| O10b | *k*-unrolling equivalence for all *k* ⇒ lfp equivalence | nothing; the pipeline emits *k* = 1 and 2 only, so the antecedent is not established |
-| O12b | the supercompiler fold | nothing; it needs the substitution model O6a lacks |
+| O10b | *k*-unrolling equivalence for all *k* ⇒ lfp equivalence | **mechanized** (plan.md 2E.1): `proofs/lean/Zippy/Positive.lean` — `Space.fixpoint_is_lfp` (the Kleene union of a positive body is the least post-fixpoint) and `fixpoint_denT_eq_of_step_eq` (one-step agreement for every value of the cut ⇒ the fixpoints agree). What a residual-cut cell still owes is the antecedent for its *own* cut, stated in its header. |
+| O12b | the supercompiler fold | **mechanized, parametric** (plan.md 2E.2): `proofs/lean/Zippy/Supercompile.lean#Zippy.Fold.resid_lfp_eq_orig`, under the `FoldPremises` the header maps to executable invariants in `SC.State` (`foldChecks`, `productive`, `residualPositive`); the substitution lemma behind the `fix` premise is O6a's |
 
 `terminating/REGISTRY.tsv` and `proofs/unbounded/REGISTRY.tsv` are the authoritative lists; this
 table is the short form for the three the acceptance review names.

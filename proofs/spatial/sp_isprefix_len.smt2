@@ -13,7 +13,9 @@
 (assert (= (len nil) 0))
 (assert (forall ((h Int) (t Path)) (= (len (cons h t)) (+ 1 (len t)))))
 (define-fun P ((p Path)) Bool (forall ((q Path)) (=> (isPrefix p q) (<= (len p) (len q)))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((p Path)) (P p))))
+; DERIVED-FROM: sp_len_nonneg.smt2
 (assert (forall ((p Path)) (>= (len p) 0)))   ; sp_len_nonneg
 (assert (not (forall ((p Path) (q Path)) (=> (isPrefix p q) (<= (len p) (len q))))))
 (check-sat)

@@ -1,6 +1,7 @@
-; AUTO-GENERATED — pipeline stage 1 (temperature): original vs optimised (∀ paths)
-; IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION: the two sides are the SAME term after
-; alpha-normalisation — including their `Iteration`/`Fixpoint` binders — so the goal would expand
-; to `true` and no prover would do any work on it.  The structural identity IS the equivalence
-; result for this cell (decided in Scala, not asserted here); the optimiser/transpiler comparison
-; that is NOT definitional for this stone is carried by the -agnostic twin.
+; TRUSTS: -
+
+; BOUNDARY: space
+; AUTO-GENERATED pipeline stage 1 (temperature) — INSTANCE.
+; TRIVIAL-NO-OBLIGATION: SC.reduce is the IDENTITY on this program — no source law fires
+; (SC.reduceTraced recorded 0 steps) and the sides are alpha-equal; nothing to prove.  This
+; is a statement about the optimiser on this stone, not a certificate of anything it did.

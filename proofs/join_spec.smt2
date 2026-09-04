@@ -10,7 +10,9 @@
 (declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
 (declare-fun E (Path) Bool) (declare-fun S (Path) Bool)
 ; binary-relation shape: members are exactly 2-item paths
+; PREMISE: E is a binary relation (every member is a 2-item path)
 (assert (forall ((p Path)) (=> (E p) (exists ((a Int) (b Int)) (= p (cons a (cons b nil)))))))
+; PREMISE: S is a binary relation (every member is a 2-item path)
 (assert (forall ((p Path)) (=> (S p) (exists ((b Int) (c Int)) (= p (cons b (cons c nil)))))))
 (define-fun joinSpec ((p Path)) Bool
   (exists ((a Int) (b Int) (c Int))

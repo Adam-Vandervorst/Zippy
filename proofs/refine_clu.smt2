@@ -30,6 +30,7 @@
   (=> (= k1 k2) (= (clu (kvcons k1 v1 r1) (kvcons k2 v2 r2)) (kvcons k1 (tru v1 v2) (clu r1 r2))))))
 ; lower-bound lemma: below the bound, lookups miss
 (define-fun PL ((l KV)) Bool (forall ((lo Int) (h Int)) (=> (and (lbnd lo l) (<= h lo)) (= (getk l h) emp))))
+; ASSUMED: T1
 (assert (=> (and (PL kvnil) (forall ((j Int) (v FT) (r KV)) (=> (PL r) (PL (kvcons j v r))))) (forall ((l KV)) (PL l))))
 (define-fun Q ((a KV) (b KV)) Bool
   (=> (and (srt a) (srt b))
@@ -43,6 +44,7 @@
              (=> (and (Q (kvcons k1 v1 r1) r2) (Q r1 (kvcons k2 v2 r2)) (Q r1 r2))
                  (Q (kvcons k1 v1 r1) (kvcons k2 v2 r2)))))
       (P (kvcons k1 v1 r1)))))
+; ASSUMED: T1
 (assert (=> (and (P kvnil) (forall ((k1 Int) (v1 FT) (r1 KV)) (=> (P r1) (P (kvcons k1 v1 r1)))))
             (forall ((a KV)) (P a))))
 (assert (not (forall ((a KV) (b KV)) (Q a b))))

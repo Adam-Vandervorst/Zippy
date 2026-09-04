@@ -15,10 +15,15 @@
   (bvor (ite (hasA x) #b010 #b000) (ite (and (hasA x) (hasB x)) #b100 #b000)))
 (define-fun init () (_ BitVec 3) #b001)
 (declare-const fx (_ BitVec 3))
-; the two POST-FIXPOINT axioms the emitter writes (AgSmt.fixSym)
+; the two POST-FIXPOINT axioms the emitter writes (AgSmt.fixSym).  In this DECIDABLE twin the
+; three clauses DEFINE `fx` as the least post-fixpoint (the domain is finite, so the definition
+; is a constraint z3 decides) — hence the DEFINITION markers scripts/check_asserts.py reads.
+; DEFINITION
 (assert (sub init fx))
+; DEFINITION
 (assert (sub (F fx) fx))
 ; PARK INDUCTION, with the candidate UNIVERSALLY quantified — so `least` really is least
+; DEFINITION
 (assert (forall ((y (_ BitVec 3))) (=> (and (sub init y) (sub (F y) y)) (sub fx y))))
 (assert (not (= fx #b111)))   ; is {a,b,c} FORCED?
 (check-sat)

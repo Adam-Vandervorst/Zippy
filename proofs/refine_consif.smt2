@@ -21,6 +21,7 @@
 (assert (forall ((j Int)) (notin j kvnil)))
 (assert (forall ((j Int) (i Int) (v FT) (r KV)) (= (notin j (kvcons i v r)) (and (not (= j i)) (notin j r)))))
 (define-fun PG ((l KV)) Bool (forall ((j Int)) (=> (notin j l) (= (getk l j) emp))))
+; ASSUMED: T1
 (assert (=> (and (PG kvnil) (forall ((i Int) (v FT) (r KV)) (=> (PG r) (PG (kvcons i v r))))) (forall ((l KV)) (PG l))))
 (assert (not (forall ((k Int) (v FT) (r KV) (j Int) (q Path))
   (=> (notin k r)

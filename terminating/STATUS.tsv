@@ -1,20 +1,20 @@
-fixpoint_is_lfp	14/14 unsat	10/14 proved	PROVED (MECHANIZED proofs/lean/Zippy/Fixpoint.lean#Zippy.Kleene.stationary_is_lfp discharges T2)
-asfixpoint_sound	18/18 unsat	15/18 proved	PROVED
-unroll_vs_kleene	19/19 unsat	13/19 proved	PROVED
-seminaive_correct	21/21 unsat	19/21 proved	PROVED
-tagged_projection	11/11 unsat	11/11 proved	PROVED
+fixpoint_is_lfp	14/14 unsat	10/14 proved	PROVED-MODULO T7 (MECHANIZED proofs/lean/Zippy/Fixpoint.lean#Zippy.Kleene.stationary_is_lfp discharges T2)
+asfixpoint_sound	18/18 unsat	15/18 proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.nat_induction discharges T8)
+unroll_vs_kleene	19/19 unsat	13/19 proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.nat_induction discharges T8)
+seminaive_correct	21/21 unsat	19/21 proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.nat_induction discharges T8)
+tagged_projection	11/11 unsat	11/11 proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 tagged_order	2/2 unsat	2/2 proved	PROVED
 mono_soundness	15/15 unsat	15/15 proved	PROVED
-mutual_tagged_bekic	8/8 unsat	8/8 proved	PROVED
-bounded_recursion_residual	5/5 unsat	4/5 proved	PROVED
-bounded_growth_decrease	1/1 unsat	0/1 proved	PROVED
-datalog_a_terminates	1/1 unsat	1/1 proved	PROVED
-datalog_b_naive_terminates	15/15 unsat	12/15 proved	PROVED
+mutual_tagged_bekic	8/8 unsat	8/8 proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+bounded_recursion_residual	5/5 unsat	4/5 proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.nat_induction discharges T8)
+bounded_growth_decrease	1/1 unsat	0/1 proved	PROVED-MODULO T7
+datalog_a_terminates	1/1 unsat	1/1 proved	PROVED-MODULO T7
+datalog_b_naive_terminates	15/15 unsat	12/15 proved	PROVED-MODULO T7
 datalog_b_seminaive_lemmas	7/7 unsat	7/7 proved	PROVED
-datalog_b_seminaive_terminates	1/1 unsat	0/1 proved	PROVED
+datalog_b_seminaive_terminates	1/1 unsat	0/1 proved	PROVED-MODULO T7
 least_fixpoint_unique	1/1 unsat	1/1 proved	PROVED
 no_infinite_descent	3/3 unsat	2/3 proved	PROVED
-reachable_decrease	6/6 unsat	4/6 proved	PROVED
-reachable_value	1/1 unsat	1/1 proved	PROVED
-scc_decrease	7/7 unsat	7/7 proved	PROVED
-transitive_equiv	1/1 unsat	1/1 proved	PROVED
+reachable_decrease	6/6 unsat	4/6 proved	PROVED-MODULO T7
+reachable_value	1/1 unsat	1/1 proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+scc_decrease	7/7 unsat	7/7 proved	PROVED-MODULO T7
+transitive_equiv	1/1 unsat	1/1 proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)

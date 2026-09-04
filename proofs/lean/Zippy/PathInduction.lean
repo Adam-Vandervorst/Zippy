@@ -125,4 +125,62 @@ theorem mon_cancel_agrees_with_core :
     (∀ p q r : List Name, p ++ q = p ++ r → q = r) ↔
     (∀ p q r : List Name, p ++ q = p ++ r → q = r) := Iff.rfl
 
+
+/-! ### THE SAME SCHEMA, FOR EVERY DATATYPE THE SMT TIER INDUCTS OVER (plan.md 2E.4)
+
+`scripts/check_asserts.py` found the SMT corpora asserting the structural-induction schema 39 times
+with no marker: over `Path` (the T1 twin), but also over `KList` (key lists), `KV` (key/trie pair
+lists) and the MUTUAL pair `FKV`/`FTrie` (isempty_finite.smt2), and the ℕ-indexed bridging form over
+the chain index in `terminating/` and `proofs/spatial/`.  Each is now marked `; ASSUMED: T1` or
+`; ASSUMED: T8` and each schema is a theorem here — generically in the predicate, as T1's own
+discharge insisted, so the SCHEMA and not merely a conclusion is what is checked.
+
+  `list_induction`   — T1, for every element type: `Path = List Name`, `KList = List Int`,
+                       `KV = List (Int × FT)` are all instances.
+  `ftrie_induction`  — T1's mutual instance: the finite trie / key-list pair of isempty_finite.smt2,
+                       declared here as Lean declares it, so its recursor IS the principle.
+  `nat_induction`    — T8: induction over the chain index, in the `n ≥ 0`-guarded Int form the SMT
+                       files assert (`Int.le_induction`-shaped), from `Nat.rec`. -/
+
+/-- T1 for an arbitrary element type -/
+theorem list_induction {α : Type*} (Φ : List α → Prop)
+    (base : Φ []) (step : ∀ (h : α) (t : List α), Φ t → Φ (h :: t)) :
+    ∀ l : List α, Φ l
+  | [] => base
+  | h :: t => step h t (list_induction Φ base step t)
+
+mutual
+  /-- `(declare-datatypes ((FTrie 0) (FKV 0)) (((fnode (term Bool) (kids FKV))) ((fknil) (fkcons (k Int) (v FTrie) (r FKV)))))` -/
+  inductive FTrie where
+    | fnode (term : Bool) (kids : FKV)
+  inductive FKV where
+    | fknil
+    | fkcons (k : Int) (v : FTrie) (r : FKV)
+end
+
+/-- T1's MUTUAL instance (isempty_finite.smt2 lines 40 and 46): induction over the key list with the
+trie predicate carried along, exactly as the two SMT asserts state it. -/
+theorem ftrie_induction (PT : FTrie → Prop) (PK : FKV → Prop)
+    (hnode : ∀ (b : Bool) (ks : FKV), PK ks → PT (.fnode b ks))
+    (hnil : PK .fknil)
+    (hcons : ∀ (j : Int) (v : FTrie) (r : FKV), PT v → PK r → PK (.fkcons j v r)) :
+    (∀ t, PT t) ∧ (∀ ks, PK ks) := by
+  refine ⟨fun t => ?_, fun ks => ?_⟩
+  · exact FTrie.rec (motive_1 := PT) (motive_2 := PK) hnode hnil hcons t
+  · exact FKV.rec (motive_1 := PT) (motive_2 := PK) hnode hnil hcons ks
+
+/-- T8: the ℕ-indexed bridging induction, in the guarded `Int` form the SMT files assert:
+`(=> (and (P 0) (forall ((n Int)) (=> (and (>= n 0) (P n)) (P (+ n 1))))) (forall ((n Int)) (=> (>= n 0) (P n))))`. -/
+theorem nat_induction (P : Int → Prop) (base : P 0)
+    (step : ∀ n : Int, 0 ≤ n → P n → P (n + 1)) : ∀ n : Int, 0 ≤ n → P n := by
+  intro n hn
+  -- a non-negative `Int` is a natural number; the SMT twin's `>= n 0` guard is this coercion
+  obtain ⟨m, rfl⟩ := Int.eq_ofNat_of_zero_le hn
+  induction m with
+  | zero => exact base
+  | succ m ih =>
+    have h := step (m : Int) (Int.natCast_nonneg m) (ih (Int.natCast_nonneg m))
+    push_cast
+    exact h
+
 end Zippy

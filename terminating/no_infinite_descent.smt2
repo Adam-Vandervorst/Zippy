@@ -40,7 +40,9 @@
 ; =============================================================================
 
 (declare-fun g (Int) Int)
+; PREMISE: g is natural-valued
 (assert (forall ((n Int)) (=> (>= n 0) (>= (g n) 0))))         ; g maps naturals to naturals
+; PREMISE: g strictly decreases
 (assert (forall ((n Int)) (=> (>= n 0) (< (g (+ n 1)) (g n)))))  ; g strictly decreases at every step
 
 ; --- Step 1 (base case): g(0) <= g(0) - 0.

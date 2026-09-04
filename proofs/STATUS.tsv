@@ -1,97 +1,107 @@
 pointwise	unsat	proved	PROVED
 wrap1	unsat	proved	PROVED
 restriction	unsat	proved	PROVED
-keyfolds	unsat	proved	PROVED
+keyfolds	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 lemma_append_cons	unsat	proved	PROVED
-lemma_append_nil	unsat	proved	PROVED
+lemma_append_nil	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 composition	timeout	proved	PROVED
-composition_norm	timeout	proved	PROVED
-impl_union	unsat	proved	PROVED
-impl_intersection	timeout	proved	PROVED
-impl_subtraction	unsat	proved	PROVED
+composition_norm	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+impl_union	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+impl_intersection	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+impl_subtraction	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 impl_wrap	unsat	proved	PROVED
 impl_unwrap	unsat	proved	PROVED
 impl_head	unsat	proved	PROVED
-threeway_union	unsat	proved	PROVED
-threeway_intersection	unsat	proved	PROVED
-threeway_subtraction	unsat	proved	PROVED
-threeway_composition_zip	timeout	proved	PROVED
-threeway_composition_trie	unsat	-	PROVED
-threeway_restriction_zip	unsat	proved	PROVED
-threeway_restriction_trie	unsat	-	PROVED
-threeway_tailsunion_trie	unsat	proved	PROVED
-threeway_tailsinter_trie	timeout	proved	PROVED
+threeway_union	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+threeway_intersection	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+threeway_subtraction	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+threeway_composition_zip	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+threeway_composition_trie	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+threeway_restriction_zip	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+threeway_restriction_trie	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+threeway_tailsunion_trie	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+threeway_tailsinter_trie	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 keys_intersection	unsat	proved	PROVED
 keys_subtraction	unsat	proved	PROVED
 keys_composition	unsat	proved	PROVED
 keys_restriction	unsat	proved	PROVED
 keys_filter_exact	unsat	proved	PROVED
-isempty_finite	timeout	proved	PROVED
-keyfold_tailsinter	unsat	proved	PROVED
-keyfold_head	unsat	proved	PROVED
-keyfold_iter	unsat	proved	PROVED
+isempty_finite	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+keyfold_tailsinter	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+keyfold_head	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+keyfold_iter	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 join_spec	unsat	proved	PROVED
-refine_kmerge	unsat	-	PROVED
-refine_kinter	unsat	-	PROVED
-refine_clu	unsat	-	PROVED
-refine_consif	unsat	proved	PROVED
+refine_kmerge	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+refine_kinter	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+refine_clu	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+refine_consif	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 refine_cli	timeout	-	OPEN (expected; differential-covered — see header)
 refine_cls	timeout	-	OPEN (expected; differential-covered — see header)
-laws/law_absorption	unsat	proved	PROVED
-laws/law_append_assoc	unsat	proved	PROVED
-laws/law_append_inj	unsat	proved	PROVED
-laws/law_comp_assoc	unsat	proved	PROVED
-laws/law_comp_lit_wraps	unsat	proved	PROVED
-laws/law_comp_rdistrib	unsat	proved	PROVED
-laws/law_comp_set	unsat	proved	PROVED
-laws/law_comp_wrap_assoc	unsat	proved	PROVED
-laws/law_demorgan_sub	unsat	proved	PROVED
-laws/law_guard_hoist	timeout	proved	PROVED
-laws/law_head_set	unsat	proved	PROVED
-laws/law_head_tails_cover	timeout	proved	PROVED
-laws/law_inter_assoc	unsat	proved	PROVED
-laws/law_inter_comm	unsat	proved	PROVED
-laws/law_inter_distrib	unsat	proved	PROVED
-laws/law_inter_empty	unsat	proved	PROVED
-laws/law_inter_idem	unsat	proved	PROVED
-laws/law_isprefix_append	timeout	proved	PROVED
-laws/law_iter_comp_right_hoist	unsat	proved	PROVED
-laws/law_iter_fusion	unsat	proved	PROVED
-laws/law_iter_head_narrow	unsat	proved	PROVED
-laws/law_iter_merge	unsat	proved	PROVED
-laws/law_iter_set	unsat	proved	PROVED
-laws/law_iter_transpose_semijoin	unsat	proved	PROVED
-laws/law_iterc_set	unsat	proved	PROVED
-laws/law_raff_push	unsat	proved	PROVED
-laws/law_raff_restrict_algebra	unsat	proved	PROVED
-laws/law_raff_wrap_both	timeout	proved	PROVED
-laws/law_raffination_partition	unsat	proved	PROVED
-laws/law_range_singleton	unsat	-	PROVED
-laws/law_restrict_idem	unsat	proved	PROVED
-laws/law_restrict_push	unsat	proved	PROVED
-laws/law_restrict_self	timeout	proved	PROVED
-laws/law_restrict_set	unsat	proved	PROVED
-laws/law_restrict_wrap_both	timeout	proved	PROVED
-laws/law_singleton_disq	unsat	proved	PROVED
-laws/law_sub_distrib	unsat	proved	PROVED
-laws/law_sub_empty	unsat	proved	PROVED
-laws/law_sub_self	unsat	proved	PROVED
-laws/law_tailsi_set	unsat	proved	PROVED
-laws/law_tailsu_push	unsat	proved	PROVED
-laws/law_tailsu_set	unsat	proved	PROVED
-laws/law_transpose_spec	unsat	proved	PROVED
-laws/law_union_assoc	unsat	proved	PROVED
-laws/law_union_chain_tailsu	unsat	proved	PROVED
-laws/law_union_comm	unsat	proved	PROVED
-laws/law_union_idem	unsat	proved	PROVED
-laws/law_union_unit	unsat	proved	PROVED
-laws/law_unwrap_merge	unsat	proved	PROVED
-laws/law_unwrap_push	unsat	proved	PROVED
-laws/law_unwrap_set	timeout	proved	PROVED
-laws/law_wrap_as_comp	unsat	proved	PROVED
-laws/law_wrap_disjoint	unsat	-	PROVED
-laws/law_wrap_merge	unsat	proved	PROVED
-laws/law_wrap_set	unsat	proved	PROVED
+zipper_refinement_leaf	unsat	-	PROVED
+zipper_refinement_tunion	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+zipper_refinement_tinter	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+zipper_refinement_tsub	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+zipper_refinement_tcomp	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+zipper_refinement_twrap	unsat	-	PROVED
+zipper_refinement_tunwrap	unsat	-	PROVED
+zipper_refinement_trestr	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+zipper_refinement_traff	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+zipper_refinement	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_absorption	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_append_assoc	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_append_inj	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_comp_assoc	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_comp_lit_wraps	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_comp_rdistrib	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_comp_set	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_comp_wrap_assoc	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_demorgan_sub	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_guard_hoist	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_head_set	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_head_tails_cover	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_inter_assoc	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_inter_comm	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_inter_distrib	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_inter_empty	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_inter_idem	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_isprefix_append	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_iter_comp_right_hoist	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_iter_fusion	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_iter_head_narrow	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_iter_merge	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_iter_set	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_iter_transpose_semijoin	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_iterc_set	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_raff_push	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_raff_restrict_algebra	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_raff_wrap_both	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_raffination_partition	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_range_singleton	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_restrict_idem	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_restrict_push	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_restrict_self	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_restrict_set	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_restrict_wrap_both	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_singleton_disq	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_sub_distrib	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_sub_empty	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_sub_self	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_tailsi_set	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_tailsu_push	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_tailsu_set	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_transpose_spec	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_union_assoc	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_union_chain_tailsu	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_union_comm	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_union_idem	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_union_unit	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_unwrap_merge	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_unwrap_push	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_unwrap_set	timeout	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_wrap_as_comp	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_wrap_disjoint	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_wrap_merge	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+laws/law_wrap_set	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 spatial/lat_cnt_order	unsat	-	PROVED
 spatial/lat_ivl_absorb	unsat	-	PROVED
 spatial/lat_ivl_bounds	unsat	-	PROVED
@@ -100,7 +110,7 @@ spatial/lat_ivl_lattice	unsat	-	PROVED
 spatial/lat_ivl_order	unsat	-	PROVED
 spatial/lat_meet_dominates	unsat	-	PROVED
 spatial/lat_mul_mono_int	unsat	-	PROVED
-spatial/lat_postfixpoint	unsat	-	PROVED
+spatial/lat_postfixpoint	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.nat_induction discharges T8)
 spatial/lat_proj_mono	unsat	-	PROVED
 spatial/lat_sat_add	unsat	-	PROVED
 spatial/lat_sat_mul	unsat	-	PROVED
@@ -112,69 +122,62 @@ spatial/lat_transfer_sound	unsat	-	PROVED
 spatial/lat_type_join_lub	unsat	-	PROVED
 spatial/lat_type_order	unsat	-	PROVED
 spatial/lat_widen_sound	unsat	-	PROVED
-spatial/sp_class_bounds	unsat	proved	PROVED
-spatial/sp_class_ie_tighter	unsat	proved	PROVED
-spatial/sp_comp_additive	unsat	proved	PROVED
+spatial/sp_class_bounds	unsat	proved	PROVED-MODULO T7
+spatial/sp_class_ie_tighter	unsat	proved	PROVED-MODULO T7
+spatial/sp_comp_additive	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 spatial/sp_comp_collision	unsat	-	PROVED
-spatial/sp_comp_inject	unsat	proved	PROVED
+spatial/sp_comp_inject	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 spatial/sp_gamma_order	unsat	proved	PROVED
 spatial/sp_head_partition	unsat	proved	PROVED
-spatial/sp_isprefix_len	unsat	-	PROVED
-spatial/sp_isprefix_refl	unsat	proved	PROVED
+spatial/sp_isprefix_len	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_isprefix_refl	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 spatial/sp_iter_disjoint_cylinders	unsat	proved	PROVED
-spatial/sp_iter_head_one	unsat	proved	PROVED
-spatial/sp_len_append	unsat	proved	PROVED
-spatial/sp_len_nonneg	unsat	proved	PROVED
-spatial/sp_lendisjoint_meet	unsat	proved	PROVED
-spatial/sp_partition_restrict_raff	unsat	proved	PROVED
-spatial/sp_raff_exact	unsat	proved	PROVED
-spatial/sp_restrict_annihilate	unsat	proved	PROVED
-spatial/sp_restrict_self	unsat	proved	PROVED
-spatial/sp_subsume_ops	unsat	proved	PROVED
-spatial/sp_subsume_syntactic	unsat	proved	PROVED
-spatial/sp_tails_shift	unsat	-	PROVED
-spatial/sp_unwrap_shift	unsat	proved	PROVED
-spatial/sp_wrap_into	unsat	proved	PROVED
-spatial/sp_wrap_onto	unsat	proved	PROVED
+spatial/sp_iter_head_one	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_len_append	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_len_nonneg	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_lendisjoint_meet	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_partition_restrict_raff	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_raff_exact	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_restrict_annihilate	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_restrict_self	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_subsume_ops	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_subsume_syntactic	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_tails_shift	unsat	-	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_unwrap_shift	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_wrap_into	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
+spatial/sp_wrap_onto	unsat	proved	PROVED (MECHANIZED proofs/lean/Zippy/PathInduction.lean#Zippy.ftrie_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.list_induction,proofs/lean/Zippy/PathInduction.lean#Zippy.path_induction,proofs/lean/Zippy/Zipper.lean#Zippy.Zip.term_induction discharges T1)
 pipeline/aunt-graph-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/aunt-graph	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
-pipeline/aunt-space-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
-pipeline/aunt-space	unsat	-	PROVED
-pipeline/aunt-zipper-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/aunt-zipper	unsat	-	PROVED
+pipeline/aunt-graph	-	-	TRIVIAL-NO-OBLIGATION
+pipeline/aunt-space	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/aunt-zipper-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/aunt-zipper	-	-	LAW-JUSTIFIED-NO-RESIDUAL
 pipeline/datalog-sn-graph-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/datalog-sn-graph	unsat	proved	PROVED
-pipeline/datalog-sn-space-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/datalog-sn-space	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
-pipeline/datalog-sn-zipper-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/datalog-sn-zipper	unsat	proved	PROVED
+pipeline/datalog-sn-graph	-	-	TRIVIAL-NO-OBLIGATION
+pipeline/datalog-sn-space	-	-	TRIVIAL-NO-OBLIGATION
+pipeline/datalog-sn-zipper-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/datalog-sn-zipper	-	-	LAW-JUSTIFIED-NO-RESIDUAL
 pipeline/gol-graph-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/gol-graph	unsat	proved	PROVED
-pipeline/gol-space-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/gol-space	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
-pipeline/gol-zipper-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/gol-zipper	unsat	proved	PROVED
+pipeline/gol-graph	-	-	TRIVIAL-NO-OBLIGATION
+pipeline/gol-space	-	-	TRIVIAL-NO-OBLIGATION
+pipeline/gol-zipper-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/gol-zipper	-	-	LAW-JUSTIFIED-NO-RESIDUAL
 pipeline/nqueens-graph-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/nqueens-graph	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
-pipeline/nqueens-space-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
-pipeline/nqueens-space	-	-	PROVER-BUDGET-EXCEEDED
-pipeline/nqueens-zipper-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/nqueens-zipper	-	-	PROVER-BUDGET-EXCEEDED
-pipeline/puzzle15-graph-agnostic	-	-	PROVER-BUDGET-EXCEEDED
-pipeline/puzzle15-graph	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
-pipeline/puzzle15-space-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
-pipeline/puzzle15-space	-	-	PROVER-BUDGET-EXCEEDED
-pipeline/puzzle15-zipper-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/puzzle15-zipper	-	-	PROVER-BUDGET-EXCEEDED
-pipeline/puzzle3-full-graph-agnostic	-	-	PROVER-BUDGET-EXCEEDED
-pipeline/puzzle3-full-graph	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
-pipeline/puzzle3-full-space-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
-pipeline/puzzle3-full-space	-	-	PROVER-BUDGET-EXCEEDED
-pipeline/puzzle3-full-zipper-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/puzzle3-full-zipper	unsat	-	PROVED
+pipeline/nqueens-graph	-	-	TRIVIAL-NO-OBLIGATION
+pipeline/nqueens-space	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/nqueens-zipper-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/nqueens-zipper	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle15-graph-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle15-graph	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle15-space	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle15-zipper-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle15-zipper	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle3-full-graph-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle3-full-graph	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle3-full-space	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle3-full-zipper-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/puzzle3-full-zipper	-	-	LAW-JUSTIFIED-NO-RESIDUAL
 pipeline/temperature-graph-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/temperature-graph	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
-pipeline/temperature-space-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/temperature-space	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
-pipeline/temperature-zipper-agnostic	-	-	TRIVIAL-NO-OBLIGATION
-pipeline/temperature-zipper	-	-	IDENTICAL-STRUCTURE-NO-EQUIVALENCE-OBLIGATION
+pipeline/temperature-graph	-	-	TRIVIAL-NO-OBLIGATION
+pipeline/temperature-space	-	-	TRIVIAL-NO-OBLIGATION
+pipeline/temperature-zipper-agnostic	-	-	LAW-JUSTIFIED-NO-RESIDUAL
+pipeline/temperature-zipper	-	-	LAW-JUSTIFIED-NO-RESIDUAL

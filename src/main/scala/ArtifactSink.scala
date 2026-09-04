@@ -243,7 +243,10 @@ object ArtifactSink:
         s"content than the tree holds:\n" + fs.map("  " + _.show).mkString("\n") +
         "\n\nThe produced files are under " + rel(scratchRoot) + " for inspection.  If the new " +
         "content is correct, regenerate the committed artifacts deliberately:\n" +
-        "    ZIPPY_REGENERATE=1 sbt 'testOnly " + suite + "'\n" +
-        "and commit the diff.  A test run must never rewrite them as a side effect: that is how a " +
-        "drifting generator used to commit its own drift.")
+        "    ZIPPY_REGENERATE=1 sbt --server 'testOnly " + suite + "'\n" +
+        "and commit the diff.  (`--server`: sbt 2's default client hands the command to a BACKGROUND " +
+        "server whose environment is the one it was started with, and the forked test JVM inherits THAT " +
+        "environment — measured 2026-09-04: a regenerate run under a stale server ran 21 minutes in " +
+        "VERIFY mode.  A foreground server sees the variable.)  A test run must never rewrite them as a " +
+        "side effect: that is how a drifting generator used to commit its own drift.")
 end ArtifactSink

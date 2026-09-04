@@ -41,6 +41,13 @@ lazy val root = (project in file("."))
     //    forked JVM is the only place a test-specific `-Xmx` is honoured.  `.jvmopts` sizes the sbt
     //    JVM itself, which still has to compile this tree.
     Test / fork := true,
+    // THE ARTIFACT-SINK SWITCH REACHES THE FORKED JVM.  `ArtifactSink` reads `$ZIPPY_REGENERATE` (and
+    // `$ZIPPY_ARTIFACT_SCRATCH`) from its own process environment; a forked test JVM does not see the
+    // variables the `sbt` invocation was given unless they are passed through here.  Measured
+    // (2026-09-04): `ZIPPY_REGENERATE=1 sbt 'testOnly morkl.EquivPipelineTest'` ran 21 minutes in
+    // VERIFY mode and then reported 98 stale artifacts.
+    Test / envVars ++= Seq("ZIPPY_REGENERATE", "ZIPPY_ARTIFACT_SCRATCH", "ZIPPY_TOOLS", "Z3", "VAMPIRE", "EGGLOG", "LAKE")
+      .flatMap(k => sys.env.get(k).map(k -> _)).toMap,
     Test / javaOptions ++= Seq("-Xmx24G", "-Xss16M", "-Dfile.encoding=UTF-8"),
 
     // ==================================================================================================

@@ -225,16 +225,20 @@ lat("lat_type_join_lub", "the pointwise join is the least upper bound on spatial
 
 # the post-fixpoint theorem — an explicit nat-induction schema instance
 POSTFIX = """(declare-fun F (Ivl) Ivl)
+; PREMISE: F# is monotone (certified separately: lat_transfer_mono)
 (assert (forall ((a Ivl) (b Ivl)) (=> (ile a b) (ile (F a) (F b)))))   ; F# monotone (lat_transfer_mono)
 (declare-fun X (Int) Ivl)                                              ; the Kleene iterates
 (declare-const init Ivl)
 (declare-const T Ivl)
 (assert (= (X 0) init))
 (assert (forall ((n Int)) (=> (>= n 0) (= (X (+ n 1)) (ijoin (X n) (F (X n)))))))
+; PREMISE: init ⊑ T — the analysis checks this before it trusts the post-fixpoint
 (assert (ile init T))                                                  ; the analysis checks both
+; PREMISE: F#(T) ⊑ T — T is a post-fixpoint; the analysis checks this too
 (assert (ile (F T) T))                                                 ; of these premises
 ; explicit nat-induction schema instance at P
 (define-fun P ((n Int)) Bool (ile (X n) T))
+; ASSUMED: T8
 (assert (=> (and (P 0) (forall ((n Int)) (=> (and (>= n 0) (P n)) (P (+ n 1)))))
             (forall ((n Int)) (=> (>= n 0) (P n)))))
 """
@@ -290,19 +294,23 @@ def sp(name, desc, goal, extra="", pre=None, lemmas=True):
 sp("sp_len_append", "append adds lengths (the class-shift arithmetic)",
    "(forall ((p Path) (q Path)) (= (len (append p q)) (+ (len p) (len q))))",
    extra="""(define-fun P ((p Path)) Bool (forall ((q Path)) (= (len (append p q)) (+ (len p) (len q)))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((p Path)) (P p))))
 """, lemmas=False)
 
 sp("sp_len_nonneg", "every path length is non-negative",
    "(forall ((p Path)) (>= (len p) 0))",
    extra="""(define-fun P ((p Path)) Bool (>= (len p) 0))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((p Path)) (P p))))
 """, lemmas=False)
 
 sp("sp_isprefix_len", "a prefix is never longer than the path (the restriction cut-off)",
    "(forall ((p Path) (q Path)) (=> (isPrefix p q) (<= (len p) (len q))))",
    extra="""(define-fun P ((p Path)) Bool (forall ((q Path)) (=> (isPrefix p q) (<= (len p) (len q)))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((p Path)) (P p))))
+; DERIVED-FROM: sp_len_nonneg.smt2
 (assert (forall ((p Path)) (>= (len p) 0)))   ; sp_len_nonneg
 """, lemmas=False)
 
@@ -402,6 +410,7 @@ sp("sp_restrict_self",
 sp("sp_isprefix_refl", "every path is a prefix of itself (structural induction)",
    "(forall ((p Path)) (isPrefix p p))",
    extra="""(define-fun P ((p Path)) Bool (isPrefix p p))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((p Path)) (P p))))
 """, lemmas=False)
 
@@ -432,8 +441,10 @@ MEASURE = """; ---- the CARDINALITY BRIDGE (kind DEFINITIONAL — standard finit
 (declare-fun cU (Int) Int)
 (declare-fun cI (Int) Int)
 (declare-fun cD (Int) Int)
+; ASSUMED: T7
 (assert (forall ((l Int)) (and (>= (cA l) 0) (>= (cB l) 0) (>= (cU l) 0) (>= (cI l) 0) (>= (cD l) 0))))
 (assert (forall ((l Int)) (= (cU l) (- (+ (cA l) (cB l)) (cI l)))))        ; inclusion–exclusion
+; ASSUMED: T7
 (assert (forall ((l Int)) (and (<= (cI l) (cA l)) (<= (cI l) (cB l)))))    ; meet ⊆ both
 (assert (forall ((l Int)) (= (cD l) (- (cA l) (cI l)))))                   ; x∖y = x minus the meet
 """

@@ -23,6 +23,7 @@
 ; P = the transpose-index candidates Unwrap(TR, c0): u with a witness u·c0·… in E
 (assert (forall ((u Int)) (= (P u) (exists ((q Path)) (E (cons u (cons c0 q)))))))
 ; STRICTNESS: the iteration body denotes nothing when the witness unwrap is empty
+; PREMISE: the body is STRICT in its witness (the law's side condition, checked by the optimiser before it fires)
 (assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h (cons c0 q))))) (not (Bd h p)))))
 (assert (not (forall ((p Path)) (= (exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) (exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) (exists ((u Int)) (and (P u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))))
 (check-sat)

@@ -190,18 +190,21 @@ law("law_append_assoc", "path append is associative",
     "(forall ((a Path) (b Path) (c Path)) (= (append (append a b) c) (append a (append b c))))",
     decls="", assume="""; explicit structural-induction schema instance (valid for the Path datatype)
 (define-fun P ((a Path)) Bool (forall ((b Path) (c Path)) (= (append (append a b) c) (append a (append b c)))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((a Path)) (P a))))
 """)
 law("law_append_inj", "append is left-cancellative (injective in its second argument)",
     "(forall ((w Path) (p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q)))",
     decls="", assume="""; explicit structural-induction schema instance (valid for the Path datatype)
 (define-fun P ((w Path)) Bool (forall ((p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((w Path)) (P w))))
 """)
 law("law_isprefix_append", "isPrefix w p  <=>  exists q. p = append w q",
     "(forall ((w Path) (p Path)) (= (isPrefix w p) (exists ((q Path)) (= p (append w q)))))",
     decls="", assume="""; explicit structural-induction schema instance (valid for the Path datatype)
 (define-fun P ((w Path)) Bool (forall ((p Path)) (= (isPrefix w p) (exists ((q Path)) (= p (append w q))))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((w Path)) (P w))))
 """)
 
@@ -233,7 +236,7 @@ law("law_absorption", "A ∪ (A ∩ B) = A  and  A ∩ (A ∪ B) = A",
 law("law_singleton_disq", "p ≠ q  ⇒  {p} \\ {q} = {p}  and  {p} ∩ {q} = ∅",
     conj(eq(SUB(SING("w"), SING("u")), SING("w")),
          eq(INTER(SING("w"), SING("u")), EMPTY)),
-    decls=SETS + CONSTS + "(assert (distinct w u))\n")
+    decls=SETS + CONSTS + "; PREMISE: the two singletons are distinct paths (the law's hypothesis p ≠ q)\n(assert (distinct w u))\n")
 
 # ---- wrap / unwrap ----
 law("law_wrap_set", "wrap: ∅-absorption, ε-unit, singleton fusion, ∪-distribution",
@@ -434,6 +437,7 @@ law("law_iter_transpose_semijoin",
           "; P = the transpose-index candidates Unwrap(TR, c0): u with a witness u·c0·… in E\n"
           "(assert (forall ((u Int)) (= (P u) (exists ((q Path)) (E (cons u (cons c0 q)))))))\n"
           "; STRICTNESS: the iteration body denotes nothing when the witness unwrap is empty\n"
+          "; PREMISE: the body is STRICT in its witness (the law's side condition, checked by the optimiser before it fires)\n"
           "(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h (cons c0 q))))) (not (Bd h p)))))\n")
 law("law_iter_head_narrow",
     "narrowing a head-dependent iteration to the heads of the witness base E drops only groups whose witness is empty (body strict in the witness)",
@@ -446,6 +450,7 @@ law("law_iter_head_narrow",
           "; PH = Head(E): the 1-item children of E\n"
           "(assert (forall ((u Int)) (= (PH u) (exists ((q Path)) (E (cons u q))))))\n"
           "; STRICTNESS: the iteration body denotes nothing when the witness unwrap at h is empty\n"
+          "; PREMISE: the body is STRICT in its witness (the law's side condition, checked by the optimiser before it fires)\n"
           "(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h q)))) (not (Bd h p)))))\n")
 # ---- mined composition laws (scripts/mine_laws.py; 18 PROVED / 4 machine-refuted) ----
 law("law_unwrap_push", "unwrap distributes through ∪/∩/\\ (pointwise membership at w·p)",
@@ -489,7 +494,9 @@ law("law_iter_merge", "same-source iteration merges: ∪ free; ∩/\\ under the 
          "(forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (not (exists ((hh Int)) (and (G hh) (Bd2 hh p))))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (not (Bd2 hh p)))))))"),
     decls="(declare-fun G (Int) Bool)\n(declare-fun Bd1 (Int Path) Bool)\n(declare-fun Bd2 (Int Path) Bool)\n",
     assume="""; KEYED guard (the ∩/\\ conjuncts need it; countermodel exists without it)
+; PREMISE: both bodies are KEYED — every output path starts with the group key (the law's guard, checked by the optimiser before it fires)
 (assert (forall ((hh Int) (p Path)) (=> (Bd1 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
+; PREMISE: both bodies are KEYED — every output path starts with the group key (the law's guard, checked by the optimiser before it fires)
 (assert (forall ((hh Int) (p Path)) (=> (Bd2 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
 """)
 law("law_raff_push", "raffination pushes through the subject's ∪/∩/\\ and splits over prefix unions",
@@ -569,6 +576,11 @@ REG = [
     ("inter-distrib", "FILE", "laws/law_inter_distrib.smt2", "formal.egg"),
     ("sub-distrib", "FILE", "laws/law_sub_distrib.smt2", "formal.egg"),
     ("demorgan-sub", "FILE", "laws/law_demorgan_sub.smt2", "formal.egg + the De Morgan family"),
+    # THE ZIPPER BACKEND'S REFINEMENT LAW (plan.md 2A.4): not an optimiser rewrite but the ∀-certificate the
+    # stage-2 pipeline cells cite -- transpileZ observes the set semantics for every term of the local algebra.
+    # The .smt2 is the first-order shadow over the key-free fragment; proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement
+    # is the full theorem (every constructor, boundaries named), and the .smt2 carries the MECHANIZED-IN marker to it.
+    ("zipper-refinement", "FILE", "zipper_refinement.smt2", "transpileZ ≡ eval over the syntax; Lean: Zippy.Zip.refinement (all constructors)"),
     ("singleton-disq", "FILE", "laws/law_singleton_disq.smt2", "formal.egg (neg ruleset)"),
     ("append-assoc", "FILE", "laws/law_append_assoc.smt2", "path monoid (schema instance)"),
     ("append-inj", "FILE", "laws/law_append_inj.smt2", "lemma: left cancellation (schema instance)"),

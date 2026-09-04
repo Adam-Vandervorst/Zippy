@@ -24,8 +24,13 @@
 (declare-const a Ivl) (declare-const b Ivl)
 (declare-const na Int) (declare-const nb Int) (declare-const nu Int)
 ; DEFINITIONAL: the finite-measure bridge for one length class (cf. proofs/spatial/sp_class_bounds)
+; ASSUMED: T7
 (assert (>= nu 0))
-(assert (>= nu na)) (assert (>= nu nb))
+; ASSUMED: T7
+(assert (>= nu na))
+; ASSUMED: T7
+(assert (>= nu nb))
+; ASSUMED: T7
 (assert (<= nu (+ na nb)))
 (assert (and (oki a) (oki b) (inI na a) (inI nb b) (not (inI nu (ucls a b)))))
 (check-sat)

@@ -113,6 +113,7 @@
 (declare-fun T (NSet) NSet)
 (declare-const arg NSet)                                       ; the initial argument
 (declare-const n Int)
+; PREMISE: n is the stationary index (n ≥ 0)
 (assert (>= n 0))
 
 (declare-fun C (Int) NSet)                                     ; C_k = T^k(arg)
@@ -151,6 +152,7 @@
 (assert (not (=> (<= (+ d0 1) n) (subset (A (- n (+ d0 1))) (A n)))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T8
 (assert (forall ((k Int)) (! (=> (and (>= k 0) (<= k n)) (subset (A k) (A n))) :pattern ((A k)))))
 
 ; =============================================================================
@@ -168,6 +170,7 @@
 (assert (not (=> (<= (+ d1 1) n) (subset (Ev (- n (+ d1 1))) (A n)))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T8
 (assert (forall ((j Int)) (! (=> (and (>= j 0) (<= j n)) (subset (Ev j) (A n))) :pattern ((Ev j)))))
 
 ; =============================================================================
@@ -194,6 +197,7 @@
 (assert (not (subset (Ev (+ j0 1)) (Ev 0))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T8
 (assert (forall ((j Int)) (! (=> (and (>= j 0) (<= j n)) (subset (Ev j) (Ev 0))) :pattern ((Ev j)))))
 ; --- hence every iterate is in Ev(0)...
 (push)
@@ -202,6 +206,7 @@
 (assert (not (subset (C j1) (Ev 0))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T8
 (assert (forall ((j Int)) (! (=> (and (>= j 0) (<= j n)) (subset (C j) (Ev 0))) :pattern ((C j)))))
 ; --- ...and A_k subset= Ev(0) for k <= n, by upward induction on k.
 (push)
@@ -215,6 +220,7 @@
 (assert (not (subset (A (+ k1 1)) (Ev 0))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T8
 (assert (forall ((k Int)) (! (=> (and (>= k 0) (<= k n)) (subset (A k) (Ev 0))) :pattern ((A k)))))
 
 ; =============================================================================

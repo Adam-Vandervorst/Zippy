@@ -19,7 +19,9 @@
 (declare-fun Bd1 (Int Path) Bool)
 (declare-fun Bd2 (Int Path) Bool)
 ; KEYED guard (the ∩/\ conjuncts need it; countermodel exists without it)
+; PREMISE: both bodies are KEYED — every output path starts with the group key (the law's guard, checked by the optimiser before it fires)
 (assert (forall ((hh Int) (p Path)) (=> (Bd1 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
+; PREMISE: both bodies are KEYED — every output path starts with the group key (the law's guard, checked by the optimiser before it fires)
 (assert (forall ((hh Int) (p Path)) (=> (Bd2 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
 (assert (not (and
   (forall ((p Path)) (= (or (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (or (Bd1 hh p) (Bd2 hh p))))))

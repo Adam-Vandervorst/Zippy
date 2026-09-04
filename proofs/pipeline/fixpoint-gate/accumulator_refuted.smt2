@@ -24,14 +24,18 @@
 
 (declare-fun fix_2 (Path) Bool)
 ; FIXPOINT fix_2 — first-class: the LEAST post-fixpoint above init (never unrolled)
+; DERIVED-FROM: proofs/lean/Zippy/Positive.lean#Zippy.Space.fixpoint_is_lfp
 (assert (forall ((zq Path)) (=> (or (= zq (cons 0 nil))) (fix_2 zq))))
+; DERIVED-FROM: proofs/lean/Zippy/Positive.lean#Zippy.Space.fixpoint_is_lfp
 (assert (forall ((zq Path)) (=> (or (exists ((q_3 Path)) (and (= zq (cons 1 q_3)) (and (fix_2 (cons 0 q_3)) (or (= (cons 0 q_3) (cons 0 nil)))))) (exists ((q_4 Path)) (and (= zq (cons 2 q_4)) (and (and (fix_2 (cons 0 q_4)) (or (= (cons 0 q_4) (cons 0 nil)))) (and (fix_2 (cons 1 q_4)) (or (= (cons 1 q_4) (cons 1 nil)))))))) (fix_2 zq))))
 (define-fun s_1 ((p Path)) Bool (fix_2 p))
 (define-fun sideA ((p Path)) Bool (s_1 p))
 (define-fun sideB ((p Path)) Bool (or (= p (cons 0 nil)) (= p (cons 1 nil))))
 ; PARK INDUCTION fix_2 ⊑ sideA — leastness of fix_2; BOTH premises are obligations
+; DERIVED-FROM: proofs/lean/Zippy/Positive.lean#Zippy.Space.fixpoint_is_lfp
 (assert (=> (and (forall ((zr Path)) (=> (or (= zr (cons 0 nil))) (sideA zr))) (forall ((zr Path)) (=> (or (exists ((q_5 Path)) (and (= zr (cons 1 q_5)) (and (sideA (cons 0 q_5)) (or (= (cons 0 q_5) (cons 0 nil)))))) (exists ((q_6 Path)) (and (= zr (cons 2 q_6)) (and (and (sideA (cons 0 q_6)) (or (= (cons 0 q_6) (cons 0 nil)))) (and (sideA (cons 1 q_6)) (or (= (cons 1 q_6) (cons 1 nil)))))))) (sideA zr)))) (forall ((zq Path)) (=> (fix_2 zq) (sideA zq)))))
 ; PARK INDUCTION fix_2 ⊑ sideB — leastness of fix_2; BOTH premises are obligations
+; DERIVED-FROM: proofs/lean/Zippy/Positive.lean#Zippy.Space.fixpoint_is_lfp
 (assert (=> (and (forall ((zr Path)) (=> (or (= zr (cons 0 nil))) (sideB zr))) (forall ((zr Path)) (=> (or (exists ((q_7 Path)) (and (= zr (cons 1 q_7)) (and (sideB (cons 0 q_7)) (or (= (cons 0 q_7) (cons 0 nil)))))) (exists ((q_8 Path)) (and (= zr (cons 2 q_8)) (and (and (sideB (cons 0 q_8)) (or (= (cons 0 q_8) (cons 0 nil)))) (and (sideB (cons 1 q_8)) (or (= (cons 1 q_8) (cons 1 nil)))))))) (sideB zr)))) (forall ((zq Path)) (=> (fix_2 zq) (sideB zq)))))
 (assert (not (forall ((p Path)) (= (sideA p) (sideB p)))))
 (check-sat)

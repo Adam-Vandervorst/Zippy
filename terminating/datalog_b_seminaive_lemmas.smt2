@@ -56,6 +56,7 @@
 (assert (forall ((x Node)) (not (mem x empty))))
 (assert (forall ((x Node)) (mem x top)))
 (assert (= (flag empty) 0))
+; DEFINITION
 (assert (forall ((a NSet)) (=> (distinct a empty) (= (flag a) 1))))
 (assert (forall ((a NSet) (dl NSet)) (= (allp a dl) (cup a (setminus (d dl) a)))))
 (assert (forall ((a NSet) (dl NSet)) (= (deltap a dl) (setminus (d dl) a))))

@@ -2,7 +2,7 @@ gsem_disjoin_sound	unsat	-	PROVED
 gsem_eps_rules	unsat	proved	PROVED
 gsem_ivl_gamma_adjunction	unsat	-	PROVED
 gsem_join_not_lub	unsat	-	PROVED
-gsem_join_union_sound	unsat	-	PROVED
+gsem_join_union_sound	unsat	-	PROVED-MODULO T7
 gsem_l1_headcount_rules	unsat	proved	PROVED
 gsem_l1_restrict_openkeys_unsound	unsat	proved	PROVED
 gsem_l1_restrict_sound	unsat	proved	PROVED

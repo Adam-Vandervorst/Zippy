@@ -20,8 +20,10 @@
 (declare-fun cU (Int) Int)
 (declare-fun cI (Int) Int)
 (declare-fun cD (Int) Int)
+; ASSUMED: T7
 (assert (forall ((l Int)) (and (>= (cA l) 0) (>= (cB l) 0) (>= (cU l) 0) (>= (cI l) 0) (>= (cD l) 0))))
 (assert (forall ((l Int)) (= (cU l) (- (+ (cA l) (cB l)) (cI l)))))        ; inclusion–exclusion
+; ASSUMED: T7
 (assert (forall ((l Int)) (and (<= (cI l) (cA l)) (<= (cI l) (cB l)))))    ; meet ⊆ both
 (assert (forall ((l Int)) (= (cD l) (- (cA l) (cI l)))))                   ; x∖y = x minus the meet
 (assert (not (forall ((l Int))

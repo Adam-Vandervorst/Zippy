@@ -27,6 +27,9 @@ object ZipperEgg:
 
   /** A (possibly virtual) [[SpaceZipper]] as an egg `Z` term — the structural transpilation. */
   def eggOf(z: SpaceZipper): String = z match
+    case SpaceZipper.Opaque(m) =>
+      throw IllegalStateException(s"ZipperEgg.eggOf: opaque source `${m.s}` has no egg rendering — it is a name; render the shell with spaceOfZipper instead")
+    case SpaceZipper.Descend(src, ks) => eggOf(ks.foldLeft(src)((z, k) => z.descend(k)))
     case SpaceZipper.Lit(t)               => eggOfTrie(t)
     case SpaceZipper.Union(a, b)          => s"(Union ${eggOf(a)} ${eggOf(b)})"
     case SpaceZipper.Intersection(a, b)   => s"(Intersection ${eggOf(a)} ${eggOf(b)})"
@@ -53,6 +56,9 @@ object ZipperEgg:
   /** A (virtual) [[SpaceZipper]] as an implementation-model `Tr` EXPRESSION — `TrU`/`TrI`/`TrS`/`TrC`/
    *  `TrR`/`TrW`/`TrTU`/`TrTI` — which egglog reduces by the modelled recursion to a canonical `Node`. */
   def implOf(z: SpaceZipper): String = z match
+    case SpaceZipper.Opaque(m) =>
+      throw IllegalStateException(s"ZipperEgg.implOf: opaque source `${m.s}` has no egg rendering — it is a name; render the shell with spaceOfZipper instead")
+    case SpaceZipper.Descend(src, ks) => implOf(ks.foldLeft(src)((z, k) => z.descend(k)))
     case SpaceZipper.Lit(t)               => trOfITrie(t)
     case SpaceZipper.Union(a, b)          => s"(TrU ${implOf(a)} ${implOf(b)})"
     case SpaceZipper.Intersection(a, b)   => s"(TrI ${implOf(a)} ${implOf(b)})"
@@ -79,6 +85,9 @@ object ZipperEgg:
 
   /** Every interned item key occurring anywhere in a zipper — the program's vocabulary. */
   def keysOf(z: SpaceZipper): Set[Int] = z match
+    case SpaceZipper.Opaque(m) =>
+      throw IllegalStateException(s"ZipperEgg.keysOf: opaque source `${m.s}` has no egg rendering — it is a name; render the shell with spaceOfZipper instead")
+    case SpaceZipper.Descend(src, ks) => keysOf(ks.foldLeft(src)((z, k) => z.descend(k)))
     case SpaceZipper.Lit(t)               => trieKeys(t)
     case SpaceZipper.Union(a, b)          => keysOf(a) ++ keysOf(b)
     case SpaceZipper.Intersection(a, b)   => keysOf(a) ++ keysOf(b)

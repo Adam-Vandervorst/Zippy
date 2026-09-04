@@ -1,3 +1,7 @@
-; AUTO-GENERATED pipeline space (gol) — DATA-AGNOSTIC.
-; TRIVIAL-NO-OBLIGATION: sides are syntactically identical after alpha-normalisation —
-; the transformation is structure-preserving here; nothing to prove.
+; TRUSTS: -
+
+; BOUNDARY: space
+; AUTO-GENERATED pipeline stage 1 (gol) — DATA-AGNOSTIC.
+; TRIVIAL-NO-OBLIGATION: SC.reduce is the IDENTITY on this program — no source law fires
+; (SC.reduceTraced recorded 0 steps) and the sides are alpha-equal; nothing to prove.  This
+; is a statement about the optimiser on this stone, not a certificate of anything it did.

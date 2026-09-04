@@ -147,6 +147,12 @@ MARKERS=$(find proofs terminating -type f \
             -not -path 'proofs/lean/*' -print0 2>/dev/null \
           | xargs -0 grep -hoE '^[[:space:]]*[;%][[:space:]]*MECHANIZED-IN:[[:space:]]*[^[:space:]`<>|]+#[^[:space:]`<>|]+' 2>/dev/null \
           | sed 's|.*MECHANIZED-IN:[[:space:]]*||' | sort -u)
+# ENTRY-LEVEL MARKERS (2E.6): docs/TRUSTED.md names, per entry, the Lean theorem that IS the entry's
+# schema, on a line of its own beginning `MECHANIZED-IN:` (no comment sigil -- it is markdown).
+# `scripts/proof_closure.py` lifts every row reaching that entry when the theorem is witnessed here.
+ENTRY_MARKERS=$(grep -hoE '^MECHANIZED-IN:[[:space:]]*[^[:space:]`<>|]+#[^[:space:]`<>|]+' docs/TRUSTED.md 2>/dev/null \
+                | sed 's|^MECHANIZED-IN:[[:space:]]*||' | sort -u)
+MARKERS=$(printf '%s\n%s\n' "$MARKERS" "$ENTRY_MARKERS" | grep -v '^$' | sort -u)
 if [ -z "$MARKERS" ]; then
   echo "  none yet (plan.md 1E.3 attaches the first ones; 0.5 only makes the marker MEAN something)."
   echo "  The marker Zippy/Pointwise.lean documents is checked below as the self-test."
@@ -232,23 +238,54 @@ fi
 # name is not one of Lean's four.
 echo
 echo "LEAN: axiom audit over every theorem in the package"
-THMS=$(grep -hoE '^(@\[[a-z, ]*\] )?(theorem|lemma) [A-Za-z_][A-Za-z0-9_'"'"']*' "$LEAN_DIR"/Zippy/*.lean \
-       | sed -E 's/^.*(theorem|lemma) //' | sort -u)
-NTHM=$(printf '%s\n' "$THMS" | grep -c . || true)
-[ "$NTHM" -gt 0 ] || fail "no theorems found in proofs/lean/Zippy — the audit would be vacuous"
-{
-  echo "import Zippy"
-  for t in $THMS; do echo "#print axioms Zippy.$t"; done
-} > "$LEAN_DIR/.axioms_probe.lean"
+# THE LIST COMES FROM THE ELABORATED ENVIRONMENT, NOT FROM A GREP OVER THE SOURCE.  A previous
+# revision derived it with `grep '^theorem NAME'` and prefixed `Zippy.`; measured (2026-09-04), 22 of
+# its 56 names did not resolve: a doc-comment line beginning with the word "theorem", the dotted
+# `Space.unwrap_wrap` truncated at the dot, and every theorem in the `Zippy.Kleene` / `Zippy.Counting`
+# namespaces probed under the wrong prefix.  A `#print axioms` on a name that does not exist is an
+# `unknown constant`, so the audit could not pass -- and an audit that cannot pass is not gating.
+# `run_cmd` below walks the environment for every THEOREM whose name is under `Zippy`, so a new
+# theorem in a new namespace is audited the moment it elaborates, with the name Lean gave it.
+cat > "$LEAN_DIR/.axioms_probe.lean" <<'PROBE'
+import Zippy
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  let mut names : Array Name := #[]
+  for (n, ci) in env.constants.toList do
+    -- skip the equation lemmas Lean generates for every definition (`f.eq_1`, `f.eq_def`): they
+    -- are not theorems anyone wrote, and their axioms are those of `f`'s own well-founded/structural
+    -- recursion compilation, which the audit of `f`'s consumers already sees.
+    let isEqn := match n with
+      | .str _ s => s.startsWith "eq_"
+      | _ => false
+    if (`Zippy).isPrefixOf n && !n.isInternal && !isEqn then
+      match ci with
+      | .thmInfo _ => names := names.push n
+      | _ => pure ()
+  let sorted := names.qsort (fun a b => a.toString < b.toString)
+  for n in sorted do
+    let axs ← collectAxioms n
+    let axsSorted := axs.qsort (fun a b => a.toString < b.toString)
+    if axsSorted.isEmpty then
+      IO.println s!"AXIOMS {n} : (none)"
+    else
+      IO.println s!"AXIOMS {n} : {String.intercalate ", " (axsSorted.toList.map toString)}"
+PROBE
 AXOUT=$( (cd "$LEAN_DIR" && "$LAKE_BIN" env lean .axioms_probe.lean) 2>&1 )
 rm -f "$LEAN_DIR/.axioms_probe.lean"
+AXLINES=$(printf '%s\n' "$AXOUT" | grep '^AXIOMS ' || true)
+NTHM=$(printf '%s\n' "$AXLINES" | grep -c . || true)
+[ "$NTHM" -gt 0 ] || { printf '%s\n' "$AXOUT" | head -20 | sed 's/^/    /';
+                       fail "the axiom audit enumerated no theorem under \`Zippy\` -- the probe did not run"; }
 # Every axiom name the audit saw, deduplicated.
-SEEN=$(printf '%s\n' "$AXOUT" | sed -n "s/.*depends on axioms: \[\(.*\)\]/\1/p" \
+SEEN=$(printf '%s\n' "$AXLINES" | sed -n 's/^AXIOMS [^:]*: //p' | grep -v '^(none)$' \
        | tr ',' '\n' | sed 's/^ *//; s/ *$//' | grep -v '^$' | sort -u)
-printf '%s\n' "$AXOUT" | grep -cE "does not depend on any axioms" > /dev/null 2>&1 || true
-NAXFREE=$(printf '%s\n' "$AXOUT" | grep -c "does not depend on any axioms" || true)
+NAXFREE=$(printf '%s\n' "$AXLINES" | grep -c ': (none)$' || true)
 echo "  $NTHM theorem(s) audited; $NAXFREE depend on NO axiom at all"
 echo "  axioms used across the package: $(printf '%s\n' "$SEEN" | tr '\n' ' ')"
+# The per-theorem list, which is what 2E.6's gate sentence asks this script to print.
+printf '%s\n' "$AXLINES" | sed 's/^AXIOMS /    /'
 if printf '%s\n' "$SEEN" | grep -q 'sorryAx'; then
   printf '%s\n' "$AXOUT" | grep -B0 'sorryAx' | head -10 | sed 's/^/    /'
   fail "a theorem depends on \`sorryAx\`: it compiles and proves nothing."
@@ -261,10 +298,9 @@ if [ -n "$UNEXPECTED" ]; then
   of every PROVED claim to be exactly Lean's; an extra axiom here is a trusted assumption with no
   entry in docs/TRUSTED.md."
 fi
-if printf '%s\n' "$AXOUT" | grep -q "unknown constant"; then
-  printf '%s\n' "$AXOUT" | grep "unknown constant" | head -5 | sed 's/^/    /'
-  fail "the audit could not resolve a theorem name it read from the source.  The name derivation
-  (namespace + declaration) has drifted from how the files are written."
+if printf '%s\n' "$AXOUT" | grep -qE "^[^ ]*\.lean:[0-9]+:[0-9]+: error"; then
+  printf '%s\n' "$AXOUT" | grep -E ": error" | head -5 | sed 's/^/    /'
+  fail "the axiom-audit probe itself failed to elaborate; see the errors above."
 fi
 
 echo

@@ -103,7 +103,54 @@ TRUSTED = {
                what="Range is outside the certified pointwise algebra"),
     "T6": dict(axiom=None, corpus="unbounded", what="grounded functions are deterministic"),
     "T7": dict(axiom="_card.p", what="the counting axioms (4 counting + injective-image + pfxmap)"),
+    # 2E.4: the SMT tiers' bridging induction over the chain index (`; ASSUMED: T8` markers)
+    "T8": dict(axiom=None, what="induction over the natural-number chain index, asserted after base and step"),
 }
+
+# ---------------------------------------------------------------------------------------------
+# ENTRY-LEVEL MECHANIZATION (plan.md 2E.6).  docs/TRUSTED.md may carry, inside an entry's section,
+#     MECHANIZED-IN: proofs/lean/Zippy/<File>.lean#<Theorem>
+# naming the Lean theorem that IS that entry's schema (T1's `path_induction` is the schema for every
+# predicate, not one conclusion).  When `scripts/check_lean.sh` has witnessed every such theorem as
+# built and sorry-free, the entry is discharged for EVERY row that reaches it -- through an include,
+# through a `; ASSUMED:` marker, or through a `rows` declaration -- which is what lets the 115 SMT
+# obligations that assert the datatype-induction schema stop being conditional at once, instead of
+# needing 115 per-file markers pointing at one theorem.
+# ---------------------------------------------------------------------------------------------
+ENTRY_MECH = re.compile(r"^MECHANIZED-IN:\s*([^\s`<>|]+)#([^\s`<>|]+)", re.M)
+
+
+def entry_mechanizations():
+    """{T -> [marker...]} from docs/TRUSTED.md's per-entry MECHANIZED-IN lines"""
+    text = (ROOT / "docs/TRUSTED.md").read_text()
+    out = {}
+    cur = None
+    for line in text.splitlines():
+        m = re.match(r"^## (T\d+)\.", line)
+        if m:
+            cur = m.group(1); continue
+        m = ENTRY_MECH.match(line)
+        if m and cur:
+            out.setdefault(cur, []).append(f"{m.group(1)}#{m.group(2)}")
+    return out
+
+
+ASSERT_CLOSURE = ROOT / "target" / "assert-closure.tsv"
+
+
+def read_assert_closure():
+    """{repo-relative .smt2 path -> set of T ids} written by scripts/check_asserts.py (2E.4); an
+    absent table is an EMPTY mapping, and `--check` reports it, because with it absent an SMT row's
+    dependencies are invisible again."""
+    out = {}
+    if not ASSERT_CLOSURE.is_file():
+        return None
+    for line in ASSERT_CLOSURE.read_text().splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        f, ts = line.split("\t")
+        out[f] = set() if ts.strip() == "-" else set(ts.split(","))
+    return out
 
 # THE MARKER THAT MAKES docs/TRUSTED.md's COMPLETENESS CLAIM CHECKABLE.  An axiom file that declares
 # an `% ASSUMED` block is asserting something the corpus does not derive, and that is exactly what a
@@ -140,6 +187,7 @@ TRUSTED_ENTRY = re.compile(r"^%\s*TRUSTED-ENTRY:\s*(T\d+)", re.M)
 # `<file>#<thm>` inside a markdown row, and a scan without those exclusions failed the Lean
 # gate on a marker nobody had written.
 MECHANIZED_IN = re.compile(r"^\s*[%;]\s*MECHANIZED-IN:\s*([^\s`<>|]+)#([^\s`<>|]+)", re.M)
+TRUSTS_RE = re.compile(r"^\s*[;%]\s*TRUSTS:\s*(.*)$", re.M)
 LEAN_WITNESS = ROOT / "target" / "lean-mechanized.tsv"
 
 
@@ -288,6 +336,28 @@ def classify(status_file: pathlib.Path, corpus: str, kind: str = "tptp"):
                 mech_for.setdefault(k, []).extend(markers)
         names = {c.name for c in cl}
         reached = sorted(k for k, v in TRUSTED.items() if v["axiom"] and v["axiom"] in names)
+        # `; TRUSTS:` (0.8 / 2E.5): an emitted artifact declares what its claim rests on.  T entries
+        # join `reached`; open rows and outside constructs are gaps, reported in the verdict as
+        # `PROVED-MODULO O6a` / `PROVED-MODULO outside:Range` (the emitter's `Certified.qualify`
+        # already writes them that way; this is the reader's side of the same contract).
+        gaps = []
+        if kind != "tptp" and p.is_file():
+            mt = TRUSTS_RE.search(p.read_text())
+            if mt:
+                for tok in [t.strip() for t in mt.group(1).split(",") if t.strip() and t.strip() != "-"]:
+                    if re.fullmatch(r"T\d+", tok):
+                        reached = sorted(set(reached) | {tok})
+                    elif re.fullmatch(r"O\d+[a-z]?|outside:[A-Za-z0-9_-]+", tok):
+                        gaps.append(tok)
+        # THE ASSERT-LEVEL CLOSURE (2E.4): for an SMT obligation, the trusted entries its own
+        # `; ASSUMED:` markers name, transitively through its `; DERIVED-FROM:` edges, as computed
+        # by scripts/check_asserts.py.  This is the SMT twin of the include closure above.
+        if kind != "tptp":
+            ac = read_assert_closure()
+            if ac is not None:
+                rel = str(p.resolve().relative_to(ROOT)) if p.is_file() else None
+                if rel in ac:
+                    reached = sorted(set(reached) | ac[rel])
         # the DIRECT, file-scoped entries: a trusted principle asserted inside this very obligation
         direct = sorted(k for k, v in TRUSTED.items()
                         if name in v.get("rows", ()) or name.removesuffix(".smt2") in v.get("rows", ()))
@@ -296,9 +366,11 @@ def classify(status_file: pathlib.Path, corpus: str, kind: str = "tptp"):
         # it is WITNESSED as built and sorry-free by `scripts/check_lean.sh`.  With no witness (the
         # Lean gate was not run on this machine) nothing is dropped.
         witness = read_lean_witness()
+        entry_mech = entry_mechanizations()
         lifted, mechanized, claimed = [], [], []
         for k in sorted(set(reached)):
-            ms = sorted(set(mech_for.get(k, ())))
+            # per-file markers first; then the entry-level theorem docs/TRUSTED.md names
+            ms = sorted(set(mech_for.get(k, ())) | set(entry_mech.get(k, ())))
             if not ms:
                 continue
             claimed += [f"{k} via {m}" for m in ms]
@@ -307,12 +379,29 @@ def classify(status_file: pathlib.Path, corpus: str, kind: str = "tptp"):
                 mechanized += ms
         reached = sorted(set(reached) - set(lifted))
         mechanized = sorted(set(mechanized))
-        rows.append(dict(name=name, verdict=verdict, negative=negative, reached=reached,
+        rows.append(dict(name=name, verdict=verdict, negative=negative, reached=reached, gaps=sorted(set(gaps)),
                          corpus=corpus_wide, deps=len(cl), missing=sorted(missing),
                          fragile=sorted(fragile), reasserted=sorted(reasserted),
                          exists=p.is_file(), mechanized=mechanized, lifted=sorted(lifted),
                          mech_claimed=sorted(set(claimed)), orphan_mech=sorted(set(orphan_mech))))
     return rows
+
+
+# TABLES WRITTEN BY A TEST SUITE, NOT BY A PROVER DRIVER.  `EquivPipelineTest` and `FixpointSemantics`
+# write their tables through `ArtifactSink` and VERIFY them on every run, so a verdict this script
+# rewrote would be reported as a stale artifact by the next test run.  For these, `--annotate` leaves
+# the file alone and `--check` accepts a plain `PROVED` wherever the closure's own verdict is a pure
+# lift (`PROVED (MECHANIZED … discharges …)` with nothing left assumed): an unqualified PROVED is
+# exactly what a fully discharged closure entitles, and the emitter writes any REMAINING qualification
+# itself (`Certified.qualify`, from the artifact's `; TRUSTS:` header).
+TEST_OWNED = {ROOT / "proofs/pipeline/STATUS.tsv", ROOT / "proofs/pipeline/fixpoint-gate/STATUS.tsv"}
+
+
+def compatible(reported, want):
+    """is the reported verdict acceptable for what the closure says?"""
+    if want is None or reported == want:
+        return True
+    return reported == "PROVED" and want.startswith("PROVED (MECHANIZED")
 
 
 def want_verdict(r):
@@ -334,7 +423,12 @@ def want_verdict(r):
     what stopped being assumed and by what."""
     if not r or r["negative"]:
         return None
-    reached = r["reached"]
+    # a marker row (TRIVIAL / IDENTICAL-STRUCTURE / LAW-JUSTIFIED / OPEN …) is not a prover verdict;
+    # what it rests on is in its `; TRUSTS:` header and `audit_pipeline_markers.py --accept` holds it
+    # to its CLAIMS.tsv row.  Only a PROVED is a claim this closure qualifies.
+    if not str(r["verdict"]).startswith("PROVED"):
+        return None
+    reached = list(r["reached"]) + list(r.get("gaps") or [])
     mech = r.get("mechanized") or []
     lifted = r.get("lifted") or []
     if reached:
@@ -368,6 +462,9 @@ def annotate():
     # touched, and the rewrite only ever weakens a verdict.
     for status, corpus, kind in STATUS_TABLES:
         if not status.is_file():
+            continue
+        if status in TEST_OWNED:
+            print(f"left alone: {status.relative_to(ROOT)} is written by a test suite (see TEST_OWNED)")
             continue
         rows = classify(status, corpus, kind)
         by_name = {r["name"]: r for r in rows}
@@ -457,13 +554,16 @@ def main():
         print(f"\n{status.relative_to(ROOT)}  [{kind}]  --  {len(rows)} reported, "
               f"{len(pos)} positive claims, {len(rows) - len(pos)} negative controls")
         if kind != "tptp":
-            print("  include-closure does NOT apply: an SMT obligation carries its axioms inline, so "
-                  "dependency here is not inclusion.  Classified by the DECLARED trusted entries "
-                  "that apply to this corpus; verdicts are NOT rewritten from here.")
-            print("  SO THIS TABLE'S COVERAGE IS WEAKER, and saying which way matters: a row is "
-                  "flagged when a trusted entry NAMES it, and a dependency that is neither named "
-                  "nor an include is invisible here.  Closing that needs an assert-level analysis "
-                  "of the SMT obligations, which this script does not attempt.")
+            if read_assert_closure() is None:
+                print("  ASSERT-LEVEL CLOSURE UNAVAILABLE: target/assert-closure.tsv is absent, so this "
+                      "table's SMT rows are classified only by the DECLARED entries that name them.  "
+                      "Run scripts/check_asserts.py first (scripts/gates.py orders it before this).")
+                if a.check:
+                    problems.append(f"{status.relative_to(ROOT)}: assert-level closure table missing "
+                                    "(scripts/check_asserts.py has not run), so SMT dependencies are invisible")
+            else:
+                print("  assert-level closure applied: every `; ASSUMED:` marker in each obligation, "
+                      "transitively through its `; DERIVED-FROM:` edges (scripts/check_asserts.py, 2E.4).")
         print(f"  corpus-wide trusted entries for `{corpus}`: "
               f"{', '.join(rows[0]['corpus']) if rows else '-'}  "
               "(declared for the tier, not reachable through any include)")
@@ -480,7 +580,7 @@ def main():
                 problems.append(f"{r['name']}: reported as unqualified PROVED, but {why} "
                                 f"{', '.join(r['reached'])} -- it is CONDITIONAL. "
                                 f"`--annotate` rewrites it to `{want}`.")
-            elif r["verdict"] != want:
+            elif not compatible(r["verdict"], want):
                 problems.append(f"{r['name']}: reported as `{r['verdict']}` but its closure says "
                                 f"`{want}`")
         # --- the Lean lifts, and the markers that could not be honoured (plan.md 0.5) ------------
@@ -530,7 +630,7 @@ def main():
                 thm = m.rsplit(" ", 1)[-1].removesuffix(".p")
                 v = verdicts.get(thm)
                 if v is None:
-                    problems.append(f"{m}: `{thm}` is not in {status_file.name}, so the "
+                    problems.append(f"{m}: `{thm}` is not in {status.name}, so the "
                                     "re-assertion rests on nothing this corpus reports")
                 elif not v.startswith("PROVED"):
                     problems.append(f"{m}: `{thm}` is reported `{v}`, so the re-asserted clause is "

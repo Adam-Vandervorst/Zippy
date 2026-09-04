@@ -110,6 +110,7 @@
 ; are the singletons; nothing below assumes the universe is EXACTLY these three.
 (declare-const ea Node) (declare-const eb Node) (declare-const ec Node)
 (declare-const sa NSet) (declare-const sb NSet) (declare-const sc NSet)
+; PREMISE: three distinct nodes (the counterexample's universe)
 (assert (distinct ea eb ec))
 (assert (forall ((x Node)) (= (mem x sa) (= x ea))))
 (assert (forall ((x Node)) (= (mem x sb) (= x eb))))
@@ -158,6 +159,7 @@
 (declare-fun H (NSet) NSet)
 (assert (forall ((x NSet)) (! (= (mem eb (H x)) (mem ea x)) :pattern ((H x)))))
 (assert (forall ((x NSet)) (! (= (mem ec (H x)) (and (mem ea x) (mem eb x))) :pattern ((H x)))))
+; DEFINITION
 (assert (forall ((x NSet) (y Node)) (! (=> (mem y (H x)) (or (= y eb) (= y ec))) :pattern ((mem y (H x))))))
 (define-fun cyU2 () NSet (cup (cup sa (H sa)) (H (H sa))))
 (define-fun cyA1 () NSet (cup sa (H sa)))
@@ -193,8 +195,10 @@
 
 (declare-fun F (NSet) NSet)
 (declare-const init NSet)
+; PREMISE: F is monotone (O3d)
 (assert (forall ((x NSet) (y NSet)) (!
   (=> (subset x y) (subset (F x) (F y))) :pattern ((F x) (F y)))))            ; MONOTONE
+; PREMISE: init ⊆ F(init)
 (assert (subset init (F init)))                                               ; INFLATIONARY AT I
 
 (declare-fun C (Int) NSet)          ; Kleene iterate      `cur` in the executors
@@ -219,6 +223,7 @@
 (assert (not (subset (C (+ k0 1)) (C (+ k0 2)))))
 (check-sat) ; expect unsat
 (pop)
+; ASSUMED: T8
 (assert (forall ((n Int)) (! (=> (>= n 0) (subset (C n) (C (+ n 1)))) :pattern ((C (+ n 1))))))
 
 ; --- U_k = C_k (base, step, bridge): the accumulator collapses on an ascending

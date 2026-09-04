@@ -77,11 +77,35 @@ object Certified:
     def parse(tok: String): Option[Trust] =
       val t = tok.trim
       if t.isEmpty || t == "-" then None
+      // `law:*` — ANY law of proofs/laws/REGISTRY.tsv — is the DECLARATION-side wildcard
+      // (proofs/pipeline/CLAIMS.tsv permits it; an emitted artifact must name its laws, and
+      // `scripts/audit_pipeline_markers.py --accept` rejects `*` in an artifact header).
       else if t.startsWith("law:") then Some(Law(t.stripPrefix("law:")))
       else if t.startsWith("outside:") then Some(Outside(t.stripPrefix("outside:")))
       else if t.matches("T\\d+") then Some(Base(t))
       else if t.matches("O\\d+[a-z]?") then Some(Open(t))
       else None
+
+  /** 2E.5 — THE API ENFORCEMENT.  A claim is FULLY PROVED only if it trusts nothing that is a gap: an
+   *  `Open` row or an `Outside` construct in its `; TRUSTS:` list makes the claim conditional, and the
+   *  emitter must say so in the status it writes.  `qualify` is what every status-row writer calls:
+   *  it returns the verdict unchanged when the trusts are all `Base`/`Law` (assumptions and certified
+   *  laws qualify nothing here — `proof_closure.py` reports T-entries; a law is a proof), and
+   *  `PROVED-MODULO <ids>` otherwise.  A term outside the certified language therefore cannot enter
+   *  an unqualified `PROVED`: the only way to write one is through this function, and this function
+   *  refuses to. */
+  def qualify(verdict: String, trusts: Vector[Trust]): String =
+    val gaps = trusts.collect { case Trust.Open(id) => id; case Trust.Outside(r) => s"outside:$r" }.distinct.sorted
+    if gaps.isEmpty || !verdict.startsWith("PROVED") then verdict
+    else s"PROVED-MODULO ${gaps.mkString(",")}"
+
+  /** the trusts an artifact's header declares, or a failure — a missing or malformed header is never
+   *  read as "trusts nothing" (see [[readTrusts]]).  Emitters call this before writing a status row. */
+  def trustsOf(artifact: String, name: String): Vector[Trust] =
+    readTrusts(artifact) match
+      case Right(ts) => ts
+      case Left(err) => throw IllegalStateException(s"$name: no readable `; TRUSTS:` header — $err.  Every " +
+        "emitted artifact must declare what its claim rests on (docs/TRUSTED.md); `-` means nothing.")
 
   /** ------------------------------------------------------------------------------------------------
    *  THE HEADER LINE.
@@ -185,7 +209,13 @@ object Certified:
       case Space.Fold(src, ini, _, _, _, t, u) => go(src); gp(ini); go(t); gp(u)
       case Space.Range(a, _, _) => out += Trust.Base("T5"); go(a)
       case Space.Call(_, refs, ms) => out += Trust.Open("O6a"); refs.foreach(gp); ms.foreach(go)
-      case Space.Fixpoint(i, _, b) => out += Trust.Open("O10b"); go(i); go(b)
+      // 2E.1 (proofs/lean/Zippy/Positive.lean): a `Fixpoint` whose body is positive in its recursion
+      // variable denotes the least post-fixpoint — INSIDE the certified algebra, nothing to trust.  A
+      // body that is NOT positive is outside it (the renderers refuse it: `AgSmt.fixSym`), and that
+      // is what is reported, by the construct that put it there.
+      case Space.Fixpoint(i, rec, b) =>
+        if !AgnosticPipeline.monotoneInMention(b, rec) then out += Trust.Outside("Fixpoint")
+        go(i); go(b)
       case Space.GroundedPS(q, _) => out += Trust.Base("T6"); gp(q)
       case Space.GroundedSS(q, _) => out += Trust.Base("T6"); go(q)
     go(s)

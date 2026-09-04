@@ -135,7 +135,8 @@ class CertifiedFormatCheck extends FunSuite:
     // outside, each with the entry docs/TRUSTED.md names for it
     ("Range",              Space.Range(L, 0, 1), Set("T5")),
     ("Call",               Space.Call(RoutinePtr("f"), Vector(K), Vector(L)), Set("O6a")),
-    ("Fixpoint",           Space.Fixpoint(L, SpaceMention("rec"), L), Set("O10b")),
+    // 2E.1: a POSITIVE body is inside the algebra (Positive.lean#fixpoint_is_lfp); nothing to trust
+    ("Fixpoint",           Space.Fixpoint(L, SpaceMention("rec"), L), Set()),
     ("GroundedPS",         Space.GroundedPS(K, (_: PathValue) => SpaceValue(Set(p("g")))), Set("T6")),
     ("GroundedSS",         Space.GroundedSS(L, (v: SpaceValue) => v), Set("T6")),
   )
@@ -165,12 +166,21 @@ class CertifiedFormatCheck extends FunSuite:
     assertEquals(boundary(bad).map(_.render).toSet, Set("T5", "O6a"),
       "boundary did not accumulate both reasons; a term can leave the algebra more than once")
     // buried arbitrarily deep, and under every binder
+    // a fixpoint whose body is NOT positive in its recursion variable (the variable under a
+    // complement) is outside the algebra — and it is reported from under every binder
+    val nonPositive = Space.Fixpoint(L, SpaceMention("z"), Space.Subtraction(L, Space.Mention(SpaceMention("z"))))
     val deep = Space.Iteration(L, PathRef("y"), SpaceMention("r"),
                  Space.Fold(L, K, PathRef("a"), PathRef("v"), SpaceMention("q"),
+                   Space.Wrap(Space.TailsUnion(nonPositive), K), K))
+    assertEquals(boundary(deep).map(_.render).toSet, Set("outside:Fixpoint"),
+      "boundary does not descend through binders and containers — a non-positive `Fixpoint` buried " +
+      "under an Iteration/Fold/Wrap/TailsUnion nest went unreported")
+    // and the SAME nest around a positive fixpoint reports nothing: 2E.1 moved it inside
+    val deepOk = Space.Iteration(L, PathRef("y"), SpaceMention("r"),
+                 Space.Fold(L, K, PathRef("a"), PathRef("v"), SpaceMention("q"),
                    Space.Wrap(Space.TailsUnion(Space.Fixpoint(L, SpaceMention("z"), L)), K), K))
-    assertEquals(boundary(deep).map(_.render).toSet, Set("O10b"),
-      "boundary does not descend through binders and containers — a `Fixpoint` buried under an " +
-      "Iteration/Fold/Wrap/TailsUnion nest went unreported")
+    assertEquals(boundary(deepOk).map(_.render).toSet, Set(),
+      "a positive Fixpoint is inside the certified algebra since Positive.lean; nothing to trust")
   }
 
   test("3''. this suite covers EVERY Space and Path constructor MORKL.scala declares") {
