@@ -1,0 +1,58 @@
+# SELECTION CERTIFICATE (tasks.md B2) — a pure function of the C rows and the objective; replay:
+# scripts/check_selection.py (independent), morkl.Pareto.replay (in-process).
+# objective	work
+# priority	work,alloc,rounds,touch
+# dominance	work,alloc,rounds,touch
+# constraints	-
+# backends	reference,trie,graph,zipper
+# tie-rule	lexicographic (hi, lo) over the priority components, then alternative id, then backend order reference,trie,graph,zipper
+# reference-touch	modelled, no counted oracle: taken as [0, inf]; not compared between two reference candidates
+# columns	C	alt	backend	work.lo	work.hi	alloc.lo	alloc.hi	rounds.lo	rounds.hi	touch.lo	touch.hi	certified	closure
+C	03e8a942917d5ed6	reference	180	500	150	150	12	12	0	inf	CERTIFIED	CLOSED
+C	03e8a942917d5ed6	trie	344	inf	360	inf	12	12	165	inf	CERTIFIED	CLOSED
+C	03e8a942917d5ed6	graph	367	inf	318	inf	12	12	171	inf	CERTIFIED	CLOSED
+C	03e8a942917d5ed6	zipper	345	inf	360	inf	12	12	165	inf	CERTIFIED	CLOSED
+C	1428a274ae846ccc	reference	159	749	130	130	23	23	0	inf	CERTIFIED	CLOSED
+C	1428a274ae846ccc	trie	192	inf	178	inf	23	23	124	inf	CERTIFIED	CLOSED
+C	1428a274ae846ccc	graph	234	inf	122	inf	23	23	134	inf	CERTIFIED	CLOSED
+C	1428a274ae846ccc	zipper	193	inf	178	inf	23	23	124	inf	CERTIFIED	CLOSED
+C	18fc06d9e7717b76	reference	177	497	180	180	21	21	0	inf	CERTIFIED	CLOSED
+C	18fc06d9e7717b76	trie	361	inf	384	inf	21	21	156	inf	CERTIFIED	CLOSED
+C	18fc06d9e7717b76	graph	382	inf	316	inf	21	21	173	inf	CERTIFIED	CLOSED
+C	18fc06d9e7717b76	zipper	362	inf	384	inf	21	21	156	inf	CERTIFIED	CLOSED
+C	2326e96cb570cfce	reference	160	750	130	130	22	22	0	inf	CERTIFIED	CLOSED
+C	2326e96cb570cfce	trie	193	inf	180	inf	22	22	140	inf	CERTIFIED	CLOSED
+C	2326e96cb570cfce	graph	232	inf	123	inf	22	22	150	inf	CERTIFIED	CLOSED
+C	2326e96cb570cfce	zipper	194	inf	180	inf	22	22	140	inf	CERTIFIED	CLOSED
+C	308810763cfa41a7	reference	177	497	150	150	11	11	0	inf	CERTIFIED	CLOSED
+C	308810763cfa41a7	trie	341	inf	360	inf	11	11	165	inf	CERTIFIED	CLOSED
+C	308810763cfa41a7	graph	361	inf	317	inf	11	11	171	inf	CERTIFIED	CLOSED
+C	308810763cfa41a7	zipper	342	inf	360	inf	11	11	165	inf	CERTIFIED	CLOSED
+C	3e2bb366a7943491	reference	176	496	180	180	20	20	0	inf	CERTIFIED	CLOSED
+C	3e2bb366a7943491	trie	360	inf	385	inf	20	20	164	inf	CERTIFIED	CLOSED
+C	3e2bb366a7943491	graph	378	inf	316	inf	20	20	181	inf	CERTIFIED	CLOSED
+C	3e2bb366a7943491	zipper	361	inf	385	inf	20	20	164	inf	CERTIFIED	CLOSED
+S	3e2bb366a7943491	reference	ranked first by the tie rule among 24 incomparable survivors
+K	03e8a942917d5ed6	reference	INCOMPARABLE with the selected: overlaps on work,touch
+K	03e8a942917d5ed6	trie	INCOMPARABLE with the selected: overlaps on work,touch
+K	03e8a942917d5ed6	graph	INCOMPARABLE with the selected: overlaps on work,touch
+K	03e8a942917d5ed6	zipper	INCOMPARABLE with the selected: overlaps on work,touch
+K	1428a274ae846ccc	reference	INCOMPARABLE with the selected: overlaps on work,touch
+K	1428a274ae846ccc	trie	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	1428a274ae846ccc	graph	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	1428a274ae846ccc	zipper	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	18fc06d9e7717b76	reference	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	18fc06d9e7717b76	trie	INCOMPARABLE with the selected: overlaps on work,touch
+K	18fc06d9e7717b76	graph	INCOMPARABLE with the selected: overlaps on work,touch
+K	18fc06d9e7717b76	zipper	INCOMPARABLE with the selected: overlaps on work,touch
+K	2326e96cb570cfce	reference	INCOMPARABLE with the selected: overlaps on work,touch
+K	2326e96cb570cfce	trie	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	2326e96cb570cfce	graph	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	2326e96cb570cfce	zipper	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	308810763cfa41a7	reference	INCOMPARABLE with the selected: overlaps on work,touch
+K	308810763cfa41a7	trie	INCOMPARABLE with the selected: overlaps on work,touch
+K	308810763cfa41a7	graph	INCOMPARABLE with the selected: overlaps on work,touch
+K	308810763cfa41a7	zipper	INCOMPARABLE with the selected: overlaps on work,touch
+K	3e2bb366a7943491	trie	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	3e2bb366a7943491	graph	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	3e2bb366a7943491	zipper	INCOMPARABLE with the selected: overlaps on work,rounds,touch

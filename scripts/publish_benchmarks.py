@@ -460,6 +460,11 @@ def reproduce(runner_hint):
             die(f"{len(problems)} structural difference(s): the named commit does NOT reproduce its publication")
         print(f"\nREPRODUCED: commit {sha} regenerates all four outputs with the same schema, row sets and "
               "sections under its own green gates; only measurement values moved.")
+        # E3 reads this: the one gate no in-tree run can produce, recorded by the run that did
+        rec = ROOT / "target" / "gates.tsv"
+        rec.parent.mkdir(parents=True, exist_ok=True)
+        with rec.open("a") as f:
+            f.write(f"script\tpublication reproduces from the accepted commit (E2)\tPASS\n")
     finally:
         subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(wt)], capture_output=True)
 

@@ -112,7 +112,9 @@ final case class CostReport(backend: Backend, phase: ExecutionPhase, bounds: Eve
                             derivation: Derivation, domain: DomainCert, notes: Vector[String],
                             analysisNodes: Int,
                             /** A5: (reused, computed) routine summaries over this analysis */
-                            summaries: (Int, Int) = (0, 0)):
+                            summaries: (Int, Int) = (0, 0),
+                            /** the abstract RESULT's cardinality interval (D3: held to the proved state-space maximum) */
+                            valueSize: Ivl = Ivl.unknown):
   /** A6: the transfer rules this result depends on (registry ids of proofs/spatial/REGISTRY.tsv) */
   def dependencies: Vector[String] = SpatialTransfers.dependenciesOf(derivation)
   /** A6: CERTIFIED iff every rule the derivation used is PROVED or a stated premise in
@@ -677,7 +679,8 @@ final class CostSem(val backend: Backend, val domain: Domain, val routines: Part
     s match
       case Empty => (domain.empty, dispatch, D("Empty", Vector.empty, dispatch, Vector.empty))
       case Mention(m) =>
-        val v = env.spaces.getOrElse(m, { note(s"input ${m.s} undeclared: ⊤"); Abs(domain.arena.summ(SpatialType.top, Cause.Input(m)), Alias.Is(m)) })
+        val v0 = env.spaces.getOrElse(m, { note(s"input ${m.s} undeclared: ⊤"); Abs(domain.arena.summ(SpatialType.top, Cause.Input(m)), Alias.Is(m)) })
+        val v = if Mutation.active("drop-alias") then v0.copy(alias = Alias.Fresh) else v0   // E1 mutation site
         (v, dispatch, D(s"Mention ${m.s}", Vector(s"value ${v.show.take(80)}"), dispatch, Vector.empty))
       case Literal(v) =>
         val a = domain.literal(v)
@@ -766,7 +769,8 @@ final class CostSem(val backend: Backend, val domain: Domain, val routines: Part
         val out = domain.tailsInterA(a)
         val ev = dispatch + ea + (if ref then EventBounds.ivl(FreshPath, headed(a.node)) else naryOverChildren(a, join = false, out))
         (out, ev, D("TailsIntersection", Vector(s"fan-out ${DomainFacts.fanOut(domain, a.node).show}"), ev, Vector(da)))
-      case Range(x, lo, hi) =>
+      case Range(x, lo0, hi0) =>
+        val (lo, hi) = if Mutation.active("reverse-range") then (hi0, lo0) else (lo0, hi0)   // E1 mutation site
         val (a, ea, da) = go(x, env)
         val out = domain.rangeA(a, lo, hi)
         val n = size(a.node)
@@ -1081,6 +1085,7 @@ final class CostSem(val backend: Backend, val domain: Domain, val routines: Part
       val e2 = EventBounds.of(CallEntry -> Ivl(1, INF), AstDispatch -> Ivl(0, INF), TrieDispatch -> Ivl(0, INF), TrieNodeVisit -> Ivl(0, INF), FreshTrieNode -> Ivl(0, INF), FreshPath -> Ivl(0, INF), LoopBodyEntry -> Ivl(0, INF), FixpointRound -> Ivl(0, INF), ZipperBuild -> Ivl(0, INF), ZipperCursorRead -> Ivl(0, INF), GraphNodeDispatch -> Ivl(0, INF), TrieOpEntry -> Ivl(0, INF))
       (t, ev + e2, D(s"Call ${r.s}/⊤", Vector(why), ev + e2, kids.toVector))
     if !routines.isDefinedAt(r) then return top("unknown routine")
+    if Mutation.active("erase-calls") then return top("erased by the E1 mutation")   // E1 mutation site
     val d = routines(r)
     val env2 = AEnv(spaces = d.mentions.zip(argVals).toMap, paths = d.refs.zip(refVals).toMap, active = env.active + r)
     // A5: a POSITIVE PASSTHROUGH RECURSIVE COMPONENT is the IR's simultaneous system — analysed as one
@@ -1357,9 +1362,16 @@ final class CostSem(val backend: Backend, val domain: Domain, val routines: Part
       case ZRestrX(x, p) => allExact(x) && allExact(p)
       case t: ZTailsUX => allExact(t.src)
       case t: ZTailsIX => allExact(t.src)
+    /** the executor's `sameSpace` is a POINTER test on the underlying tries.  Which subtries are the same
+     *  object is not visible to the analysis (a builder may share structurally equal subtries — the
+     *  E1 adversarial family found `tails(k)` reusing one `{ε}` leaf under two heads), so the MAXIMAL-
+     *  sharing walk (`share`, the lower bound) treats structurally equal exact tries as the same object
+     *  and the no-sharing walk (the upper bound) treats only the same declared object as the same. */
     def sameSpace(a: ZX, b: ZX): Boolean =
       (a eq b) || ((a, b) match
-        case (ZLitX(x, o1), ZLitX(y, o2)) => (o1 > 0 && o1 == o2) || (share && (x.node eq y.node) && isExactTrie(x.node))
+        case (ZLitX(x, o1), ZLitX(y, o2)) =>
+          (o1 > 0 && o1 == o2) ||
+          (share && isExactTrie(x.node) && isExactTrie(y.node) && ((x.node eq y.node) || (domain.leq(x.node, y.node) && domain.leq(y.node, x.node))))
         case _ => false)
     def union(a: ZX, b: ZX): ZX = if sameSpace(a, b) then { ev += EventBounds.one(ReusedSpace); a } else ZUnionX(a, b)
     def intersection(a: ZX, b: ZX): ZX = if sameSpace(a, b) then { ev += EventBounds.one(ReusedSpace); a } else ZInterX(a, b)
@@ -1649,7 +1661,7 @@ object CostSem:
     val d = new Domain(budget)
     val sem = new CostSem(backend, d, routines, phase, declared = inputs.values.keySet ++ inputs.summaries.keySet)
     val (v, ev, der) = sem.analyze(s, inputs.env(d))
-    CostReport(backend, phase, ev, v, der, d.certificate, sem.notesOut, d.arena.size, sem.summaryStats)
+    CostReport(backend, phase, Mutation.bounds(ev), v, der, d.certificate, sem.notesOut, d.arena.size, sem.summaryStats, d.size(v.node))   // E1 mutation site
 
   def analyzeAll(s: Space, inputs: Inputs, routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
                  phase: ExecutionPhase = ExecutionPhase.Warm): Map[Backend, CostReport] =
@@ -1662,7 +1674,7 @@ object CostSem:
     val d = new Domain(budget)
     val sem = new GraphSem(d, phase, index, inputs.values.keySet ++ inputs.summaries.keySet)
     val (v, ev, der) = sem.run(g, inputs.env(d))
-    CostReport(Backend.Graph, phase, ev, v, der, d.certificate, sem.notesOut, d.arena.size, sem.summaryStats)
+    CostReport(Backend.Graph, phase, Mutation.bounds(ev), v, der, d.certificate, sem.notesOut, d.arena.size, sem.summaryStats, d.size(v.node))
 
 /** `execT` over an operation graph, abstractly: the same trie rules, the graph's own dispatch/frame
  *  rules, and its empty-left short circuits */

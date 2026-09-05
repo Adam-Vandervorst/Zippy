@@ -1,0 +1,18 @@
+# PUZZLE15 CERTIFICATE (tasks.md D3) — one expansion priced under four declarations on four backends; re-derived by scripts/check_puzzle15.py
+# C	declaration	backend	frontier	work.lo	work.hi	alloc.lo	alloc.hi	rounds.lo	rounds.hi	touch.lo	touch.hi	counted-work	counted-alloc	counted-rounds	counted-touch	size.lo	size.hi	certified
+C	value:1	reference	1	74195	75923	33434	33434	3191	3191	0	0	75059	33434	3191	0	2	2	CERTIFIED
+C	value:1	trie	1	27444	5331756	30208	1748053	3191	3191	24084	1138504	49160	42457	3191	32512	2	2	CERTIFIED
+C	value:1	graph	1	7542	7542	5398	5398	471	471	7719	16304	7542	5398	471	8129	2	2	CERTIFIED
+C	value:1	zipper	1	27445	5331757	30208	1748053	3191	3191	24084	1138504	49161	42457	3191	32512	2	2	CERTIFIED
+C	value:level2	reference	5	423787	433003	185146	185146	17028	17028	0	0	428395	185146	17028	0	12	12	CERTIFIED
+C	value:level2	trie	5	152657	28512059	170657	9363540	17028	17028	141670	6100723	276263	239740	17028	187142	12	12	CERTIFIED
+C	value:level2	graph	5	40876	40876	34666	34668	1828	1828	49994	79390	40876	34668	1828	50873	12	12	CERTIFIED
+C	value:level2	zipper	5	152658	28512060	170657	9363540	17028	17028	141670	6100723	276264	239740	17028	187142	12	12	CERTIFIED
+C	symbolic:1	reference	1	2	184219517825	0	inf	0	52497	0	0	-	-	-	-	0	inf	CERTIFIED
+C	symbolic:1	trie	1	2	inf	0	inf	0	52497	1	inf	-	-	-	-	0	inf	CERTIFIED
+C	symbolic:1	graph	1	1460	28610	753	inf	160	722	1101	inf	-	-	-	-	0	inf	CERTIFIED
+C	symbolic:1	zipper	1	1	inf	0	inf	0	52497	0	inf	-	-	-	-	0	inf	CERTIFIED
+C	symbolic:4	reference	4	2	inf	0	inf	0	225409905284436	0	0	-	-	-	-	0	inf	CERTIFIED
+C	symbolic:4	trie	4	2	inf	0	inf	0	225409905284436	1	inf	-	-	-	-	0	inf	CERTIFIED
+C	symbolic:4	graph	4	1460	116293397819468	753	inf	160	2350778766836	1101	inf	-	-	-	-	0	inf	CERTIFIED
+C	symbolic:4	zipper	4	1	inf	0	inf	0	225409905284436	0	inf	-	-	-	-	0	inf	CERTIFIED

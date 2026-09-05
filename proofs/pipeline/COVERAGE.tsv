@@ -1,108 +1,301 @@
-# COVERAGE (plan.md 2A.6) — every construct a cornerstone exercises, and the artifact whose checked
-# chain mentions it.  Written by EquivPipelineTest; verified row by row by
-# `scripts/audit_pipeline_markers.py --accept` (the named artifact exists and mentions the item).
-# cornerstone	kind	item	artifact
-aunt	binder	Iteration	proofs/pipeline/aunt-zipper.smt2
-aunt	boundary	graph	proofs/pipeline/aunt-graph-agnostic.smt2
-aunt	boundary	space	proofs/pipeline/aunt-space.smt2
-aunt	boundary	zipper	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Concat	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Constant	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Deref	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Intersection	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Iteration	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Mention	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Restriction	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Subtraction	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	TailsUnion	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Unwrap	proofs/pipeline/aunt-zipper.smt2
-aunt	constructor	Wrap	proofs/pipeline/aunt-zipper.smt2
-aunt	hole	Iteration	proofs/pipeline/aunt-zipper.smt2
-aunt	law	unwrap-concat-unwraps	proofs/pipeline/aunt-space.smt2
-datalog-sn	boundary	graph	proofs/pipeline/datalog-sn-graph-agnostic.smt2
-datalog-sn	boundary	space	proofs/pipeline/datalog-sn-space.smt2
-datalog-sn	boundary	zipper	proofs/pipeline/datalog-sn-zipper.smt2
-datalog-sn	call	sn_tc	proofs/pipeline/datalog-sn-zipper.smt2
-datalog-sn	constructor	Call	proofs/pipeline/datalog-sn-zipper.smt2
-datalog-sn	constructor	Mention	proofs/pipeline/datalog-sn-zipper.smt2
-datalog-sn	hole	Call	proofs/pipeline/datalog-sn-zipper.smt2
-gol	boundary	graph	proofs/pipeline/gol-graph-agnostic.smt2
-gol	boundary	space	proofs/pipeline/gol-space.smt2
-gol	boundary	zipper	proofs/pipeline/gol-zipper.smt2
-gol	call	nextStep	proofs/pipeline/gol-zipper.smt2
-gol	constructor	Call	proofs/pipeline/gol-zipper.smt2
-gol	constructor	Mention	proofs/pipeline/gol-zipper.smt2
-gol	hole	Call	proofs/pipeline/gol-zipper.smt2
-nqueens	binder	Iteration	proofs/pipeline/nqueens-zipper.smt2
-nqueens	boundary	graph	proofs/pipeline/nqueens-graph-agnostic.smt2
-nqueens	boundary	space	proofs/pipeline/nqueens-space.smt2
-nqueens	boundary	zipper	proofs/pipeline/nqueens-zipper.smt2
-nqueens	call	aoe	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor		proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Call	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Concat	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Constant	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Deref	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Iteration	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Literal	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Mention	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Subtraction	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Union	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Unwrap	proofs/pipeline/nqueens-zipper.smt2
-nqueens	constructor	Wrap	proofs/pipeline/nqueens-zipper.smt2
-nqueens	hole	Iteration	proofs/pipeline/nqueens-zipper.smt2
-nqueens	law	algebraic-identities	proofs/pipeline/nqueens-space.smt2
-nqueens	law	constant-ops	proofs/pipeline/nqueens-space.smt2
-nqueens	law	iterate-literal-union	proofs/pipeline/nqueens-space.smt2
-puzzle15	binder	Iteration	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	boundary	graph	proofs/pipeline/puzzle15-graph-agnostic.smt2
-puzzle15	boundary	space	proofs/pipeline/puzzle15-space.smt2
-puzzle15	boundary	zipper	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	call	collapse	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	call	superpose	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Call	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Composition	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Concat	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Constant	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Deref	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Iteration	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Literal	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Mention	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Raffination	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Singleton	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Union	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Unwrap	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	constructor	Wrap	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	hole	Iteration	proofs/pipeline/puzzle15-zipper.smt2
-puzzle15	law	comp-wrap-assoc	proofs/pipeline/puzzle15-space.smt2
-puzzle15	law	constant-ops	proofs/pipeline/puzzle15-space.smt2
-puzzle15	law	unwrap-concat-unwraps	proofs/pipeline/puzzle15-space.smt2
-puzzle3-full	binder	Fixpoint	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	binder	Iteration	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	boundary	graph	proofs/pipeline/puzzle3-full-graph-agnostic.smt2
-puzzle3-full	boundary	space	proofs/pipeline/puzzle3-full-space.smt2
-puzzle3-full	boundary	zipper	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Composition	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Concat	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Constant	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Deref	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Fixpoint	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Intersection	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Iteration	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Literal	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Mention	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Raffination	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Singleton	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	TailsUnion	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Union	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Unwrap	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	constructor	Wrap	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	hole	Fixpoint	proofs/pipeline/puzzle3-full-zipper.smt2
-puzzle3-full	law	constant-ops	proofs/pipeline/puzzle3-full-space.smt2
-temperature	boundary	graph	proofs/pipeline/temperature-graph-agnostic.smt2
-temperature	boundary	space	proofs/pipeline/temperature-space.smt2
-temperature	boundary	zipper	proofs/pipeline/temperature-zipper.smt2
-temperature	constructor	Literal	proofs/pipeline/temperature-zipper.smt2
-temperature	constructor	Mention	proofs/pipeline/temperature-zipper.smt2
-temperature	constructor	Restriction	proofs/pipeline/temperature-zipper.smt2
-temperature	constructor	Union	proofs/pipeline/temperature-zipper.smt2
+# STRUCTURAL COVERAGE (tasks.md D1) — every feature a cornerstone exercises, anchored to a term or node
+# of its typed proof trace and to the claim cell whose closure discharges it.  Written by EquivPipelineTest
+# from the parsed AST and the trace DAGs; re-derived row by row by `scripts/check_coverage.py`.
+# Census rows (`*`) list the constructors no cornerstone exercises and the certified laws no trace fires.
+# cornerstone	kind	feature	artifact	artifact-node	trace	trace-node	claim	state
+aunt	binder	Iteration	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	boundary	graph	proofs/pipeline/aunt-graph-agnostic.smt2	BOUNDARY:graph	proofs/pipeline/traces/aunt-graph.trace.tsv	N:2	aunt/graph/instance	covered
+aunt	boundary	space	proofs/pipeline/aunt-space.smt2	BOUNDARY:space	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	boundary	zipper	proofs/pipeline/aunt-zipper.smt2	BOUNDARY:zipper	proofs/pipeline/traces/aunt-zipper.trace.tsv	N:4	aunt/zipper/instance	covered
+aunt	constructor	Concat	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Constant	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Deref	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Intersection	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Iteration	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Mention	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Restriction	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Subtraction	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	TailsUnion	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Unwrap	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	constructor	Wrap	proofs/pipeline/traces/aunt-space.trace.tsv	T:bd9b5608750a	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	hole	Iteration	proofs/pipeline/aunt-zipper.smt2	HOLE:#hole0	proofs/pipeline/traces/aunt-zipper.trace.tsv	N:0	aunt/zipper/instance	covered
+aunt	law	unwrap-concat-unwraps	proofs/pipeline/aunt-space.smt2	law:unwrap-concat-unwraps	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-BACKENDS	proofs/spatial/REGISTRY.tsv	RULE:A6-BACKENDS	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EVENTS	proofs/spatial/REGISTRY.tsv	RULE:A6-EVENTS	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-INTER	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-INTER-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER-SAME	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-RESTRICT	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-RESTRICT	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-SUB	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-SUB	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-SUB-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-SUB-SAME	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-TAILS-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-TAILS-UNION	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-UNION-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION-SAME	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-UNWRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNWRAP	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-EXACT-WRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-WRAP	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-IVL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-IVL-IMPL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL-IMPL	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-MUSTMAY	proofs/spatial/REGISTRY.tsv	RULE:A6-MUSTMAY	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-ORDER	proofs/spatial/REGISTRY.tsv	RULE:A6-ORDER	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+aunt	resource	A6-PATRICIA	proofs/spatial/REGISTRY.tsv	RULE:A6-PATRICIA	proofs/pipeline/traces/aunt-space.trace.tsv	N:0	aunt/space/instance	covered
+datalog-sn	boundary	graph	proofs/pipeline/datalog-sn-graph-agnostic.smt2	BOUNDARY:graph	proofs/pipeline/traces/datalog-sn-graph.trace.tsv	N:2	datalog-sn/graph/instance	covered
+datalog-sn	boundary	space	proofs/pipeline/datalog-sn-space.smt2	BOUNDARY:space	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	boundary	zipper	proofs/pipeline/datalog-sn-zipper.smt2	BOUNDARY:zipper	proofs/pipeline/traces/datalog-sn-zipper.trace.tsv	N:4	datalog-sn/zipper/instance	covered
+datalog-sn	call	sn_tc	proofs/pipeline/traces/datalog-sn-space.trace.tsv	T:5e2dfec69e57	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	constructor	Call	proofs/pipeline/traces/datalog-sn-space.trace.tsv	T:5e2dfec69e57	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	constructor	Mention	proofs/pipeline/traces/datalog-sn-space.trace.tsv	T:5e2dfec69e57	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	hole	Call	proofs/pipeline/datalog-sn-zipper.smt2	HOLE:#hole0	proofs/pipeline/traces/datalog-sn-zipper.trace.tsv	N:0	datalog-sn/zipper/instance	covered
+datalog-sn	resource	A6-BACKENDS	proofs/spatial/REGISTRY.tsv	RULE:A6-BACKENDS	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-EVENTS	proofs/spatial/REGISTRY.tsv	RULE:A6-EVENTS	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-EXACT-RESTRICT	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-RESTRICT	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-EXACT-SUB	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-SUB	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-EXACT-SUB-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-SUB-SAME	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-EXACT-TAILS-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-TAILS-UNION	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-EXACT-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-EXACT-UNION-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION-SAME	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-EXACT-WRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-WRAP	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-IVL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-IVL-IMPL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL-IMPL	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-MUSTMAY	proofs/spatial/REGISTRY.tsv	RULE:A6-MUSTMAY	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-ORDER	proofs/spatial/REGISTRY.tsv	RULE:A6-ORDER	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-PATRICIA	proofs/spatial/REGISTRY.tsv	RULE:A6-PATRICIA	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+datalog-sn	resource	A6-SUMM	proofs/spatial/REGISTRY.tsv	RULE:A6-SUMM	proofs/pipeline/traces/datalog-sn-space.trace.tsv	N:2	datalog-sn/space/instance	covered
+gol	boundary	graph	proofs/pipeline/gol-graph-agnostic.smt2	BOUNDARY:graph	proofs/pipeline/traces/gol-graph.trace.tsv	N:2	gol/graph/instance	covered
+gol	boundary	space	proofs/pipeline/gol-space.smt2	BOUNDARY:space	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	boundary	zipper	proofs/pipeline/gol-zipper.smt2	BOUNDARY:zipper	proofs/pipeline/traces/gol-zipper.trace.tsv	N:4	gol/zipper/instance	covered
+gol	call	nextStep	proofs/pipeline/traces/gol-space.trace.tsv	T:bbf670acc629	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	constructor	Call	proofs/pipeline/traces/gol-space.trace.tsv	T:bbf670acc629	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	constructor	Mention	proofs/pipeline/traces/gol-space.trace.tsv	T:bbf670acc629	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	hole	Call	proofs/pipeline/gol-zipper.smt2	HOLE:#hole0	proofs/pipeline/traces/gol-zipper.trace.tsv	N:0	gol/zipper/instance	covered
+gol	resource	A6-BACKENDS	proofs/spatial/REGISTRY.tsv	RULE:A6-BACKENDS	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EVENTS	proofs/spatial/REGISTRY.tsv	RULE:A6-EVENTS	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-COMP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-COMP	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-INTER	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-INTER-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER-SAME	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-RANGE	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-RANGE	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-SUB	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-SUB	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-SUB-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-SUB-SAME	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-UNION-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION-SAME	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-UNWRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNWRAP	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-EXACT-WRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-WRAP	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-IVL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-IVL-IMPL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL-IMPL	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-MUSTMAY	proofs/spatial/REGISTRY.tsv	RULE:A6-MUSTMAY	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-ORDER	proofs/spatial/REGISTRY.tsv	RULE:A6-ORDER	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-PATRICIA	proofs/spatial/REGISTRY.tsv	RULE:A6-PATRICIA	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+gol	resource	A6-RANGE	proofs/spatial/REGISTRY.tsv	RULE:A6-RANGE	proofs/pipeline/traces/gol-space.trace.tsv	N:2	gol/space/instance	covered
+nqueens	binder	Iteration	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	boundary	graph	proofs/pipeline/nqueens-graph-agnostic.smt2	BOUNDARY:graph	proofs/pipeline/traces/nqueens-graph.trace.tsv	N:2	nqueens/graph/instance	covered
+nqueens	boundary	space	proofs/pipeline/nqueens-space.smt2	BOUNDARY:space	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	boundary	zipper	proofs/pipeline/nqueens-zipper.smt2	BOUNDARY:zipper	proofs/pipeline/traces/nqueens-zipper.trace.tsv	N:4	nqueens/zipper/instance	covered
+nqueens	call	aoe	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Call	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Concat	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Constant	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Deref	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Empty	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Iteration	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Literal	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Mention	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Subtraction	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Union	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Unwrap	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	constructor	Wrap	proofs/pipeline/traces/nqueens-space.trace.tsv	T:a887daa34323	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	hole	Iteration	proofs/pipeline/nqueens-zipper.smt2	HOLE:#hole0	proofs/pipeline/traces/nqueens-zipper.trace.tsv	N:0	nqueens/zipper/instance	covered
+nqueens	law	algebraic-identities	proofs/pipeline/nqueens-space.smt2	law:algebraic-identities	proofs/pipeline/traces/nqueens-space.trace.tsv	N:1	nqueens/space/instance	covered
+nqueens	law	constant-ops	proofs/pipeline/nqueens-space.smt2	law:constant-ops	proofs/pipeline/traces/nqueens-space.trace.tsv	N:0	nqueens/space/instance	covered
+nqueens	law	iterate-literal-union	proofs/pipeline/nqueens-space.smt2	law:iterate-literal-union	proofs/pipeline/traces/nqueens-space.trace.tsv	N:2	nqueens/space/instance	covered
+nqueens	resource	A6-BACKENDS	proofs/spatial/REGISTRY.tsv	RULE:A6-BACKENDS	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EVENTS	proofs/spatial/REGISTRY.tsv	RULE:A6-EVENTS	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-COMP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-COMP	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-INTER	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-INTER-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER-SAME	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-SUB	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-SUB	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-SUB-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-SUB-SAME	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-UNION-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION-SAME	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-UNWRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNWRAP	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-EXACT-WRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-WRAP	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-IVL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-IVL-IMPL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL-IMPL	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-MUSTMAY	proofs/spatial/REGISTRY.tsv	RULE:A6-MUSTMAY	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-ORDER	proofs/spatial/REGISTRY.tsv	RULE:A6-ORDER	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+nqueens	resource	A6-PATRICIA	proofs/spatial/REGISTRY.tsv	RULE:A6-PATRICIA	proofs/pipeline/traces/nqueens-space.trace.tsv	N:3	nqueens/space/instance	covered
+puzzle15	binder	Iteration	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	boundary	graph	proofs/pipeline/puzzle15-graph-agnostic.smt2	BOUNDARY:graph	proofs/pipeline/traces/puzzle15-graph.trace.tsv	N:36	puzzle15/graph/instance	covered
+puzzle15	boundary	space	proofs/pipeline/puzzle15-space.smt2	BOUNDARY:space	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	boundary	zipper	proofs/pipeline/puzzle15-zipper.smt2	BOUNDARY:zipper	proofs/pipeline/traces/puzzle15-zipper.trace.tsv	N:4	puzzle15/zipper/instance	covered
+puzzle15	call	collapse	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	call	superpose	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Call	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Composition	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Concat	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Constant	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Deref	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Iteration	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Literal	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Mention	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Raffination	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Singleton	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Union	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Unwrap	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	constructor	Wrap	proofs/pipeline/traces/puzzle15-space.trace.tsv	T:017e2b8fcb53	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	hole	Iteration	proofs/pipeline/puzzle15-zipper.smt2	HOLE:#hole0	proofs/pipeline/traces/puzzle15-zipper.trace.tsv	N:0	puzzle15/zipper/instance	covered
+puzzle15	law	comp-wrap-assoc	proofs/pipeline/puzzle15-space.smt2	law:comp-wrap-assoc	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:2	puzzle15/space/instance	covered
+puzzle15	law	constant-ops	proofs/pipeline/puzzle15-space.smt2	law:constant-ops	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:0	puzzle15/space/instance	covered
+puzzle15	law	unwrap-concat-unwraps	proofs/pipeline/puzzle15-space.smt2	law:unwrap-concat-unwraps	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:1	puzzle15/space/instance	covered
+puzzle15	resource	A6-BACKENDS	proofs/spatial/REGISTRY.tsv	RULE:A6-BACKENDS	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EVENTS	proofs/spatial/REGISTRY.tsv	RULE:A6-EVENTS	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-COMP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-COMP	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-INTER	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-INTER-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER-SAME	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-RAFF	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-RAFF	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-TAILS-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-TAILS-UNION	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-UNION-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION-SAME	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-UNWRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNWRAP	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-EXACT-WRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-WRAP	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-IVL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-IVL-IMPL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL-IMPL	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-MUSTMAY	proofs/spatial/REGISTRY.tsv	RULE:A6-MUSTMAY	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-ORDER	proofs/spatial/REGISTRY.tsv	RULE:A6-ORDER	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle15	resource	A6-PATRICIA	proofs/spatial/REGISTRY.tsv	RULE:A6-PATRICIA	proofs/pipeline/traces/puzzle15-space.trace.tsv	N:4	puzzle15/space/instance	covered
+puzzle3-full	binder	Fixpoint	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	binder	Iteration	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	boundary	graph	proofs/pipeline/puzzle3-full-graph-agnostic.smt2	BOUNDARY:graph	proofs/pipeline/traces/puzzle3-full-graph.trace.tsv	N:12	puzzle3-full/graph/instance	covered
+puzzle3-full	boundary	space	proofs/pipeline/puzzle3-full-space.smt2	BOUNDARY:space	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	boundary	zipper	proofs/pipeline/puzzle3-full-zipper.smt2	BOUNDARY:zipper	proofs/pipeline/traces/puzzle3-full-zipper.trace.tsv	N:4	puzzle3-full/zipper/instance	covered
+puzzle3-full	constructor	Composition	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Concat	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Constant	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Deref	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Fixpoint	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Intersection	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Iteration	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Literal	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Mention	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Raffination	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Singleton	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	TailsUnion	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Union	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Unwrap	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	constructor	Wrap	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	T:9d1bb69376a1	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	hole	Fixpoint	proofs/pipeline/puzzle3-full-zipper.smt2	HOLE:#hole0	proofs/pipeline/traces/puzzle3-full-zipper.trace.tsv	N:0	puzzle3-full/zipper/instance	covered
+puzzle3-full	law	constant-ops	proofs/pipeline/puzzle3-full-space.smt2	law:constant-ops	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-BACKENDS	proofs/spatial/REGISTRY.tsv	RULE:A6-BACKENDS	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-BUDGET	proofs/spatial/REGISTRY.tsv	RULE:A6-BUDGET	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EVENTS	proofs/spatial/REGISTRY.tsv	RULE:A6-EVENTS	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-COMP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-COMP	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-INTER	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-INTER-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-INTER-SAME	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-RAFF	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-RAFF	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-RANGE	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-RANGE	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-TAILS-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-TAILS-UNION	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-UNION-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION-SAME	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-UNWRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNWRAP	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-EXACT-WRAP	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-WRAP	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-IVL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-IVL-IMPL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL-IMPL	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-MUSTMAY	proofs/spatial/REGISTRY.tsv	RULE:A6-MUSTMAY	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-ORDER	proofs/spatial/REGISTRY.tsv	RULE:A6-ORDER	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-PATRICIA	proofs/spatial/REGISTRY.tsv	RULE:A6-PATRICIA	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-RANGE	proofs/spatial/REGISTRY.tsv	RULE:A6-RANGE	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+puzzle3-full	resource	A6-WIDEN	proofs/spatial/REGISTRY.tsv	RULE:A6-WIDEN	proofs/pipeline/traces/puzzle3-full-space.trace.tsv	N:0	puzzle3-full/space/instance	covered
+temperature	boundary	graph	proofs/pipeline/temperature-graph-agnostic.smt2	BOUNDARY:graph	proofs/pipeline/traces/temperature-graph.trace.tsv	N:2	temperature/graph/instance	covered
+temperature	boundary	space	proofs/pipeline/temperature-space.smt2	BOUNDARY:space	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	boundary	zipper	proofs/pipeline/temperature-zipper.smt2	BOUNDARY:zipper	proofs/pipeline/traces/temperature-zipper.trace.tsv	N:4	temperature/zipper/instance	covered
+temperature	constructor	Literal	proofs/pipeline/traces/temperature-space.trace.tsv	T:b2d255c2b847	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	constructor	Mention	proofs/pipeline/traces/temperature-space.trace.tsv	T:b2d255c2b847	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	constructor	Restriction	proofs/pipeline/traces/temperature-space.trace.tsv	T:b2d255c2b847	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	constructor	Union	proofs/pipeline/traces/temperature-space.trace.tsv	T:b2d255c2b847	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-BACKENDS	proofs/spatial/REGISTRY.tsv	RULE:A6-BACKENDS	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-EVENTS	proofs/spatial/REGISTRY.tsv	RULE:A6-EVENTS	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-EXACT-RESTRICT	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-RESTRICT	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-EXACT-UNION	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-EXACT-UNION-SAME	proofs/spatial/REGISTRY.tsv	RULE:A6-EXACT-UNION-SAME	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-IVL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-IVL-IMPL	proofs/spatial/REGISTRY.tsv	RULE:A6-IVL-IMPL	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-MUSTMAY	proofs/spatial/REGISTRY.tsv	RULE:A6-MUSTMAY	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-ORDER	proofs/spatial/REGISTRY.tsv	RULE:A6-ORDER	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+temperature	resource	A6-PATRICIA	proofs/spatial/REGISTRY.tsv	RULE:A6-PATRICIA	proofs/pipeline/traces/temperature-space.trace.tsv	N:2	temperature/space/instance	covered
+*	constructor	Fold	census	census	census	census	census	unsupported
+*	constructor	TailsIntersection	census	census	census	census	census	unsupported
+*	constructor	GroundedPS	census	census	census	census	census	unsupported
+*	constructor	GroundedSS	census	census	census	census	census	unsupported
+*	constructor	Range	census	census	census	census	census	unsupported
+*	constructor	GroundedPP	census	census	census	census	census	unsupported
+*	constructor	GroundedSP	census	census	census	census	census	unsupported
+*	law	absorption	census	census	census	census	census	proved-unexercised
+*	law	append-assoc	census	census	census	census	census	proved-unexercised
+*	law	append-inj	census	census	census	census	census	proved-unexercised
+*	law	comp-assoc	census	census	census	census	census	proved-unexercised
+*	law	comp-assoc-right	census	census	census	census	census	proved-unexercised
+*	law	comp-lit-to-wraps	census	census	census	census	census	proved-unexercised
+*	law	comp-rdistrib	census	census	census	census	census	proved-unexercised
+*	law	comp-set	census	census	census	census	census	proved-unexercised
+*	law	concat-path	census	census	census	census	census	proved-unexercised
+*	law	concat-singleton-iter	census	census	census	census	census	proved-unexercised
+*	law	demorgan-sub	census	census	census	census	census	proved-unexercised
+*	law	guard-hoist	census	census	census	census	census	proved-unexercised
+*	law	head-set	census	census	census	census	census	proved-unexercised
+*	law	head-tails-cover	census	census	census	census	census	proved-unexercised
+*	law	inter-assoc	census	census	census	census	census	proved-unexercised
+*	law	inter-comm	census	census	census	census	census	proved-unexercised
+*	law	inter-distrib	census	census	census	census	census	proved-unexercised
+*	law	inter-empty	census	census	census	census	census	proved-unexercised
+*	law	inter-idem	census	census	census	census	census	proved-unexercised
+*	law	isprefix-append	census	census	census	census	census	proved-unexercised
+*	law	iter-comp-right-hoist	census	census	census	census	census	proved-unexercised
+*	law	iter-fusion	census	census	census	census	census	proved-unexercised
+*	law	iter-ident	census	census	census	census	census	proved-unexercised
+*	law	iter-set	census	census	census	census	census	proved-unexercised
+*	law	iter-setop-merge	census	census	census	census	census	proved-unexercised
+*	law	iter-tails	census	census	census	census	census	proved-unexercised
+*	law	iter-transpose-semijoin	census	census	census	census	census	proved-unexercised
+*	law	iter-union-indep	census	census	census	census	census	proved-unexercised
+*	law	iter-witness-head-narrow	census	census	census	census	census	proved-unexercised
+*	law	iterate-singleton-deref	census	census	census	census	census	proved-unexercised
+*	law	iterc-set	census	census	census	census	census	proved-unexercised
+*	law	literal-space-ops	census	census	census	census	census	proved-unexercised
+*	law	raff-restrict-algebra	census	census	census	census	census	proved-unexercised
+*	law	raffination-partition	census	census	census	census	census	proved-unexercised
+*	law	raffination-push	census	census	census	census	census	proved-unexercised
+*	law	range-singleton	census	census	census	census	census	proved-unexercised
+*	law	restrict-idem	census	census	census	census	census	proved-unexercised
+*	law	restrict-raff-wrap-both	census	census	census	census	census	proved-unexercised
+*	law	restrict-self	census	census	census	census	census	proved-unexercised
+*	law	restrict-set	census	census	census	census	census	proved-unexercised
+*	law	restrict-wrap-both	census	census	census	census	census	proved-unexercised
+*	law	restriction-push	census	census	census	census	census	proved-unexercised
+*	law	restriction-singleton-unwrap	census	census	census	census	census	proved-unexercised
+*	law	singleton-composition-wrap	census	census	census	census	census	proved-unexercised
+*	law	singleton-const-literal	census	census	census	census	census	proved-unexercised
+*	law	singleton-constprefix-wrap	census	census	census	census	census	proved-unexercised
+*	law	singleton-disq	census	census	census	census	census	proved-unexercised
+*	law	singleton-space-op-path-op	census	census	census	census	census	proved-unexercised
+*	law	sub-distrib	census	census	census	census	census	proved-unexercised
+*	law	sub-empty	census	census	census	census	census	proved-unexercised
+*	law	sub-self	census	census	census	census	census	proved-unexercised
+*	law	tailsi-set	census	census	census	census	census	proved-unexercised
+*	law	tailsu-push	census	census	census	census	census	proved-unexercised
+*	law	tailsu-set	census	census	census	census	census	proved-unexercised
+*	law	tailsunion-singleton	census	census	census	census	census	proved-unexercised
+*	law	transpose-spec	census	census	census	census	census	proved-unexercised
+*	law	union-assoc	census	census	census	census	census	proved-unexercised
+*	law	union-chain-tailsu	census	census	census	census	census	proved-unexercised
+*	law	union-comm	census	census	census	census	census	proved-unexercised
+*	law	union-idem	census	census	census	census	census	proved-unexercised
+*	law	union-unit	census	census	census	census	census	proved-unexercised
+*	law	unwrap-fuse-const	census	census	census	census	census	proved-unexercised
+*	law	unwrap-merge	census	census	census	census	census	proved-unexercised
+*	law	unwrap-merge-set	census	census	census	census	census	proved-unexercised
+*	law	unwrap-push	census	census	census	census	census	proved-unexercised
+*	law	unwrap-set	census	census	census	census	census	proved-unexercised
+*	law	unwrap-wrap	census	census	census	census	census	proved-unexercised
+*	law	wrap-as-comp	census	census	census	census	census	proved-unexercised
+*	law	wrap-disjoint	census	census	census	census	census	proved-unexercised
+*	law	wrap-iter	census	census	census	census	census	proved-unexercised
+*	law	wrap-merge	census	census	census	census	census	proved-unexercised
+*	law	wrap-set	census	census	census	census	census	proved-unexercised
+*	law	zipper-refinement	census	census	census	census	census	proved-unexercised

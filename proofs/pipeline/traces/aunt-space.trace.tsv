@@ -1,0 +1,11 @@
+# PROOF TRACE (tasks.md C3) — a typed DAG; every node carries its endpoint terms by digest, every
+# dependency is an earlier id, every leaf is a law instance, a definitional step or a backend obligation.
+# Replay: morkl.ProofTrace.Checker (Scala, re-runs each step); scripts/check_traces.py (structural, independent).
+# root	0
+# id	kind	before	after	fields	deps
+0	LawInstance	bd9b5608750a	a5593f903e28	law=unwrap-concat-unwraps;changed=0.1.0.0.0.0.1.0.1:6b6c7a209cc6:7e5b6e341ab8,0.1.0.0.1:6b6c7a209cc6:7e5b6e341ab8;guards=	-
+# terms
+T	6b6c7a209cc6	Unwrap(Mention("family"),Concat(Constant(["child"]),Deref("person")))
+T	7e5b6e341ab8	Unwrap(Unwrap(Mention("family"),Constant(["child"])),Deref("person"))
+T	bd9b5608750a	Wrap(Iteration(Mention("people"),"#p0","#s1",Wrap(Intersection(Subtraction(TailsUnion(Restriction(Unwrap(Mention("family"),Constant(["parent"])),TailsUnion(Restriction(Unwrap(Mention("family"),Constant(["child"])),Unwrap(Mention("family"),Concat(Constant(["child"]),Deref("#p0"))))))),Unwrap(Mention("family"),Concat(Constant(["child"]),Deref("#p0")))),Unwrap(Mention("family"),Constant(["female"]))),Deref("#p0"))),Constant(["Aunt"]))
+T	a5593f903e28	Wrap(Iteration(Mention("people"),"#p0","#s1",Wrap(Intersection(Subtraction(TailsUnion(Restriction(Unwrap(Mention("family"),Constant(["parent"])),TailsUnion(Restriction(Unwrap(Mention("family"),Constant(["child"])),Unwrap(Unwrap(Mention("family"),Constant(["child"])),Deref("#p0")))))),Unwrap(Unwrap(Mention("family"),Constant(["child"])),Deref("#p0"))),Unwrap(Mention("family"),Constant(["female"]))),Deref("#p0"))),Constant(["Aunt"]))

@@ -1,0 +1,10 @@
+# PROOF TRACE (tasks.md C3) — a typed DAG; every node carries its endpoint terms by digest, every
+# dependency is an earlier id, every leaf is a law instance, a definitional step or a backend obligation.
+# Replay: morkl.ProofTrace.Checker (Scala, re-runs each step); scripts/check_traces.py (structural, independent).
+# root	2
+# id	kind	before	after	fields	deps
+0	AlphaEquivalence	bbf670acc629	bbf670acc629	-	-
+1	OptimizerNoOp	bbf670acc629	bbf670acc629	-	-
+2	Compose	bbf670acc629	bbf670acc629	steps=0,1	0,1
+# terms
+T	bbf670acc629	Call("nextStep";,Mention("field"))

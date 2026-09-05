@@ -598,7 +598,9 @@ class SpatialEventsCheck extends FunSuite, CalibrationProbe:
         if !rep.finite then hard :+= s"$name/${b.slug}: INFINITE ${rep.bounds.showComponents}"
         else if rep.magnitude >= ProductRequirement.Astronomical.toLong then hard :+= s"$name/${b.slug}: ASTRONOMICAL ${rep.bounds.showComponents}"
         println(f"CALIBRATION: $name%-12s ${b.slug}%-9s ${rep.bounds.showComponents}  counted ${ev.showComponents}  ${if v.isEmpty then "OK" else "OUT"}  ${rep.domain.show.linesIterator.next()}")
-      println(f"CALIBRATION: $name%-12s analysed in ${ms}%.0f ms; ${reps.head._3.derivation.size} derivation nodes")
+      // TIMING, not CALIBRATION: a wall-clock figure is not a counted column and must not enter the
+      // determinism diff (check_determinism.sh compares every CALIBRATION line of two runs)
+      println(f"TIMING:      $name%-12s analysed in ${ms}%.0f ms; ${reps.head._3.derivation.size} derivation nodes")
     usefulness("cornerstones, optimized bodies, exact declarations", rows)
     assert(hard.isEmpty, s"infinite or astronomical estimates on closed cornerstones:\n${hard.mkString("\n")}")
     assertEquals(bad, Vector.empty[String], "containment failures on the cornerstones")

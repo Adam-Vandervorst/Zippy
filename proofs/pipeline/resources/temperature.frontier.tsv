@@ -1,0 +1,10 @@
+# RESIDUAL ALTERNATIVES (tasks.md B1) — one row per alternative on the frontier; every column is
+# derived from the residual, its trace and its certificate (no timings, no counters, no hashes of closures).
+# budget	32
+# id	provenance	scope	size	routines	driver	certified	laws	intervals
+A	41b05c988fdaddbf	Fold[fold-first driver, every law]	UNCONDITIONAL (no input annotation restricts the input)	9	1	folds=0 unfold=1 unroll=0 gen=0	CERTIFIED		reference:work=[77, 87],alloc=[0, 0],rounds=[1, 1],touch=[0, 0] trie:work=[9, 9],alloc=[7, 7],rounds=[1, 1],touch=[17, 38] graph:work=[16, 16],alloc=[9, 9],rounds=[1, 1],touch=[17, 38] zipper:work=[10, 10],alloc=[7, 7],rounds=[1, 1],touch=[17, 38]
+P	41b05c988fdaddbf	Fusion[disabled iter-setop-merge,unwrap-fuse-const,unwrap-merge,wrap-merge]	MERGED into 41b05c988fdaddbf: alpha-equivalent canonical residual under equal semantic and resource assumptions
+P	41b05c988fdaddbf	Sharing[disabled iter-comp-right-hoist,iter-union-indep]	MERGED into 41b05c988fdaddbf: alpha-equivalent canonical residual under equal semantic and resource assumptions
+P	41b05c988fdaddbf	PrefixRestriction[disabled raff-restrict-algebra,raffination-push,restrict-raff-wrap-both,restriction-push,unwrap-push]	MERGED into 41b05c988fdaddbf: alpha-equivalent canonical residual under equal semantic and resource assumptions
+P	41b05c988fdaddbf	RangeReduction[disabled range-singleton]	MERGED into 41b05c988fdaddbf: alpha-equivalent canonical residual under equal semantic and resource assumptions
+P	41b05c988fdaddbf	Materialization[disabled comp-lit-to-wraps]	MERGED into 41b05c988fdaddbf: alpha-equivalent canonical residual under equal semantic and resource assumptions

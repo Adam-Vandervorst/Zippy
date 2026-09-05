@@ -1,0 +1,66 @@
+# SELECTION CERTIFICATE (tasks.md B2) — a pure function of the C rows and the objective; replay:
+# scripts/check_selection.py (independent), morkl.Pareto.replay (in-process).
+# objective	rounds
+# priority	rounds,work,alloc,touch
+# dominance	work,alloc,rounds,touch
+# constraints	-
+# backends	reference,trie,graph,zipper
+# tie-rule	lexicographic (hi, lo) over the priority components, then alternative id, then backend order reference,trie,graph,zipper
+# reference-touch	modelled, no counted oracle: taken as [0, inf]; not compared between two reference candidates
+# columns	C	alt	backend	work.lo	work.hi	alloc.lo	alloc.hi	rounds.lo	rounds.hi	touch.lo	touch.hi	certified	closure
+C	14978b7772f126d2	reference	85	90	51	51	7	7	0	inf	CERTIFIED	CLOSED
+C	14978b7772f126d2	trie	95	971	92	743	7	7	78	909	CERTIFIED	CLOSED
+C	14978b7772f126d2	graph	101	305	63	190	7	7	92	395	CERTIFIED	CLOSED
+C	14978b7772f126d2	zipper	96	972	92	743	7	7	78	909	CERTIFIED	CLOSED
+C	2d0044171fd11267	reference	100	195	73	73	11	11	0	inf	CERTIFIED	CLOSED
+C	2d0044171fd11267	trie	105	609	107	469	11	11	87	459	CERTIFIED	CLOSED
+C	2d0044171fd11267	graph	123	327	69	195	11	11	93	320	CERTIFIED	CLOSED
+C	2d0044171fd11267	zipper	106	610	107	469	11	11	87	459	CERTIFIED	CLOSED
+C	3127de331b14337c	reference	99	104	66	66	10	10	0	inf	CERTIFIED	CLOSED
+C	3127de331b14337c	trie	104	932	103	714	10	10	86	889	CERTIFIED	CLOSED
+C	3127de331b14337c	graph	117	321	67	194	10	10	100	403	CERTIFIED	CLOSED
+C	3127de331b14337c	zipper	105	933	103	714	10	10	86	889	CERTIFIED	CLOSED
+C	3647ed13b206b241	reference	88	183	58	58	8	8	0	inf	CERTIFIED	CLOSED
+C	3647ed13b206b241	trie	98	650	95	497	8	8	80	472	CERTIFIED	CLOSED
+C	3647ed13b206b241	graph	111	315	64	190	8	8	86	305	CERTIFIED	CLOSED
+C	3647ed13b206b241	zipper	99	651	95	497	8	8	80	472	CERTIFIED	CLOSED
+C	73071d9ca45b944d	reference	87	92	51	51	7	7	0	inf	CERTIFIED	CLOSED
+C	73071d9ca45b944d	trie	97	973	91	742	7	7	79	902	CERTIFIED	CLOSED
+C	73071d9ca45b944d	graph	105	309	62	189	7	7	93	388	CERTIFIED	CLOSED
+C	73071d9ca45b944d	zipper	98	974	91	742	7	7	79	902	CERTIFIED	CLOSED
+C	87812a96c788732b	reference	86	181	58	58	8	8	0	inf	CERTIFIED	CLOSED
+C	87812a96c788732b	trie	96	648	96	498	8	8	79	479	CERTIFIED	CLOSED
+C	87812a96c788732b	graph	107	311	65	191	8	8	85	312	CERTIFIED	CLOSED
+C	87812a96c788732b	zipper	97	649	96	498	8	8	79	479	CERTIFIED	CLOSED
+C	b74a8ec3bbe53433	reference	98	193	73	73	11	11	0	inf	CERTIFIED	CLOSED
+C	b74a8ec3bbe53433	trie	103	607	108	470	11	11	86	466	CERTIFIED	CLOSED
+C	b74a8ec3bbe53433	graph	119	323	70	196	11	11	92	327	CERTIFIED	CLOSED
+C	b74a8ec3bbe53433	zipper	104	608	108	470	11	11	86	466	CERTIFIED	CLOSED
+X	2d0044171fd11267	reference	DOMINATED	by 14978b7772f126d2/reference: work 90<=100 alloc 51<=73 rounds 7<=11
+X	3127de331b14337c	reference	DOMINATED	by 14978b7772f126d2/reference: work 90<=99 alloc 51<=66 rounds 7<=10
+X	b74a8ec3bbe53433	reference	DOMINATED	by 14978b7772f126d2/reference: work 90<=98 alloc 51<=73 rounds 7<=11
+S	14978b7772f126d2	reference	ranked first by the tie rule among 25 incomparable survivors
+K	14978b7772f126d2	trie	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	14978b7772f126d2	graph	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	14978b7772f126d2	zipper	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	2d0044171fd11267	trie	INCOMPARABLE with the selected: overlaps on touch
+K	2d0044171fd11267	graph	INCOMPARABLE with the selected: overlaps on touch
+K	2d0044171fd11267	zipper	INCOMPARABLE with the selected: overlaps on touch
+K	3127de331b14337c	trie	INCOMPARABLE with the selected: overlaps on touch
+K	3127de331b14337c	graph	INCOMPARABLE with the selected: overlaps on touch
+K	3127de331b14337c	zipper	INCOMPARABLE with the selected: overlaps on touch
+K	3647ed13b206b241	reference	INCOMPARABLE with the selected: overlaps on work,touch
+K	3647ed13b206b241	trie	INCOMPARABLE with the selected: overlaps on touch
+K	3647ed13b206b241	graph	INCOMPARABLE with the selected: overlaps on touch
+K	3647ed13b206b241	zipper	INCOMPARABLE with the selected: overlaps on touch
+K	73071d9ca45b944d	reference	INCOMPARABLE with the selected: overlaps on work,alloc,rounds,touch
+K	73071d9ca45b944d	trie	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	73071d9ca45b944d	graph	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	73071d9ca45b944d	zipper	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	87812a96c788732b	reference	INCOMPARABLE with the selected: overlaps on work,touch
+K	87812a96c788732b	trie	INCOMPARABLE with the selected: overlaps on touch
+K	87812a96c788732b	graph	INCOMPARABLE with the selected: overlaps on touch
+K	87812a96c788732b	zipper	INCOMPARABLE with the selected: overlaps on touch
+K	b74a8ec3bbe53433	trie	INCOMPARABLE with the selected: overlaps on touch
+K	b74a8ec3bbe53433	graph	INCOMPARABLE with the selected: overlaps on touch
+K	b74a8ec3bbe53433	zipper	INCOMPARABLE with the selected: overlaps on touch

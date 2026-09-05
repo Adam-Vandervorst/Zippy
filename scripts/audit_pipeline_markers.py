@@ -523,33 +523,18 @@ if args.accept:
             problems.append(f"--accept: {counts[kind_bad]} {kind_bad} cell(s); the gate requires 0")
     if expected_open:
         problems.append(f"--accept: {len(expected_open)} marker-to-marker chain(s); the gate requires 0")
-    # ---- COVERAGE.tsv: every exercised construct appears in a checked chain (2A.6)
+    # ---- COVERAGE.tsv: STRUCTURAL coverage (tasks.md D1) — one authority, scripts/check_coverage.py:
+    #      every row's feature is parsed out of a trace term or a trace node, its claim's closure is read from
+    #      target/trace-closure.tsv, and the census of unsupported constructors / unexercised laws is complete
     if not COVERAGE_FILE.exists():
         problems.append(f"{COVERAGE_FILE.relative_to(root)} is missing — the emitter must write the coverage census")
     else:
-        cov_rows = 0
-        by_stone = {}
-        for line in COVERAGE_FILE.read_text().splitlines():
-            if not line.strip() or line.startswith("#"):
-                continue
-            cols = line.split("\t")
-            if len(cols) != 4:
-                problems.append(f"COVERAGE.tsv: row has {len(cols)} columns, not 4: {line[:60]}"); continue
-            stone, kind, item, where = cols
-            cov_rows += 1
-            by_stone.setdefault(stone, set()).add(kind)
-            wp = root / where
-            if not wp.exists():
-                problems.append(f"COVERAGE {stone}/{kind}/{item}: names {where}, which does not exist"); continue
-            if item not in wp.read_text():
-                problems.append(f"COVERAGE {stone}/{kind}/{item}: {where} does not mention `{item}` — the construct is not in a checked chain")
-        stones = {c["cornerstone"] for c in claims}
-        for st in sorted(stones):
-            kinds = by_stone.get(st, set())
-            for need in ("constructor", "boundary"):
-                if need not in kinds:
-                    problems.append(f"COVERAGE {st}: no `{need}` row — the census does not cover this stone")
-        print(f"\ncoverage census: {cov_rows} row(s) over {len(by_stone)} stone(s), each backed by the artifact it names")
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        import check_coverage
+        cov_problems = check_coverage.check(str(root))
+        problems.extend("COVERAGE: " + p for p in cov_problems)
+        st = check_coverage.summary(str(root))
+        print("\ncoverage (structural): " + ", ".join(f"{k}={v}" for k, v in sorted(st.items())) + f"; {len(cov_problems)} problem(s)")
     print(f"\nclaims audit: {accepted} of {len(claims)} declared cells accepted")
 
 if len(expected_open) > MAX_MARKER_CHAINS:

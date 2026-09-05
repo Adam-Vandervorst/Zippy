@@ -249,24 +249,23 @@ MECHANIZED-IN: proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.whistle_terminates
 > assumed; what remains operational is the `Deadline`, for runs the report says are not covered.
 
 **Registry row:** `terminating/REGISTRY.tsv` O12d · **Code:** `Supercompiler.scala` (homeomorphic
-embedding whistle) · **Status: MECHANIZED, per run**
+embedding whistle) · **Status: MECHANIZED, per run — not admitted**
 
 The homeomorphic embedding on the configuration signature is a well-quasi-order, hence driving
 terminates.
 
-**Why it is not derived.** The standard proof is Kruskal's tree theorem, which is outside what z3 or
-vampire will find; there is no checked library boundary available here to import it from.
+**Why it was once admitted, and is not any more.** The standard proof is Kruskal's tree theorem,
+outside what z3 or vampire will find; it is now a Lean theorem in this tree (`Whistle.lean`, from
+Mathlib's Higman lemma).  What the theorem needs of the implementation — a finite label alphabet and
+a fold for every blow — is checked per run (`alphabetEscapes`, `whistleFallbacks`) and a run that
+fails those checks is reported as NOT covered.
 
-**What stands in for a proof.** Nothing, in the prover corpus. The compensating checks are
-operational: the supercompiler runs under an explicit `Deadline` (`all_forever(..., budget)`), so a
-non-terminating drive is a *timeout* rather than a hang, and `SCHardening` / `SCDriver` exercise the
-whistle on the corpus.
-
-**If it were false**, `SC.reduce` could fail to terminate on some program. It would not produce a
-*wrong* answer: soundness of each individual rewrite is O12a and the certified law set, which is
-independent of whether driving stops. The consequence is liveness, not correctness — which is why it
-is admitted rather than blocking, and it is named here so that a reader of `docs/SUPERCOMPILER.md`
-does not have to infer it.
+**What stands in for the theorem where a run is not covered.** The operational `Deadline`
+(`all_forever(..., budget)`): a drive the theorem does not cover cannot hang, it times out, and
+`SCReport.leanCovered` says which happened.  Nothing about the result's *correctness* depends on this
+entry: soundness of each rewrite is O12a/O12b and the certified law set, independent of whether
+driving stops.  The consequence of a false statement would be liveness on an uncovered run, not a
+wrong answer.
 
 ## T4. `EquivPipeline.expand` — the stage-0 control-flow expansion
 
@@ -449,9 +448,9 @@ it is open, and the registries say so.
 
 | row | statement | what stands in for it |
 |---|---|---|
-| O6a | beta-soundness of capture-avoiding inlining | the semantic half is PROVED (`call_unfold.p`, U63); the syntactic half is the randomized differential `src/test/scala/SubstConformance.scala`, which found three real bugs |
+| O6a | beta-soundness of capture-avoiding inlining | **mechanized** (tasks.md C1): `proofs/lean/Zippy/SubstSem.lean#Zippy.substS_denT` — substituting into a term denotes evaluating it in the environment the substitution denotes, every constructor, every fresh-name supply; the Scala's correspondence with `substS` is the generated `Trace.lean` plus the differentials `SubstConformance`/`SubstCapture`.  No longer open. |
 | O10b | *k*-unrolling equivalence for all *k* ⇒ lfp equivalence | **mechanized** (plan.md 2E.1): `proofs/lean/Zippy/Positive.lean` — `Space.fixpoint_is_lfp` (the Kleene union of a positive body is the least post-fixpoint) and `fixpoint_denT_eq_of_step_eq` (one-step agreement for every value of the cut ⇒ the fixpoints agree). What a residual-cut cell still owes is the antecedent for its *own* cut, stated in its header. |
-| O12b | the supercompiler fold | **mechanized, parametric** (plan.md 2E.2): `proofs/lean/Zippy/Supercompile.lean#Zippy.Fold.resid_lfp_eq_orig`, under the `FoldPremises` the header maps to executable invariants in `SC.State` (`foldChecks`, `productive`, `residualPositive`); the substitution lemma behind the `fix` premise is O6a's |
+| O12b | the supercompiler fold | **mechanized and instantiated** (tasks.md C2): `proofs/lean/Zippy/Drive.lean#Zippy.DriveSystem.drive_correct` derives the `FoldPremises` of `Supercompile.lean#Zippy.Fold.resid_lfp_eq_orig` from the run's typed driving trace and the `SC.State` invariants (configurations are calls with call-free arguments, closed bodies, positive residuals, one unfold per node, every fold an instance); the substitution lemma is O6a's `substS_denT`.  What a run still cites is each law step's own SMT certificate.  No longer open. |
 
 `terminating/REGISTRY.tsv` and `proofs/unbounded/REGISTRY.tsv` are the authoritative lists; this
 table is the short form for the three the acceptance review names.
@@ -476,6 +475,16 @@ verdict to `PROVED-MODULO T1`, `proofs/unbounded/run.sh` calls it after every co
 `--check` holds the table to the closure afterwards — so the prover writes the verdict it reached
 and the closure decides whether that verdict is unqualified. The annotation only ever weakens a
 verdict, and it is idempotent.
+
+**The same closure runs over the typed proof traces (tasks.md C4).** Every
+`proofs/pipeline/traces/*.trace.tsv` is a DAG whose leaves are law instances, unfold/fold steps,
+generalizations, backend-refinement obligations or optimizer no-ops; `proof_closure.py` resolves each
+leaf — a law to its certificate rows in `proofs/STATUS.tsv`, a refinement obligation to its registry
+entry, a premise to this table — and reports the trace as `UNCONDITIONAL`, `CONDITIONAL T…` or `OPEN`
+(`target/trace-closure.tsv`). A pipeline cell declared `LAW-JUSTIFIED` or `PROVED` whose trace closure is
+`OPEN` is an error under `--check`. The gate `--inject-open O6a --expect-consumers 1` marks an entry
+open and requires that exactly its consumers turn `OPEN`: the check that the closure is transitive,
+not vacuous.
 
 Two limits, stated so the report is not read as complete:
 

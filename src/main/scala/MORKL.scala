@@ -1671,7 +1671,9 @@ def subs(s: Space)(spre: PartialFunction[Space, Space] = PartialFunction.empty,
 object Lower:
   val TailsUnion_Iteration = subs(_: Space)(PartialFunction.empty, {
     case Space.TailsUnion(src) =>
-      val name = SpaceMention("s" + src.hashCode().toHexString)
+      // a STRUCTURAL digest, not `hashCode`: a grounded closure inside `src` hashes by identity and the
+      // fresh name would differ between two runs of the same program (the pipeline's resource certificates did)
+      val name = SpaceMention("s" + ProofTrace.structural(src).hashCode.toHexString)
       Space.Iteration(src, PathRef("_").known(1), name, Space.Mention(name))
   })
 
@@ -2851,27 +2853,28 @@ object Syntax:
     def apply(p: Path) = Space.Unwrap(x, p)
     infix def iter(h: Path.Deref, t: Space.Mention, rhs: Space): Space = Space.Iteration(x, h.pr.known(1), t.variable, subs(rhs)(ppre = { case `h` => Path.Deref(h.pr.known(1)) }))
     infix def iter(h2: (Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
-      val sm = SpaceMention(s"r${h2._2.pr.s}${rhs.hashCode().toHexString}")
+      val sm = SpaceMention(s"r${h2._2.pr.s}${ProofTrace.structural(rhs).hashCode.toHexString}")
       Space.Iteration(x, h2._1.pr.known(1), sm, Space.Iteration(Space.Mention(sm), h2._2.pr.known(1), t.variable,
         subs(rhs)(ppre = { case Path.Deref(pr) if pr == h2._1.pr || pr == h2._2.pr => Path.Deref(pr.known(1)) })))
     infix def iter(h3: (Path.Deref, Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
-      val sm2 = SpaceMention(s"r${h3._2.pr.s}${rhs.hashCode().toHexString}")
-      val sm3 = SpaceMention(s"r${h3._3.pr.s}${rhs.hashCode().toHexString}")
+      val sm2 = SpaceMention(s"r${h3._2.pr.s}${ProofTrace.structural(rhs).hashCode.toHexString}")
+      val sm3 = SpaceMention(s"r${h3._3.pr.s}${ProofTrace.structural(rhs).hashCode.toHexString}")
       Space.Iteration(x, h3._1.pr.known(1), sm2,
         Space.Iteration(Space.Mention(sm2), h3._2.pr.known(1), sm3,
           Space.Iteration(Space.Mention(sm3), h3._3.pr.known(1), t.variable,
             subs(rhs)(ppre = { case Path.Deref(pr) if pr == h3._1.pr || pr == h3._2.pr || pr == h3._3.pr => Path.Deref(pr.known(1)) }))))
     infix def iter(h4: (Path.Deref, Path.Deref, Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
-      val sm2 = SpaceMention(s"r${h4._2.pr.s}${rhs.hashCode().toHexString}")
-      val sm3 = SpaceMention(s"r${h4._3.pr.s}${rhs.hashCode().toHexString}")
-      val sm4 = SpaceMention(s"r${h4._4.pr.s}${rhs.hashCode().toHexString}")
+      val sm2 = SpaceMention(s"r${h4._2.pr.s}${ProofTrace.structural(rhs).hashCode.toHexString}")
+      val sm3 = SpaceMention(s"r${h4._3.pr.s}${ProofTrace.structural(rhs).hashCode.toHexString}")
+      val sm4 = SpaceMention(s"r${h4._4.pr.s}${ProofTrace.structural(rhs).hashCode.toHexString}")
       Space.Iteration(x, h4._1.pr.known(1), sm2,
         Space.Iteration(Space.Mention(sm2), h4._2.pr.known(1), sm3,
           Space.Iteration(Space.Mention(sm3), h4._3.pr.known(1), sm4,
             Space.Iteration(Space.Mention(sm4), h4._4.pr.known(1), t.variable,
               subs(rhs)(ppre = { case Path.Deref(pr) if pr == h4._1.pr || pr == h4._2.pr || pr == h4._3.pr || pr == h4._4.pr => Path.Deref(pr.known(1)) })))))
     infix def iterk(k: Int, t: Space.Mention, rhs: Path => Space): Space =
-      val rhsh = rhs.hashCode().toHexString
+      // the body applied to a placeholder path, digested structurally (a lambda's own hashCode is its identity)
+      val rhsh = ProofTrace.structural(rhs(Path.Deref(PathRef("#k")))).hashCode.toHexString
       val prs = Vector.tabulate(k)(i => PathRef(s"${i}h$rhsh").known(1))
       val sms = Vector.tabulate(k)(i => if i != k - 1 then SpaceMention(s"r${i}h$rhsh") else t.variable)
       val ss = Vector.tabulate(k)(i => if i == 0 then x else Space.Mention(sms(i-1)))

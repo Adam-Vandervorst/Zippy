@@ -97,7 +97,8 @@ TRUSTED = {
     "T2": dict(axiom=None, corpus="terminating", rows={"fixpoint_is_lfp"},
                what="the four bridging induction principles of fixpoint_is_lfp.smt2"),
     "T3": dict(axiom=None, corpus="terminating",
-               what="the whistle terminates (Kruskal's tree theorem) -- ADMITTED"),
+               what="the whistle terminates (Kruskal's tree theorem) -- MECHANIZED per run in Whistle.lean; "
+                    "a run outside the covered alphabet is bounded by the Deadline and reported, not assumed"),
     "T4": dict(axiom=None, corpus="pipeline", what="EquivPipeline.expand, the stage-0 expansion"),
     "T5": dict(axiom=None, corpus="unbounded",
                what="Range is outside the certified pointwise algebra"),
@@ -121,6 +122,232 @@ TRUSTED = {
 # ==================================================================================================
 SPATIAL_REGISTRY = ROOT / "proofs/spatial/REGISTRY.tsv"
 SPATIAL_STATUS = ROOT / "proofs/spatial/STATUS.tsv"
+
+
+# ==================================================================================================
+# C4: ONE DEPENDENCY GRAPH OVER THE TYPED PROOF TRACES.  A pipeline cell's claim is its trace
+# (proofs/pipeline/traces/<cell>.trace.tsv, tasks.md C3); every leaf names what it rests on — a law
+# (proofs/laws/REGISTRY.tsv, whose certificates have rows in proofs/STATUS.tsv), a backend artifact
+# (proofs/pipeline/STATUS.tsv verdict + its `; TRUSTS:` header of T/O ids), the substitution and fold
+# theorems (terminating/REGISTRY.tsv O6a/O12b), a mechanized boundary theorem.  This traverses them
+# as ONE graph, classifies every trace UNCONDITIONAL / CONDITIONAL (with its MINIMAL open set) /
+# FAILED (a leaf that resolves to nothing), refuses cycles in the law-certificate include graph, and
+# writes target/trace-closure.tsv for the acceptance generator (E3).  `--inject-open ID` marks a
+# registry row open for one run, which must turn every transitive consumer conditional (C4's
+# acceptance) — a mutation of the graph, not of the tree.
+# ==================================================================================================
+TRACE_DIR = ROOT / "proofs/pipeline/traces"
+TRACE_CLOSURE = ROOT / "target" / "trace-closure.tsv"
+
+def read_tsv_rows(path, skip_header_prefixes=("#",)):
+    if not path.is_file():
+        return []
+    out = []
+    for line in path.read_text(errors="replace").splitlines():
+        if not line.strip() or any(line.startswith(p) for p in skip_header_prefixes):
+            continue
+        out.append(line.split("\t"))
+    return out
+
+def registry_kinds():
+    """id -> kind for terminating/REGISTRY.tsv"""
+    return {cols[0]: cols[1] for cols in read_tsv_rows(ROOT / "terminating/REGISTRY.tsv") if len(cols) > 1 and cols[0] != "id"}
+
+def law_rows():
+    """law -> (kind, certificates) for proofs/laws/REGISTRY.tsv"""
+    out = {}
+    for cols in read_tsv_rows(ROOT / "proofs/laws/REGISTRY.tsv"):
+        if len(cols) >= 3 and cols[0] != "law":
+            out[cols[0]] = (cols[1], cols[2])
+    return out
+
+def status_verdicts(path):
+    """name(stem) -> verdict (last column)"""
+    out = {}
+    for cols in read_tsv_rows(path):
+        if len(cols) >= 2:
+            name = cols[0].split("/")[-1]
+            if name.endswith((".smt2", ".p", ".egg")):
+                name = name.rsplit(".", 1)[0]
+            out[name] = cols[-1].strip()
+    return out
+
+TRUSTS_HEADER = re.compile(r"^\s*[;%]\s*TRUSTS:\s*(.*)$", re.M)
+
+def artifact_trusts(rel):
+    f = ROOT / rel
+    if not f.is_file():
+        return None
+    m = TRUSTS_HEADER.search(f.read_text(errors="replace"))
+    if not m:
+        return []
+    body = m.group(1).strip()
+    return [] if body == "-" else [t.strip() for t in body.split(",") if t.strip()]
+
+def include_cycles(corpus_root):
+    """cycles in the include graph of a corpus (a certificate may not rest on itself)"""
+    edges = {}
+    for f in sorted(corpus_root.glob("*.smt2")) + sorted(corpus_root.glob("*.p")):
+        try: text = f.read_text(errors="replace")
+        except OSError: continue
+        edges[f.name] = [inc.split("/")[-1] for inc in INCLUDE.findall(text)]
+    cycles = []
+    state = {}
+    def dfs(n, stack):
+        state[n] = 1; stack.append(n)
+        for m in edges.get(n, []):
+            if state.get(m) == 1:
+                cycles.append(" -> ".join(stack[stack.index(m):] + [m]))
+            elif state.get(m) is None:
+                dfs(m, stack)
+        stack.pop(); state[n] = 2
+    for n in edges:
+        if state.get(n) is None: dfs(n, [])
+    return cycles
+
+def resolve_dep(dep, kinds, laws, law_status, term_status, lean_witness, injected):
+    """one dependency token -> (status, detail) with status in DISCHARGED / CONDITIONAL / OPEN / FAILED"""
+    if dep in injected:
+        return "OPEN", f"{dep} (injected open)"
+    if dep.startswith("law:"):
+        name = dep[4:]
+        if name == "zipper-refinement":
+            return "DISCHARGED", "zipper_refinement.smt2 + Zipper.lean"
+        if name not in laws:
+            return "FAILED", f"law {name} has no registry row"
+        kind, certs = laws[name]
+        if kind == "DEFINITIONAL":
+            return "DISCHARGED", f"law {name}: definitional"
+        # FILE / SCHEMATIC / GROUND: every certificate must be PROVED in proofs/STATUS.tsv (a GROUND law's
+        # certificates are the per-operation implementation theorems, `threeway_*` / `impl_*`)
+        opens = []
+        for c in certs.split(","):
+            stem = c.strip().split("/")[-1].rsplit(".", 1)[0].replace("*", "")
+            if not stem: continue
+            wild = "*" in c
+            matches = [v for k, v in law_status.items() if k == stem or (wild and k.startswith(stem))]
+            if not matches:
+                opens.append(f"{stem}: no status row")
+            for v in matches:
+                if not v.startswith("PROVED"):
+                    opens.append(f"{stem}: {v}")
+                elif "PROVED-MODULO" in v:
+                    opens.append(f"{stem}: {v}")
+        if not opens:
+            return "DISCHARGED", f"law {name}: {certs}"
+        if all("MODULO" in o for o in opens):
+            return "CONDITIONAL", f"law {name}: " + "; ".join(opens)
+        return "OPEN", f"law {name}: " + "; ".join(opens)
+    if re.fullmatch(r"O\d+[a-z]?(-[A-Z]+)?", dep):
+        kind = kinds.get(dep)
+        if kind is None:
+            return "FAILED", f"{dep}: no registry row"
+        if kind.startswith("MECHANIZED"):
+            return "DISCHARGED", f"{dep}: {kind[:40]}"
+        if kind.startswith("OPEN"):
+            return "OPEN", f"{dep}: {kind[:40]}"
+        if kind == "FILE":
+            return "DISCHARGED", f"{dep}: FILE"
+        return "CONDITIONAL", f"{dep}: {kind[:40]} (evidence, not a theorem)"
+    if re.fullmatch(r"T\d+", dep):
+        if dep not in TRUSTED:
+            return "FAILED", f"{dep}: not in docs/TRUSTED.md"
+        mech = entry_mechanizations().get(dep, [])
+        if mech and all(m in lean_witness for m in mech):
+            return "DISCHARGED", f"{dep}: mechanized ({len(mech)} theorem(s))"
+        return "CONDITIONAL", f"{dep}: trusted base entry"
+    if dep.startswith("outside:"):
+        return "CONDITIONAL", dep
+    return "FAILED", f"unknown dependency token {dep}"
+
+def check_trace_closure(problems, check, injected):
+    print(f"\n{TRACE_DIR.relative_to(ROOT)}  [typed proof traces, one dependency graph — C3/C4]")
+    if not TRACE_DIR.is_dir():
+        problems.append("proofs/pipeline/traces is missing (run `sbt \"testOnly morkl.EquivPipelineTest\"`)")
+        return
+    kinds = registry_kinds(); laws = law_rows()
+    law_status = status_verdicts(ROOT / "proofs/STATUS.tsv")
+    term_status = status_verdicts(ROOT / "terminating/STATUS.tsv")
+    cell_status = status_verdicts(ROOT / "proofs/pipeline/STATUS.tsv")
+    lean_witness = read_lean_witness()
+    for cyc in include_cycles(ROOT / "proofs/laws") + include_cycles(ROOT / "proofs"):
+        problems.append(f"cycle in the certificate include graph: {cyc}")
+    rows = []
+    for f in sorted(TRACE_DIR.glob("*.trace.tsv")):
+        cell = f.name.removesuffix(".trace.tsv")
+        deps = []   # dependency tokens the leaves name
+        for line in f.read_text(errors="replace").splitlines():
+            if not line.strip() or line.startswith("#") or line.startswith("T\t"):
+                continue
+            cols = line.split("\t")
+            if len(cols) < 6: continue
+            kind, fields = cols[1], cols[4]
+            fd = dict(kv.split("=", 1) for kv in fields.split(";") if "=" in kv) if fields != "-" else {}
+            if kind == "LawInstance":
+                deps.append("law:" + fd.get("law", "?"))
+            elif kind in ("Unfold",):
+                deps.append("O6a")
+            elif kind in ("Fold", "Generalization"):
+                deps.append("O12b"); deps.append("O6a")
+            elif kind == "BackendRefinement":
+                art = fd.get("artifact", "")
+                deps.append("artifact:" + art)
+                ts = artifact_trusts(art)
+                if ts is None:
+                    deps.append("missing:" + art)
+                else:
+                    deps.extend(ts)
+            elif kind == "GraphOptimizerNoOp":
+                deps.append("T4")
+        # resolve
+        opens, conds, failed, discharged = [], [], [], []
+        for d in sorted(set(deps)):
+            if d.startswith("artifact:"):
+                art = d[len("artifact:"):]
+                stem = art.split("/")[-1].rsplit(".", 1)[0]
+                if art == "proofs/zipper_refinement.smt2":
+                    v = law_status.get("zipper_refinement", "?")
+                else:
+                    v = cell_status.get(stem, "?")
+                if v.startswith("PROVED") and "MODULO" not in v or v == "LAW-JUSTIFIED":
+                    discharged.append(f"{stem}: {v}")
+                elif v.startswith("PROVED-MODULO") or v.startswith("LAW-JUSTIFIED"):
+                    conds.append(f"{stem}: {v}")
+                elif v in ("TRIVIAL", "IDENTICAL-STRUCTURE"):
+                    conds.append(f"{stem}: marker {v} cited as an obligation")
+                else:
+                    failed.append(f"{stem}: {v}")
+                continue
+            if d.startswith("missing:"):
+                failed.append(d); continue
+            st, detail = resolve_dep(d, kinds, laws, law_status, term_status, lean_witness, injected)
+            {"DISCHARGED": discharged, "CONDITIONAL": conds, "OPEN": opens, "FAILED": failed}[st].append(detail)
+        status = "FAILED" if failed else "OPEN" if opens else "CONDITIONAL" if conds else "UNCONDITIONAL"
+        minimal = opens + conds + failed
+        rows.append((cell, status, len(deps), minimal))
+        verdict = cell_status.get(cell, "?")
+        if check and status in ("OPEN", "FAILED") and verdict.startswith(("PROVED", "LAW-JUSTIFIED")) and "MODULO" not in verdict:
+            problems.append(f"{cell}: reported `{verdict}` but its trace closure is {status}: {'; '.join(minimal[:3])}")
+        if check and status == "FAILED":
+            problems.append(f"{cell}: a trace leaf resolves to nothing: {'; '.join(failed[:3])}")
+    # an INJECTION run must not overwrite the real closure (check_coverage.py and gen_acceptance.py read it):
+    # its rows go to a sibling file
+    out_path = TRACE_CLOSURE if not injected else TRACE_CLOSURE.with_name("trace-closure-injected.tsv")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w") as out:
+        out.write("# cell\tstatus\tdependencies\tminimal-open-set\n")
+        for cell, status, n, minimal in rows:
+            out.write(f"{cell}\t{status}\t{n}\t{' | '.join(minimal) if minimal else '-'}\n")
+    for cell, status, n, minimal in rows:
+        print(f"    {cell:34s} {status:14s} {n:3d} dep(s)  {('; '.join(minimal))[:110]}")
+    by = {}
+    for _, st, _, _ in rows: by[st] = by.get(st, 0) + 1
+    print(f"  {len(rows)} traces: " + ", ".join(f"{k} {v}" for k, v in sorted(by.items())) + f"; closure written to {out_path.relative_to(ROOT)}")
+    if injected:
+        affected = [c for c, st, _, mn in rows if any("injected open" in m for m in mn)]
+        print(f"  INJECTED OPEN {sorted(injected)}: {len(affected)} consumer trace(s) turned OPEN")
+        return affected
+    return None
 
 
 def check_spatial_transfers(problems):
@@ -560,6 +787,11 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--check", action="store_true",
                     help="exit non-zero if any unqualified PROVED has a conditional closure")
+    ap.add_argument("--inject-open", action="append", default=[],
+                    help="treat this registry id as OPEN for this run (C4's mutation test: every "
+                         "transitive consumer must turn conditional); implies --check")
+    ap.add_argument("--expect-consumers", type=int, default=None,
+                    help="with --inject-open: fail unless at least this many traces turned OPEN")
     ap.add_argument("--annotate", action="store_true",
                     help="rewrite the status tables so a conditional result SAYS it is conditional, "
                          "then re-check.  This is what makes the requirement enforceable: the "
@@ -704,6 +936,15 @@ def main():
         print(f"  deepest closure: {depth} axiom file(s)")
 
     check_spatial_transfers(problems)
+    injected = set(a.inject_open)
+    affected = check_trace_closure(problems, a.check or bool(injected), injected)
+    if injected:
+        n = len(affected or [])
+        if a.expect_consumers is not None and n < a.expect_consumers:
+            problems.append(f"injecting {sorted(injected)} as open turned only {n} consumer(s) conditional (expected >= {a.expect_consumers})")
+        # an injection is a mutation test: its problems are the EXPECTED outcome, reported and then discarded
+        print(f"  (injection run: {len(problems)} problem(s) reported under the mutation, exit reflects --expect-consumers only)")
+        sys.exit(0 if (a.expect_consumers is None or n >= a.expect_consumers) else 1)
 
     print("\n" + "=" * 100)
     print(f"ENUMERATED: {total_reported} reported statuses across {len(STATUS_TABLES)} tables.")

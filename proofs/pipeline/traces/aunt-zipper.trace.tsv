@@ -1,0 +1,12 @@
+# PROOF TRACE (tasks.md C3) — a typed DAG; every node carries its endpoint terms by digest, every
+# dependency is an earlier id, every leaf is a law instance, a definitional step or a backend obligation.
+# Replay: morkl.ProofTrace.Checker (Scala, re-runs each step); scripts/check_traces.py (structural, independent).
+# root	4
+# id	kind	before	after	fields	deps
+0	BackendRefinement	4e18a9bcc4ab	4e18a9bcc4ab	backend=zipper;boundary=zipper;artifact=proofs/zipper_refinement.smt2;obligation=zipper-refinement (proofs/zipper_refinement.smt2; proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement)	-
+1	AlphaEquivalence	4e18a9bcc4ab	4e18a9bcc4ab	-	-
+2	OptimizerNoOp	4e18a9bcc4ab	4e18a9bcc4ab	-	-
+3	Compose	4e18a9bcc4ab	4e18a9bcc4ab	steps=1,2	1,2
+4	Compose	4e18a9bcc4ab	4e18a9bcc4ab	steps=0,1,3,1	0,1,3,1
+# terms
+T	4e18a9bcc4ab	Wrap(Mention("#hole0"),Constant(["Aunt"]))

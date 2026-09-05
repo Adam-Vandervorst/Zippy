@@ -321,6 +321,7 @@ final class Domain(val budget: DomainBudget = DomainBudget()):
     case _ => 1
 
   private def record(reason: String, before: Vector[XNode], after: XNode): Unit =
+    if Mutation.active("no-widening-record") then return   // E1 mutation site: the precision loss goes unrecorded
     val bs = before.map(size).reduce((a, b) => Ivl(a.lo min b.lo, a.hi max b.hi))
     val bl = before.map(len).filterNot(_.isEmpty)
     val blen = if bl.isEmpty then LenBounds.empty else LenBounds(bl.map(_.lo).min, bl.map(_.hi).max)

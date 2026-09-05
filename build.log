@@ -6805,3 +6805,234 @@ TRACK A′ — cornerstone coverage (item 4).
   check_laws, audit_pipeline_markers, check_asserts green.  check_references --strict RED for the
   pre-existing citations of the removed plan/acceptance/decisions documents (86 references removed by
   commit 0737bb6, not touched here).  Nothing committed; everything staged.
+
+================================================================================================
+2026-09-05  tasks.md C1–C4 — THE PROOF SPINE (local host, not a Symba `cpu-small` node: no Symba CLI
+            here; 16 cores / 247 GB; Lean 4.33.1 + Mathlib v4.33.1; Scala 3.8.1 / sbt 2.0.8)
+================================================================================================
+
+  C1  proofs/lean/Zippy/SubstSem.lean — the production substitution is semantic (O6a).
+      `Env.AgreeRM` (agreement on the free names of a term), `Space.denT_congr_rm`, `Env.extend`,
+      `bindM_cases`/`bindR_cases`, `extend_bindM_agree`/`extend_bindR_agree`, then the mutual
+      `substS_denT`/`substP_denT`/`substList_denTs`/`substPList_denTs`: ⟦σ t⟧ρ = ⟦t⟧(extend ρ σ) for
+      every capture-avoiding substitution, with the corollaries `instance_denT`, `fixpoint_alpha`,
+      `fixpoint_shadow`, `iteration_shadow`.  Sorry-free; `terminating/REGISTRY.tsv` O6a → MECHANIZED,
+      docs/TRUSTED.md O6a row mechanized; `proofs/lean/Zippy/Subst.lean` header points at it.
+  C2  proofs/lean/Zippy/Drive.lean — unfolding and repeated folding (O12a/O12b).
+      `Space.calls`, `denT_congr_delta_calls`, contexts `Ctx`/`plug`/`plug_congr`, `Chain`, the
+      residual identities `Resid.*`, `lookupM_zip_of_mem`, `argEnv_extend_agree`, `unfoldOnce`/
+      `unfold_step`, `foldArgsM/R`/`fold_step`, the `DriveSystem` record (F, O, Tb, Trefs, Tments,
+      conf, disjointness, closedness, positivity), `TT`/`tO`/`tOinf`/`mixed`/`Consistent`/
+      `mixed_consistent`, the step relation `DStep` (law | fold) with `DStep.sound`, traces `DTrace`
+      with `DTrace.sound`, `unfold_inf`/`unfold_succ`, `Traced`, `premises : FoldPremises`, and
+      `drive_correct`/`drive_node`: a driven residual system denotes its configuration.  Registry
+      O12a MECHANIZED+CITED, O12b MECHANIZED+INSTANTIATED (the supercompiler's `canonicalName` is the
+      collision-safe identity the theorem needs: SHA-256 of the alpha-canonical configuration + arity).
+  C3  src/main/scala/ProofTrace.scala — typed, compositional proof traces.
+      Node kinds: LawInstance (law, changed positions with local pairs, guards), AlphaEquivalence,
+      Unfold, Fold, Generalization, Positional, BackendRefinement, OptimizerNoOp, GraphOptimizerNoOp,
+      Compose.  `Dag.render` is deterministic and ALPHA-CANONICAL (terms digested through
+      `Matching.canon`, so the fresh names a run draws do not leak into the artifact — the nqueens
+      trace differed between two runs before this; it does not now).  `Builder.splice` embeds an inner
+      DAG with its ids remapped.  `Checker.check` replays every node against the law table, the
+      routine table and the node table.  `SC.Config.trace = true` records the drive: `driveT`
+      records every law step and every positional call replacement, `makeNode`/`scCall`/`generalize`
+      return their step id.  `EquivPipelineTest` writes one trace per declared cell:
+      proofs/pipeline/traces/*.trace.tsv (42 files: space / space-agnostic / graph / graph-agnostic /
+      zipper / zipper-agnostic for the seven cornerstones).  `scripts/check_traces.py` is the
+      INDEPENDENT structural checker (DAG shape, compose chains, leaf kinds, artifact references,
+      identity chains, every CLAIMS.tsv cell has a trace).  `ProofTraceCheck` 3/3: replay, deterministic
+      rendering, nine mutations (matcher, side condition, endpoint, dependency, cycle …) each fail.
+  C4  scripts/proof_closure.py `check_trace_closure` — ONE dependency graph over trace nodes, law
+      certificates (proofs/STATUS.tsv rows, wildcard families `threeway_*`/`impl_*` for the GROUND
+      laws), registry entries (terminating/REGISTRY.tsv, proofs/unbounded, proofs/spatial), backend
+      refinement artifacts and trusted entries.  Every trace is UNCONDITIONAL / CONDITIONAL (names
+      the trusted entries it rests on) / OPEN; `target/trace-closure.tsv` is the machine-readable
+      closure; a `LAW-JUSTIFIED`/`PROVED` cell whose closure is OPEN is an error.  Result on the tree:
+      42 traces — CONDITIONAL 10 (the graph cells rest on T4, the zipper cells on the refinement
+      theorem's stated premises), UNCONDITIONAL 32, OPEN 0.  THE INJECTION GATE
+      (`--inject-open O6a --expect-consumers 1`, in scripts/gates.py): marking O6a OPEN turns exactly
+      its consumers OPEN (2 traces — the substitution-bearing cells), which is the check that the
+      closure is transitive and not vacuous.  `CostReport.certified` (A6) already refuses an OPEN
+      spatial rule; `Certified.scala` remains the boundary that consumes both.
+      DEFECTS FOUND AND FIXED ON THE WAY: the status lookup keyed `laws/law_x` rows by their full
+      path (every law resolved to "no status row"); wildcard certificate patterns (`threeway_*.smt2`)
+      were matched literally; `check_traces.py` read CLAIMS.tsv's first column as the artifact path.
+  NOT DONE, NAMED: the graph cells are CONDITIONAL on T4 (the egglog `expand` step is trusted, not
+      proved); the zipper cells on the refinement theorem's premises; the trace closure does not yet
+      feed a generated acceptance table (that is E3).
+
+  STATE: check_traces 42/42 cells 0 problems; proof_closure --check green (0 OPEN traces);
+      injection gate green; check_lean.sh green (SubstSem, Drive, Spatial in the package);
+      EquivPipelineTest 9/9 in regenerate mode (traces rewritten with canonical digests) and
+      ProofTraceCheck 3/3 in the same JVM; audit_pipeline_markers green.  Nothing committed.
+
+================================================================================================
+2026-09-05  tasks.md B1–B2 — THE DECISION LAYER (local host; same toolchain as above)
+================================================================================================
+
+  B1  src/main/scala/Alternatives.scala — residual alternatives are explicit.
+      `Alternative` = residual + C3 trace (top and per-node) + node table + semantic scope + the
+      `CostSem.Inputs` it was priced under + per-backend `CostReport` + provenance + the driver's
+      counters.  `explore` drives ONE configuration under several `SC.Config`s: the fold-first driver
+      over the full law table, the table with one law FAMILY off (Fusion: iter-setop-merge/wrap-merge/
+      unwrap-merge/unwrap-fuse-const; Sharing: iter-union-indep/iter-comp-right-hoist; PrefixRestriction:
+      restriction-push/raffination-push/unwrap-push/raff-restrict-algebra/restrict-raff-wrap-both;
+      RangeReduction: range-singleton), every pair of families, and each of those with `unroll = k`
+      (SC.Config.unroll: unfold-before-fold, a definitional step recorded as an `Unfold` node).  New
+      supercompiler knobs: `SC.Config.laws` (the table a run drives with), `SC.Config.unroll`,
+      `SC.groundLaws` (constant-ops, literal-space-ops — held to proofs/laws/REGISTRY.tsv's GROUND rows)
+      and `SC.lawsWithout`; `reduceTraced` takes its law table.  The exploration is EVALUATION-FREE:
+      the GROUND laws are removed from every table and the suite counts executor events across the
+      whole exploration (0).  Hash-consing by the ALPHA-CANONICAL residual with routine names
+      canonicalised by first appearance (`canonResidual`); merge only under equal semantic scope and
+      equal resource assumptions; subsumption (same residual, unconditional over conditional); a widening
+      budget that drops the largest residual and records it.  Deterministic TSV (`Frontier.render`) and
+      trace serialization (`renderTraces`).
+      AlternativesCheck 7/7: the fixture (two same-source loops, an invariant branch, a restriction of a
+      union) yields 7 alternatives with 7 distinct (work, alloc) trie intervals, 15 merged twins
+      recorded (the unroll and range variants collapse onto their fold-first twins), 0 refused;
+      every trace replays; every certificate contains every executor's counted run; hash-consing,
+      subsumption, widening and determinism each asserted; the unroll fixture (`suf`) yields the
+      fold-first residual plus one- and two-times unrolled residuals, all replaying.
+      NOT CREATED HERE, NAMED: materialization (term-level literal folding evaluates; the backend-side
+      choice is the zipper's certificate); alternatives from the spatial (conditional) rewrites of
+      SpatialPipeline are not yet fed into the frontier.
+  B2  src/main/scala/Pareto.scala + TraceClosure.scala + scripts/check_selection.py.
+      Admission: certified derivation AND closed trace (`TraceClosure`, the Scala mirror of
+      proof_closure.py's trace resolution: laws → proofs/STATUS.tsv through the law registry, wildcard
+      families, DEFINITIONAL laws closed; unfold/fold/generalization → O6a/O12a/O12b MECHANIZED;
+      refinement nodes → their artifact's row; GraphOptimizerNoOp → CONDITIONAL T4).  Constraints
+      proved by the upper bound (INFEASIBLE / UNPROVEN otherwise).  Dominance over interval-valued
+      work/alloc/rounds/touch: x ≼ y iff every x.hi ≤ y.lo, one strict, no x.hi infinite; a component
+      NEITHER backend counts (the reference's touch) is not compared; across backends an unknown side
+      is [0, inf] and blocks both directions.  Incomparable survivors KEPT; selection by the declared
+      tie rule (lexicographic (hi, lo) over the priority components, then id, then backend).  The
+      certificate is a pure function of the C rows; `Pareto.replay` and `scripts/check_selection.py`
+      (no shared code) re-derive it.
+      ParetoCheck 6/6: fusion / sharing / prefix-range / call-composition / recursion fixtures under six
+      objectives = 30 certificates, all replayed by both checkers, deterministic; the objective changes
+      the choice in every family (2/2/3/3/3 distinct choices over the four minimise objectives);
+      sharing: `alloc` selects the hoisted residual (allocates strictly less), `work` the exactly-priced
+      per-head one (tighter upper bound — the conservative rule, the overlap recorded); recursion: the
+      fold-first residual under every objective, the unrolled ones KEPT with unbounded certificates;
+      infinite upper bounds never win; uncertified / open-closure candidates NOT-ADMITTED with the
+      reason; three forgeries (dropped rejection, swapped selection, altered interval) fail both replays.
+      OBSERVED, NOT FIXED: the trie/zipper/graph intervals are the A4 must/may envelopes and are wide
+      even under exact inputs (trie work [95, 971] where the reference is [85, 90]); cross-backend
+      dominance is therefore rarely provable and the tie rule decides.  Under summarized inputs the trie's
+      TailsUnion upper bound is infinite (`narySummBounds`), which B3's cases avoid by pricing on values.
+
+================================================================================================
+2026-09-05  tasks.md B3, D1, D2 — DECISION CASES, STRUCTURAL COVERAGE, CORNERSTONE CERTIFICATES
+================================================================================================
+
+  B3  src/main/scala/Decisions.scala + DecisionsCheck; docs/DECISIONS.md and proofs/decisions/ GENERATED
+      through ArtifactSink (regenerate/verify).  Eight cases in five families, each: symbolic precondition,
+      the B1 frontier, the B2 selection under a declared objective, EVERY alternative's counted run on every
+      executor beside its predicted interval, and two scalar predictors evaluated on the same frontier —
+      fewest residual nodes after most rewrites, and output cardinality.  Verdicts: range-after-call
+      DIFFERENTIATED; fusion-alloc-work AGREES, fusion-work-trie DIFFERENTIATED (fusion saves alloc, costs
+      trie work); tails-disjoint DIFFERENTIATED (cardinality), tails-overlap AGREES; pointer-rebuild
+      DIFFERENTIATED; puzzle15-expand (all backends, graph wins) AGREES, puzzle15-expand-reference
+      DIFFERENTIATED — `comp-lit-to-wraps` materialises the projection under each move prefix, cheaper on
+      the graph, dearer on the reference evaluator: the certified choice depends on the backend, which a
+      backend-blind heuristic cannot express.  No case is CONTRADICTED.  New law family MATERIALIZATION
+      (`comp-lit-to-wraps`) in `Alternatives.families`.
+      FOUND ON THE WAY: a "violation" FreshTrieNode 63 > [18, 46] was the harness charging input-trie
+      construction and interning to the counted run (Decisions.counted now builds inputs and warms up
+      outside the counted region, as the gate suites do) — not an unsound bound; the graph executor has
+      no stabilised-argument Call rule, so a recursive residual is not counted on the graph (datalog-sn).
+  D1  proofs/pipeline/COVERAGE.tsv is STRUCTURAL: 9 columns (cornerstone, kind, feature, artifact,
+      artifact-node, trace, trace-node, claim, state).  Constructors/binders/calls anchor to the term of
+      the trace's term table that carries them (`T:<digest>`; the term table is now rendered in a
+      constructor-form printer `ProofTrace.structural`, and digests are taken over it) and to the trace
+      root; laws to their first LawInstance node and the cell header naming them; recursion to the
+      unfold/fold/generalization nodes; boundaries to `; BOUNDARY:` headers; zipper holes to `#holeN`
+      lines; resource rules (A6 ids used by the cost derivation on any backend) to the spatial registry.
+      The claim is the CLAIMS.tsv cell whose trace closure discharges it; the state is `covered` /
+      `exercised-unproved` (closure OPEN) / census `proved-unexercised` (73 registry laws no trace fires)
+      / `unsupported` (7 constructors no cornerstone exercises: Fold, TailsIntersection, GroundedPS,
+      GroundedSS, GroundedPP, GroundedSP, Range).  scripts/check_coverage.py re-derives every row from the
+      files (216 covered, 0 problems) and `--selftest` catches five mutations (blank feature, deleted trace
+      node, deleted term, misnamed law, opened closure).  audit_pipeline_markers.py delegates its coverage
+      block to it.  `Certified.boundary`'s Call→O6a marker left alone (the closure discharges it).
+  D2  proofs/pipeline/resources/<stone>.tsv: every cornerstone priced by the A4/A5 analysis over its actual
+      inputs on all four backends, the counted run beside every interval (108 counted values, all inside),
+      the derivation spelled out; <stone>.frontier.tsv and <stone>-alloc.tsv: the B1 frontier and the B2
+      selection under `alloc`; proofs/pipeline/RESOURCES.tsv indexes them.  scripts/check_resources.py
+      re-checks containment and replays every certificate.  All 42 cells accepted by the audit (25
+      LAW-JUSTIFIED, 16 TRIVIAL, 1 REAL; 0 BUDGET / SINGLE-SIDE / chained).  The TraceClosure Scala mirror
+      resolves pipeline cell artifacts through proofs/pipeline/STATUS.tsv exactly as the Python does
+      (and the pipeline writes its status rows BEFORE the coverage rows read them).
+  GATES ADDED (scripts/gates.py): morkl.AlternativesCheck, morkl.ParetoCheck, morkl.DecisionsCheck;
+      check_selection.py (proofs/decisions + proofs/pipeline/resources), check_coverage.py (+ --selftest),
+      check_resources.py.
+  STATE: EquivPipelineTest 9/9 + DecisionsCheck 4/4 in regenerate mode; proof_closure --check green (42
+      traces: 32 UNCONDITIONAL, 10 CONDITIONAL on T4); check_traces 42/42; check_coverage 0 problems +
+      selftest OK; check_resources 0 problems; check_selection 20 certificates 0 problems; audit --accept
+      42/42.  Nothing committed; everything staged.
+
+================================================================================================
+2026-09-05  tasks.md D3, E1, E3 (E2 prepared) — STRESS THEOREM, DISCRIMINATING GATES, ACCEPTANCE FROM EVIDENCE
+================================================================================================
+
+  D3  proofs/lean/Zippy/Puzzle15.lean (sorry-free, in the package): boards as permutations of Fin 16, moves
+      as swaps with the blank; `neighbours_le_four`, `successors_le_four`, `expand_le` (one expansion of F
+      has <= 4·|F| boards — THE FINITE MAXIMUM every result bound is held to), `blank_move`, `move_move`,
+      `move_tile_unchanged` (projection commutes with a move elsewhere), `states_card` (16!), `tile_fibre`
+      (15 values at a non-blank position), `nonblank_card`.  proofs/puzzle15/REGISTRY.tsv names them;
+      Puzzle15Check checks their instantiation on the MORKL encoding (7 boards over 3 BFS levels legal, 8
+      edges legal moves, the count equals Sliding.refReachable) and writes EXPANSION.tsv; then prices one
+      expansion under four declarations x four backends (CERTIFICATE.tsv, REPORT.md): every counted run
+      inside its interval (32 values), every finite result-size bound <= 4·|frontier|, a certificate-
+      justified backend choice (graph: counted alloc 13175 against 32985 / 36730 / 36730; SELECTION-alloc.tsv
+      replays).  scripts/check_puzzle15.py re-derives the expansion with its own BFS and re-checks
+      containment and the proved maximum; usefulness findings are reported there and GATED by the suite.
+      NOT USEFUL, NOT EXCUSED: under the SYMBOLIC declarations ("one path of length 16", "<= 4 paths of
+      length 16") the summarized 16-deep iteration nest multiplies fibres it cannot correlate — reference
+      work [2, 1.8e11], alloc [0, inf], result size [0, inf]; graph work [1460, 28610] but size inf.  The
+      committed thresholds (THRESHOLDS.tsv) claim finiteness there and the USEFULNESS test fails:
+      Puzzle15Check is 13/14 and D3 is SOUND-BUT-NOT-USEFUL in docs/ACCEPTANCE.md.  The value-declared
+      certificates are tight on the reference and graph executors (width <= 1.05) and finite everywhere.
+  E1  src/main/scala/Mutation.scala + MutationGates (8/8): five analysis mutations, each consulted at one
+      named site, each caught by one assertion that passes without it — drop-alias (the memoised count on a
+      declared input: touch [4, 31] vs counted 4), reverse-range (result size [8, 8] vs 2 paths),
+      erase-calls (not finite), optimistic-lower (containment), no-widening-record (an exact certificate
+      after a budget widening); the two script mutations (an injected open O6a must reach >= 1 consumer and a
+      claim of 1000 must fail; check_coverage --selftest's five forgeries); an ADVERSARIAL FAMILY (depth 1..4
+      x width 1..3 x aliasing x prefix overlap, seed 2026): 144 (program, backend) pairs contained.
+      THE FAMILY FOUND A DEFECT: `TailsUnion` on the zipper counted 16 cursor reads in one JVM and 17 in
+      another for the same program and input — `SpaceZipper.TailsUnion.merged` reduced its child cursors
+      in interned-id order, so the Union chain's shape (and `terminal`'s short-circuit) depended on the
+      process-wide interning history.  It now reduces in item order, as the cost model does.  The zipper
+      model's maximal-sharing walk also identifies structurally equal exact tries (the executor's `eq` may
+      hold for them).  `CostReport.valueSize` (the result's cardinality interval) is new.
+      Injection runs of proof_closure.py write target/trace-closure-injected.tsv, not the real closure.
+  E3  scripts/gen_acceptance.py + docs/ACCEPTANCE_MAP.tsv: every row of docs/ACCEPTANCE.md is derived —
+      the acceptance sentence parsed from tasks.md, the gates the map names (S soundness / U usefulness)
+      with their results from target/gates.tsv (written by `gates.py --run`), the closures (registry kinds,
+      target/trace-closure.tsv, proofs/spatial/STATUS.tsv), the evidence files (dirty or missing =>
+      UNMEASURED).  States GREEN / CONDITIONAL / UNSOUND / SOUND-BUT-NOT-USEFUL / UNMEASURED; `--check`
+      fails when the committed document disagrees with the evidence; `--selftest` shows that injecting O6a
+      open, failing a usefulness gate, failing a soundness gate and dirtying a generated result each move
+      their row.  docs/acceptance.tsv is the machine-readable twin.  Protocol: a gates run records, the
+      document is regenerated and committed, the NEXT run's `--check` holds it to the record.
+  E2  PREPARED, NOT RUN: publish_benchmarks.py --reproduce records its result for E3; the gate manifest
+      (scripts/gates.py) now has 31 gates (20 suites incl. the acceptance suites of the spine, 11 scripts)
+      and records target/gates.tsv.  Publication requires a committed, clean tree; nothing was committed
+      (the standing instruction), so E2's acceptance cannot be exercised here — its row is UNMEASURED.
+  GATES ADDED: morkl.MutationGates, morkl.Puzzle15Check, morkl.SpatialSemanticsCheck, DeltaIRCheck,
+      SpatialDomainCheck, CrossFunctionCostCheck, ProofTraceCheck, EquivPipelineTest (verify mode);
+      audit --accept, check_puzzle15.py, gen_acceptance --selftest / --check.
+
+  FINAL STATE (2026-09-05, local host; `scripts/gates.py --run`, 34 gates, twice): 32 PASS.  RED: (1)
+      `check_references --strict` — 110 dangling citations of the plan.md / docs/ACCEPTANCE.md the owner
+      removed in 0737bb6 (not touched here; the regenerated docs/ACCEPTANCE.md has no dangling reference);
+      (2) `morkl.Puzzle15Check` USEFULNESS — the symbolic puzzle15 declarations (D3), reported above.
+      The determinism gate went red once on a wall-clock "analysed in N ms" line that SpatialEventsCheck
+      printed under the CALIBRATION prefix; it is a TIMING line now and both runs agree on all 49 counted
+      lines.  docs/ACCEPTANCE.md regenerated from the record: 9 GREEN, A6 CONDITIONAL (T9), 9 UNMEASURED
+      because their generated evidence is uncommitted; with the evidence taken as committed the rows read
+      12 GREEN, A6/C4/D1/D2 CONDITIONAL (T9; the graph cells' T4), D3 SOUND-BUT-NOT-USEFUL, E2 UNMEASURED.
+      Nothing committed; everything staged.

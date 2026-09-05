@@ -763,6 +763,12 @@ object SC:
     "restrict-raff-wrap-both" -> Lower.RestrictRaffWrapBoth,
     "iter-setop-merge" -> Lower.IterSetOpMerge)
   val simplifyRules: List[Space => Space] = sourceLaws.map(_._2)
+  /** THE GROUND LAWS: the two that EVALUATE a closed subterm (`Lower.ConstantOps` tries `eval` on every
+   *  node, `Lower.LiteralSpaceOps` evaluates literal-operand algebra).  proofs/laws/REGISTRY.tsv files
+   *  them as kind GROUND; `AlternativesCheck` holds this set to that table.  An exploration that must
+   *  be evaluation-free (tasks.md B1) drives with `sourceLaws` minus these. */
+  val groundLaws: Set[String] = Set("constant-ops", "literal-space-ops")
+  def lawsWithout(names: Set[String]): List[(String, Space => Space)] = sourceLaws.filterNot((n, _) => names(n))
 
   /** Bounded fixpoint reduction.  The step cap turns an oscillating/non-terminating rule into a
    *  clear error; the wall-clock `deadline` stops it GRACEFULLY (returns the current normal form,
@@ -780,11 +786,11 @@ object SC:
   /** [[reduce]] with the per-step trace.  `record = false` is `reduce` itself (no allocation per
    *  step); the loop is ONE loop so the traced and untraced reductions cannot disagree. */
   def reduceTraced(s: Space, cap: Int = 100000, deadline: Deadline = Deadline.never,
-                   record: Boolean = true): (Space, Vector[Step]) =
+                   record: Boolean = true, laws: List[(String, Space => Space)] = sourceLaws): (Space, Vector[Step]) =
     val steps = if record then Vector.newBuilder[Step] else null
     def round(x0: Space): Space =
       var x = x0
-      for (name, f) <- sourceLaws do
+      for (name, f) <- laws do
         val y = f(x)
         if record && (y ne x) && y != x then steps += Step(name, x, y)
         x = y
@@ -855,7 +861,17 @@ object SC:
    *  (a supercompiler should always be time-bounded); raise it for very large specializations. */
   case class Config(maxNodes: Int = 2000, maxDepth: Int = 400, generalize: Boolean = true,
                     literalsAreAtoms: Boolean = true, maxReduce: Int = 100000,
-                    compileBudgetMs: Double = Config.DefaultBudgetMs)
+                    compileBudgetMs: Double = Config.DefaultBudgetMs,
+                    /** record the typed proof trace of the run (tasks.md C3): one DAG per residual node */
+                    trace: Boolean = false,
+                    /** THE LAW TABLE THIS RUN DRIVES WITH (tasks.md B1): a subset of [[sourceLaws]].  Two runs
+                     *  over two subsets reach two normal forms of the same program — two residual
+                     *  ALTERNATIVES, each with its own law trace — which is how fusion, hoisting and
+                     *  push choices are exposed instead of committed. */
+                    laws: List[(String, Space => Space)] = sourceLaws,
+                    /** UNROLL BEFORE FOLDING (tasks.md B1): the first `unroll` times a configuration would
+                     *  fold to a node, unfold it once more instead.  0 is the ordinary fold-first driver. */
+                    unroll: Int = 0)
   object Config:
     /** Default wall-clock compile budget (ms).  Finite by design — compilation must be bounded. */
     val DefaultBudgetMs: Double = 10000.0
@@ -883,6 +899,9 @@ object SC:
     var whistleFallbacks = 0
     /** residual names whose body consumed one unfold of their own configuration BEFORE driving */
     val unfoldedNodes = mutable.Set.empty[RoutinePtr]
+    /** B1: how many times each node's would-be folds were unrolled instead (bounded by `cfg.unroll`) */
+    val unrolled = mutable.Map.empty[RoutinePtr, Int]
+    var unrolls = 0
     /** the alphabet of the INPUTS — the finite label set Kruskal is applied to — and the labels the
      *  drive produced outside it */
     val alphabet0: Set[Matching.Label] = Set.empty // set by `run`
@@ -905,8 +924,29 @@ object SC:
     // function nodes: (residual name, configuration at creation, ordered ref params, ordered mention params)
     val fnodes = mutable.ArrayBuffer.empty[(RoutinePtr, Space, Vector[PathRef], Vector[SpaceMention])]
     val routines = mutable.Map.empty[RoutinePtr, Routine]
+    // ---- THE TYPED PROOF TRACE (tasks.md C3): every unfold, law step, fold and generalization ----
+    val traceBuilder = new ProofTrace.Builder
+    /** per residual node: the trace from one unfold of its configuration to its body */
+    val traces = mutable.LinkedHashMap.empty[RoutinePtr, Int]
+    /** the top-level drive's trace id (configuration → residual top) */
+    var topTrace: Int = -1
+    def nodeTable: ProofTrace.NodeTable = fnodes.iterator.map((g, c, refs, ments) => g -> (c, refs, ments)).toMap
+    def traceOf(g: RoutinePtr): Option[ProofTrace.Dag] = traces.get(g).map(traceBuilder.dag)
+    def topTraceDag: Option[ProofTrace.Dag] = if topTrace >= 0 then Some(traceBuilder.dag(topTrace)) else None
 
     def fresh(hint: String): RoutinePtr = { counter += 1; RoutinePtr(s"${hint}_sc$counter") }
+    /** A COLLISION-SAFE CANONICAL IDENTITY for a residual node (tasks.md C2): the name carries a digest
+     *  of the ALPHA-NORMALISED configuration and its parameter arity, so two nodes with the same
+     *  configuration up to renaming have the same identity and two different configurations never
+     *  share one — an integer counter alone is neither.  The counter is kept as a readable prefix
+     *  (and as the tie-breaker no canonical digest should ever need). */
+    def canonicalName(hint: String, c: Space): RoutinePtr =
+      counter += 1
+      val (refs, ments) = paramsOf(c)
+      val canon = Matching.canon(c).toString + s"|${refs.length}/${ments.length}"
+      val md = java.security.MessageDigest.getInstance("SHA-256").digest(canon.getBytes("UTF-8"))
+      val digest = md.take(6).map(b => f"${b & 0xff}%02x").mkString
+      RoutinePtr(s"${hint}_sc${counter}_$digest")
     def hintOf(c: Space): String = c match { case Space.Call(r, _, _) => r.s; case _ => "node" }
     def paramsOf(c: Space): (Vector[PathRef], Vector[SpaceMention]) = (Matching.freeRefsV(c), Matching.freeMentionsV(c))
 
@@ -926,11 +966,36 @@ object SC:
     /** Drive: reduce, then supercompile every routine-call subterm bottom-up.  The compile deadline
      *  is checked at every driver step (here) and inside `reduce`/`scCall`, so the WHOLE driver is
      *  time-bounded; on expiry `scCall` raises CompileBudgetExceeded and `run` falls back. */
-    def drive(s: Space, path: List[(Space, RoutinePtr)], depth: Int): Space =
+    def drive(s: Space, path: List[(Space, RoutinePtr)], depth: Int): Space = driveT(s, path, depth)._1
+
+    /** `drive` with its trace: the law steps of the reduction, then every call replaced at its
+     *  position (a fold, a new node or a generalization), as one composed step `s → result` */
+    def driveT(s: Space, path: List[(Space, RoutinePtr)], depth: Int): (Space, Int) =
       if deadline.expired then throw CompileBudgetExceeded
       reductions += 1
-      val r = reduce(s, cfg.maxReduce, deadline)
-      subs(r)(spost = { case c: Space.Call if callable(c) => scCall(c, path, depth) })
+      val (r, steps) = reduceTraced(s, cfg.maxReduce, deadline, record = cfg.trace, laws = cfg.laws)
+      val ids = mutable.ArrayBuffer.empty[Int]
+      if cfg.trace then for st <- steps do ids += traceBuilder.add(ProofTrace.lawNode(st.law, st.before, st.after))
+      if !cfg.trace then
+        (subs(r)(spost = { case c: Space.Call if callable(c) => scCall(c, path, depth)._1 }), -1)
+      else
+        // the calls, bottom-up and positionally, so every replacement is a recorded step of the whole term
+        var cur = r
+        def go(x: Space, pos: Vector[Int]): Space =
+          val kids = ProofTrace.children(x)
+          val rebuilt = if kids.isEmpty then x else ProofTrace.rebuild(x, kids.indices.toVector.map(i => go(kids(i), pos :+ i)))
+          rebuilt match
+            case c: Space.Call if callable(c) =>
+              val whole = ProofTrace.replaceAt(cur, pos, c).getOrElse(cur)
+              val (res, by) = scCall(c, path, depth)
+              val next = ProofTrace.replaceAt(whole, pos, res).getOrElse(whole)
+              if by >= 0 then ids += traceBuilder.add(ProofTrace.Node.Positional(whole, pos, next, by))
+              cur = next
+              res
+            case other => other
+        val out = go(r, Vector.empty)
+        val tid = if ids.isEmpty then traceBuilder.add(ProofTrace.Node.AlphaEquivalence(s, out)) else traceBuilder.compose(ids.toVector, s, out)
+        (out, tid)
 
     /** Supercompile one Call configuration: fold -> whistle/generalize -> new node.
      *
@@ -941,7 +1006,7 @@ object SC:
      *  argument substitution regardless of context.  Global memoization only ever increases
      *  sharing.  The whistle still uses the ancestor PATH (innermost first via `collectFirst`,
      *  so generalization is deterministic w.r.t. the most-recent embedding ancestor). */
-    def scCall(c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): Space =
+    def scCall(c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): (Space, Int) =
       if deadline.expired then throw CompileBudgetExceeded
       if depth > cfg.maxDepth then sys.error(s"SC depth cap ${cfg.maxDepth} exceeded at ${c.show}")
       if fnodes.length > cfg.maxNodes then sys.error(s"SC node cap ${cfg.maxNodes} exceeded")
@@ -950,6 +1015,20 @@ object SC:
         Matching.instanceOf(gc, c).map((g, refs, ments, gc, _))
       }.nextOption()
       folded match
+        case Some((g, _, _, _, _)) if cfg.unroll > 0 && unrolled.getOrElse(g, 0) < cfg.unroll && callable(c) =>
+          // B1: UNROLL INSTEAD OF FOLDING — one more unfold of this configuration, driven; the fold the
+          // ordinary driver would have emitted happens one level deeper (the same node, now at its cap).
+          // Semantically a definitional step (Drive.lean `unfold_step`), recorded as such.
+          unrolled(g) = unrolled.getOrElse(g, 0) + 1
+          unrolls += 1
+          val u = unfold(c)
+          val (body, bodyTrace) = driveT(u, path, depth + 1)
+          val by = if cfg.trace then
+            val d = defs(c.r)
+            val un = traceBuilder.add(ProofTrace.Node.Unfold(c.r, c, d.body, d.mentions.zip(c.mentions).map((m, t) => m.s -> t), d.refs.zip(c.refs).map((p, t) => p.s -> t), u))
+            traceBuilder.compose(Vector(un, bodyTrace), c, body)
+          else -1
+          (body, by)
         case Some((g, refs, ments, gc, (sm, pm))) =>
           // THE FOLD-SITE PREMISE, CHECKED: the instance substitution applied ONCE to the node's
           // configuration is the folded configuration.  `instanceOf`'s docstring argues this; the
@@ -959,7 +1038,10 @@ object SC:
             sys.error(s"SC fold premise violated: ${gc.show} under the instance substitution is " +
                       s"${back.show}, not the folded configuration ${c.show}")
           foldChecks += 1
-          folds += 1; callOf(g, refs, ments, sm, pm)
+          folds += 1
+          val call = callOf(g, refs, ments, sm, pm)
+          val by = if cfg.trace then traceBuilder.add(ProofTrace.Node.Fold(g, gc, sm.toVector.map((m, t) => m.s -> t).sortBy(_._1), pm.toVector.map((p, t) => p.s -> t).sortBy(_._1), c, call)) else -1
+          (call, by)
         case None =>
           val whistler =
             if !cfg.generalize then None
@@ -968,29 +1050,41 @@ object SC:
             case Some(pc) => whistles += 1; generalize(pc, c, path, depth)
             case None => makeNode(c, path, depth)
 
-    def makeNode(c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): Space =
+    def makeNode(c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): (Space, Int) =
       val (refs, ments) = paramsOf(c)
-      val g = fresh(hintOf(c))
+      val g = canonicalName(hintOf(c), c)
       fnodes += ((g, c, refs, ments))
       // ONE UNFOLD PER NODE, recorded before the body is driven: the productivity premise
       val unfolded = unfold(c)
       unfoldedNodes += g
-      val body = drive(unfolded, (c, g) :: path, depth + 1)
+      val (body, bodyTrace) = driveT(unfolded, (c, g) :: path, depth + 1)
       routines(g) = Routine(g, refs, ments, body)
-      Space.Call(g, refs.map(Path.Deref(_)), ments.map(Space.Mention(_)))
+      val call = Space.Call(g, refs.map(Path.Deref(_)), ments.map(Space.Mention(_)))
+      if cfg.trace then
+        val d = defs(c.r)
+        val u = ProofTrace.Node.Unfold(c.r, c, d.body, d.mentions.zip(c.mentions).map((m, t) => m.s -> t), d.refs.zip(c.refs).map((p, t) => p.s -> t), unfolded)
+        traces(g) = traceBuilder.compose(Vector(traceBuilder.add(u), bodyTrace), c, body)
+        // the new node's call denotes its configuration: a fold with the identity instance
+        val by = traceBuilder.add(ProofTrace.Node.Fold(g, c, Vector.empty, Vector.empty, c, call))
+        (call, by)
+      else (call, -1)
 
     /** Whistle response: most-specific-generalize the embedded ancestor against the current
      *  call (downward generalization), supercompile the more-general skeleton, then plug the
      *  driven hole-values back in.  The generalized skeleton, being strictly more general, is
      *  driven once and its recursive descendants fold to it. */
-    def generalize(pc: Space, c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): Space =
+    def generalize(pc: Space, c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): (Space, Int) =
       val gen = Matching.msg(pc, c, cfg.literalsAreAtoms)
       gen.skeleton match
         case sk: Space.Call if !Matching.alphaEqual(sk, c) =>
           generalizations += 1
-          val residGen = scCall(sk, path, depth + 1)
-          val sm = gen.rsm.view.mapValues(v => drive(v, path, depth + 1)).toMap
-          Matching.subst(residGen, sm, gen.rpm)
+          val (residGen, skTrace) = scCall(sk, path, depth + 1)
+          val driven = gen.rsm.toVector.sortBy(_._1.s).map((m, v) => { val (d, t) = driveT(v, path, depth + 1); (m, v, d, t) })
+          val sm = driven.map((m, _, d, _) => m -> d).toMap
+          val result = Matching.subst(residGen, sm, gen.rpm)
+          val by = if cfg.trace then traceBuilder.add(ProofTrace.Node.Generalization(sk, gen.rsm.toVector.map((m, t) => m.s -> t).sortBy(_._1),
+                     gen.rpm.toVector.map((p, t) => p.s -> t).sortBy(_._1), c, residGen, skTrace, driven.map((m, o, d, t) => (m.s, o, d, t)), result)) else -1
+          (result, by)
         case _ =>
           // the whistle blew (coarse, label-based) but the generalizer (fine coupling) found nothing
           // to abstract: the path is extended by a node an ancestor embeds.  Counted, because the
@@ -1020,7 +1114,10 @@ object SC:
     st.alphabetBase = Matching.labels(conf, cfg.literalsAreAtoms) ++
       materialize(conf, defs).values.flatMap(r => Matching.labels(r.body, cfg.literalsAreAtoms))
     val residual =
-      try Residual(st.drive(conf, Nil, 0), st.routines.toMap)
+      try
+        val (top, tid) = st.driveT(conf, Nil, 0)
+        st.topTrace = tid
+        Residual(top, st.routines.toMap)
       catch
         case CompileBudgetExceeded =>
           st.converged = false

@@ -27,25 +27,40 @@ stops compiling cannot hide by having no importer.
   Delta      — the four-valued variance analysis `varB` and its soundness (`+` monotone, `-`
                antitone, `·` constant), and the differential transfer `dden` with the delta-step
                equation and the accumulated-delta / full-iteration equivalence (A2).
+  SubstSem   — O6a as a theorem: substituting into a term denotes evaluating it in the environment the
+               substitution denotes (`substS_denT`, every constructor, every fresh-name policy), with the
+               fold-site instance lemma, alpha-renaming and shadowing as corollaries (C1).
+  Drive      — the fold theorem INSTANTIATED (C2): typed driving steps (certified law at a position,
+               fold of a checked instance), their soundness under every consistent valuation, the
+               unfold at the fixpoint and at every approximant via `substS_denT`, and the derivation
+               of `FoldPremises` for the mixed valuations — `drive_correct`: every residual routine
+               computes its configuration's original meaning.
   Spatial    — the resource domain's interval arithmetic and order (`Ivl.mem_add`, `mem_mul`,
                `mem_foldl_hull`, `sum_mem`, the MUST/MAY rule `must_may`), `RangeBounds.normalize`
                transcribed with its window and slice-length lemmas, the widening contract, and the
                finite-model principle the independent transfer checker instantiates (A6).
+  Puzzle15   — the 15-puzzle's state space independently of the cost model (D3): boards as
+               permutations, ≤ 4 neighbours / successors, one expansion ≤ 4·|frontier|, 16! states,
+               the path encoding's fibres (16 at the blank position, 15 elsewhere), moves preserve
+               every other cell's tile.  What Puzzle15Check holds the certificates to.
   Trace      — GENERATED.  The correspondence trace: every substitution the Scala actually
                performed, re-checked against `substS` (1E.2).  See LeanRender.scala.
 -/
 import Zippy.Syntax
 import Zippy.Pointwise
 import Zippy.Subst
+import Zippy.SubstSem
 import Zippy.PathInduction
 import Zippy.Fixpoint
 import Zippy.Counting
 import Zippy.Positive
 import Zippy.Supercompile
+import Zippy.Drive
 import Zippy.Whistle
 import Zippy.Zipper
 import Zippy.Strata
 import Zippy.Delta
 import Zippy.Spatial
+import Zippy.Puzzle15
 import Zippy.Trace
 import Zippy.WhistleTrace

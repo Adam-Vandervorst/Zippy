@@ -4,10 +4,10 @@ SUBSTITUTION, MECHANIZED (plan.md 1E.1).
 
 This is the Lean mirror of `src/main/scala/Subst.scala`: simultaneous in both sorts,
 capture-avoiding, total over every constructor.  Item 3's `O6a` — beta-soundness of capture-avoiding
-inlining — is OPEN as a first-order theorem, and `terminating/REGISTRY.tsv` says why: it needs a
-model of the substitution FUNCTION, and a first-order model that agreed with the implementation by
-construction would prove nothing about it.  Here the function is a DEFINITION and the hygiene
-statements are theorems about it, checked by Lean's kernel.
+inlining — was OPEN as a first-order theorem because it needs a model of the substitution FUNCTION.
+Here the function is a DEFINITION and the hygiene statements are theorems about it, checked by
+Lean's kernel; its SEMANTIC half — substitution denotes environment extension — is `SubstSem.lean`
+(`substS_denT`, tasks.md C1), which closes O6a.
 
 ==THE ONE PLACE THIS DEFINITION DIFFERS FROM THE SCALA, AND WHY==
 At a binder that would capture, `Subst.scala` does TWO passes over the body: first a rename

@@ -271,7 +271,12 @@ object SpaceZipper:
       val cs = src.children
       zdemandN(ZipperDemandEvent.TailsChainEntry, cs.size.toLong)
       zdemandN(ZipperDemandEvent.VirtualCursorAlloc, math.max(cs.size.toLong - 1L, 0L))
-      if cs.isEmpty then empty else cs.valuesIterator.reduce(Union(_, _))
+      // IN ITEM ORDER, not interned-id order: the chain's shape decides which operand `terminal` reaches
+      // first and short-circuits on, so a reduce over `IntMap` order made the cursor-read count depend on the
+      // process-wide interning history (the E1 adversarial family measured 16 reads in one JVM and 17 in
+      // another for the same program and input).  The cost model orders children by item, and now so does
+      // the executor.
+      if cs.isEmpty then empty else cs.toVector.sortBy((k, _) => Interner.unintern(k)).map(_._2).reduce(Union(_, _))
     def terminal = { effort(EffortEvent.ZipperCursorRead); merged.terminal }
     def children = { effort(EffortEvent.ZipperCursorRead); merged.children }
     def descend(k: Int) = { effort(EffortEvent.ZipperCursorRead); merged.descend(k) }

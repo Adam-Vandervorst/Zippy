@@ -403,7 +403,7 @@ object Sliding:
     def rec(i: Int, cur: Space): Space =
       if i == heads.size - 1 then Space.Iteration(cur, heads(i).known(1), rest, marked)
       else
-        val mid = SpaceMention(s"__n${i}h${math.abs(body.hashCode())}")
+        val mid = SpaceMention(s"__n${i}h${math.abs(ProofTrace.structural(body).hashCode)}")
         Space.Iteration(cur, heads(i).known(1), mid, rec(i + 1, Space.Mention(mid)))
     rec(0, src)
 

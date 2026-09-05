@@ -61,6 +61,13 @@ lattice to the residual system built from actual `Space` bodies.
 
     proofs/lean/Zippy/Supercompile.lean#Zippy.Fold.fold_correct
     proofs/lean/Zippy/Supercompile.lean#Zippy.Fold.resid_lfp_eq_orig
+
+==INSTANTIATED (tasks.md C2, `Drive.lean`)==
+`DriveSystem.premises` DERIVES `FoldPremises` from a run's typed driving trace: the unfold clause
+plus C1's semantic substitution theorem give the unfold step, `instance_denT` gives the fold step,
+`Ctx.plug_congr` lifts a certified law to its position, and the mixed valuations (original names at
+Kleene depth `n`, residual names at their configuration's depth-`n` meaning) satisfy fix, productive,
+zero, mono and sup.  `drive_correct` is the conclusion for the actual residual table.
 ==================================================================================================
 -/
 import Zippy.Positive

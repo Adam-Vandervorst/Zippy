@@ -1,0 +1,24 @@
+# SELECTION CERTIFICATE (tasks.md B2) — a pure function of the C rows and the objective; replay:
+# scripts/check_selection.py (independent), morkl.Pareto.replay (in-process).
+# objective	work-on-trie
+# priority	work,alloc,rounds,touch
+# dominance	work,alloc,rounds,touch
+# constraints	-
+# backends	trie
+# tie-rule	lexicographic (hi, lo) over the priority components, then alternative id, then backend order reference,trie,graph,zipper
+# reference-touch	modelled, no counted oracle: taken as [0, inf]; not compared between two reference candidates
+# columns	C	alt	backend	work.lo	work.hi	alloc.lo	alloc.hi	rounds.lo	rounds.hi	touch.lo	touch.hi	certified	closure
+C	14978b7772f126d2	trie	95	971	92	743	7	7	78	909	CERTIFIED	CLOSED
+C	2d0044171fd11267	trie	105	609	107	469	11	11	87	459	CERTIFIED	CLOSED
+C	3127de331b14337c	trie	104	932	103	714	10	10	86	889	CERTIFIED	CLOSED
+C	3647ed13b206b241	trie	98	650	95	497	8	8	80	472	CERTIFIED	CLOSED
+C	73071d9ca45b944d	trie	97	973	91	742	7	7	79	902	CERTIFIED	CLOSED
+C	87812a96c788732b	trie	96	648	96	498	8	8	79	479	CERTIFIED	CLOSED
+C	b74a8ec3bbe53433	trie	103	607	108	470	11	11	86	466	CERTIFIED	CLOSED
+S	b74a8ec3bbe53433	trie	ranked first by the tie rule among 7 incomparable survivors
+K	14978b7772f126d2	trie	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	2d0044171fd11267	trie	INCOMPARABLE with the selected: overlaps on work,alloc,rounds,touch
+K	3127de331b14337c	trie	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	3647ed13b206b241	trie	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	73071d9ca45b944d	trie	INCOMPARABLE with the selected: overlaps on work,alloc,touch
+K	87812a96c788732b	trie	INCOMPARABLE with the selected: overlaps on work,alloc,touch

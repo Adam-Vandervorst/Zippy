@@ -19,7 +19,7 @@ different runners.  `sbt exportTestRuntime` (build.sbt) writes an in-tree runner
 than a requirement.
 """
 
-import argparse, os, pathlib, re, subprocess, sys
+import argparse, datetime, os, pathlib, re, subprocess, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -28,13 +28,29 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_RUNNER = ROOT / "target" / "test-runtime" / "run-suite.sh"
 
 # ---------------------------------------------------------------------------------------------
-# THE SCALA GATE SUITES.  These four are review item 1's declared gate and the publisher's.
+# THE SCALA GATE SUITES.  The first four are review item 1's declared gate and the publisher's;
+# the B1/B2 suites are the decision layer's acceptance.
 # ---------------------------------------------------------------------------------------------
 GATE_SUITES = [
     "morkl.SpatialCostCheck",
     "morkl.SpatialEventsCheck",
     "morkl.SpatialScaleCheck",
     "morkl.SpatialPipelineCheck",
+    # tasks.md B1/B2: residual alternatives are explicit and evaluation-free; selection is by certified
+    # dominance, deterministic, and every removal replays through scripts/check_selection.py
+    "morkl.AlternativesCheck",
+    "morkl.ParetoCheck",
+    # tasks.md B3: the decision cases — certified choice, counted containment, scalar predictors compared
+    "morkl.DecisionsCheck",
+    # the acceptance suites of the spine, registered so docs/ACCEPTANCE.md can be generated from gate results
+    "morkl.SpatialSemanticsCheck",   # A1
+    "morkl.DeltaIRCheck",            # A2
+    "morkl.SpatialDomainCheck",      # A3
+    "morkl.CrossFunctionCostCheck",  # A5
+    "morkl.ProofTraceCheck",         # C3
+    "morkl.EquivPipelineTest",       # D2 (verify mode: every committed pipeline artifact matches)
+    "morkl.MutationGates",           # E1
+    "morkl.Puzzle15Check",           # D3 (verify mode: the committed puzzle15 artifacts match)
 ]
 
 # ---------------------------------------------------------------------------------------------
@@ -52,6 +68,11 @@ GATE_SCRIPTS = [
      ["check_references.py", "--snapshot=index", "--strict"]),
     ("reference-checker self-test (item 7)", ["check_references.py", "--selftest"]),
     ("pipeline marker/declaration audit (item 4)", ["audit_pipeline_markers.py"]),
+    ("pipeline claims accepted: no SINGLE-SIDE, BUDGET or chained cell (D2)", ["audit_pipeline_markers.py", "--accept"]),
+    ("typed proof traces: every declared cell resolves to a checked DAG (C3)", ["check_traces.py"]),
+    # D1: structural coverage — after proof_closure.py --check has written target/trace-closure.tsv (below);
+    # the ordering is by the closure gate's dependency, so these two run at the end of the list
+
     ("law certificates discharged (item 3/4)", ["check_laws.py"]),
     ("cited obligations discharged (item 3/4)", ["check_obligations.py"]),
     ("counted columns are run-order independent (0.2)", ["check_determinism.sh"]),
@@ -64,7 +85,20 @@ GATE_SCRIPTS = [
     # check below reads; an unclassified assert fails here (2E.4).
     ("every SMT assert classified: goal, definition, derived, or a named assumption (2E.4)",
      ["check_asserts.py"]),
-    ("proof status vs the trusted base (item 8)", ["proof_closure.py", "--check"]),
+    ("proof status vs the trusted base, one dependency graph over the traces (item 8, C4)", ["proof_closure.py", "--check"]),
+    # C4's acceptance as a gate: marking O6a open must turn every trace that unfolds or folds conditional
+    ("trust closure mutation: an injected open O6a reaches its consumers (C4)",
+     ["proof_closure.py", "--inject-open", "O6a", "--expect-consumers", "1"]),
+    # B2/B3: every committed selection certificate re-derives from its own candidate rows
+    ("selection certificates replay independently (B2, B3, D2)", ["check_selection.py", "proofs/decisions", "proofs/pipeline/resources"]),
+    ("structural coverage: every feature inside a checked chain, census complete (D1)", ["check_coverage.py"]),
+    ("structural coverage mutations are caught (D1)", ["check_coverage.py", "--selftest"]),
+    ("cornerstone resource certificates contain their counted runs; selections replay (D2)", ["check_resources.py"]),
+    ("puzzle15: legal expansion, counted runs inside, bounds under the proved maximum, thresholds (D3)", ["check_puzzle15.py"]),
+    # E3: the acceptance document is derived from the gate record this run writes (see main: the record is
+    # written BEFORE these two run, so `--check` sees this run's results)
+    ("acceptance mutations move their rows (E3)", ["gen_acceptance.py", "--selftest"]),
+    ("acceptance status agrees with the evidence (E3)", ["gen_acceptance.py", "--check"]),
 ]
 
 
@@ -136,6 +170,8 @@ def main():
     ap.add_argument("--runner", help="override the one-suite runner "
                                      "(default: target/test-runtime/run-suite.sh)")
     ap.add_argument("--scripts-only", action="store_true", help="skip the Scala suites")
+    ap.add_argument("--record", default=str(ROOT / "target" / "gates.tsv"),
+                    help="where to write one PASS/FAIL/NOT-RUN row per gate (read by scripts/gen_acceptance.py)")
     a = ap.parse_args()
 
     if a.list or not a.run:
@@ -156,6 +192,7 @@ def main():
     # SCRIPTS FIRST, and this order is deliberate: they cost seconds and the suites cost minutes, so
     # a broken reference or an unqualified PROVED is reported before a prover-backed suite has run.
     failed = run_scripts()
+    suites_ran = False
     if not a.scripts_only:
         runner = resolve_runner(a.runner)
         if runner is None:
@@ -163,6 +200,18 @@ def main():
                   f"Run `sbt exportTestRuntime` (or `sbt check`, which depends on it).")
             return 2
         failed += run_suites(runner)
+        suites_ran = True
+    # THE RECORD (E3): one row per gate, what actually happened to it in this run
+    failed_names = {name for name, _, _ in failed}
+    rec = pathlib.Path(a.record); rec.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with rec.open("w") as f:
+        f.write(f"# gate results\t{stamp}\n# kind\tname\tstatus\n")
+        for label, _argv in GATE_SCRIPTS:
+            f.write(f"script\t{label}\t{'FAIL' if label in failed_names else 'PASS'}\n")
+        for suite in GATE_SUITES:
+            f.write(f"suite\t{suite}\t{'NOT-RUN' if not suites_ran else 'FAIL' if suite in failed_names else 'PASS'}\n")
+    print(f"\nrecorded to {rec.relative_to(ROOT) if rec.is_relative_to(ROOT) else rec}")
 
     if failed:
         print(f"\n{len(failed)} of {ran} gate(s) FAILED:")

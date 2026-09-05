@@ -1,0 +1,16 @@
+# THE PUZZLE15 STATE-SPACE THEOREMS (tasks.md D3) — stated and proved independently of the cost model in
+# proofs/lean/Zippy/Puzzle15.lean; `scripts/check_puzzle15.py` verifies every row names a theorem that
+# file declares, and `scripts/check_lean.sh` builds them.  The concrete instantiation over the MORKL
+# encoding (paths `blank . t1 … t15`) is CHECKED by Puzzle15Check and re-checked by check_puzzle15.py on
+# the committed expansion (proofs/puzzle15/EXPANSION.tsv); it is not a Lean theorem about the MORKL program.
+# id	kind	theorem	statement
+P15-BOARD	MECHANIZED	Zippy.Puzzle15.Board	a board is a permutation of the 16 cells' tiles; a move stays a board by type
+P15-NEIGHBOURS	MECHANIZED	Zippy.Puzzle15.neighbours_le_four	no cell has more than four grid neighbours
+P15-SUCC	MECHANIZED	Zippy.Puzzle15.successors_le_four	a board has at most four successors
+P15-EXPAND	MECHANIZED	Zippy.Puzzle15.expand_le	one expansion of a frontier F has at most 4·|F| boards — the finite maximum of every result bound
+P15-BLANK	MECHANIZED	Zippy.Puzzle15.blank_move	the blank of the moved board is the cell it moved to
+P15-UNDO	MECHANIZED	Zippy.Puzzle15.move_move	moving back undoes a move
+P15-PROJ	MECHANIZED	Zippy.Puzzle15.move_tile_unchanged	every cell other than the two swapped keeps its tile: projection commutes with a move elsewhere
+P15-STATES	MECHANIZED	Zippy.Puzzle15.states_card	the state space is finite: 16! boards
+P15-FIBRE	MECHANIZED	Zippy.Puzzle15.tile_fibre	a non-blank position has at most 15 values
+P15-NONBLANK	MECHANIZED	Zippy.Puzzle15.nonblank_card	a board has exactly fifteen non-blank cells (path length 16 = blank + 15 tiles)

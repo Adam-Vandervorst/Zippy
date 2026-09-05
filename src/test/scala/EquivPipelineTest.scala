@@ -122,6 +122,56 @@ class EquivPipelineTest extends FunSuite:
     realCount += 1
     assert(runEggFileOpt(name, content), s"egglog rejected pipeline/$name at every rounds budget")
 
+  // ---- THE TYPED PROOF TRACE of every cell (tasks.md C3): checked here by replay, written beside the
+  //      cell for the independent structural checker (scripts/check_traces.py) ----
+  val traceDir = new java.io.File(smtDir, "traces"); traceDir.mkdirs()
+  var traceCount = 0
+  /** every cell's trace DAG, for the structural coverage census (tasks.md D1) */
+  val cellDags = scala.collection.mutable.Map.empty[String, ProofTrace.Dag]
+  def traceFile(cell: String, dag: ProofTrace.Dag, rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Unit =
+    val bad = ProofTrace.Checker.check(dag, rc)
+    assert(bad.isEmpty, s"$cell: the proof trace does not replay:\n  ${bad.mkString("\n  ")}")
+    ArtifactSink.write(new java.io.File(traceDir, s"$cell.trace.tsv"), dag.render)
+    cellDags(cell) = dag
+    traceCount += 1
+  /** the trace of a law chain `steps` from `from` to `to`; an identity when no law fired */
+  def lawChainDag(from: Space, to: Space, steps: Vector[SC.Step]): ProofTrace.Dag =
+    val b = new ProofTrace.Builder
+    if steps.isEmpty then
+      val root = b.compose(Vector(b.add(ProofTrace.Node.AlphaEquivalence(from, to)), b.add(ProofTrace.Node.OptimizerNoOp(from))), from, to)
+      b.dag(root)
+    else
+      val ids = steps.map(st => b.add(ProofTrace.lawNode(st.law, st.before, st.after)))
+      b.dag(b.compose(ids, from, to))
+  /** the trace of one LAW-JUSTIFIED diff pair: a replayed law chain when the reducer reproduces the
+   *  right side, else the cell's own artifact (whose LAW-JUSTIFIED header carries the join) */
+  def pairDag(b: ProofTrace.Builder, l: Space, r: Space, artifact: String, law: String): Int =
+    val (nl, steps) = SC.reduceTraced(l)
+    if steps.nonEmpty && SmtDiff.alphaNorm(nl) == SmtDiff.alphaNorm(r) then
+      val ids = steps.map(st => b.add(ProofTrace.lawNode(st.law, st.before, st.after)))
+      if nl == r then b.compose(ids, l, r)
+      else b.compose(ids :+ b.add(ProofTrace.Node.AlphaEquivalence(nl, r)), l, r)
+    else b.add(ProofTrace.Node.BackendRefinement("laws", "space", artifact, law, l, r))
+  /** the trace from `from` to `to` (both alpha-normalised) as POSITIONAL steps at the maximal differing
+   *  positions, each justified by a replayed law chain or, failing that, by the cell's prover artifact */
+  def diffChainDag(from: Space, to: Space, artifact: String, ident: Option[ProofTrace.Node]): ProofTrace.Dag =
+    val b = new ProofTrace.Builder
+    val positions = ProofTrace.diffPositions(from, to)
+    if positions.isEmpty then
+      val alpha = b.add(ProofTrace.Node.AlphaEquivalence(from, to))
+      val noop = b.add(ident.getOrElse(ProofTrace.Node.OptimizerNoOp(from)))
+      b.dag(b.compose(Vector(alpha, noop), from, to))
+    else
+      var cur = from
+      val ids = positions.map { (pos, l, r) =>
+        val law = SmtDiff.justify(l, r).getOrElse("residual pair (z3 + vampire)")
+        val by = pairDag(b, l, r, artifact, law)
+        val next = ProofTrace.replaceAt(cur, pos, r).getOrElse(sys.error(s"position ${pos.mkString(".")} vanished"))
+        val id = b.add(ProofTrace.Node.Positional(cur, pos, next, by))
+        cur = next; id
+      }
+      assert(cur == to, "the positional chain must end at the right side")
+      b.dag(b.compose(ids, from, to))
   var trivialCount = 0; var realCount = 0; var budgetCount = 0; var lawCount = 0; var identCount = 0
   var singleSideCount = 0
   /** which stones reached the renderers with their control flow INTACT, and which fell back to the
@@ -401,7 +451,8 @@ class EquivPipelineTest extends FunSuite:
    *  TRIVIAL-NO-OBLIGATION marker (recorded, counted) — never a fake check. */
   def agnosticLegs(name: String, stage: String, sideA0: Space, sideB0: Space,
                    smtA0: Space = null, smtB0: Space = null,
-                   withEgg: Boolean = true, extraTrusts: Vector[Certified.Trust] = Vector.empty): String =
+                   withEgg: Boolean = true, extraTrusts: Vector[Certified.Trust] = Vector.empty,
+                   graphRoutine: Option[Routine] = None): String =
     val (sideA, sideB) = (SmtDiff.alphaNorm(sideA0), SmtDiff.alphaNorm(sideB0))
     val (smtA, smtB) = (Option(smtA0).getOrElse(sideA), Option(smtB0).getOrElse(sideB))
     // O10b — WHAT A CELL WITH A RESIDUAL CUT ACTUALLY CLAIMS.
@@ -522,6 +573,12 @@ class EquivPipelineTest extends FunSuite:
     val smtText = Certified.trustsHeader(trusts) + s"\n; BOUNDARY: $stage\n" + boundedNote +
       SmtDiff.obligationsFile(s"pipeline $stage ($name), data-agnostic", smtA, smtB)
     runSmtFile(s"$name-$stage-agnostic.smt2", smtText)
+    // THE TYPED TRACE of this cell (tasks.md C3): an identity (alpha-equivalence + the verified optimiser
+    // no-op) or positional steps at the differing positions, each a replayed law chain or the cell's own
+    // prover obligation; written for the agnostic cell and its instance twin (the same claim)
+    val artifact = s"proofs/pipeline/$name-$stage-agnostic.smt2"
+    val dag = diffChainDag(sideA, sideB, artifact, graphRoutine.map(r => ProofTrace.Node.GraphOptimizerNoOp(r, sideB, sideA)))
+    traceFile(s"$name-$stage-agnostic", dag); traceFile(s"$name-$stage", dag)
     smtText
 
   /** the law NAMES inside a justification string (`unwrap-merge`, `replay: a + b`, `reduce-join: …`) */
@@ -630,8 +687,12 @@ class EquivPipelineTest extends FunSuite:
     zipperCells(name, prog, sc, rc, reference)
     graphCells(name, prog, reference)
     binderCensus(name, prog)
-    coverage(name, prog, SC.reduceTraced(prog)._2, abstractHoles(prog)._2)
+    val values = sc match { case SpaceContextMap(m) => m; case _ => Map.empty[SpaceMention, SpaceValue] }
+    writeStatus()   // the coverage rows read this stone's cell verdicts through TraceClosure: written first
+    coverage(name, prog, values, rc, abstractHoles(prog)._2)
     writeCoverage()
+    decisionCell(name, prog, values, rc)
+    writeResources()
     Loaders.note(s"[pipeline] $name markers so far: real=$realCount trivial=$trivialCount " +
                  s"law-justified=$lawCount budget=$budgetCount identical=$identCount single-side=$singleSideCount")
     writeStatus()
@@ -666,6 +727,8 @@ class EquivPipelineTest extends FunSuite:
         (if art.endsWith(".egg") then "" else "")
       runSmtFile(s"$name-space.smt2", trivial("INSTANCE", "smt2"))
       runEggFile(s"$name-space-agnostic.egg", trivial("DATA-AGNOSTIC", "egg"))
+      val idDag = lawChainDag(prog, reduced, Vector.empty)
+      traceFile(s"$name-space", idDag); traceFile(s"$name-space-agnostic", idDag)
       return
     // ---- the instance record: the chain, composed, with the differential
     val sb = new StringBuilder
@@ -682,6 +745,8 @@ class EquivPipelineTest extends FunSuite:
       sb.append(f"; STEP $i%3d  ${st.law}%-28s  ${sha12(st.before)} -> ${sha12(st.after)}   certificate(s): ${SmtDiff.certificateOf(st.law)}\n")
     sb.append(s"; endpoints: ${sha12(prog)} (program) -> ${sha12(reduced)} (SC.reduce)\n")
     runSmtFile(s"$name-space.smt2", sb.toString)
+    val chainDag = lawChainDag(prog, reduced, steps)
+    traceFile(s"$name-space", chainDag); traceFile(s"$name-space-agnostic", chainDag)
     // ---- the agnostic egg: each step's differing pairs re-derived under the certified movement rules
     val ctx = new AgnosticPipeline.RenderCtx
     val lets = new StringBuilder; val checks = new StringBuilder
@@ -774,6 +839,19 @@ class EquivPipelineTest extends FunSuite:
     runSmtFile(s"$name-zipper-agnostic.smt2", cell("DATA-AGNOSTIC", ""))
     runSmtFile(s"$name-zipper.smt2", cell("INSTANCE",
       "; INSTANCE-DIFFERENTIAL: SpaceZipper.materialize(transpileZ(program)) == eval(program) on this input (Scala assertEquals).\n"))
+    // THE TYPED TRACE: the universal zipper refinement theorem, instantiated on this shell (the leaf
+    // shell → read-back), then the read-back brought to the shell by positional law chains
+    val b = new ProofTrace.Builder
+    val (nb, ns) = (SmtDiff.alphaNorm(back), SmtDiff.alphaNorm(shell))
+    val thm = b.add(ProofTrace.Node.BackendRefinement("zipper", "zipper", "proofs/zipper_refinement.smt2",
+      "zipper-refinement (proofs/zipper_refinement.smt2; proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement)", shell, back))
+    val toNorm = b.add(ProofTrace.Node.AlphaEquivalence(back, nb))
+    val inner = diffChainDag(nb, ns, s"proofs/pipeline/$name-zipper-agnostic.smt2", Some(ProofTrace.Node.OptimizerNoOp(nb)))
+    val innerRoot = b.splice(inner)
+    val fromNorm = b.add(ProofTrace.Node.AlphaEquivalence(ns, shell))
+    val root = b.compose(Vector(thm, toNorm, innerRoot, fromNorm), shell, shell)
+    val zdag = b.dag(root)
+    traceFile(s"$name-zipper-agnostic", zdag); traceFile(s"$name-zipper", zdag)
 
   // ==============================================================================================
   // GRAPH — optimize's action, on the symbolic program
@@ -796,7 +874,7 @@ class EquivPipelineTest extends FunSuite:
     // inlined acyclic Call is the substitution premise O6a
     val hasCall = collect(prog)({ case c: Space.Call if rc.isDefinedAt(c.r) => c })._1.nonEmpty
     val extra = (Certified.boundary(uO) ++ (if hasCall then Vector(Certified.Trust.Open("O6a")) else Vector.empty)).distinct
-    val agnostic = agnosticLegs(name, "graph", optG, plainG, withEgg = false, extraTrusts = extra)
+    val agnostic = agnosticLegs(name, "graph", optG, plainG, withEgg = false, extraTrusts = extra, graphRoutine = Some(r))
     // the INSTANCE cell: the same obligation (it is data-agnostic) plus the executor differential
     val eO = EquivPipeline.expand(prog)
     val g = optimize(transpile(Routine(RoutinePtr(name), Vector.empty, Vector.empty, eO)))
@@ -809,25 +887,43 @@ class EquivPipelineTest extends FunSuite:
     runSmtFile(s"$name-graph.smt2", instance.replace("data-agnostic", "instance (data-agnostic obligation + differential)"))
 
   // ==============================================================================================
-  // COVERAGE (plan.md 2A.6): every constructor, binder, call pattern, optimiser law, recursive
-  // transformation and backend boundary a cornerstone exercises, with the artifact whose checked
-  // chain mentions it.  `scripts/audit_pipeline_markers.py --accept` verifies every row against the
-  // artifact it names and fails on a stone with no row of a required kind.
+  // STRUCTURAL COVERAGE (tasks.md D1): every constructor, binder, call pattern, recursive transformation,
+  // optimiser law, resource rule and backend boundary a cornerstone exercises — each row anchored to a
+  // TERM of a trace's term table (by digest) or a NODE of the trace DAG (by id), to the cell artifact's
+  // structured header, and to the CLAIMS.tsv cell whose trace closure discharges it.  Nothing here is a
+  // free string: `scripts/check_coverage.py` re-derives every row from the files and rejects an item the
+  // trace does not carry.  The census rows (`*`) list what NO cornerstone exercises.
   // ==============================================================================================
   val coverageRows = scala.collection.mutable.ArrayBuffer.empty[String]
-  def coverage(name: String, prog: Space, steps: Vector[SC.Step], holes: Vector[(SpaceMention, Space)]): Unit =
+  val exercisedCtors = scala.collection.mutable.Set.empty[String]
+  val exercisedLaws = scala.collection.mutable.Set.empty[String]
+  /** the constructors of the language — the census is complete against this list (mirrored in check_coverage.py) */
+  val allConstructors: Vector[String] = Vector("Empty", "Call", "Mention", "Singleton", "Literal", "Union", "Intersection", "Subtraction",
+    "Restriction", "Raffination", "Composition", "Iteration", "Fixpoint", "Fold", "Wrap", "Unwrap", "TailsUnion", "TailsIntersection",
+    "GroundedPS", "GroundedSS", "Range", "Deref", "Constant", "Concat", "GroundedPP", "GroundedSP")
+  def sname(x: Space): String = x match
+    case Empty => "Empty"; case Call(_, _, _) => "Call"; case Mention(_) => "Mention"; case Singleton(_) => "Singleton"; case Literal(_) => "Literal"
+    case Union(_, _) => "Union"; case Intersection(_, _) => "Intersection"; case Subtraction(_, _) => "Subtraction"; case Restriction(_, _) => "Restriction"
+    case Raffination(_, _) => "Raffination"; case Composition(_, _) => "Composition"; case Iteration(_, _, _, _) => "Iteration"; case Fixpoint(_, _, _) => "Fixpoint"
+    case Fold(_, _, _, _, _, _, _) => "Fold"; case Wrap(_, _) => "Wrap"; case Unwrap(_, _) => "Unwrap"; case TailsUnion(_) => "TailsUnion"
+    case TailsIntersection(_) => "TailsIntersection"; case GroundedPS(_, _) => "GroundedPS"; case GroundedSS(_, _) => "GroundedSS"; case Range(_, _, _) => "Range"
+  def coverage(name: String, prog: Space, values: Map[SpaceMention, SpaceValue], rc: PartialFunction[RoutinePtr, Routine],
+               holes: Vector[(SpaceMention, Space)]): Unit =
     val ctors = scala.collection.mutable.LinkedHashSet.empty[String]
     val binders = scala.collection.mutable.LinkedHashSet.empty[String]
     val calls = scala.collection.mutable.LinkedHashSet.empty[String]
+    def pname(p: Path): String = p match
+      case Path.Deref(_) => "Deref"; case Path.Constant(_) => "Constant"; case Path.Concat(_, _) => "Concat"
+      case Path.GroundedPP(_, _) => "GroundedPP"; case Path.GroundedSP(_, _) => "GroundedSP"
     def gp(p: Path): Unit =
-      ctors += p.getClass.getSimpleName.stripSuffix("$")
+      ctors += pname(p)
       p match
         case Path.Concat(l, r) => gp(l); gp(r)
         case Path.GroundedPP(q, _) => gp(q)
         case Path.GroundedSP(x, _) => go(x)
         case _ => ()
     def go(x: Space): Unit =
-      ctors += ctorName(x)
+      ctors += sname(x)
       x match
         case Union(a, b) => go(a); go(b)
         case Intersection(a, b) => go(a); go(b)
@@ -849,26 +945,101 @@ class EquivPipelineTest extends FunSuite:
         case GroundedSS(a, _) => go(a)
         case Empty | Literal(_) | Mention(_) => ()
     go(prog)
-    val zipperArt = s"proofs/pipeline/$name-zipper.smt2"
-    val spaceArt = s"proofs/pipeline/$name-space.smt2"
-    val graphArt = s"proofs/pipeline/$name-graph-agnostic.smt2"
-    // a constructor is "in a checked chain" where an artifact names it: the zipper cell lists every
-    // hole by constructor and the shell; constructors of the shell are named in the SHELL line below
-    for c <- ctors do coverageRows += s"$name\tconstructor\t$c\t$zipperArt"
-    for b <- binders do coverageRows += s"$name\tbinder\t$b\t$zipperArt"
-    for c <- calls do coverageRows += s"$name\tcall\t$c\t$zipperArt"
-    for l <- steps.map(_.law).distinct.sorted do coverageRows += s"$name\tlaw\t$l\t$spaceArt"
-    for (m, h) <- holes do coverageRows += s"$name\thole\t${ctorName(h)}\t$zipperArt"
-    for b <- Seq("space", "zipper", "graph") do
-      coverageRows += s"$name\tboundary\t$b\t" + (b match { case "space" => spaceArt; case "zipper" => zipperArt; case _ => graphArt })
+    def traceOf(cell: String) = s"proofs/pipeline/traces/$cell.trace.tsv"
+    val arts = Map("space" -> s"proofs/pipeline/$name-space.smt2", "zipper" -> s"proofs/pipeline/$name-zipper.smt2",
+                   "graph" -> s"proofs/pipeline/$name-graph-agnostic.smt2")
+    def state(dag: ProofTrace.Dag): String = if TraceClosure.of(dag).closed then "covered" else "exercised-unproved"
+    def row(kind: String, feature: String, artifact: String, anode: String, trace: String, tnode: String, claim: String, st: String): Unit =
+      coverageRows += Vector(name, kind, feature, artifact, anode, trace, tnode, claim, st).mkString("\t")
+    val sd = cellDags.getOrElse(s"$name-space", sys.error(s"$name: no space trace recorded before coverage"))
+    val stf = traceOf(s"$name-space"); val sState = state(sd); val sClaim = s"$name/space/instance"
+    val progD = ProofTrace.sha(prog)
+    assert(ProofTrace.sha(sd.src) == progD, s"$name: the space trace does not start at the program")
+    for c <- ctors do { row("constructor", c, stf, s"T:$progD", stf, s"N:${sd.root}", sClaim, sState); exercisedCtors += c }
+    for b <- binders do row("binder", b, stf, s"T:$progD", stf, s"N:${sd.root}", sClaim, sState)
+    for c <- calls do row("call", c, stf, s"T:$progD", stf, s"N:${sd.root}", sClaim, sState)
+    // every law the space chain fired: its first LawInstance node, and the cell header that names it
+    val lawIds = sd.nodes.zipWithIndex.collect { case (ProofTrace.Node.LawInstance(l, _, _, _, _), i) => (l, i) }.groupBy(_._1).view.mapValues(_.map(_._2).min).toMap
+    for (l, i) <- lawIds.toVector.sortBy(_._1) do { row("law", l, arts("space"), s"law:$l", stf, s"N:$i", sClaim, sState); exercisedLaws += l }
+    // recursive transformations: the unfold / fold / generalization nodes of any cell of this stone
+    for b <- Seq("space", "zipper", "graph"); dag <- cellDags.get(s"$name-$b").toSeq do
+      val seen = scala.collection.mutable.Set.empty[String]
+      for (n, i) <- dag.nodes.zipWithIndex if Set("Unfold", "Fold", "Generalization")(n.kind) && seen.add(n.kind) do
+        row("recursion", n.kind, traceOf(s"$name-$b"), s"T:${ProofTrace.sha(n.src)}", traceOf(s"$name-$b"), s"N:$i", s"$name/$b/instance", state(dag))
+    // backend boundaries: the cell artifact's `; BOUNDARY:` header and the root of the cell's trace
+    for b <- Seq("space", "zipper", "graph"); dag <- cellDags.get(s"$name-$b") do
+      row("boundary", b, arts(b), s"BOUNDARY:$b", traceOf(s"$name-$b"), s"N:${dag.root}", s"$name/$b/instance", state(dag))
+    // the zipper's holes: the artifact's `#holeN = Ctor` lines and the refinement node
+    for ((_, h), i) <- holes.zipWithIndex; dag <- cellDags.get(s"$name-zipper") do
+      val refId = dag.nodes.indexWhere(_.kind == "BackendRefinement")
+      row("hole", sname(h), arts("zipper"), s"HOLE:#hole$i", traceOf(s"$name-zipper"), s"N:${if refId >= 0 then refId else dag.root}", s"$name/zipper/instance", state(dag))
+      exercisedCtors += sname(h)
+    // resource rules (A6): every transfer rule the cost analysis of this program used, on any backend
+    val routine = Routine(RoutinePtr(s"#$name"), Vector.empty, values.keys.toVector.sortBy(_.s), prog)
+    val rules = Backend.values.toVector.flatMap { b =>
+      try SpatialPipeline.priceInputs(routine, CostSem.Inputs(values = values), rc, b).dependencies
+      catch case scala.util.control.NonFatal(_) => Vector.empty
+    }.distinct.sorted
+    for id <- rules do
+      val discharged = SpatialTransfers.status.get(id).exists(_ != "OPEN")
+      row("resource", id, "proofs/spatial/REGISTRY.tsv", s"RULE:$id", stf, s"N:${sd.root}", sClaim, if sState == "covered" && discharged then "covered" else "exercised-unproved")
+  // ==============================================================================================
+  // RESOURCE AND SELECTION CERTIFICATES PER CORNERSTONE (tasks.md D2): the program priced on every
+  // backend over its actual inputs (A4/A5, with the counted run beside every interval and the derivation
+  // spelled out), its residual alternatives (B1) and the certified selection under `alloc` (B2).
+  // `scripts/check_resources.py` re-checks containment and replays every selection certificate.
+  // ==============================================================================================
+  val resDir = new java.io.File(smtDir, "resources"); resDir.mkdirs()
+  val resourceRows = scala.collection.mutable.ArrayBuffer.empty[String]
+  def decisionCell(name: String, prog: Space, values: Map[SpaceMention, SpaceValue], rc: PartialFunction[RoutinePtr, Routine]): Unit =
+    val routine = Routine(RoutinePtr(name), Vector.empty, values.keys.toVector.sortBy(_.s), prog)
+    val defs: PartialFunction[RoutinePtr, Routine] = rc.orElse(Map(routine.name -> routine))
+    val inputs = CostSem.Inputs(values = values)
+    val res = Residual(prog, SC.materialize(prog, rc))
+    val sb = new StringBuilder
+    sb ++= s"# RESOURCE CERTIFICATE (tasks.md D2) — $name priced by the A4/A5 analysis over its actual inputs, per backend,\n"
+    sb ++= "# with the counted run of the executor beside every interval; the derivation follows (D rows).\n"
+    sb ++= s"# inputs\t${Alternatives.renderInputs(inputs).take(4000)}\n"
+    sb ++= "# B\tbackend\twork\talloc\trounds\ttouch\tcounted-work\tcounted-alloc\tcounted-rounds\tcounted-touch\tcertified\tdependencies\tsummaries(reused,computed)\n"
+    var contained = true
+    for b <- Backend.values do
+      val rep = SpatialPipeline.priceInputs(routine, inputs, rc, b)
+      val cnt = Decisions.counted(res, b, values)
+      val bad = cnt.toVector.flatMap(ev => rep.bounds.violations(ev))
+      assert(bad.isEmpty, s"$name/${b.slug}: the counted run escapes the certificate: ${bad.mkString("; ")}")
+      def iv(c: EffortComponent) = rep.component(c).show
+      def cn(c: EffortComponent) = cnt.map(_.component(c).toString).getOrElse("-")
+      sb ++= (Vector("B", b.slug) ++ EffortEvent.calibratedComponents.map(iv) ++ EffortEvent.calibratedComponents.map(cn) ++
+              Vector(if rep.certified then "CERTIFIED" else "UNCERTIFIED", rep.dependencies.mkString(","), s"${rep.summaries._1},${rep.summaries._2}")).mkString("\t") ++= "\n"
+      for l <- rep.derivation.render().linesIterator do sb ++= s"D\t${b.slug}\t$l\n"
+    ArtifactSink.write(new java.io.File(resDir, s"$name.tsv"), sb.result())
+    // the alternatives and the certified choice under `alloc`
+    val fr = Alternatives.exploreRoutine(routine, defs, inputs, Alternatives.Options(pairs = false, unrolls = Vector.empty))
+    val sel = Pareto.select(fr, Pareto.Objective.minimise(EffortComponent.Alloc))
+    assert(Pareto.replay(sel.render).isEmpty, s"$name: the selection certificate does not replay")
+    ArtifactSink.write(new java.io.File(resDir, s"$name-alloc.tsv"), sel.render)
+    ArtifactSink.write(new java.io.File(resDir, s"$name.frontier.tsv"), fr.render)
+    val chosen = sel.selected.getOrElse(sys.error(s"$name: nothing selected"))
+    val alt = fr(chosen.alt)
+    val cntSel = Decisions.counted(alt.residual, chosen.backend, values).map(_.component(EffortComponent.Alloc))
+    resourceRows += Vector(name, fr.alternatives.length.toString, chosen.key, alt.certificate(chosen.backend).component(EffortComponent.Alloc).show,
+                           cntSel.map(_.toString).getOrElse("-"), if alt.certified then "CERTIFIED" else "UNCERTIFIED",
+                           TraceClosure.of(alt.trace +: alt.nodeTraces.values.toVector).render, s"proofs/pipeline/resources/$name-alloc.tsv").mkString("\t")
+  def writeResources(): Unit =
+    val hdr = "# RESOURCES (tasks.md D2) — one row per cornerstone: the residual alternatives explored, the alloc-minimising\n" +
+              "# certified choice, its predicted and counted alloc, its certification and trace closure, its certificate.\n" +
+              "# cornerstone\talternatives\tselected\tpredicted-alloc\tcounted-alloc\tcertified\tclosure\tcertificate\n"
+    ArtifactSink.write(new java.io.File(smtDir, "RESOURCES.tsv"), hdr + resourceRows.sorted.mkString("\n") + "\n")
   def writeCoverage(): Unit =
-    val hdr = "# COVERAGE (plan.md 2A.6) — every construct a cornerstone exercises, and the artifact whose checked\n" +
-              "# chain mentions it.  Written by EquivPipelineTest; verified row by row by\n" +
-              "# `scripts/audit_pipeline_markers.py --accept` (the named artifact exists and mentions the item).\n" +
-              "# cornerstone\tkind\titem\tartifact\n"
-    ArtifactSink.write(new java.io.File(smtDir, "COVERAGE.tsv"), hdr + coverageRows.sorted.mkString("\n") + "\n")
-
-  /** 1D.4's census, kept as the gate it is: do the binders survive `expandKeepBinders`? */
+    val census =
+      allConstructors.filterNot(exercisedCtors).map(c => s"*\tconstructor\t$c\tcensus\tcensus\tcensus\tcensus\tcensus\tunsupported") ++
+      TraceClosure.lawCertificates.keys.toVector.sorted.filterNot(exercisedLaws).map(l => s"*\tlaw\t$l\tcensus\tcensus\tcensus\tcensus\tcensus\tproved-unexercised")
+    val hdr = "# STRUCTURAL COVERAGE (tasks.md D1) — every feature a cornerstone exercises, anchored to a term or node\n" +
+              "# of its typed proof trace and to the claim cell whose closure discharges it.  Written by EquivPipelineTest\n" +
+              "# from the parsed AST and the trace DAGs; re-derived row by row by `scripts/check_coverage.py`.\n" +
+              "# Census rows (`*`) list the constructors no cornerstone exercises and the certified laws no trace fires.\n" +
+              "# cornerstone\tkind\tfeature\tartifact\tartifact-node\ttrace\ttrace-node\tclaim\tstate\n"
+    ArtifactSink.write(new java.io.File(smtDir, "COVERAGE.tsv"), hdr + (coverageRows.distinct.sorted ++ census).mkString("\n") + "\n")
   def binderCensus(name: String, prog: Space)
                   (using PathContext, SpaceContext, PartialFunction[RoutinePtr, Routine]): Unit =
     try
