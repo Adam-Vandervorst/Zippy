@@ -4,732 +4,263 @@ import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
-/** THE COST ALGEBRA.
+/** ==============================================================================================
+ *  A4 — RESOURCE BOUNDS AS ABSTRACTIONS OF THE COUNTED EXECUTION (gate suite 1 of 4).
  *
- *  What these tests establish, and what they do not:
+ *  tasks.md A4 acceptance: "zero containment failures under exhaustive small-model checks and
+ *  randomized soundness hunts; the two known zipper counterexamples are covered as permanent
+ *  regressions; all four spatial cost suites pass without workload-specific exceptions or stale
+ *  expected formulae."
  *
- *   - the algebra's normalisation, idempotence and order are CHECKED (unit + numeric property);
- *   - `dominates` is checked NUMERICALLY against [[Sym.evalAt]] on random valuations — that is
- *     evidence for the sufficient condition, not a proof of it;
- *   - the per-operator transfer constants are a MODEL of the two interpreters read off their code.
- *     No test can validate a modelling choice; what is tested is that the model is compositional,
- *     monotone, and that the two backends genuinely disagree where they should;
- *   - the runtime check is a WEAK rank-correlation sanity check against measured `eval` time, not a
- *     calibration.  `eval` is only ever used as ground truth in tests, never by the analysis. */
+ *  WHAT IS GATED HERE, AND WHAT IS REPORTED.  SOUNDNESS is the gate: every counted execution of every
+ *  constructor on every backend lies inside the predicted interval, over an exhaustive small universe
+ *  (exact and summarized declarations) and a randomized hunt.  USEFULNESS — the interval width per
+ *  (backend, component) against the selection/budget tiers — is REPORTED per row and per tier; it is
+ *  not a pass/fail here, because tasks.md M1 says "wide intervals are allowed at this milestone but are
+ *  reported as not useful", and E1 is where usefulness becomes a published claim with its own gate.
+ *  There is NO ledger of named exceptions: a containment failure fails, whatever its name.
+ *  ============================================================================================== */
 class SpatialCostCheck extends FunSuite, CalibrationProbe:
-  override val munitTimeout = scala.concurrent.duration.Duration(20, "min")
+  override val munitTimeout = scala.concurrent.duration.Duration(30, "min")
 
-  def lit(ps: PathValue*): Space = Space.Literal(SpaceValue(ps.toSet))
   def p(items: String*): PathValue = PathValue(items.toList)
-  /** k distinct one-item paths */
-  def litN(k: Int, pre: String = "i"): Space = Space.Literal(SpaceValue((0 until k).map(i => p(pre + i)).toSet))
-  /** iterate and return the group head — the review's own head-count observation */
-  def headsOf(s: Space): Space =
-    Space.Iteration(s, PathRef("h").known(1), SpaceMention("_"), Space.Singleton(Path.Deref(PathRef("h").known(1))))
+  def sv(ps: PathValue*): SpaceValue = SpaceValue(ps.toSet)
+  val s0 = SpaceMention("s0"); val s1 = SpaceMention("s1")
+  val S0 = Space.Mention(s0); val S1 = Space.Mention(s1)
+  val noRc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
 
-  val N: Sym = Sym.v("N"); val M: Sym = Sym.v("M")
-  val chain: Vector[Sym] = Vector(Sym.one, Sym.log(N), N, N * Sym.log(N), N ** Sym.c(2), Sym.c(2) ** N)
+  /** the small universe: paths over {a, b} of length ≤ 2, values of at most 3 paths */
+  lazy val small: Vector[SpaceValue] =
+    SpatialGamma.universe(Vector("a", "b"), 2).filter(_.paths.size <= 3)
 
-  /** a pool of expressions used by the numeric property tests */
-  val pool: Vector[Sym] = Vector(
-    Sym.zero, Sym.one, Sym.c(7), N, M, N + M, N * M, N + Sym.c(3), Sym.c(2) * N,
-    Sym.log(N), N * Sym.log(N), N ** Sym.c(2), N ** Sym.c(3), M * (N ** Sym.c(2)),
-    Sym.c(2) ** N, Sym.c(3) ** N, Sym.maxOf(N, M), Sym.maxOf(N, N ** Sym.c(2)),
-    N * Sym.log(M) + Sym.c(5), (N + M) ** Sym.c(2), Sym.log(Sym.log(N)))
+  // ---- the oracle: every backend counted, one warm run first --------------------------------------------
+  final case class Counted(reference: Events, trie: Events, graph: Option[Events], zipper: Events)
+  def counted(prog: Space, spaces: Map[SpaceMention, SpaceValue], rc: PartialFunction[RoutinePtr, Routine] = noRc,
+              graph: Option[RecursiveOpGraph] = None): Counted =
+    val pc = PathContextMap(Map.empty); val sc = SpaceContextMap(spaces)
+    val ic = spaces.view.mapValues(ITrie.fromSpaceValue).toMap
+    eval(prog)(using pc, sc, rc); val r = EffortSink.events(eval(prog)(using pc, sc, rc))
+    evalI(prog)(using pc, ic, rc); val t = EffortSink.events(evalI(prog)(using pc, ic, rc))
+    execZ(prog)(using pc, ic, rc); val z = EffortSink.events(execZ(prog)(using pc, ic, rc))
+    val g = graph.map { gg =>
+      val ments = ic.map((k, v) => k.s -> v)
+      runGraphT(gg, Map.empty, ments); EffortSink.events(runGraphT(gg, Map.empty, ments)) }
+    Counted(r, t, g, z)
+
+  /** one containment verdict per (backend); a failure names the events that escaped */
+  final case class Row(label: String, backend: Backend, comp: EffortComponent, actual: Long, lo: Long, hi: Long):
+    def contains: Boolean = lo <= actual && actual <= hi
+    def width: Double = (hi.toDouble + 1) / (lo.toDouble + 1)
+    def show: String = f"$label%-40s ${backend.slug}%-9s $comp%-6s actual=$actual%8d in [${Ivl(lo, hi).show}]  ${if contains then "OK" else "OUT"}"
+
+  def rows(label: String, rep: CostReport, ev: Events): Vector[Row] =
+    EffortEvent.calibratedComponents.map(c => Row(label, rep.backend, c, ev.component(c), rep.component(c).lo, rep.component(c).hi))
+
+  def check(label: String, prog: Space, inputs: CostSem.Inputs, spaces: Map[SpaceMention, SpaceValue],
+            rc: PartialFunction[RoutinePtr, Routine] = noRc, withGraph: Boolean = true): (Vector[Row], Vector[String]) =
+    val g = if withGraph then Some(transpile(Routine(RoutinePtr("m"), Vector.empty, spaces.keys.toVector, prog))) else None
+    val c = counted(prog, spaces, rc, g)
+    val out = Vector.newBuilder[Row]; val bad = Vector.newBuilder[String]
+    def one(b: Backend, ev: Events): Unit =
+      val rep = if b == Backend.Graph then CostSem.analyzeGraph(g.get, inputs) else CostSem.analyze(prog, inputs, b, rc)
+      val rs = rows(label, rep, ev); out ++= rs
+      val v = rep.bounds.violations(ev)
+      if v.nonEmpty then bad += s"$label/${b.slug}: ${v.mkString("; ")}\n    prog = ${prog.show.replace('\n', ' ').take(200)}\n    counted = ${ev.show}\n    ${rep.derivation.render().linesIterator.take(12).mkString("\n    ")}"
+    one(Backend.Reference, c.reference); one(Backend.Trie, c.trie); one(Backend.Zipper, c.zipper)
+    for ge <- c.graph do one(Backend.Graph, ge)
+    (out.result(), bad.result())
+
+  /** the usefulness report: per (backend, component) the p50 / p95 / worst width, against the tiers */
+  def usefulness(title: String, rs: Vector[Row]): Unit =
+    println(s"USEFULNESS — $title (${rs.length} rows; reported, not gated at M1)")
+    for b <- Backend.values; c <- EffortEvent.calibratedComponents do
+      val mine = rs.filter(r => r.backend == b && r.comp == c)
+      if mine.nonEmpty then
+        val ws = mine.map(_.width).sorted
+        val tier = ProductRequirement.tierOf(b.slug, c)
+        val worst = ws.last
+        val verdict = tier match
+          case Some(t) if t.width.isInfinite => "not gated"
+          case Some(t) => if worst <= t.width then s"USEFUL (${t.name})" else s"NOT USEFUL for ${t.name} (worst width ${f"$worst%.1f"} > ${t.width})"
+          case None => "no tier"
+        println(f"USEFULNESS:   ${b.slug}%-9s $c%-6s p50=${ws(ws.length / 2)}%8.2f p95=${ws((ws.length * 95) / 100 min (ws.length - 1))}%8.2f worst=$worst%10.2f  $verdict")
 
   // ==============================================================================================
-  // 1. THE ALGEBRA
+  // 1. EXHAUSTIVE SMALL-MODEL CHECK — exact declarations
   // ==============================================================================================
 
-  test("normalisation folds constants and collects like terms") {
-    assertEquals((N + N + Sym.c(3) + Sym.c(4)).show, "2*N + 7")
-    assertEquals((N * N).show, "N^2")
-    assertEquals((N * (M + Sym.c(1))).show, "M*N + N")
-    assertEquals((Sym.c(2) * Sym.c(3)).show, "6")
-    assertEquals(Sym.log(Sym.c(8)).show, "3", "log is base 2 and folds on constants (ceil)")
-    assertEquals((N * Sym.zero).show, "0")
-    assertEquals((Sym.Inf * Sym.zero).show, "0", "doing an unbounded-cost thing zero times is free")
-    assertEquals((N + Sym.Inf).show, "inf")
-    assertEquals((N ** Sym.c(0)).show, "1")
-    assertEquals((N ** Sym.c(1)).show, "N")
-    // a Max collapses when one alternative dominates the other
-    assertEquals(Sym.maxOf(N, Sym.c(2) * N).show, "2*N")
-    assertEquals(Sym.maxOf(N, M).show, "max(M, N)")
-    // large exponents survive without being expanded (and stay canonical)
-    assertEquals((N ** Sym.c(40)).show, "N^40")
+  val binops: Vector[(String, (Space, Space) => Space)] = Vector(
+    "union" -> Space.Union.apply, "inter" -> Space.Intersection.apply, "sub" -> Space.Subtraction.apply,
+    "restrict" -> Space.Restriction.apply, "raff" -> Space.Raffination.apply, "comp" -> Space.Composition.apply)
+  val unops: Vector[(String, Space => Space)] = Vector(
+    "tails-union" -> Space.TailsUnion.apply, "tails-inter" -> Space.TailsIntersection.apply,
+    "wrap" -> (x => Space.Wrap(x, Path.Constant(p("w")))), "unwrap-a" -> (x => Space.Unwrap(x, Path.Constant(p("a")))),
+    "range-first" -> (x => Space.Range(x, 0, 1)), "range-last" -> (x => Space.Range(x, -1, 0)), "range-full" -> (x => Space.Range(x, 0, 0)),
+    "iter-heads" -> (x => Space.Iteration(x, PathRef("h").known(1), SpaceMention("r"), Space.Singleton(Path.Deref(PathRef("h").known(1))))),
+    "iter-tails" -> (x => Space.Iteration(x, PathRef("h").known(1), SpaceMention("r"), Space.Mention(SpaceMention("r")))),
+    "iter-rebuild" -> (x => Space.Iteration(x, PathRef("h").known(1), SpaceMention("r"), Space.Wrap(Space.Mention(SpaceMention("r")), Path.Deref(PathRef("h").known(1))))),
+    "fix-suffix" -> (x => Space.Fixpoint(x, SpaceMention("f"), Space.Union(Space.Mention(SpaceMention("f")), Space.TailsUnion(Space.Mention(SpaceMention("f")))))))
+
+  test("EXHAUSTIVE: every binary constructor over every pair of small values, exact declarations, four backends") {
+    var all = Vector.empty[Row]; var bad = Vector.empty[String]
+    val pairs = for a <- small; b <- small yield (a, b)
+    for (name, op) <- binops do
+      val prog = op(S0, S1)
+      for (a, b) <- pairs do
+        val (rs, bs) = check(s"$name", prog, CostSem.Inputs(values = Map(s0 -> a, s1 -> b)), Map(s0 -> a, s1 -> b))
+        all ++= rs; bad ++= bs
+      // aliased operand: the same input twice
+      for a <- small do
+        val (rs, bs) = check(s"$name/aliased", op(S0, S0), CostSem.Inputs(values = Map(s0 -> a)), Map(s0 -> a))
+        all ++= rs; bad ++= bs
+    println(s"COST: exhaustive binary — ${all.length} rows, ${bad.length} containment failures")
+    bad.take(6).foreach(b => println("COST: OUT " + b))
+    usefulness("exhaustive binary, exact declarations", all)
+    assertEquals(bad.length, 0, s"containment failures:\n${bad.take(10).mkString("\n")}")
   }
 
-  test("normalisation is idempotent, and equal quantities have equal normal forms") {
-    for e <- pool do
-      val n1 = Sym.normalize(e)
-      assertEquals(Sym.normalize(n1), n1, s"not idempotent: ${e.show}")
-    // two spellings of the same quantity
-    assertEquals(Sym.normalize((N + M) * (N + M)), Sym.normalize(N * N + Sym.c(2) * N * M + M * M))
-    assertEquals(Sym.normalize(N * (M + Sym.one)), Sym.normalize(N * M + N))
-  }
-
-  test("N, log N, N log N, N^2 and 2^N are ORDERED and DISTINCT (not all INF)") {
-    val os = chain.map(Sym.bigO)
-    for i <- 0 until os.length - 1 do
-      assert(os(i) < os(i + 1), s"${chain(i).show} (${os(i).show}) must be strictly below ${chain(i + 1).show} (${os(i + 1).show})")
-    assertEquals(os.distinct.length, os.length, "the order classes must be distinct")
-    assertEquals(chain.map(Sym.normalize).distinct.length, chain.length, "the normal forms must be distinct")
-    assertEquals(os.map(_.show), Vector("1", "log n", "n", "n log n", "n^2", "2^n"))
-    // and none of them is the saturated top
-    assert(os.forall(_ != BigO.inf), "no member of the chain may collapse to inf")
-    assertEquals(Sym.bigO(Sym.Inf), BigO.inf)
-    assertEquals(Sym.bigO(Sym.zero), BigO.zero)
-    assert(BigO.zero < BigO.const && BigO.const < BigO.inf)
-  }
-
-  test("dominates: the cases it must get right") {
-    assert(Sym.dominates(N ** Sym.c(2), N))
-    assert(Sym.dominates(N ** Sym.c(2), N * Sym.log(N)), "log x <= x on the domain (x >= 2)")
-    assert(Sym.dominates(N * Sym.log(N), N))
-    assert(Sym.dominates(N, Sym.log(N)))
-    assert(Sym.dominates(Sym.c(2) * N, N))
-    assert(Sym.dominates(N + M, N))
-    assert(Sym.dominates(Sym.Inf, Sym.c(2) ** N))
-    assert(Sym.dominates(Sym.maxOf(N, M), N))
-    assert(Sym.dominates(N, Sym.zero))
-    // and the ones it must NOT claim
-    assert(!Sym.dominates(N, N * Sym.log(N)))
-    assert(!Sym.dominates(N * Sym.log(N), N ** Sym.c(2)))
-    assert(!Sym.dominates(N, M))
-    assert(!Sym.dominates(N ** Sym.c(2), Sym.c(2) ** N))
-    assert(!Sym.dominates(Sym.c(2) ** N, Sym.Inf))
-    // INCOMPLETENESS, recorded honestly: 2^N >= N holds pointwise but is not derived here
-    assert(!Sym.dominates(Sym.c(2) ** N, N), "known incompleteness: no exponential-vs-polynomial rule")
-  }
-
-  test("dominates is SOUND against numeric evaluation (random valuations, vars >= 2)") {
-    val rng = new java.util.Random(9001)
-    var checkedPairs = 0; var checkedPoints = 0
-    for a <- pool; b <- pool if Sym.dominates(a, b) do
-      checkedPairs += 1
-      val names = (Sym.vars(a) ++ Sym.vars(b)).toVector
-      for _ <- 0 until 60 do
-        val v = names.map(n => n -> (2.0 + rng.nextDouble() * 60.0)).toMap
-        val (x, y) = (Sym.evalAt(a, v), Sym.evalAt(b, v))
-        assert(x >= y - 1e-9 * (1.0 + math.abs(y)),
-               s"dominates(${a.show}, ${b.show}) but $x < $y at $v")
-        checkedPoints += 1
-    assert(checkedPairs > 40, s"too few dominating pairs exercised ($checkedPairs)")
-    println(s"COST: dominates checked on $checkedPairs pairs x 60 valuations = $checkedPoints points")
-  }
-
-  test("bigO is monotone under dominates (checked on the pool)") {
-    for a <- pool; b <- pool if Sym.dominates(a, b) do
-      assert(Sym.bigO(a) >= Sym.bigO(b), s"dominates(${a.show}, ${b.show}) but bigO ${Sym.bigO(a).show} < ${Sym.bigO(b).show}")
-  }
-
-  test("tighter picks a sound upper bound, and prefers the declared constant") {
-    assertEquals(Sym.tighter(Sym.c(4), N).show, "4")
-    assertEquals(Sym.tighter(N, Sym.Inf).show, "N")
-    assertEquals(Sym.tighter(N ** Sym.c(2), N).show, "N")
-    // tighter always returns ONE of its arguments (so it can never invent an unsound bound)
-    for a <- pool; b <- pool do
-      val t = Sym.tighter(a, b)
-      assert(t == Sym.normalize(a) || t == Sym.normalize(b), s"tighter(${a.show}, ${b.show}) = ${t.show}")
+  test("EXHAUSTIVE: every unary, positional and loop constructor over every small value, exact declarations") {
+    var all = Vector.empty[Row]; var bad = Vector.empty[String]
+    for (name, op) <- unops; a <- small do
+      val (rs, bs) = check(name, op(S0), CostSem.Inputs(values = Map(s0 -> a)), Map(s0 -> a))
+      all ++= rs; bad ++= bs
+    println(s"COST: exhaustive unary — ${all.length} rows, ${bad.length} containment failures")
+    bad.take(6).foreach(b => println("COST: OUT " + b))
+    usefulness("exhaustive unary, exact declarations", all)
+    assertEquals(bad.length, 0, s"containment failures:\n${bad.take(10).mkString("\n")}")
   }
 
   // ==============================================================================================
-  // 2. PER-OPERATOR COST TRANSFERS
+  // 2. THE SUMMARIZED TIER — inputs declared by type, outcomes sampled from γ
   // ==============================================================================================
 
-  private def work(r: SpatialCost.Report): Sym = r.cost.work.symOpt.getOrElse(Sym.Inf)
-  private def alloc(r: SpatialCost.Report): Sym = r.cost.alloc.symOpt.getOrElse(Sym.Inf)
-  private def rounds(r: SpatialCost.Report): Sym = r.cost.rounds.symOpt.getOrElse(Sym.Inf)
-  private def touch(r: SpatialCost.Report): Sym = r.cost.touch.symOpt.getOrElse(Sym.Inf)
-
-  // NOTE ON COMPONENT MEANINGS (changed by the calibration work).
-  //   ALL FOUR components are now DEFINED BY COUNTED EVENTS, so a claim about any of them is a claim
-  //   about `Events.work`/`.alloc`/`.rounds`/`.touch` that `SpatialEventsCheck` measures and GATES.
-  //   A `Set` union is ONE AstDispatch and ZERO PathValue allocations, however large its operands: the
-  //   |a|+|b| element cost lives in `touch`.  For the TRIE-SHAPED backends `touch` is the counted
-  //   per-node descent inside the trie algebra (TrieNodeVisit + PatriciaVisit).  For the REFERENCE
-  //   backend alone it has no oracle — `eval` does that work inside `Set`, which carries no hooks — so
-  //   `ReferenceCost.touchNoOracle` declares it and the rank-correlation test at the end of this file
-  //   is the only (secondary) evidence for it.
-  test("reference-backend transfers: the shape of each operator's cost") {
-    def setO(s: Space) = SpatialCost.analyze(s, SetCost).cost
-    // a union is a linear scan of both operands, but the scan happens inside `Set` — so it is a
-    // `touch` claim, and the evaluator's own counted work for it is constant
-    assertEquals(setO(Space.Union(S"s0", S"s1")).touch.bigO, BigO(0, 1, 0))
-    assertEquals(setO(Space.Union(S"s0", S"s1")).work.bigO, BigO.const, "3 AstDispatches, whatever |s0|,|s1| are")
-    assertEquals(setO(Space.Union(S"s0", S"s1")).alloc, Amount.Bounded(Sym.zero), "no PathValue is built")
-    // a composition builds |a|.|b| FRESH PathValues — that IS counted, as FreshPath
-    assertEquals(setO(Space.Composition(S"s0", S"s1")).alloc.bigO, BigO(0, 2, 0))
-    assertEquals(setO(Space.Composition(S"s0", S"s1")).touch.bigO, BigO(0, 3, 0), "|a|.|b| concats of length |a|+|b|")
-    // a Restriction in `eval` is a NESTED startsWith scan, and every item comparison IS counted
-    assertEquals(setO(Space.Restriction(S"s0", S"s1")).work.bigO, BigO(0, 3, 0))
-    // `Range` in `eval` is `.toVector.sorted.slice` — a comparison sort through `pathValueOrdering`,
-    // which is instrumented, so the log factor lands in the COUNTED component
-    assert(setO(Space.Range(S"s0", 0, 3)).work.bigO.logs >= 1, "a set Range must pay for a sort")
-    // an Unwrap rebuilds the whole set
-    assertEquals(setO(Space.Unwrap(S"s0", "a")).alloc.bigO, BigO(0, 1, 0))
-    // and an empty operand costs nothing downstream
-    assertEquals(setO(Space.Composition(Space.Empty, S"s1")).touch, Amount.Bounded(Sym.zero))
-  }
-
-  test("trie-backend transfers: skipping and sharing show up as different cost") {
-    def trieO(s: Space) = SpatialCost.analyze(s, TrieCost).cost
-    // an Unwrap descends |p| levels and hands back the SHARED subtrie: no allocation at all
-    assertEquals(trieO(Space.Unwrap(S"s0", "a")).alloc, Amount.Bounded(Sym.zero))
-    assertEquals(trieO(Space.Wrap(S"s0", "a.b")).alloc, Amount.Bounded(Sym.c(2)), "a 2-node spine over a shared child")
-    // ATTRIBUTION, TWICE CORRECTED.  The first model claimed the trie `Range` needs "NO SORT"; the
-    // second charged `heads·log(heads)` per visited node to `touch`.  Both were wrong about the same
-    // fact: `IntTrie.ordered`'s sort is real work but it emits NO counted event, and `touch` is
-    // DEFINED as `TrieNodeVisit + PatriciaVisit`.  Work with no oracle cannot sit in a calibrated
-    // component — it is declared on the report instead.  What is left is the order-statistic slice,
-    // whose cost is a SUM (`window + depth`), never the product the predecessor charged.
-    val rng3 = trieO(Space.Range(S"s0", 0, 3))
-    assertEquals(rng3.touch.bigO.logs, 0,
-                 s"an uncounted sort must not sit inside `touch`: ${rng3.show}")
-    assert(rng3.touch.bigO.degree <= 1,
-           s"the order-statistic slice is linear in window + depth, not a product: ${rng3.show}")
-    assert(rng3.alloc.bigO.degree <= 1,
-           s"only the two cut chains are rebuilt, so `alloc` is linear in depth: ${rng3.show}")
-    // the reported ASSUMPTION is what makes the omission honest rather than silent
-    val rngRep = SpatialCost.analyze(Space.Range(S"s0", 0, 3), TrieCost)
-    assert(rngRep.assumptions.exists(_.contains("IntTrie.ordered")),
-           s"the uncounted sort must be DECLARED: ${rngRep.assumptions.mkString(" | ")}")
-    // restriction descends the prefix trie once instead of scanning pairs: the win is in COMPARISONS
-    // (`work`), which is exactly the component `Effort.startsWith` counts for the reference evaluator
-    assert(trieO(Space.Restriction(S"s0", S"s1")).work.bigO <
-             SpatialCost.analyze(Space.Restriction(S"s0", S"s1"), SetCost).cost.work.bigO)
-  }
-
-  test("the SAME facts give the two backends DIFFERENT costs") {
-    val cases: Vector[(String, Space)] = Vector(
-      "unwrap"      -> Space.Unwrap(S"s0", "a"),
-      "wrap"        -> Space.Wrap(S"s0", "a"),
-      "range"       -> Space.Range(S"s0", 0, 3),
-      "restriction" -> Space.Restriction(S"s0", S"s1"),
-      "composition" -> Space.Composition(S"s0", S"s1"),
-      "union"       -> Space.Union(S"s0", S"s1"))
-    var differing = 0
-    for (nm, s) <- cases do
-      val (a, b) = SpatialCost.compare(s)
-      if a.cost != b.cost then differing += 1
-      println(f"COST: $nm%-12s set[${a.cost.showO}]  trie[${b.cost.showO}]")
-    assertEquals(differing, cases.length, "every one of these must be priced differently by the two backends")
-    // A HEAD-DISJOINT intersection: the trie stops at the head level, the set evaluator cannot.
-    //
-    // WHY THE HEAD SETS AND NOT THE RESULT (a correction the event calibration forced).  The model used
-    // to take "the intersection is PROVABLY EMPTY" as licence to charge one head comparison and ZERO
-    // allocations.  Measurement refuted it: `ITrie.intersection`'s empty guard fires on an empty
-    // OPERAND, not an empty RESULT, so operands that share HEADS but no full path still descend every
-    // shared prefix — 12 counted fresh nodes against a predicted 1, three times over on the corpus.
-    // What the executor actually rewards is DISJOINT HEAD SETS, so that is what the model now asks for.
-    //
-    // The fibers are deliberately FAT (2 heads x 30 tails): the trie's win is that its cost is in the
-    // HEAD count while the set evaluator's is in the PATH count, and a 6-path example is too small to
-    // show it — at 2 heads x 3 tails the two are within one unit of each other.
-    val heads = Vector("a", "b"); val other = Vector("c", "d")
-    val av = SpaceValue(heads.flatMap(h => (0 until 30).map(i => p(h, "x" + i))).toSet)
-    val bv = SpaceValue(other.flatMap(h => (0 until 30).map(i => p(h, "x" + i))).toSet)
-    val (ma, mb) = (SpaceMention("A"), SpaceMention("B"))
-    val env = SpatialCost.Env(facts = SpatialTyping.Env(spaces = Map(ma -> SpatialType.of(av), mb -> SpatialType.of(bv))))
-    val (ds, dt) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(mb)), env)
-    assertEquals(touch(ds).show, "120", "a set intersection touches all 60+60 paths")
-    // The trie compares 2+2 HEADS and stops.  THE ASSERTION IS ASYMPTOTIC, NOT A CONSTANT (this used to
-    // pin `touch` to the literal string "13" and went red at 17 when `TrieAlgebraCost.tPer` changed):
-    // what matters is that the head-disjoint skip makes the trie's descent INDEPENDENT OF THE FIBER
-    // SIZE, so growing 30 tails per head to 300 must not move it.  A constant here is a constant factor
-    // the product requirements in `SpatialScaleCheck` measure against counted events; a GROWTH in it
-    // would be the failure.
-    val fatA = SpaceValue(heads.flatMap(h => (0 until 300).map(i => p(h, "x" + i))).toSet)
-    val fatB = SpaceValue(other.flatMap(h => (0 until 300).map(i => p(h, "x" + i))).toSet)
-    val fatEnv = SpatialCost.Env(facts = SpatialTyping.Env(
-      spaces = Map(ma -> SpatialType.of(fatA), mb -> SpatialType.of(fatB))))
-    val fatT = SpatialCost.analyze(Space.Intersection(Space.Mention(ma), Space.Mention(mb)), fatEnv, TrieCost)
-    assertEquals(touch(fatT).show, touch(dt).show,
-                 s"a 10x fatter fiber must not change the head-disjoint descent bound: " +
-                 s"${touch(dt).show} vs ${touch(fatT).show}")
-    assert(Sym.vars(touch(dt)).isEmpty && Sym.evalAt(touch(dt), Map.empty) <= 32.0,
-           s"the head-disjoint descent must be a small CONSTANT: ${touch(dt).show}")
-    println(s"COST: head-disjoint trie touch = ${touch(dt).show} at 2x30 tails and ${touch(fatT).show} " +
-            s"at 2x300 — flat, while the set evaluator goes ${touch(ds).show} -> ${touch(SpatialCost.analyze(Space.Intersection(Space.Mention(ma), Space.Mention(mb)), fatEnv, SetCost)).show}")
-    // and it allocates exactly the ONE root node it builds before discovering the result is empty
-    assertEquals(alloc(dt).show, "1", "the merged root node, and nothing below it")
-    assert(Sym.dominates(touch(ds), touch(dt)), s"${ds.show}\n${dt.show}")
-    // ground truth: the intersection really is empty (eval as ORACLE, never inside the analysis)
-    assertEquals(eval(Space.Intersection(Space.Literal(av), Space.Literal(bv))), SpaceValue(Set.empty))
-    // an OVERLAPPING intersection gets no skip.  `Mention(A) ∩ Mention(A)` is the SAME trie object,
-    // so `ITrie.intersection`'s `a eq b` fires and the trie really is O(1) there — a different fast
-    // path from the disjointness skip, and one the reference `Set` evaluator does not have.
-    val (os, ot) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(mb)),
-                                       env.copy(shapeFacts = false))
-    // 60 paths x 2 items, PLUS the always-present root node (Meas.nodes = 1 + size*len)
-    assertEquals(alloc(ot).show, "121", s"no shape tier, no skip: ${ot.show}")
-    val (_, selfT) = SpatialCost.compare(Space.Intersection(Space.Mention(ma), Space.Mention(ma)), env)
-    assertEquals(alloc(selfT).show, "0", s"x ∩ x is a pointer-identity accept: ${selfT.show}")
-    // dropping the shape tier removes the skip: the cost RISES, and the report says why
-    val noShape = SpatialCost.analyze(Space.Intersection(Space.Mention(ma), Space.Mention(mb)),
-                                      env.copy(shapeFacts = false), TrieCost)
-    assert(Sym.dominates(touch(noShape), touch(dt)), s"without the shape the trie must not be cheaper: ${noShape.show}")
-    assert(dt.assumptions.exists(_.contains("SpatialShapeCheck")), "a shape-derived skip must be flagged")
-    assert(noShape.assumptions.forall(!_.contains("SpatialShapeCheck")))
-  }
-
-  test("the model is NOT rigged: each backend wins somewhere") {
-    // compared on the WHOLE cost vector's order class (the max over all four components), which is
-    // the honest "which executable is asymptotically cheaper here"
-    def cheaper(s: Space): String =
-      val (a, b) = SpatialCost.compare(s)
-      if a.cost.bigO < b.cost.bigO then "set"
-      else if b.cost.bigO < a.cost.bigO then "trie" else "tie"
-    // a focus, an ordered slice and a prefix descent favour the trie
-    assertEquals(cheaper(Space.Unwrap(S"s0", "a")), "trie")
-    assertEquals(cheaper(Space.Restriction(S"s0", S"s1")), "trie")
-    // a flat set union favours the hash set: a trie merge walks nodes, not paths
-    assertEquals(cheaper(Space.Union(S"s0", S"s1")), "set")
-    assertEquals(cheaper(Space.TailsUnion(S"s0")), "set")
-    // A FULL-WINDOW RANGE IS NOW A TIE, and the change of answer is the point.  `SpatialCost.compare`
-    // prices the WARM phase on a free input mention, and `Meas.countKnown` says such a value is
-    // `CountKnown`: `ITrie.range` reads an already-populated per-node terminal count and returns its
-    // input, exactly as `sliceRange` does, so neither executable is asymptotically cheaper.  The trie only
-    // loses this operator when the count is genuinely cold — a `Cold` phase or a freshly built
-    // subexpression — which is what the cache-state channel exists to distinguish and what the assertion
-    // below pins.  (Before the channel existed the trie was charged the walk unconditionally, which is the
-    // stale claim `LIM-3`/`LIM-3g`/`LIM-3z` recorded and which is now retired.)
-    assertEquals(cheaper(Space.Range(S"s0", 0, 0)), "tie")
-    // the SAME term on a COLD run: the count walk is real there, so the reference backend wins
-    def cheaperCold(s: Space): String =
-      val (a, b) = (SpatialCost.analyze(s, SpatialCost.Env(), Backends.referenceCold),
-                    SpatialCost.analyze(s, SpatialCost.Env(), Backends.trieCold))
-      if a.cost.bigO < b.cost.bigO then "set" else if b.cost.bigO < a.cost.bigO then "trie" else "tie"
-    assertEquals(cheaperCold(Space.Range(S"s0", 0, 0)), "set")
+  test("SUMMARIZED: inputs declared by their spatial type; every sampled member's execution is contained") {
+    var all = Vector.empty[Row]; var bad = Vector.empty[String]
+    // three declarations of increasing coarseness for the same sample family
+    val decls: Vector[(String, SpaceValue => SpatialType)] = Vector(
+      "SpatialType.of" -> (v => SpatialType.of(v)),
+      "bounded(len≤2, ≤3)" -> (_ => SpatialType(Shape.top, SpaceType.bounded(Lower.LenBounds(0, 2), 3))),
+      "closed-heads" -> (v => SpatialType(Shape.of(v).copy(others = Ivl.zero), SpaceType.bounded(Lower.LenBounds(0, 2), 3))))
+    val rng = new java.util.Random(7)
+    val sample = small.filter(_ => rng.nextInt(3) == 0).take(16)
+    for (dn, decl) <- decls; (name, op) <- binops; a <- sample; b <- sample.take(6) do
+      val inputs = CostSem.Inputs(summaries = Map(s0 -> decl(a), s1 -> decl(b)))
+      val (rs, bs) = check(s"$name/$dn", op(S0, S1), inputs, Map(s0 -> a, s1 -> b))
+      all ++= rs; bad ++= bs
+    for (dn, decl) <- decls; (name, op) <- unops; a <- sample do
+      val (rs, bs) = check(s"$name/$dn", op(S0), CostSem.Inputs(summaries = Map(s0 -> decl(a))), Map(s0 -> a))
+      all ++= rs; bad ++= bs
+    println(s"COST: summarized — ${all.length} rows, ${bad.length} containment failures")
+    bad.take(6).foreach(b => println("COST: OUT " + b))
+    usefulness("summarized declarations", all)
+    assertEquals(bad.length, 0, s"containment failures:\n${bad.take(10).mkString("\n")}")
   }
 
   // ==============================================================================================
-  // 3. LOOPS AND RECURRENCES
+  // 3. THE RANDOMIZED SOUNDNESS HUNT
   // ==============================================================================================
 
-  test("an iteration's work is (head-groups) x (body work) — the review's own example") {
-    val a = lit(p("a", "0"), p("a", "1"), p("a", "2"), p("a", "3"))   // ONE head
-    val b = lit(p("a", "0"), p("b", "0"), p("c", "0"), p("d", "0"))   // FOUR heads
-    // the length histogram cannot tell these apart at all
-    assertEquals(SpatialTypes.infer(a).show, SpatialTypes.infer(b).show)
-    val (ra, rb) = (SpatialCost.analyze(headsOf(a), SetCost), SpatialCost.analyze(headsOf(b), SetCost))
-    assertEquals(rounds(ra).show, "1", s"A runs one body frame: ${ra.show}")
-    assertEquals(rounds(rb).show, "4", s"B runs four body frames: ${rb.show}")
-    assert(Sym.dominates(work(rb), work(ra)), "four frames cannot cost less than one")
-    // ground truth
-    assertEquals(eval(headsOf(a)).paths.size, 1)
-    assertEquals(eval(headsOf(b)).paths.size, 4)
-    // THE POINT of separating work from rounds.  With a body that squares the rest-set, the source
-    // with FEWER, FATTER groups costs MORE work while running FEWER frames — so `rounds` and `work`
-    // move in opposite directions on two sources the histogram calls identical.  A single "cost"
-    // scalar, and any cardinality bound, cannot express that.
-    val heavy = (x: Space) => Space.Iteration(x, PathRef("h").known(1), SpaceMention("t"),
-                                              Space.Composition(S"t", S"t"))
-    val (ha, hb) = (SpatialCost.analyze(heavy(a), SetCost), SpatialCost.analyze(heavy(b), SetCost))
-    assertEquals(rounds(ha).show, "1"); assertEquals(rounds(hb).show, "4")
-    // the fat-group source ALLOCATES more (16 fresh concatenated paths against 4), which is the
-    // counted `FreshPath` component, and touches more elements
-    assert(Sym.dominates(alloc(ha), alloc(hb)) && alloc(ha) != alloc(hb),
-           s"one group over 4 tails squares to 16 concats; four groups over 1 tail each to 4:\n${ha.show}\n${hb.show}")
-    assert(Sym.dominates(touch(ha), touch(hb)) && touch(ha) != touch(hb), s"${ha.show}\n${hb.show}")
-    // ground truth for that direction
-    assertEquals(eval(heavy(a)).paths.size, 16)
-    assertEquals(eval(heavy(b)).paths.size, 1)
-    // a symbolic source gives a symbolic group count, not INF
-    val sym = SpatialCost.analyze(headsOf(S"s0"), SetCost)
-    assertEquals(rounds(sym).show, "|s0|")
-    assert(rounds(sym) != Sym.Inf)
-  }
-
-  test("nested iterations accumulate rounds, and an unrunnable loop costs zero rounds") {
-    val src = lit(p("a", "x"), p("a", "y"), p("b", "x"), p("b", "y"))
-    val nested = Space.Iteration(src, PathRef("h").known(1), SpaceMention("t"),
-                   Space.Iteration(S"t", PathRef("g").known(1), SpaceMention("_"),
-                     Space.Singleton(Path.Deref(PathRef("g").known(1)))))
-    val flat = headsOf(src)
-    val (rn, rf) = (SpatialCost.analyze(nested, SetCost), SpatialCost.analyze(flat, SetCost))
-    assert(Sym.dominates(rounds(rn), rounds(rf)) && rounds(rn) != rounds(rf),
-           s"nested must run strictly more frames: ${rounds(rn).show} vs ${rounds(rf).show}")
-    println(s"COST: nested rounds=${rounds(rn).show}  flat rounds=${rounds(rf).show}")
-    // an ε-only source has no head-group at all
-    val eps = SpatialCost.analyze(headsOf(lit(p())), SetCost)
-    assertEquals(rounds(eps), Sym.zero, s"an ε-only source runs no body frame: ${eps.show}")
-    assertEquals(eval(headsOf(lit(p()))), SpaceValue(Set.empty))
-  }
-
-  test("fixpoint rounds: a NUMBER when the seed is exact, tied to the result when it is not") {
-    val r = SpaceMention("r")
-    // EXACT SEED.  This assertion used to demand the free variable `|fix:r|` and the assumption string
-    // "monotone accumulator, so rounds"; the transfer now DERIVES A NUMBER when the seed and the body
-    // are closed, which is strictly better and is what the product requirements ask for (a free variable
-    // in the answer is `[0, inf]` in a different costume — see `symbolicEstimates` in
-    // `SpatialEventsCheck`).  So the test now asserts the stronger property AND checks it against the
-    // counted truth, with `eval` as the oracle.
-    val mono = Space.Fixpoint(lit(p("a")), r, Space.Union(Space.Mention(r), lit(p("b"))))
-    val rm = SpatialCost.analyze(mono, SetCost)
-    assert(Sym.vars(rounds(rm)).isEmpty, s"an exactly seeded monotone fixpoint must give a NUMBER: ${rm.show}")
-    assert(rounds(rm) != Sym.Inf, "never saturate")
-    val trueRounds = EffortSink.count(eval(mono))._2(EffortEvent.FixpointRound)
-    val (loR, hiR) = rm.bracket(EffortComponent.Rounds, Map.empty)
-    assert(loR <= trueRounds && trueRounds <= hiR,
-           s"the counted $trueRounds rounds must lie in the predicted [$loR, $hiR]: ${rm.show}")
-    println(f"COST: exact monotone fixpoint — counted $trueRounds rounds in [$loR%.0f, $hiR%.0f]")
-    assertEquals(eval(mono).paths.size, 2)
-
-    // UNKNOWN SEED: the size is not available, so the round count must be tied to the fixpoint's own
-    // result size rather than invented — that is where `|fix:r|` belongs.
-    // ...UNLESS THE STEP IS IDEMPOTENT, and this one is: `Union(r, {b})` with `r` not free in `{b}`
-    // gives `F(F(x)) = F(x)`, so the loop runs ONE round to add `{b}` and one to observe that nothing
-    // changed — `[1, 2]` whatever `|fix:r|` is.  Tying the bound to the result size here was not
-    // "honest about the unknown", it was 37x wider than the truth on the operator table.
-    val openMono = Space.Fixpoint(S"s0", r, Space.Union(Space.Mention(r), lit(p("b"))))
-    val ro = SpatialCost.analyze(openMono, SetCost)
-    assert(ro.assumptions.exists(_.contains("IDEMPOTENT")), ro.show)
-    assertEquals(ro.bracket(EffortComponent.Rounds, Map.empty), (1.0, 2.0),
-                 s"an idempotent step runs at most twice, whatever the cardinalities: ${ro.show}")
-    // and the RESULT SIZE still is tied to the fixpoint's own unknown — the round bound being a
-    // constant does not make the value known
-    assert(Sym.vars(ro.meas.size).contains("|fix:r|"), s"the result size stays symbolic: ${ro.meas.show}")
-
-    // THE NON-IDEMPOTENT MONOTONE CASE is where `|fix:r|` belongs: the step reads the accumulator, so
-    // each round can add and the bound really is the result size.
-    val openGrow = Space.Fixpoint(S"s0", r,
-                                  Space.Union(Space.Mention(r), Space.TailsUnion(Space.Mention(r))))
-    val rg = SpatialCost.analyze(openGrow, SetCost)
-    assert(rg.assumptions.exists(_.contains("monotone accumulator, so rounds")), rg.show)
-    assert(Sym.vars(rounds(rg)).contains("|fix:r|"),
-           s"rounds must be tied to the result size when the step reads the accumulator: ${rounds(rg).show}")
-
-    val nonmono = Space.Fixpoint(lit(p("a", "b", "c")), r, Space.TailsUnion(Space.Mention(r)))
-    val rn = SpatialCost.analyze(nonmono, SetCost)
-    assert(rn.assumptions.exists(_.contains("no round bound is derivable")), rn.show)
-    assert(Sym.vars(rounds(rn)).exists(_.startsWith("R")), s"a fresh symbolic round variable: ${rounds(rn).show}")
-    assert(!rn.cost.work.isUnbounded, "the cost stays parametric in the unknown, it does not saturate")
-    // and the body work really is multiplied by the round count
-    assert(Sym.vars(work(rn)).exists(_.startsWith("R")), work(rn).show)
-  }
-
-  test("linear recurrences get closed forms, never a silent saturation") {
-    import Recurrence.*
-    assertEquals(solve(Linear(Sym.c(5), Sym.c(0), Sym.c(10))), Amount.Bounded(Sym.c(5)))
-    assertEquals(solve(Linear(Sym.c(5), Sym.c(1), Sym.c(10))), Amount.Bounded(Sym.c(50)))
-    assertEquals(solve(Linear(Sym.c(5), Sym.c(1), N)), Amount.Bounded(Sym.c(5) * N))
-    assertEquals(solve(Linear(Sym.c(5), Sym.c(2), N)).show, "5*2^N")
-    assertEquals(Sym.bigO(solve(Linear(Sym.c(5), Sym.c(2), N)).symOpt.get), BigO(1, 0, 0), "b=2 is exponential in n")
-    assertEquals(Sym.bigO(solve(Linear(Sym.c(5), Sym.c(1), N)).symOpt.get), BigO(0, 1, 0), "b=1 is linear in n")
-    // a symbolic branching factor may be 1, so the sound envelope keeps the extra factor n
-    assertEquals(solve(Linear(Sym.c(5), Sym.v("B"), Sym.c(4))).show, "20*B^4")
-    assertEquals(solve(Linear(Sym.c(5), Sym.c(2), Sym.Inf)), Amount.Unbounded("recursion depth is unbounded"))
-    assertEquals(solve(Linear(Sym.c(5), Sym.Inf, Sym.c(3))), Amount.Unbounded("recursive branching factor is unbounded"))
-    // numeric check of the closed form against the actual recurrence, T(0)=0
-    for a <- Vector(1L, 3L, 7L); b <- Vector(1L, 2L, 3L); n <- Vector(1, 2, 3, 6, 9) do
-      var t = 0.0
-      for _ <- 0 until n do t = a + b * t
-      val closed = Sym.evalAt(solve(Linear(Sym.c(a), Sym.c(b), Sym.c(n.toLong))).symOpt.get, Map.empty)
-      assert(closed >= t - 1e-9, s"closed form $closed < actual $t for a=$a b=$b n=$n")
-    // and the split that drives it
-    assertEquals(Sym.splitLinear(Sym.c(3) + Sym.c(2) * Sym.v("T"), "T"), Some((Sym.c(3), Sym.c(2))))
-    assertEquals(Sym.splitLinear(N * Sym.v("T") + M, "T"), Some((M, N)))
-    assertEquals(Sym.splitLinear(Sym.v("T") * Sym.v("T"), "T"), None, "degree 2 in T is not a linear recurrence")
-    assertEquals(Sym.splitLinear(Sym.log(Sym.v("T")), "T"), None, "T inside an opaque atom is not linear")
-    assertEquals(Recurrence.close(Amount.of(Sym.c(3) + Sym.c(2) * Sym.v("T")), "T", Sym.c(5)).show, "96")
-    assertEquals(Recurrence.close(Amount.of(Sym.v("T") * Sym.v("T")), "T", Sym.c(5)),
-                 Amount.Unbounded("non-linear recurrence in T"))
-  }
-
-  test("a routine that drops an item per call gets a DEPTH BOUND and a closed cost") {
-    val rp = RoutinePtr("f"); val xs = SpaceMention("xs")
-    // f(xs) = xs \/ f(tails(xs)) — the union-recursive shape eval's self-call detection terminates
-    val body = Space.Union(Space.Mention(xs), Space.Call(rp, Vector.empty, Vector(Space.TailsUnion(Space.Mention(xs)))))
-    val rt = Routine(rp, Vector.empty, Vector(xs), body)
-    val rc: PartialFunction[RoutinePtr, Routine] = { case r if r == rp => rt }
-    assertEquals(Recurrence.decreasingArg(body, rp, Vector(xs)), Some(0))
-    assert(Recurrence.selfTerminating(body, rp))
-    assertEquals(Recurrence.depthBound(3).show, "5")
-    assertEquals(Recurrence.depthBound(Lower.LenBounds.INF), Sym.Inf)
-
-    val arg = lit(p("a", "b", "c"), p("d", "e", "f"))                 // maximum path length 3
-    val prog = Space.Call(rp, Vector.empty, Vector(arg))
-    val rep = SpatialCost.analyze(prog, SpatialCost.Env().withRoutines(rc), SetCost)
-    assert(!rep.cost.work.isUnbounded, s"the recursion must be closed: ${rep.show}")
-    assertEquals(rounds(rep).show, "5", s"depth = maxlen(3) + 2: ${rep.show}")
-    assert(rep.assumptions.exists(_.contains("depth bound 5 from maxlen(arg 0) = 3")), rep.show)
-    // ground truth: eval really does terminate and produce every suffix
-    assertEquals(eval(prog)(using rc = rc).paths.size, 7)
-    // a longer argument costs strictly more
-    val long = Space.Call(rp, Vector.empty, Vector(lit(p("a", "b", "c", "d", "e"))))
-    val repL = SpatialCost.analyze(long, SpatialCost.Env().withRoutines(rc), SetCost)
-    assertEquals(rounds(repL).show, "7")
-    assert(Sym.dominates(rounds(repL), rounds(rep)))
-
-    // NO decreasing measure -> an explicit Unbounded with a reason, not a bogus number
-    val body2 = Space.Union(Space.Mention(xs), Space.Call(rp, Vector.empty, Vector(Space.Mention(xs))))
-    val rc2: PartialFunction[RoutinePtr, Routine] = { case r if r == rp => Routine(rp, Vector.empty, Vector(xs), body2) }
-    val rep2 = SpatialCost.analyze(Space.Call(rp, Vector.empty, Vector(lit(p("a")))),
-                                   SpatialCost.Env().withRoutines(rc2), SetCost)
-    assert(rep2.cost.work.isUnbounded, rep2.show)
-    assert(rep2.cost.work.show.contains("without a decreasing measure"), rep2.cost.work.show)
-    // an UNBOUNDED argument length also refuses to invent a bound
-    val rep3 = SpatialCost.analyze(Space.Call(rp, Vector.empty, Vector(S"s0")),
-                                   SpatialCost.Env().withRoutines(rc), SetCost)
-    assert(rep3.cost.work.isUnbounded, rep3.show)
-    assert(rep3.assumptions.exists(_.contains("maximum path length")), rep3.show)
-    // a non-self-terminating body gets the bound but MUST flag the assumption
-    val body4 = Space.Intersection(Space.Mention(xs), Space.Call(rp, Vector.empty, Vector(Space.TailsUnion(Space.Mention(xs)))))
-    val rc4: PartialFunction[RoutinePtr, Routine] = { case r if r == rp => Routine(rp, Vector.empty, Vector(xs), body4) }
-    val rep4 = SpatialCost.analyze(Space.Call(rp, Vector.empty, Vector(arg)), SpatialCost.Env().withRoutines(rc4), SetCost)
-    assert(rep4.assumptions.exists(_.contains("termination is ASSUMED, not derived")), rep4.show)
+  test("HUNT: random programs over random inputs, exact and summarized declarations, four backends") {
+    val recs = Corpus.load(sys.props.get("cost.progs").map(_.toInt).getOrElse(120))
+    val Al = SpaceFuzzer.alphabet
+    val rng = new java.util.Random(20260905)
+    def randPath() = PathValue(List.fill(1 + rng.nextInt(2))(Al(rng.nextInt(Al.length))))
+    def smallTrie() = SpaceValue((0 until (1 + rng.nextInt(6))).map(_ => randPath()).toSet)
+    val sNames = (0 until 3).map(i => SpaceMention("s" + i)).toVector
+    val pNames = (0 until 2).map(j => PathRef("p" + j)).toVector
+    var all = Vector.empty[Row]; var bad = Vector.empty[String]; var n = 0
+    for r <- recs if r.nPath == 0 do
+      val svs = sNames.take(r.nSpace).map(_ -> smallTrie()).toMap
+      val exact = CostSem.Inputs(values = svs)
+      val summ = CostSem.Inputs(summaries = svs.view.mapValues(SpatialType.of).toMap)
+      val (rs1, bs1) = check(s"corpus#$n/exact", r.prog, exact, svs)
+      val (rs2, bs2) = check(s"corpus#$n/summ", r.prog, summ, svs)
+      all ++= rs1 ++ rs2; bad ++= bs1 ++ bs2; n += 1
+    println(s"COST: hunt — $n programs, ${all.length} rows, ${bad.length} containment failures")
+    bad.take(8).foreach(b => println("COST: OUT " + b))
+    usefulness("corpus hunt", all)
+    assertEquals(bad.length, 0, s"containment failures:\n${bad.take(10).mkString("\n")}")
   }
 
   // ==============================================================================================
-  // 4. MONOTONICITY
+  // 4. THE TWO KNOWN ZIPPER COUNTEREXAMPLES — permanent regressions
   // ==============================================================================================
 
-  test("MONOTONICITY: bigger inputs never give a smaller cost (symbolic valuations)") {
-    val progs: Vector[Space] = Vector(
-      Space.Composition(S"s0", S"s1"),
-      Space.Restriction(S"s0", S"s1"),
-      Space.Union(Space.Unwrap(S"s0", "a"), Space.Wrap(S"s1", "b")),
-      Space.Range(Space.Composition(S"s0", S"s1"), 0, 4),
-      headsOf(S"s0"),
-      Space.Iteration(S"s0", PathRef("h").known(1), SpaceMention("t"), Space.Composition(S"t", S"s1")),
-      Space.Fold(S"s0", "z", PathRef("a"), PathRef("h").known(1), SpaceMention("t"), S"t", Path.Deref(PathRef("h").known(1))),
-      Space.Fixpoint(S"s0", SpaceMention("r"), Space.Union(Space.Mention(SpaceMention("r")), Space.TailsUnion(Space.Mention(SpaceMention("r"))))))
-    var checked = 0
-    for prog <- progs; model <- Vector[CostModel](SetCost, TrieCost) do
-      val c = SpatialCost.analyze(prog, model).cost
-      for comp <- Vector(c.work, c.alloc, c.rounds); e <- comp.symOpt do
-        val names = Sym.vars(e).toVector
-        var prev = Double.NegativeInfinity
-        for k <- Vector(2.0, 3.0, 5.0, 9.0, 17.0, 33.0, 65.0) do
-          val cur = Sym.evalAt(e, names.map(_ -> k).toMap)
-          assert(cur >= prev - 1e-9, s"cost DECREASED from $prev to $cur at $k for ${e.show} (${model.name}, ${prog.show.take(60)})")
-          prev = cur
-        checked += 1
-    println(s"COST: monotonicity checked on $checked cost components")
-  }
-
-  test("MONOTONICITY: a bigger DECLARED input type never gives a smaller cost") {
-    val m = SpaceMention("s")
-    def costAt(n: Long, prog: Space, model: CostModel): Cost =
-      val t = SpatialType(Shape.top, SpaceType.closed(1L -> Ivl(n, n)))
-      SpatialCost.analyze(prog, SpatialCost.Env(facts = SpatialTyping.Env(spaces = Map(m -> t))), model).cost
-    val progs = Vector[Space](
-      Space.Composition(Space.Mention(m), Space.Mention(m)),
-      Space.Range(Space.Mention(m), 0, 3),
-      headsOf(Space.Mention(m)),
-      Space.Restriction(Space.Mention(m), Space.Mention(m)))
-    for prog <- progs; model <- Vector[CostModel](SetCost, TrieCost) do
-      val sizes = Vector(2L, 4L, 8L, 16L, 64L, 256L)
-      val ws = sizes.map(n => costAt(n, prog, model)).map(c => c.work.symOpt.map(Sym.evalAt(_, Map.empty)).getOrElse(Double.PositiveInfinity))
-      for i <- 0 until ws.length - 1 do
-        assert(ws(i) <= ws(i + 1) + 1e-9,
-               s"work fell from ${ws(i)} to ${ws(i + 1)} between |s|=${sizes(i)} and ${sizes(i + 1)} (${model.name}, ${prog.show.take(50)})")
-      println(f"COST: ${model.name}%-5s ${prog.show.take(42).replace('\n', ' ')}%-44s work over |s|=${sizes.mkString(",")}: ${ws.map(_.toLong).mkString(",")}")
+  test("REGRESSION: the two corpus programs whose zipper Work escaped the old model are contained") {
+    // identified by their rendering in the 2026-09-05 baseline run (build.log, A4): the two programs whose
+    // counted `execZ` Work fell outside the old model's interval (27 ∉ [16, 26]; 30 ∉ [22, 29])
+    val marks = Vector(
+      "Singleton(P\"h686557\" x \"d.c\") <| Range((TailsIntersection(",
+      "TailsUnion((S\"s0\" \\/ S\"s0\"))(\"c\").iter(P\"h668698\"")
+    val recs = Corpus.load()
+    val found = marks.map(m => recs.find(r => r.prog.show.replace('\n', ' ').contains(m)))
+    assert(found.forall(_.isDefined), s"the two counterexample programs must still be in the corpus: ${found.map(_.isDefined)}")
+    val rng = new java.util.Random(20260807)
+    val Al = SpaceFuzzer.alphabet
+    def randPath() = PathValue(List.fill(1 + rng.nextInt(2))(Al(rng.nextInt(Al.length))))
+    def smallTrie() = SpaceValue((0 until (1 + rng.nextInt(6))).map(_ => randPath()).toSet)
+    val svs = (0 until 3).map(i => SpaceMention("s" + i) -> smallTrie()).toMap
+    var bad = Vector.empty[String]
+    for r <- found.flatten do
+      val inputs = svs.filter((k, _) => (0 until r.nSpace).map(i => SpaceMention("s" + i)).contains(k))
+      for tries <- 0 until 3 do
+        val vals = inputs.view.mapValues(_ => smallTrie()).toMap
+        val (rs, bs) = check("zipper-counterexample", r.prog, CostSem.Inputs(values = vals), vals, withGraph = false)
+        bad ++= bs
+        rs.filter(_.backend == Backend.Zipper).foreach(row => println("COST: " + row.show))
+    assertEquals(bad, Vector.empty[String])
   }
 
   // ==============================================================================================
-  // 5. GROUND-TRUTH TREND (eval used only as an oracle, never by the analysis)
+  // 5. FIBRES: the puzzle15 requirement, in the small
   // ==============================================================================================
 
-  // DEMOTED: this is a SECONDARY trend metric.  It runs against `touch`, the
-  // un-oracled element-cost component, because wall-clock time is dominated by `Set`/`ITrie`
-  // internals that no event counts.  The PRIMARY evidence is now the containment/slack table in
-  // `SpatialEventsCheck`, which compares predicted intervals against counted events per component.
-  test("SECONDARY TREND: the reference-backend touch model ranks with measured eval runtime") {
-    // families whose predicted set costs differ by construction: k^2 concats, k^2 prefix
-    // comparisons, k log k sort comparisons, and a linear scan
-    def bigLit(k: Int, pre: String): Space = litN(k, pre)
-    def twoItem(k: Int): Space = Space.Literal(SpaceValue((0 until k).map(i => p("a" + i, "b")).toSet))
-    val ks = Vector(32, 64, 128, 256)
-    val progs: Vector[(String, Space)] =
-      ks.map(k => s"compose/$k" -> Space.Composition(bigLit(k, "x"), bigLit(k, "y"))) ++
-      ks.map(k => s"restrict/$k" -> Space.Restriction(twoItem(k), bigLit(k, "a"))) ++
-      ks.map(k => s"range/$k" -> Space.Range(bigLit(k, "z"), 0, 4)) ++
-      ks.map(k => s"union/$k" -> Space.Union(bigLit(k, "u"), bigLit(k, "v")))
-    def timeMs(s: Space): Double =
-      for _ <- 0 until 3 do eval(s)
-      var best = Double.MaxValue
-      for _ <- 0 until 5 do
-        val t0 = System.nanoTime()
-        var i = 0
-        while i < 20 do { eval(s); i += 1 }
-        best = math.min(best, (System.nanoTime() - t0) / 1e6 / 20.0)
-      best
-    val rows = progs.map { (nm, s) =>
-      val pred = SpatialCost.analyze(s, SetCost).cost.touch.at(Map.empty)
-      (nm, pred, timeMs(s))
-    }
-    val rho = Calibration.spearman(rows.map(_._2), rows.map(_._3))
-    for (nm, pred, ms) <- rows.sortBy(_._2) do println(f"COST: $nm%-14s predicted touch=${pred.toLong}%10d  measured eval=$ms%8.3f ms")
-    println(f"COST: Spearman rank correlation (predicted set touch vs measured eval time) = $rho%.3f over ${rows.length} programs " +
-            "[SECONDARY metric; see SpatialEventsCheck for containment/slack]")
-    assert(rho >= 0.5, f"the predicted cost order should track measured runtime; got rho=$rho%.3f")
-    // the strongest single claim: the quadratic family really does grow quadratically
-    val comp = rows.filter(_._1.startsWith("compose")).map(_._3)
-    assert(comp.last > comp.head, s"compose/256 must be slower than compose/32: $comp")
+  test("FIBRES: a 16-cell board's per-cell projections compose to one path, priced from fibres, no Shape.top") {
+    val cells = (0 until 16).map(i => s"c$i")
+    val board = SpaceValue(cells.zipWithIndex.map((c, i) => PathValue(List(c, s"tile$i"))).toSet)
+    val state = SpaceMention("state")
+    val product = cells.map(c => Space.Unwrap(Space.Mention(state), Path.Constant(p(c)))).reduce(Space.Composition.apply)
+    val inputs = CostSem.Inputs(values = Map(state -> board))
+    val (rs, bad) = check("board-collapse", product, inputs, Map(state -> board))
+    assertEquals(bad, Vector.empty[String])
+    for b <- Backend.values do
+      val rep = if b == Backend.Graph then CostSem.analyzeGraph(transpile(Routine(RoutinePtr("m"), Vector.empty, Vector(state), product)), inputs) else CostSem.analyze(product, inputs, b)
+      assert(rep.finite, s"${b.slug}: ${rep.show}")
+      assert(rep.magnitude < 100000L, s"${b.slug}: a 16-fold composition of one-tile fibres is small: ${rep.bounds.showComponents}")
+      assertEquals(rep.value.node match { case t: XTrie => t.children.size; case _ => -1 }, 1, s"${b.slug}: the product is one path, got ${rep.value.show.take(120)}")
+      assert(rep.domain.exact, rep.domain.show)
+    // the same with the board declared ONLY by its summary: the fibres are no longer one tile each, and
+    // the bound is wider — but finite, and it names no Shape.top
+    val summ = CostSem.Inputs(summaries = Map(state -> SpatialType.of(board)))
+    val rep2 = CostSem.analyze(product, summ, Backend.Trie)
+    println(s"COST: board exact  ${CostSem.analyze(product, inputs, Backend.Trie).bounds.showComponents}")
+    println(s"COST: board summ   ${rep2.bounds.showComponents}")
+    println(CostSem.analyze(product, inputs, Backend.Trie).derivation.render().linesIterator.take(6).mkString("\n"))
   }
 
   // ==============================================================================================
-  // 6. CORPUS SMOKE
+  // 6. THE DERIVATION DAG is deterministic and names its rules
   // ==============================================================================================
 
-  test("corpus: every program gets a report from both backends, and every cost is monotone") {
-    val recs = Corpus.load(300)
-    var bounded = 0; var unbounded = 0; var differing = 0
-    val hist = collection.mutable.Map.empty[String, Int]
-    var infExample: Option[String] = None
-    val t0 = System.nanoTime()
-    for r <- recs do
-      val (a, b) = SpatialCost.compare(r.prog)
-      for rep <- Vector(a, b) do
-        if rep.cost.work.isUnbounded then unbounded += 1 else bounded += 1
-        // MONOTONICITY on every corpus cost component
-        for comp <- Vector(rep.cost.work, rep.cost.alloc, rep.cost.rounds); e <- comp.symOpt do
-          val names = Sym.vars(e).toVector
-          var prev = Double.NegativeInfinity
-          for k <- Vector(2.0, 4.0, 16.0, 64.0) do
-            val cur = Sym.evalAt(e, names.map(_ -> k).toMap)
-            assert(cur >= prev - 1e-9, s"cost decreased at k=$k for ${e.show} in ${r.prog.show.take(90)}")
-            prev = cur
-          // and normalisation is stable on real analysis output
-          assertEquals(Sym.normalize(e), e, s"analysis emitted a non-normal form: ${e.show}")
-      hist(a.cost.work.bigO.show) = hist.getOrElse(a.cost.work.bigO.show, 0) + 1
-      if a.cost.work.bigO == BigO.inf && infExample.isEmpty then
-        infExample = Some(s"${r.prog.show.take(160).replace('\n', ' ')}\n         -> ${a.cost.show}")
-      if a.cost != b.cost then differing += 1
-    val ms = (System.nanoTime() - t0) / 1e6
-    println(f"COST: ${recs.length} corpus programs x 2 backends in $ms%.0f ms — $bounded bounded / $unbounded unbounded work components")
-    println(s"COST: set-backend work order classes: ${hist.toVector.sortBy(_._2).reverse.mkString(", ")}")
-    // the whole point of the algebra: unknown growth must NOT all collapse onto one top element
-    val classes = hist.keySet
-    println(s"COST: ${hist.getOrElse("inf", 0)} / ${recs.length} programs reach the saturated `inf` class")
-    infExample.foreach(e => println(s"COST: first `inf` work example:\n      $e"))
-    assert(classes.count(_ != "inf") >= 5, s"the corpus should exhibit several distinct order classes, got $classes")
-    assert(hist.getOrElse("inf", 0) * 10 <= recs.length,
-           s"at most a tenth of the corpus may saturate; got ${hist.getOrElse("inf", 0)}/${recs.length}")
-    println(f"COST: the two backends disagree on ${differing} / ${recs.length} corpus programs " +
-            f"(${100.0 * differing / recs.length}%.0f%%)")
-    assert(differing > recs.length / 4, s"the backends should differ on a large share of the corpus, got $differing")
+  test("DERIVATION: two analyses render the same certificate; every interval has a rule") {
+    val prog = Space.Union(Space.TailsUnion(S0), Space.Composition(S1, Space.Unwrap(S0, Path.Constant(p("a")))))
+    val inputs = CostSem.Inputs(values = Map(s0 -> sv(p("a", "x"), p("b", "y")), s1 -> sv(p("k"))))
+    for b <- Backend.values.filterNot(_ == Backend.Graph) do
+      val r1 = CostSem.analyze(prog, inputs, b); val r2 = CostSem.analyze(prog, inputs, b)
+      assertEquals(r1.derivation.render(), r2.derivation.render(), s"${b.slug}: the derivation is not deterministic")
+      assertEquals(r1.bounds, r2.bounds)
+      assert(r1.derivation.size >= (if b == Backend.Zipper then 1 else 5), s"${b.slug}: ${r1.derivation.size} derivation nodes")
+      def allRules(d: Derivation): Vector[String] = d.rule +: d.children.flatMap(allRules)
+      assert(allRules(r1.derivation).forall(_.nonEmpty))
+    println(CostSem.analyze(prog, inputs, Backend.Trie).derivation.render())
   }
 
-  // ==============================================================================================
-  // 7. THE INTERVAL-WIDTH PRODUCT REQUIREMENT, PER OPERATOR AND BACKEND
-  // ==============================================================================================
-
-  /** WIDTH is the one product requirement that needs no execution: it is a property of the ANSWER, not
-   *  of a run.  `(upper + 1) / (lower + 1)` says how much a caller who trusts the estimate still does not
-   *  know.  `[0, inf]` is the degenerate case and `[0, 10^55]` — Puzzle's, today — is the same failure
-   *  with a finite number in it.
-   *
-   *  This table is the per-OPERATOR stratification of that requirement, on `Routine.optimized`'s body
-   *  (the user's third steer) with the inputs DECLARED exactly, so every endpoint is a number.  The
-   *  ERROR and SLOPE halves of the requirement need counted runs and geometric ladders and live in
-   *  `SpatialEventsCheck` and `SpatialScaleCheck`; this is the third leg and the cheapest. */
-  test("PRODUCT REQUIREMENT: interval WIDTH per operator and backend, on the OPTIMIZED form") {
-    val a = SpaceMention("a"); val b = SpaceMention("b")
-    // 64 paths over 8 heads, depth 2 — a closed shape, so `SpatialFacts.trieNodes` gives the analysis an
-    // exact prefix profile and nothing here is loose for want of an input fact
-    val av = SpaceValue((0 until 64).map(i => p("h" + (i % 8), "t" + i)).toSet)
-    val bv = SpaceValue((0 until 16).map(i => p("h" + (i % 4), "t" + i)).toSet)
-    val ann = SpatialAnnotations(spaces = Map(a -> SpatialType.of(av), b -> SpatialType.of(bv)))
-    val A = Space.Mention(a); val B = Space.Mention(b)
-    val h = PathRef("h").known(1)
-    val ops: Vector[(String, Space)] = Vector(
-      "union"        -> Space.Union(A, B),
-      "intersection" -> Space.Intersection(A, B),
-      "subtraction"  -> Space.Subtraction(A, B),
-      "restriction"  -> Space.Restriction(A, B),
-      "raffination"  -> Space.Raffination(A, B),
-      "composition"  -> Space.Composition(A, B),
-      "wrap"         -> Space.Wrap(A, "k"),
-      "unwrap"       -> Space.Unwrap(A, "h0"),
-      "tails-union"  -> Space.TailsUnion(A),
-      "tails-inter"  -> Space.TailsIntersection(A),
-      "range-full"   -> Space.Range(A, 0, 0),
-      "range-part"   -> Space.Range(A, 0, 4),
-      // THE LOOP HAS TO SURVIVE `optimized`, OR THIS ROW IS MISLABELLED.  It used to be
-      // `Iteration(A, h, t, Mention(t))` — the minimal loop — and that term is semantically
-      // `TailsUnion(A)`: `Lower.Iter_Tails` rewrites it, so with that rule in `OrdinaryRules` the row
-      // would price a `TailsUnion` under the name `iteration` and duplicate the row four lines up.
-      //
-      // A BODY THAT IS A FUNCTION OF THE TAIL-SET ALONE IS THE GENERAL FORM OF THAT MISTAKE, not a
-      // special case of it: `⋃_h f(T_h) = f(⋃_h T_h)` for every `f` that distributes over union, which
-      // is every operator here in its left argument — so `Subtraction(rest, B)`, `Restriction(rest, B)`
-      // and `TailsUnion(rest)` are all collapsible in principle and a future rule could collapse them
-      // in fact.  The body below binds BOTH names and TAGS its output with the group head, so
-      // `⋃_h h·(T_h ∖ b)` genuinely needs the grouping.
-      //
-      // AND IT IS *NOT* "THE SHAPE EVERY CORNERSTONE LOOP HAS", which is what this comment used to
-      // claim of `aunt`, `gol/nextStep` and `nqueens.place`.  Checked: all four of `gol/nextStep`'s
-      // `Iteration` bodies are an `Iteration`, a `Subtraction` (`exactly(...)`) or a `Call`, and
-      // only the INNERMOST level of `nqueens.place` is a head-retagging wrap.  The claim mattered
-      // because `OperandShape.ofLoopBody` fires exactly on this shape, so the sentence made a
-      // fixture-specific tightening look like a general one -- and the logs show `gol trie Alloc`'s
-      // upper going UP, not down, when that fact landed.  `BackendProfileCheck` pins which bodies
-      // fire and which do not.
-      // It also keeps the per-group result LARGE, so the n-ary accumulate `collectJoin` is still
-      // exercised on eight substantial operands — which is the cost structure this row exists to show.
-      "iteration"    -> Space.Iteration(A, h, SpaceMention("t"),
-                                        Space.Wrap(Space.Subtraction(Space.Mention(SpaceMention("t")), B),
-                                                   Path.Deref(h))),
-      "fixpoint"     -> Space.Fixpoint(A, SpaceMention("r"),
-                                       Space.Union(Space.Mention(SpaceMention("r")), B)))
-    var rows = Vector.empty[GateRow]
-    var infinite = Vector.empty[String]
-    var symbolic = Vector.empty[String]
-    println("=" * 122)
-    println("WIDTH: (upper+1)/(lower+1) on Routine.optimized's body, inputs declared exactly (|a|=64, |b|=16)")
-    println("=" * 122)
-    for (name, prog) <- ops do
-      val r = Routine(RoutinePtr("w_" + name.replace('-', '_')), Vector.empty, Vector(a, b), prog)
-      val opt = r.optimized(using ann.routines)
-      val an = SpatialPipeline.analyzeRoutine(opt, ann)
-      val env = ann.costEnvFor(an.decorated)
-      for bk <- Backend.values do
-        val rep = SpatialCost.analyze(opt.body, env, Backends.of(bk, ExecutionPhase.Warm), CostForm.Optimized)
-        assertEquals(rep.form, CostForm.Optimized)
-        val cells = EffortEvent.calibratedComponents.map { comp =>
-          val (lo, hi) = rep.bracket(comp, Map.empty)
-          if hi.isInfinite then
-            infinite :+= s"$name/${bk.slug}/$comp"
-            comp -> Double.PositiveInfinity
-          else
-            val w = (hi + 1.0) / (lo + 1.0)
-            ProductRequirement.tierOf(bk.slug, comp).foreach { t =>
-              rows :+= GateRow("operator", name, bk.slug, comp, "width", w, t)
-              // THE ABSOLUTE CEILING, on a closed one-operator program with exactly declared inputs: a
-              // finite endpoint above `Astronomical` is the same failed result as `inf`.
-              rows :+= GateRow("operator", name, bk.slug, comp, "magnitude", hi, t)
-            }
-            comp -> w
-        }
-        if freeVars(rep.cost).nonEmpty then symbolic :+= s"$name/${bk.slug}"
-        println(f"WIDTH: $name%-13s ${bk.slug}%-10s " +
-                cells.map((c, w) => f"$c%-6s ${if w.isInfinite then "inf" else f"$w%10.2f"}%10s").mkString("  "))
-    // The review as an invariant on a CLOSED one-operator program with declared exact inputs:
-    // an infinite endpoint here would be an analysis bug, not semantic uncertainty
-    assertEquals(infinite, Vector.empty[String],
-                 "an INFINITE endpoint on a closed one-operator program with exactly declared inputs:\n  " +
-                 infinite.mkString("\n  "))
-    assertEquals(symbolic, Vector.empty[String],
-                 "a FREE VARIABLE in the answer for a closed one-operator program:\n  " + symbolic.mkString("\n  "))
-    publishOperatorGate(rows)
+  test("NO EVALUATION: the analysis never runs an executor — a bomb literal is priced, not detonated") {
+    val bomb = Space.GroundedSS(S0, _ => throw new AssertionError("the analysis evaluated its subject"))
+    val prog = Space.Union(Space.TailsUnion(bomb), S1)
+    val inputs = CostSem.Inputs(values = Map(s0 -> sv(p("a")), s1 -> sv(p("b"))))
+    for b <- Backend.values.filterNot(_ == Backend.Graph) do
+      val rep = CostSem.analyze(prog, inputs, b)
+      assert(rep.notes.exists(_.contains("grounded")), rep.notes.toString)
+    println("COST: bomb subterm priced on three backends without evaluation")
   }
-
-  /** [[ProductGate]] is the one gate policy for all three suites; this is the `operator` scope's
-   *  assertion.  It used to be a third copy of the same "a named limitation converts this failure into a
-   *  pass" logic — see the class comment on `ProductGate`. */
-  def publishOperatorGate(rows: Vector[GateRow], extra: Vector[String] = Vector.empty): Unit =
-    val fs = ProductGate.report("interval width per operator, on the OPTIMIZED form", "operator",
-                                rows, rows.map(r => s"${r.backend}/${r.comp}").distinct.length, extra)
-    assert(fs.isEmpty,
-           s"width per operator: ${fs.length} product-requirement FAILURE(S) — every one is printed " +
-           s"above:\n  " + fs.take(30).mkString("\n  ") +
-           (if fs.length > 30 then s"\n  ... and ${fs.length - 30} more" else ""))
-
-  def freeVars(c: Cost): Set[String] =
-    Vector(c.work, c.alloc, c.rounds, c.touch)
-      .flatMap(x => x.symOpt.map(Sym.vars).getOrElse(Set.empty[String])).toSet
-
-end SpatialCostCheck

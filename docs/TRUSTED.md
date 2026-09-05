@@ -415,6 +415,33 @@ condition, not a well-founded type, so the prover has no induction rule to apply
 **If it were false**, the five files' conclusions about their chains would lose their premise. They
 would not: `Nat.rec` is a theorem of Lean's kernel and `nat_induction` is its transport.
 
+## T9. The counted executors are the event semantics
+
+**Files:** `proofs/spatial/REGISTRY.tsv` rows `A6-EVENTS`, `A6-BACKENDS`, `A6-SUMM` (kind
+DIFFERENTIAL) · **Checked by:** `SpatialSemanticsCheck` (A1), `SpatialCostCheck`,
+`SpatialEventsCheck`, `SpatialScaleCheck` (A4)
+
+**What it is.** The resource analysis (`SpatialCostSemantics.scala`) bounds the events the
+instrumented executors emit — `eval`, `evalI`, `execT`, `execZ` with their `effort(...)` hooks
+(`SpatialEvents.scala`).  Those executors are the operational semantics of the language; there is no
+other definition of "the cost of running this program on this backend".  The compositional event
+semantics (`SpatialSemantics.scala`, A1) is written rule for rule after them and checked to produce
+the same event multiset on every constructor and backend, the fuzzer corpus and the cornerstones; the
+pricing is checked to contain the counted executions exhaustively on the small universe and on the
+ladders.  That correspondence is DIFFERENTIAL — a check that two implementations agree on every case
+enumerated — not a theorem about the executors' source.
+
+**Why it is not derived.** The executors are Scala programs over `IntMap` Patricia maps, an interner
+whose ids are process-dependent, and a JVM; a proof about their event counts would be a proof about
+that code, which no theorem in this tree states.  Where a parameter of the pricing IS
+implementation-dependent (the Patricia shape) it is bounded by an envelope that holds for every id
+assignment (registry row `A6-PATRICIA`) rather than predicted.
+
+**If it were false**, a constructor's counted events would fall outside the semantics' event multiset
+— which is exactly what the differential suites report as a failure, so the assumption is checked on
+every run rather than believed.  Every row of `proofs/spatial/STATUS.tsv` of kind DIFFERENTIAL is
+reported `PROVED-MODULO T9`, never unqualified.
+
 ## Open obligations, which are *not* trusted assumptions
 
 These are gaps, recorded as gaps. A claim that depends on one is not "proved modulo an assumption" —

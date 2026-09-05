@@ -51,3 +51,6 @@ proofs/lean/.lake/
 # `scripts/check_lean.sh`'s transient `#print axioms` probe (it removes it; this stops a
 # SIGKILLed run, or a mid-run `git add -A`, from catching it).
 proofs/lean/.axioms_probe.lean
+
+# A6: the transfer checker's inputs, written by `sbt "testOnly morkl.SpatialTransferDump"` (see proofs/spatial/README.md)
+proofs/spatial/out/

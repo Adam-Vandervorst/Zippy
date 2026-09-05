@@ -579,10 +579,10 @@ class SpatialLawsCheck extends FunSuite:
            s"${SpatialPipeline.nodeCount(gBare.residual.body)} -> ${SpatialPipeline.nodeCount(gLaw.residual.body)}")
     // (4) the residual's COST, on all four backends
     for b <- Backend.values.toVector do
-      val cBare = SpatialCost.analyze(gBare.residual.body, ann.costEnv, Backends.of(b, ExecutionPhase.Warm))
-      val cLaw = SpatialCost.analyze(gLaw.residual.body, ann.costEnv, Backends.of(b, ExecutionPhase.Warm))
-      assert(cLaw.cost.work.at(Map.empty) <= cBare.cost.work.at(Map.empty),
-             s"${b.slug}: the law's residual must not cost more: ${cLaw.cost.work.show} vs ${cBare.cost.work.show}")
+      val cBare = CostSem.analyze(gBare.residual.body, ann.costInputs, b, ann.routines)
+      val cLaw = CostSem.analyze(gLaw.residual.body, ann.costInputs, b, ann.routines)
+      assert(cLaw.work.hi <= cBare.work.hi,
+             s"${b.slug}: the law's residual must not cost more: ${cLaw.work.show} vs ${cBare.work.show}")
     // and the residual is CORRECT for every input the annotation admits
     val rng = new java.util.Random(11L)
     var conforming = 0

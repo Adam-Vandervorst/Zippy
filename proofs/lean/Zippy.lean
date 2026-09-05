@@ -21,6 +21,16 @@ stops compiling cannot hide by having no importer.
                named (2A.4).  What the stage-2 pipeline cells instantiate.
   WhistleTrace — GENERATED.  The whistle correspondence: every pair `Matching.embeds` compared in
                the seeded drives, re-decided by `embedsB` (2E.3).  See Matching.toLabel.
+  Strata     — the simultaneous least-post-fixpoint system as a tagged set (`Sim.tagged_lfp`), its
+               componentwise leastness, the unary correspondence with `Space.fixpoint`
+               (`Sim.unary_eq`), and stratum-order soundness with frozen lower values (A2).
+  Delta      — the four-valued variance analysis `varB` and its soundness (`+` monotone, `-`
+               antitone, `·` constant), and the differential transfer `dden` with the delta-step
+               equation and the accumulated-delta / full-iteration equivalence (A2).
+  Spatial    — the resource domain's interval arithmetic and order (`Ivl.mem_add`, `mem_mul`,
+               `mem_foldl_hull`, `sum_mem`, the MUST/MAY rule `must_may`), `RangeBounds.normalize`
+               transcribed with its window and slice-length lemmas, the widening contract, and the
+               finite-model principle the independent transfer checker instantiates (A6).
   Trace      — GENERATED.  The correspondence trace: every substitution the Scala actually
                performed, re-checked against `substS` (1E.2).  See LeanRender.scala.
 -/
@@ -34,5 +44,8 @@ import Zippy.Positive
 import Zippy.Supercompile
 import Zippy.Whistle
 import Zippy.Zipper
+import Zippy.Strata
+import Zippy.Delta
+import Zippy.Spatial
 import Zippy.Trace
 import Zippy.WhistleTrace

@@ -105,7 +105,60 @@ TRUSTED = {
     "T7": dict(axiom="_card.p", what="the counting axioms (4 counting + injective-image + pfxmap)"),
     # 2E.4: the SMT tiers' bridging induction over the chain index (`; ASSUMED: T8` markers)
     "T8": dict(axiom=None, what="induction over the natural-number chain index, asserted after base and step"),
+    # A6: the instrumented executors ARE the operational semantics the resource analysis bounds; the
+    # compositional event semantics is checked against them differentially (SpatialSemanticsCheck), not proved
+    "T9": dict(axiom=None, corpus="spatial-transfers",
+               what="the counted executors are the event semantics (checked differentially by SpatialSemanticsCheck, A1)"),
 }
+
+# ==================================================================================================
+# A6: THE TRANSFER RULES OF THE RESOURCE ANALYSIS.  proofs/spatial/REGISTRY.tsv names every rule and
+# what discharges it (a Lean theorem in proofs/lean/Zippy/Spatial.lean, the independent checker
+# proofs/spatial/check_transfers.py, a differential gate suite, or a stated premise);
+# proofs/spatial/STATUS.tsv is the checker's verdict table.  A cost result is labelled certified
+# (`CostReport.certified`) only when every rule its derivation used is PROVED there — so `--check`
+# refuses an OPEN row, a registry row without a status, or a status row the registry does not know.
+# ==================================================================================================
+SPATIAL_REGISTRY = ROOT / "proofs/spatial/REGISTRY.tsv"
+SPATIAL_STATUS = ROOT / "proofs/spatial/STATUS.tsv"
+
+
+def check_spatial_transfers(problems):
+    """the A6 transfer table: every registry rule has a verdict and none is OPEN"""
+    print(f"\n{SPATIAL_REGISTRY.relative_to(ROOT)}  [transfer rules of the resource analysis, A6]")
+    if not SPATIAL_REGISTRY.is_file():
+        problems.append("proofs/spatial/REGISTRY.tsv is missing"); return
+    reg = {}
+    for line in SPATIAL_REGISTRY.read_text().splitlines():
+        if not line.strip() or line.startswith("#"): continue
+        cols = line.split("\t")
+        reg[cols[0]] = cols[1]
+    if not SPATIAL_STATUS.is_file():
+        problems.append("proofs/spatial/STATUS.tsv is missing: run proofs/spatial/check_transfers.py "
+                        "(after `sbt \"testOnly morkl.SpatialTransferDump\"`); no cost result is certified without it")
+        print(f"  {len(reg)} rules registered, NO verdict table")
+        return
+    st = {}
+    for line in SPATIAL_STATUS.read_text().splitlines():
+        if not line.strip() or line.startswith("#"): continue
+        cols = line.split("\t")
+        st[cols[0]] = cols[-1].strip()
+    kinds = {}
+    for rid, kind in reg.items():
+        v = st.get(rid)
+        if v is None:
+            problems.append(f"{rid}: registered transfer rule with no verdict in proofs/spatial/STATUS.tsv")
+        elif v == "OPEN":
+            problems.append(f"{rid}: transfer rule OPEN -- no cost result depending on it may be labelled certified")
+        kinds[kind.split(" ")[0]] = kinds.get(kind.split(" ")[0], 0) + 1
+    for rid in st:
+        if rid not in reg:
+            problems.append(f"{rid}: a verdict for a transfer rule the registry does not know")
+    for rid, v in sorted(st.items()):
+        print(f"    {rid:24s} {reg.get(rid, '?'):14s} {v}")
+    print(f"  {len(reg)} rules: " + ", ".join(f"{k} {n}" for k, n in sorted(kinds.items())) +
+          f"; {sum(1 for v in st.values() if v == 'OPEN')} OPEN")
+
 
 # ---------------------------------------------------------------------------------------------
 # ENTRY-LEVEL MECHANIZATION (plan.md 2E.6).  docs/TRUSTED.md may carry, inside an entry's section,
@@ -649,6 +702,8 @@ def main():
             problems += [f"working-directory-dependent include: {m}" for m in fragile]
         depth = max((r["deps"] for r in rows), default=0)
         print(f"  deepest closure: {depth} axiom file(s)")
+
+    check_spatial_transfers(problems)
 
     print("\n" + "=" * 100)
     print(f"ENUMERATED: {total_reported} reported statuses across {len(STATUS_TABLES)} tables.")

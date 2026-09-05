@@ -1,46 +1,36 @@
-law	kind	certificates	note
-Cnt total order (ℕ∪{∞})	FILE	spatial/lat_cnt_order.smt2	the count domain: 0 least, ∞ greatest
-Ivl partial order	FILE	spatial/lat_ivl_order.smt2	⊑ = interval inclusion
-Ivl lattice (lub/glb)	FILE	spatial/lat_ivl_lattice.smt2	join/meet are the lub/glb
-Ivl bounds ⊥/⊤	FILE	spatial/lat_ivl_bounds.smt2	⊥ = the INCONSISTENT interval (empty marker); [0,0] is NOT ⊥ — z3 refuted that first draft
-Ivl absorption/idempotence	FILE	spatial/lat_ivl_absorb.smt2	
-Ivl distributivity	FILE	spatial/lat_ivl_distrib.smt2	product of two total orders
-saturating +	FILE	spatial/lat_sat_add.smt2	comm/assoc/∞-absorbing/monotone
-saturating ×	FILE	spatial/lat_sat_mul.smt2	0 beats ∞ (Ivl.mul convention)
-saturating relu −	FILE	spatial/lat_sat_sub.smt2	monotone down in the subtrahend
-transfer monotonicity (∪∩∖)	FILE	spatial/lat_transfer_mono_binary.smt2	precondition of the fixpoint iteration
-transfer monotonicity (unary)	FILE	spatial/lat_transfer_mono_unary.smt2	restriction kill/keep, tails
-transfer monotonicity (scale)	FILE	spatial/lat_transfer_mono_scale.smt2	iteration/fold scaling; lifts lat_mul_mono_int
-nonlinear mul monotonicity	FILE	spatial/lat_mul_mono_int.smt2	the Int core factored out so the lifting stays linear
-transfer local soundness	FILE	spatial/lat_transfer_sound.smt2	each interval contains the true class count
-meet dominates	FILE	spatial/lat_meet_dominates.smt2	the bestSize/bestLen theorem
-widening soundness	FILE	spatial/lat_widen_sound.smt2	count-widening and class-spilling only loosen
-projection monotonicity	FILE	spatial/lat_proj_mono.smt2	size and length projections monotone; classes add
-spatial-type order	FILE	spatial/lat_type_order.smt2	pointwise per-length order
-spatial-type join	FILE	spatial/lat_type_join_lub.smt2	pointwise join is the lub
-POST-FIXPOINT theorem	FILE	spatial/lat_postfixpoint.smt2	licenses the Fixpoint transfer (nat-induction schema)
-len ∘ append	FILE	spatial/sp_len_append.smt2	structural-induction schema
-len non-negative	FILE	spatial/sp_len_nonneg.smt2	structural-induction schema
-isPrefix ⇒ len ≤	FILE	spatial/sp_isprefix_len.smt2	structural-induction schema; the restriction cut-off
-restriction annihilation	FILE	spatial/sp_restrict_annihilate.smt2	short classes cannot survive a longer prefix
-raffination exactness	FILE	spatial/sp_raff_exact.smt2	short classes are kept exactly
-restriction/raffination partition	FILE	spatial/sp_partition_restrict_raff.smt2	disjoint + covering
-length-disjoint meet	FILE	spatial/sp_lendisjoint_meet.smt2	different lengths ⇒ empty intersection
-wrap injection (⊇)	FILE	spatial/sp_wrap_into.smt2	exact class shift, injective
-wrap surjection (⊆)	FILE	spatial/sp_wrap_onto.smt2	nothing else is produced
-unwrap shift	FILE	spatial/sp_unwrap_shift.smt2	
-tails shift + dedup	FILE	spatial/sp_tails_shift.smt2	≥1 tail per nonempty class
-composition additivity	FILE	spatial/sp_comp_additive.smt2	class-pair convolution covers the output
-composition injectivity	FILE	spatial/sp_comp_inject.smt2	the per-class lower-bound witness
-composition collision	FILE	spatial/sp_comp_collision.smt2	why the per-class lower bound is a MAX, not a sum
-subsumption tightening	FILE	spatial/sp_subsume_ops.smt2	y ⊆ x ⇒ x∪y = x, x∩y = y
-syntactic subsumptions	FILE	spatial/sp_subsume_syntactic.smt2	licenses the relational Union/Inter/Sub cases
-self-restriction identity	FILE	spatial/sp_restrict_self.smt2	x <| x = x, x \| x = ∅ — closes a z3-only lower bound
-isPrefix reflexive	FILE	spatial/sp_isprefix_refl.smt2	structural-induction schema
-head-group partition	FILE	spatial/sp_head_partition.smt2	Sigma_g |rest_g| = |headed src| — makes a NESTED iteration linear, not quadratic
-disjoint cylinders (iteration)	FILE	spatial/sp_iter_disjoint_cylinders.smt2	distinct group heads ⇒ disjoint per-group results
-iteration key length	FILE	spatial/sp_iter_head_one.smt2	group keys are single items
-cardinality bridge	DEFINITIONAL	spatial/sp_class_bounds.smt2	4 finite-measure axioms asserted; the per-class bounds PROVED on top
-per-class bounds	FILE	spatial/sp_class_bounds.smt2	union/inter/sub class bounds from the measure axioms
-inclusion–exclusion strength	FILE	spatial/sp_class_ie_tighter.smt2	IE beats the additive bound on overlap — the strengthening
-concretization order	FILE	spatial/sp_gamma_order.smt2	interval inclusion ⇒ γ-containment; upper-envelope alone does NOT (refuted) — bounds what `within` licenses
+# proofs/spatial/REGISTRY.tsv — THE TRANSFER RULES OF THE RESOURCE ANALYSIS AND WHAT DISCHARGES EACH (tasks.md A6).
+#
+# Columns:  id  kind  witness  code-site  statement
+#   kind     MECHANIZED (Lean, proofs/lean/Zippy/Spatial.lean; built sorry-free by scripts/check_lean.sh)
+#            CHECKED (proofs/spatial/check_transfers.py over the exhaustive small universe; argument in README.md)
+#            DIFFERENTIAL (a Scala gate suite compares the rule against the counted executors; conditional on T9)
+#            PREMISE (a property checked at run time or asserted about the implementation; stated, not proved)
+#   witness  the Lean theorems (file#name, comma separated), the checker, or the suite
+# proofs/spatial/check_transfers.py writes STATUS.tsv from this table; scripts/proof_closure.py --check refuses an OPEN row.
+A6-IVL	MECHANIZED	proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.mem_add,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.mem_mul,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.mem_hull_left,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.mem_hull_right,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.sum_mem,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.mem_foldl_hull	SpatialCostSemantics.scala (EventBounds.+ / scale / hull; CostSem.add / mul / hullI)	INTERVAL ARITHMETIC IS SOUND: a count in γ(i) plus one in γ(j) lies in γ(add i j); a product in γ(mul i j); k executions each in γ(i) sum into γ(mul ⟨k,k⟩ i) (the `scale` rule); the hull over alternatives contains what any alternative contains.  Upper endpoints are `WithTop ℕ`: saturation to INF is the sound direction.
+A6-ORDER	MECHANIZED	proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.leq_mem,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.leq_trans,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.leq_hull_left,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.leq_hull_right	SpatialCostSemantics.scala (EventBounds.contains / violations; Domain.leq on summaries)	THE ORDER IS CONTAINMENT: `i ⊑ j` (j.lo ≤ i.lo, i.hi ≤ j.hi) implies γ(i) ⊆ γ(j); it is transitive and the hull is an upper bound of both arguments.
+A6-MUSTMAY	MECHANIZED	proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.must_may,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Ivl.mem_top	SpatialCostSemantics.scala (Walk(share = true) for lower endpoints, Walk(share = false) for upper; frontierEvents' MUST side; narySummBounds)	LOWER BOUNDS FROM MUST FACTS, UPPER FROM MAY FACTS: an endpoint L below every admitted execution and an endpoint U above every one give an interval containing every admitted execution; ⟨0, ⊤⟩ admits everything.  The rules that produce L only read universal facts (maximal sharing, must-present keys, must-aliasing) and the rules that produce U cover every alternative (no sharing, every may-present key, every alias possibility).
+A6-RANGE	MECHANIZED	proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Range.normalize_bounds,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Range.normalize_full,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Range.normalize_empty,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Range.slice_length,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Range.slice_full,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.Range.slice_empty	MORKL.scala:233 (RangeBounds.normalize); SpatialCostSemantics.scala (rangeTrie / sliceTrie / sortComparisons)	RANGE NORMALISATION: the window `normalize(size, start, end)` lies in [0, size] with lo ≤ hi; (0, 0) is the identity window on a nonempty source and the empty source has the empty window; the slice `[lo, hi)` of the canonical order has exactly hi − lo elements, the full slice is the source and the empty window selects nothing.
+A6-WIDEN	MECHANIZED	proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.widen_upper,proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.post_fixpoint	SpatialDomain.scala (Domain.widen = join then SpatialRecursion.widenType); SpatialCostSemantics.scala (fixpoint / system / GraphSem Fixpoint)	WIDENING: a widening that dominates the join is an upper bound of both its arguments, so the iteration `cur := widen(cur, nxt)` never drops a fact; the iteration stops at a post-fixpoint (`nxt ⊑ cur`).
+A6-EXHAUST	MECHANIZED	proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.exhaustive	proofs/spatial/check_transfers.py	THE FINITE-MODEL PRINCIPLE: a decidable property with no counterexample on a finite universe holds on every element of it — what the checker's zero-failure enumeration of the small universe establishes for that universe.
+A6-EXACT-UNION	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.union)	The exact-tier union transfer is EXACT on the small universe: γ(union#(α a, α b)) = {a ∪ b} for every pair.
+A6-EXACT-INTER	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.inter)	The exact-tier intersection transfer is exact on the small universe.
+A6-EXACT-SUB	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.sub)	The exact-tier subtraction transfer is exact on the small universe.
+A6-EXACT-RESTRICT	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.restrict)	The exact-tier restriction (prefix-filter) transfer is exact on the small universe.
+A6-EXACT-RAFF	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.raff)	The exact-tier raffination (prefix-complement) transfer is exact on the small universe.
+A6-EXACT-COMP	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.comp)	The exact-tier composition (concatenation) transfer is exact on the small universe.
+A6-EXACT-TAILS-UNION	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.tailsUnion)	The exact-tier tails-union transfer is exact on the small universe.
+A6-EXACT-TAILS-INTER	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.tailsInter)	The exact-tier tails-intersection transfer is exact on the small universe.
+A6-EXACT-WRAP	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.wrap)	The exact-tier wrap transfer is exact on the small universe.
+A6-EXACT-UNWRAP	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.unwrap)	The exact-tier unwrap transfer is exact on the small universe.
+A6-EXACT-RANGE	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.range)	The exact-tier range transfer (the canonical-order slice under `normalize`) is exact on the small universe over eight windows including the identity, the empty, the first, the last and negative windows.
+A6-EXACT-UNION-SAME	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.unionA / mustAlias short circuit)	The alias short circuit `x ∪ x = x` (the same object on both sides) is exact on the small universe.
+A6-EXACT-INTER-SAME	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.interA)	The alias short circuit `x ∩ x = x` is exact on the small universe.
+A6-EXACT-SUB-SAME	CHECKED	proofs/spatial/check_transfers.py	SpatialDomain.scala (Domain.subA)	The alias short circuit `x ∖ x = ∅` is exact on the small universe.
+A6-PRICING	CHECKED	proofs/spatial/check_transfers.py	SpatialCostSemantics.scala (CostSem.go, every constructor); SpatialCostCheck	The pricing rules' containment on the dumped rows is re-checked independently: for every (operation, backend, inputs, component) row the counted total lies in [lo, hi] and no upper endpoint is infinite on a closed exact program.  The exhaustive Scala gate (SpatialCostCheck: 399360 + 11264 binary/unary rows, 36096 summarized rows, the corpus hunt) is the full enumeration; these rows are its independent spot re-check.
+A6-SUMM	DIFFERENTIAL	proofs/spatial-semantic (the certified SpatialTyping transfers, corpus STATUS.tsv); SpatialDomainCheck	SpatialDomain.scala (Domain.summary; summarized ops via SpatialTyping.infer)	The summarized tier REUSES the certified shape × count transfers (proofs/spatial-semantic): a summarized operation is `SpatialTyping.infer` on the two-mention term, and `SpatialDomainCheck` checks γ-containment of every summarized outcome against the reference evaluator on the finite universe.
+A6-EVENTS	DIFFERENTIAL	SpatialSemanticsCheck (A1)	SpatialSemantics.scala (EventSemantics: reference / trie / graph / zipper)	THE EVENT SEMANTICS IS THE EXECUTORS': the compositional semantics produces the same event multiset as the instrumented executions for every constructor and backend (1148 constructor cases, the fuzzer corpus, the cornerstones).  This is the implementation-correspondence boundary T9 names; it is checked differentially, not proved.
+A6-BACKENDS	DIFFERENTIAL	SpatialCostCheck; SpatialEventsCheck; SpatialScaleCheck	SpatialCostSemantics.scala (Walk, ZipperWalk, GraphSem; frontierEvents; narySummBounds)	BACKEND PRICING ↔ COUNTED SEMANTICS: every backend parameter of the pricing (Patricia envelope 2k−1, live-frontier probes, cursor reads, graph slots) is checked against the counted executions: exhaustive small-model containment, summarized declarations, the randomized hunt, the cornerstones and the geometric ladders, with zero containment failures.
+A6-IVL-IMPL	PREMISE	SpatialTypes.scala:38 (Ivl.add / Ivl.mul saturate at Long.MaxValue)	SpatialCostSemantics.scala (CostSem.add / mul / sat)	THE `Long` ARITHMETIC IS THE `WithTop ℕ` ARITHMETIC BELOW 2^63: `Ivl.add`/`Ivl.mul` return the exact sum/product when it is representable and INF otherwise.  Lower endpoints never saturate in any analysed program (they are bounded by the finite inputs); a lower endpoint reaching INF would be reported as an infinite interval, never as a tight one.
+A6-BUDGET	PREMISE	SpatialCostSemantics.scala (maxRounds; notes "no post-fixpoint within N abstract rounds"); SpatialDomain.scala (DomainBudget; DomainCert.widenings)	SpatialCostSemantics.scala (fixpoint / system / GraphSem Fixpoint)	TERMINATION OF THE ABSTRACT ITERATION is a checked run-time property, not a theorem: a fixpoint or system that reaches no post-fixpoint within `maxRounds` abstract rounds is reported with an INFINITE round count and a note, never with a finite bound.  Every widening applied is named in the report's certificate.
+A6-PATRICIA	PREMISE	docs/SPATIAL_SEMANTICS.md §parameters; SpatialCostSemantics.scala (Walk.patricia)	IntTrieOps (merge over IntMap Patricia maps); Interner	THE PATRICIA SHAPE DEPENDS ON THE INTERNER'S IDS (process-dependent): a merge of two child maps with m and n keys is priced by the envelope [1, 2·(m+n)−1] Patricia visits, which holds for every id assignment; the exact visit count is not predicted.

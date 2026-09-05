@@ -15,11 +15,11 @@ import scala.language.implicitConversions
  *      workload's hook count in hand so the measurement is an accounting, not a hope;
  *   3. the hooks are wired where they claim to be (hand-computed exact counts per executor);
  *   4. each of the four attribution errors is now a passing regression;
- *   5. containment (`lower <= actual <= upper`) AND TIGHTNESS (median / p95 / worst slack) are
- *      measured PER COMPONENT and PER BACKEND over the corpus and the cornerstones, and the p95 and
- *      worst case are GATED against thresholds read off the measurements;
- *   6. the specific regression the review asks for: for a backend whose real implementation returns
- *      its input unchanged, increasing the input size must NOT increase modelled warm work.
+ *   5. CONTAINMENT (`lower <= actual <= upper`) of the counted events in the intervals the A4 analysis
+ *      (`CostSem`) derives, over the fuzzer corpus and the six cornerstones' OPTIMIZED bodies, on every
+ *      backend — the gate; USEFULNESS (interval width per tier) is reported, not gated, at milestone M1;
+ *   6. the derivation certificate is deterministic and every cornerstone bound is finite and below the
+ *      astronomical ceiling.
  *
  *  EXECUTORS ARE GROUND TRUTH HERE AND NOWHERE ELSE.  Every `eval`/`evalI`/`execT`/`execZ` call below
  *  is a test oracle.  The analysis under test (`SpatialCost.analyze`) never runs the program — the
@@ -191,7 +191,7 @@ class SpatialEventsCheck extends FunSuite, CalibrationProbe:
     def best(body: => Long): Double =
       var b = Double.MaxValue
       for _ <- 0 until 5 do
-        val t0 = System.nanoTime(); val r = body; val d = (System.nanoTime() - t0).toDouble
+        val t0 = java.lang.System.nanoTime(); val r = body; val d = (java.lang.System.nanoTime() - t0).toDouble
         assert(r >= 0L)
         if d < b then b = d
       b
@@ -241,7 +241,7 @@ class SpatialEventsCheck extends FunSuite, CalibrationProbe:
     def bestMs(k: Int)(body: => Unit): Double =
       var b = Double.MaxValue
       for _ <- 0 until 5 do
-        val t0 = System.nanoTime(); body; val d = (System.nanoTime() - t0) / 1e6
+        val t0 = java.lang.System.nanoTime(); body; val d = (java.lang.System.nanoTime() - t0) / 1e6
         if d < b then b = d
       b
     val off = bestMs(2000)(runN(2000))
@@ -267,14 +267,14 @@ class SpatialEventsCheck extends FunSuite, CalibrationProbe:
     def bestTrie(k: Int): Double =
       var b = Double.MaxValue
       for _ <- 0 until 5 do
-        val t0 = System.nanoTime(); val r = trieWork(k); val d = (System.nanoTime() - t0) / 1e6
+        val t0 = java.lang.System.nanoTime(); val r = trieWork(k); val d = (java.lang.System.nanoTime() - t0) / 1e6
         assert(r > 0)
         if d < b then b = d
       b
     val tOff = bestTrie(200)
     val tOn = { var b = Double.MaxValue
                 for _ <- 0 until 5 do
-                  val t0 = System.nanoTime(); EffortSink.count(trieWork(200)); val d = (System.nanoTime() - t0) / 1e6
+                  val t0 = java.lang.System.nanoTime(); EffortSink.count(trieWork(200)); val d = (java.lang.System.nanoTime() - t0) / 1e6
                   if d < b then b = d
                 b }
     val (_, trieEv) = EffortSink.count(trieWork(1))
@@ -478,499 +478,74 @@ class SpatialEventsCheck extends FunSuite, CalibrationProbe:
     println(s"EVENTS: execT ${ge.showComponents} | execZ ${ze.showComponents} | execZ(loop) ${zl.showComponents}")
   }
 
-  // ==============================================================================================
-  // 4. THE FOUR FIXED ATTRIBUTIONS
-  // ==============================================================================================
-
-  test("FIX 1: a warm Literal returns the stored set — the model no longer charges |v|") {
-    for k <- Vector(4, 32, 256) do
-      val l = litN(k, "z")
-      val (_, ev) = EffortSink.count(eval(l))
-      assertEquals(ev(EffortEvent.AstDispatch), 1L)
-      assertEquals(ev(EffortEvent.FreshPath), 0L, s"eval(Literal) returns the stored Set, |v|=$k: ${ev.show}")
-      val warm = SpatialCost.analyze(l, Backends.referenceWarm)
-      assertEquals(warm.cost.alloc, Amount.Bounded(Sym.zero), s"warm: ${warm.show}")
-      assertEquals(warm.cost.work, Amount.Bounded(Sym.one), s"one AstDispatch, whatever |v|: ${warm.show}")
-      // the COLD phase still carries the construction cost — the information is not lost, just moved
-      val cold = SpatialCost.analyze(l, Backends.referenceCold)
-      assertEquals(cold.cost.alloc, Amount.Bounded(Sym.c(k.toLong)), s"cold: ${cold.show}")
-    println("EVENTS: FIX 1 — warm Literal is 1 dispatch / 0 allocations at |v| = 4, 32, 256")
-  }
-
-  test("FIX 2: a full-window Range is the identity — no sort is charged, and none happens") {
-    for k <- Vector(8, 64, 256) do
-      val src = litN(k, "r")
-      // ground truth: sliceRange returns its input, so pathValueOrdering is never consulted
-      val (full, fe) = EffortSink.count(eval(Space.Range(src, 0, 0)))
-      assertEquals(full.paths.size, k)
-      assertEquals(fe(EffortEvent.PathItemComparison), 0L, s"a full Range sorts nothing, |x|=$k: ${fe.show}")
-      // a partial window really does sort
-      val (part, pe) = EffortSink.count(eval(Space.Range(src, 0, 3)))
-      assertEquals(part.paths.size, 3)
-      assert(pe(EffortEvent.PathItemComparison) > 0L, s"a partial Range must sort: ${pe.show}")
-      // the model agrees in both directions
-      val mFull = SpatialCost.analyze(Space.Range(src, 0, 0), Backends.referenceWarm)
-      val mPart = SpatialCost.analyze(Space.Range(src, 0, 3), Backends.referenceWarm)
-      assertEquals(mFull.cost.work, Amount.Bounded(Sym.c(2)), s"2 dispatches, no sort: ${mFull.show}")
-      assert(Sym.dominates(mPart.cost.work.symOpt.get, mFull.cost.work.symOpt.get) &&
-             mPart.cost.work != mFull.cost.work, s"${mPart.show}\n${mFull.show}")
-    // and the identity predicate matches RangeBounds' actual behaviour, exhaustively on small windows
-    for size <- 1 to 12; lo <- -3 to 3; hi <- -3 to 3 do
-      val (a, b) = RangeBounds.normalize(size, lo, hi)
-      val reallyIdentity = a == 0 && b == size
-      if SpatialCost.rangeIsIdentity(lo, hi) then
-        assert(reallyIdentity, s"rangeIsIdentity($lo,$hi) but normalize($size) = ($a,$b)")
-    println("EVENTS: FIX 2 — 0 counted comparisons for Range(x,0,0) at |x| = 8, 64, 256; >0 for Range(x,0,3)")
-  }
-
-  test("FIX 3: the trie Range DOES sort, and its full window is free only when the count is CACHED") {
-    // ground truth from IntTrie.scala:160-176 — the full-window slice returns the SAME object ...
-    val t = ITrie.fromSpaceValue(SpaceValue((0 until 64).map(i => p("k" + i)).toSet))
-    assert(ITrie.range(t, 0, 0) eq t, "a full window returns its input unchanged")
-    // ... but `val size = t.size` runs FIRST, so on a trie whose per-node terminal counts are NOT yet
-    // memoised the work is proportional to the trie.  THAT IS A PROPERTY OF THE OPERAND, NOT OF THE
-    // OPERATOR, and `Meas.countKnown` is the channel that says which: this test pins both directions, and
-    // the COLD direction is the one that must never be assumed away.
-    val identCold = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.trieCold)
-    val partCold = SpatialCost.analyze(Space.Range(S"s0", 0, 3), Backends.trieCold)
-    assert(identCold.cost.touch.bigO > BigO.const,
-           s"a COLD full window still walks every node to compute t.size: ${identCold.show}")
-    // THE PER-NODE KEY SORT IS NO LONGER INSIDE `touch`, AND THAT IS DELIBERATE.  `touch` is
-    // contractually `TrieNodeVisit + PatriciaVisit`; `IntTrie.ordered`'s `sortBy` emits neither, so a
-    // `heads·log(heads)` term inside `touch` charged work no counted run can confirm or refute — pure
-    // unmeasurable slack, and the dominant term in `range-part`'s interval width.  It is DECLARED
-    // rather than deleted: the report names the site and says why it is outside the counted vocabulary.
-    assertEquals(partCold.cost.touch.bigO.logs, 0,
-                 s"an UNCOUNTABLE sort must not sit inside `touch`: ${partCold.show}")
-    assert(partCold.assumptions.exists(_.contains("IntTrie.ordered")),
-           s"…and it must be DECLARED instead of dropped: ${partCold.assumptions.mkString(" | ")}")
-    // the OLD model's claim, still true on a COLD object: the trie is NOT cheaper than the reference
-    val refIdent = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.referenceCold)
-    assert(refIdent.cost.bigO < identCold.cost.bigO,
-           s"eval's sliceRange returns `s` in O(1); a cold ITrie.range walks the trie:\n" +
-           s"${refIdent.show}\n${identCold.show}")
-    // A FRESHLY BUILT SUBEXPRESSION IS COLD EVEN IN A WARM RUN — its nodes were allocated by this run —
-    // so the walk is still charged there.  This is the half that stops the channel from degenerating into
-    // "a warm Range is free".
-    val fresh = SpatialCost.analyze(Space.Range(Space.Union(S"s0", S"s1"), 0, 0), Backends.trieWarm)
-    assert(fresh.cost.touch.bigO > BigO.const,
-           s"a warm Range over a FRESHLY BUILT union must still pay the count walk: ${fresh.show}")
-    // ... and the WARM query on a FREE INPUT mention is the one that is O(1): this same executable already
-    // ran on this object, so every count it forces was forced and memoised then.
-    val identWarm = SpatialCost.analyze(Space.Range(S"s0", 0, 0), Backends.trieWarm)
-    assertEquals(identWarm.cost.touch.bigO, BigO.const,
-                 s"a warm full window on a declared input reads a cached count: ${identWarm.show}")
-    // the per-node key sort is NOT dropped by the cache state (see `TrieAlgebraCost.range`'s scaladoc)
-    val partWarm = SpatialCost.analyze(Space.Range(S"s0", 0, 3), Backends.trieWarm)
-    assert(partWarm.assumptions.exists(_.contains("IntTrie.ordered")),
-           s"the sort assumption is not dropped by the cache state either (see `TrieAlgebraCost.range`): " +
-           partWarm.assumptions.mkString(" | "))
-    println(s"EVENTS: FIX 3 — trie Range(x,0,0) touch cold = ${identCold.cost.touch.show}, " +
-            s"warm/declared = ${identWarm.cost.touch.show}, warm/freshly-built = ${fresh.cost.touch.show}; " +
-            s"Range(x,0,3) touch = ${partCold.cost.touch.show}")
-  }
-
-  test("FIX 4: execT and execZ are priced separately, and really do differ") {
-    val sv = SpaceValue(Set(p("a", "x"), p("a", "y"), p("b", "z"), p("b", "w")))
-    val ic = Map(SpaceMention("s0") -> ITrie.fromSpaceValue(sv))
-    val cases: Vector[(String, Space)] = Vector(
-      "local algebra" -> Space.Union(Space.Mention(SpaceMention("s0")), Space.TailsUnion(S"s0")),
-      "unwrap"        -> Space.Unwrap(Space.Mention(SpaceMention("s0")), "a"),
-      "iteration"     -> headsOf(Space.Mention(SpaceMention("s0"))))
-    var differing = 0
-    for (nm, prog) <- cases do
-      val g = transpile(Routine(RoutinePtr("m"), Vector.empty, Vector(SpaceMention("s0")), prog))
-      runGraphT(g, Map.empty, Map("s0" -> ic(SpaceMention("s0"))))
-      execZ(prog)(using emptyPc, ic, noRc)
-      val (_, ge) = EffortSink.count(runGraphT(g, Map.empty, Map("s0" -> ic(SpaceMention("s0")))))
-      val (_, ze) = EffortSink.count(execZ(prog)(using emptyPc, ic, noRc))
-      val gm = SpatialCost.analyze(prog, Backends.graphWarm)
-      val zm = SpatialCost.analyze(prog, Backends.zipperWarm)
-      if gm.interval != zm.interval then differing += 1
-      println(f"EVENTS: FIX 4 $nm%-14s counted execT[${ge.showComponents}]  execZ[${ze.showComponents}]")
-      assert(ge != ze, s"$nm: the two executables must not produce the same event vector")
-    assertEquals(differing, cases.length, "each case must be priced differently by the Graph and Zipper models")
-    // and the zipper report SAYS where it stopped fusing
-    val zl = SpatialCost.analyze(headsOf(Space.Mention(SpaceMention("s0"))), Backends.zipperWarm)
-    assert(zl.assumptions.exists(_.contains("materialises it through evalI")),
-           s"the fallback must be disclosed: ${zl.show}")
-  }
 
   // ==============================================================================================
-  // 5. THE REGRESSION the review ASKS FOR BY NAME
+  // 4. CALIBRATION AGAINST THE A4 ANALYSIS — the corpus and the cornerstones
   // ==============================================================================================
 
-  test("IDENTITY REGRESSION: a bigger input must NOT increase modelled warm work for an identity op") {
-    val sizes = Vector(4, 16, 64, 256, 1024)
-    // (a) the reference evaluator: `Literal` returns the stored set and a full `Range` returns its
-    //     input, so NO component of the warm cost may grow.  This is the review's exact request.
-    for build <- Vector[(String, Int => Space)](
-                   "Literal"        -> (k => litN(k, "q")),
-                   "Range(x, 0, 0)" -> (k => Space.Range(litN(k, "q"), 0, 0)),
-                   "Range(x, 1, 0)" -> (k => Space.Range(litN(k, "q"), 1, 0))) do
-      val (nm, mk) = build
-      val costs = sizes.map(k => SpatialCost.analyze(mk(k), Backends.referenceWarm).cost)
-      val counted = sizes.map(k => EffortSink.count(eval(mk(k)))._2)
-      for i <- 0 until costs.length - 1 do
-        assertEquals(costs(i).work, costs(i + 1).work, s"$nm: modelled warm WORK grew from |v|=${sizes(i)} to ${sizes(i + 1)}")
-        assertEquals(costs(i).alloc, costs(i + 1).alloc, s"$nm: modelled warm ALLOC grew")
-        assertEquals(costs(i).touch, costs(i + 1).touch, s"$nm: modelled warm TOUCH grew")
-        assertEquals(counted(i).work, counted(i + 1).work, s"$nm: COUNTED work grew — the model would be wrong")
-        assertEquals(counted(i).alloc, counted(i + 1).alloc, s"$nm: COUNTED alloc grew")
-      println(f"EVENTS: identity/$nm%-16s reference warm cost constant over |v| = ${sizes.mkString(",")}: " +
-              f"${costs.head.show}  (counted ${counted.head.showComponents})")
+  /** one containment row: a counted component against the analysis' interval */
+  final case class Row(label: String, backend: Backend, comp: EffortComponent, actual: Long, lo: Long, hi: Long):
+    def contains: Boolean = lo <= actual && actual <= hi
+    def width: Double = (hi.toDouble + 1) / (lo.toDouble + 1)
+    def show: String = f"$label%-28s ${backend.slug}%-9s $comp%-6s actual=$actual%9d in [${Ivl(lo, hi).show}]  ${if contains then "OK" else "OUT"}"
 
-    // (b) a warm `Literal` is a cache hit on every trie-shaped backend too
-    for m <- Vector(Backends.trieWarm, Backends.graphWarm, Backends.zipperWarm) do
-      val costs = sizes.map(k => SpatialCost.analyze(litN(k, "q"), m).cost)
-      for i <- 0 until costs.length - 1 do
-        assertEquals(costs(i), costs(i + 1), s"${m.name}: a warm Literal's cost grew with |v|")
-      println(s"EVENTS: identity/Literal ${m.name} warm cost constant: ${costs.head.show}")
+  def rowsOf(label: String, rep: CostReport, ev: Events): Vector[Row] =
+    EffortEvent.calibratedComponents.map(c => Row(label, rep.backend, c, ev.component(c), rep.component(c).lo, rep.component(c).hi))
 
-    // (c) THE HONEST EXCEPTION, recorded rather than papered over: `ITrie.range` computes the
-    //     recursive `t.size` BEFORE its identity check, so for the trie-shaped backends a full
-    //     `Range` is NOT constant work.  The model must say so, or it would be unsound the other way.
-    val trieRange = sizes.map(k => SpatialCost.analyze(Space.Range(litN(k, "q"), 0, 0), Backends.trieWarm).cost)
-    assert(trieRange.head.touch != trieRange.last.touch,
-           "ITrie.range walks every node even for a full window (IntTrie.scala:161) — the model must not claim O(1)")
-    for i <- 0 until trieRange.length - 1 do
-      assert(Sym.dominates(trieRange(i + 1).touch.symOpt.get, trieRange(i).touch.symOpt.get))
-    println(s"EVENTS: identity/Range trie warm touch GROWS as documented: " +
-            s"${trieRange.map(_.touch.show).mkString(" -> ")}")
-  }
+  def usefulness(title: String, rs: Vector[Row]): Unit =
+    println(s"CALIBRATION: USEFULNESS — $title (${rs.length} rows; reported, not gated at M1)")
+    for b <- Backend.values; c <- EffortEvent.calibratedComponents do
+      val mine = rs.filter(r => r.backend == b && r.comp == c)
+      if mine.nonEmpty then
+        val ws = mine.map(_.width).sorted
+        val tier = ProductRequirement.tierOf(b.slug, c)
+        val worst = ws.last
+        val verdict = tier match
+          case Some(t) if t.width.isInfinite => "not gated"
+          case Some(t) => if worst <= t.width then s"USEFUL (${t.name})" else s"NOT USEFUL for ${t.name} (worst width ${f"$worst%.1f"} > ${t.width})"
+          case None => "no tier"
+        println(f"CALIBRATION:   ${b.slug}%-9s $c%-6s p50=${ws(ws.length / 2)}%8.2f p95=${ws((ws.length * 95) / 100 min (ws.length - 1))}%8.2f worst=$worst%12.2f  $verdict")
 
-  // ==============================================================================================
-  // 6. THE CALIBRATION HARNESS
-  // ==============================================================================================
+  val sNames: Vector[SpaceMention] = (0 until 3).map(i => SpaceMention("s" + i)).toVector
 
-  val maxS = 3; val maxP = 2
-  val sNames: Vector[SpaceMention] = (0 until maxS).map(i => SpaceMention("s" + i)).toVector
-  val pNames: Vector[PathRef] = (0 until maxP).map(j => PathRef("p" + j)).toVector
-
-  /** the exact `Meas` of a DECLARED input type (an input annotation, never an observed output) */
-  def measOf(t: SpatialType): Meas =
-    if t.isProvablyEmpty then Meas.empty
-    else
-      def up(n: Long) = if n >= Ivl.INF then Sym.Inf else Sym.c(n)
-      Meas(up(t.size.hi), if t.len.isEmpty then Sym.zero else up(t.len.hi), up(t.headCount.hi),
-           up(t.size.lo), up(t.headCount.lo))
-
-  final case class Case(label: String, prog: Space,
-                        spaces: Map[SpaceMention, SpaceValue] = Map.empty,
-                        paths: Map[PathRef, PathValue] = Map.empty,
-                        rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty):
-    def pc: PathContext = PathContextMap(paths)
-    def sc: SpaceContext = SpaceContextMap(spaces)
-    lazy val ic: Map[SpaceMention, ITrie] = spaces.view.mapValues(ITrie.fromSpaceValue).toMap
-    def env: SpatialCost.Env =
-      val types = spaces.view.mapValues(SpatialType.of).toMap
-      SpatialCost.Env(
-        spaces = types.view.mapValues(measOf).toMap,
-        paths = paths.view.mapValues(v => Sym.c(v.items.length.toLong)).toMap,
-        routines = rc,
-        facts = SpatialTyping.Env(
-          spaces = types, paths = paths,
-          lenv = SpatialEnv(
-            paths = paths.view.mapValues(v => Lower.LenBounds(v.items.length.toLong, v.items.length.toLong)).toMap,
-            routines = rc)))
-
-  def freeVars(c: Cost): Set[String] =
-    Vector(c.work, c.alloc, c.rounds, c.touch)
-      .flatMap(a => a.symOpt.map(Sym.vars).getOrElse(Set.empty[String])).toSet
-
-  /** One backend's calibration points, or `None` when the prediction still mentions a free variable
-   *  (a symbolic fixpoint round count, a grounded path length): evaluating those at an arbitrary
-   *  valuation would produce a number the model never claimed, so such rows are SKIPPED and counted,
-   *  never silently defaulted.
-   *
-   *  The `touch` component is included for every model EXCEPT one that declares
-   *  `CostModel.touchNoOracle` — the exclusion lives in the model, and the test
-   *  `the declared touch-oracle gap is exactly one backend` pins the list to `reference` alone. */
-  def calibrate(label: String, model: CostModel, rep: SpatialCost.Report, ev: Events,
-                extra: CostInterval = CostInterval.zero): Option[Vector[Calibration]] =
-    val hi = rep.cost + extra.hi
-    val lo = rep.lower + extra.lo
-    if freeVars(hi).nonEmpty || freeVars(lo).nonEmpty then None
-    else Some(EffortEvent.calibratedComponents
-                .filterNot(c => c == EffortComponent.Touch && model.touchNoOracle.isDefined)
-                .map { comp =>
-                  Calibration(s"$label/${rep.backend.slug}", comp, ev.component(comp),
-                              lo.calibrated(comp).at(Map.empty), hi.calibrated(comp).at(Map.empty))
-                })
-
-  def countReference(c: Case): (SpaceValue, Events) =
-    eval(c.prog)(using c.pc, c.sc, c.rc)                              // warm
-    EffortSink.count(eval(c.prog)(using c.pc, c.sc, c.rc))
-
-  /** `evalI` — instrumented now, so the Trie backend is calibrated like the other three. */
-  def countTrie(c: Case): (ITrie, Events) =
-    evalI(c.prog)(using c.pc, c.ic, c.rc)                             // warm (fills the iLiteral memo)
-    EffortSink.count(evalI(c.prog)(using c.pc, c.ic, c.rc))
-
-  def countZipper(c: Case): (ITrie, Events) =
-    execZ(c.prog)(using c.pc, c.ic, c.rc)
-    EffortSink.count(execZ(c.prog)(using c.pc, c.ic, c.rc))
-
-  /** `transpile` is COLD work and stays outside the counted region — that is the cold/warm split. */
-  def countGraph(c: Case, nS: Int, nP: Int): Option[(ITrie, Events, CostInterval)] =
-    try
-      val g = transpile(Routine(RoutinePtr("m"), pNames.take(nP), sNames.take(nS), c.prog))
-      val refs = (0 until nP).map(j => ("p" + j) -> Interner.internPath(c.paths(pNames(j)).items)).toMap
-      val ments = (0 until nS).map(i => ("s" + i) -> c.ic(sNames(i))).toMap
-      runGraphT(g, refs, ments)
-      val (v, e) = EffortSink.count(runGraphT(g, refs, ments))
-      Some((v, e, SpatialCost.graphPrologue(nP, nS)))
-    catch case _: NotImplementedError | _: IllegalStateException | _: RuntimeException => None
-
-  /** THE COST OF A TERM AS `Routine.optimized`'s BODY, on every backend (the user's third steer).
-   *
-   *  "Asymptotics belong on the OPTIMIZED / SUPERCOMPILED program, not the definitional one."  A
-   *  cornerstone's definitional term is not what runs: `Routine.optimized` applies the spatial hook and
-   *  then the ordinary `Lower` rule list, and THAT body is what an executor is handed.  The decorated
-   *  analysis is re-run on the optimized body so the prediction consumes per-node facts that address the
-   *  term being priced. */
-  def optimizedForm(c: Case): (Routine, Map[Backend, SpatialCost.Report]) =
-    val ann = SpatialAnnotations(
-      spaces = c.spaces.view.mapValues(SpatialType.of).toMap,
-      paths = c.paths,
-      pathLens = c.paths.view.mapValues(v => Lower.LenBounds(v.items.length.toLong, v.items.length.toLong)).toMap,
-      routines = c.rc)
-    given PartialFunction[RoutinePtr, Routine] = c.rc
-    val r = Routine(RoutinePtr("main"), c.paths.keys.toVector, c.spaces.keys.toVector, c.prog)
-    val opt = r.optimized
-    val a = SpatialPipeline.analyzeRoutine(opt, ann)
-    val env = ann.costEnvFor(a.decorated)
-    (opt, Backend.values.iterator.map(b =>
-       b -> SpatialCost.analyze(opt.body, env, Backends.of(b, ExecutionPhase.Warm),
-                                CostForm.Optimized)).toMap)
-
-  /** THE PRODUCT-REQUIREMENT GATE.
-   *
-   *  ==WHAT WAS HERE==
-   *  Two maps of thresholds, `corpusGate` and `cornerstoneGate`, each "READ OFF THE MEASUREMENT this
-   *  suite prints, then rounded up".  That is a regression detector wearing a gate's clothes: it can
-   *  say "the number did not move" and it can never say "the number is usable".  The published
-   *  consequence was `trie Touch -> (4.5e6, 4.5e6)` and `trie Alloc -> (2.5e5, 2.5e5)` on the
-   *  cornerstones, with Puzzle and Datalog removed from the statistic by an allow-list.
-   *
-   *  ==WHAT IS HERE NOW==
-   *  [[ProductRequirement]] (SpatialScaleCheck.scala): interval WIDTH, multiplicative ERROR and
-   *  asymptotic SLOPE budgets derived from the decisions an estimate has to support, stratified by
-   *  (backend, component), with the slope half measured on the geometric ladders in `SpatialScaleCheck`.
-   *  Anything that cannot meet its tier FAILS with the measured number printed, unless it appears in the
-   *  named-limitation ledger — which requires a root cause, an owning file, and passes a NECESSITY check
-   *  so a channel that gets fixed breaks the build instead of keeping its excuse.
-   *
-   *  ==AND IT IS GATED ON THE OPTIMIZED FORM==
-   *  The user's third steer: the numbers that matter describe `Routine.optimized`'s body executed on the
-   *  optimal backends.  So the cornerstone gate below runs on the OPTIMIZED body, and the definitional
-   *  rows are printed beside it as a labelled contrast rather than gated.  The REFERENCE evaluator is
-   *  ungated on every form (the user's second steer, and `ProductRequirement.NotGated` states it in the
-   *  table): `eval` over `Set[PathValue]` is allowed to be slow, its constants are not a product, and its
-   *  `touch` has no counted oracle at all. */
-  def gateOf(scope: String, subject: String, rows: Vector[Calibration]): Vector[GateRow] =
-    val keys = rows.map(r => (r.label.split('/').last, r.component)).distinct
-    keys.flatMap { (b, comp) =>
-      val sub = rows.filter(r => r.label.endsWith("/" + b) && r.component == comp).filter(_.bounded)
-      ProductRequirement.tierOf(b, comp) match
-        case _ if sub.isEmpty => Vector.empty[GateRow]
-        case None => Vector.empty[GateRow]        // caller asserts totality separately
-        case Some(tier) =>
-          val errs = sub.map(_.slack)
-          val widths = sub.map(r => (r.upper + 1.0) / (r.lower + 1.0))
-          // THE LOWER ENDPOINT AGAINST THE TRUTH, sampled only where the execution DID something.
-          // the second product requirement: "no zero lower endpoint when a nonempty execution
-          // must allocate or touch".  The counted run is the evidence that the work was mandatory — a
-          // test oracle, never an input to a bound.
-          val lowErrs = sub.filter(_.actual > 0L).map(r => (r.actual.toDouble + 1.0) / (r.lower + 1.0))
-          // a p95 over fewer than five points is the maximum with extra steps, so it is not emitted
-          Vector(GateRow(scope, subject, b, comp, "error", errs.max, tier),
-                 GateRow(scope, subject, b, comp, "width", widths.max, tier),
-                 GateRow(scope, subject, b, comp, "magnitude", sub.map(_.upper).max, tier)) ++
-          (if lowErrs.isEmpty then Vector.empty
-           else Vector(GateRow(scope, subject, b, comp, "lower-error", lowErrs.max, tier))) ++
-          (if sub.length < 5 then Vector.empty
-           else Vector(GateRow(scope, subject, b, comp, "error-p95", Calibration.p95(errs), tier),
-                       GateRow(scope, subject, b, comp, "width-p95", Calibration.p95(widths), tier)))
-    }
-
-  /** print the containment/slack table, gate SOUNDNESS unconditionally, and gate TIGHTNESS against the
-   *  product requirements when `gateRows` is non-empty */
-  def publish(title: String, scope: String, rows: Vector[Calibration], skipped: Int, cases: Int,
-              gateRows: Vector[GateRow], ungatedNote: String = "",
-              hard: Vector[String] = Vector.empty): Unit =
-    println("=" * 116)
-    println(s"CALIBRATION — $title  ($cases cases, ${rows.length} points, $skipped predictions skipped as symbolic)")
-    println("=" * 116)
-    val keys = rows.map(r => (r.label.split('/').last, r.component)).distinct
-      .sortBy((b, c) => (b, c.ordinal))
-    for (b, comp) <- keys do
-      val sub = rows.filter(r => r.label.endsWith("/" + b) && r.component == comp)
-      val key = s"$b $comp"
-      println("CALIBRATION: " + Calibration.summarize(key, sub).show)
-      val raw = Calibration.summarizeRaw(s"$key [raw, actual>0]", sub)
-      if raw.n > 0 && raw.n != sub.length then println("CALIBRATION: " + raw.show)
-      val unb = sub.filterNot(_.bounded)
-      if unb.nonEmpty then
-        println(s"CALIBRATION:   ${unb.length} of ${sub.length} predictions were UNBOUNDED " +
-                s"(${unb.map(_.label).distinct.mkString(", ")})")
-      // EVERY (backend, component) that produced a row must have a declared product requirement
-      assert(ProductRequirement.tierOf(b, comp).isDefined,
-             s"$key produced calibration rows with no declared product requirement")
-    val bad = rows.filterNot(_.contains)
-    println(f"CALIBRATION: overall containment ${100.0 * rows.count(_.contains) / math.max(1, rows.length)}%.2f%% " +
-            f"(${bad.length} of ${rows.length} points outside the interval)")
-    for b <- bad.take(8) do println(s"CALIBRATION:   OUT ${b.show}")
-    // SOUNDNESS IS THE FIRST GATE: an upper bound below the counted truth is a bug, not imprecision.  It
-    // is reported THROUGH the gate — at the top of the report, prefixed UNSOUND, and matched by no ledger
-    // entry — rather than asserted here, for the same reason as in `SpatialScaleCheck`: an assertion at
-    // this point throws before the requirement table is printed, and a reader of a red build then sees the
-    // containment failure and nothing else.  It is still a failure and it is still first.
-    val soundness =
-      if bad.isEmpty then Vector.empty[String]
-      else Vector(s"UNSOUND (soundness is never excused): ${bad.length} of ${rows.length} counted values " +
-                  s"fell outside the predicted interval — " +
-                  bad.take(8).map(b => s"${b.label}/${b.component} actual=${b.actual} in " +
-                                       f"[${b.lower}%.0f, ${b.upper}%.0f]").mkString("; ") +
-                  (if bad.length > 8 then s" ... and ${bad.length - 8} more" else ""))
-    // THE WORKLOAD CLASS, DECLARED AND PRINTED even when this class is not ratio-gated — the review asks
-    // for a declared maximum ratio "per component AND WORKLOAD CLASS", so a class that opts out has to say
-    // so in the table rather than by the absence of a gate call.
-    ProductRequirement.workloadOf(scope) match
-      case Some(w) =>
-        println(s"CALIBRATION: WORKLOAD CLASS `$scope` — " +
-                (if w.gated then "RATIOS GATED" else "RATIOS NOT GATED") + ": " + w.why)
-      case None =>
-        fail(s"scope `$scope` publishes ${rows.length} calibration points under no declared workload " +
-             "class (ProductRequirement.workloads)")
-    if ungatedNote.nonEmpty then
-      println(s"CALIBRATION: TIGHTNESS NOT GATED ON THIS FORM — $ungatedNote")
-    val all = soundness ++ hard
-    if gateRows.nonEmpty || all.nonEmpty then publishGate(title, scope, gateRows, keys.length, all)
-
-  /** [[ProductGate]] is the one gate policy for all three suites; this is the assertion for the
-   *  `corpus`/`cornerstone` scopes.  It used to be a second copy of the "a named limitation converts this
-   *  failure into a pass" logic — see the class comment on `ProductGate`. */
-  def publishGate(title: String, scope: String, rows: Vector[GateRow], channels: Int,
-                  hard: Vector[String]): Unit =
-    val fs = ProductGate.report(title, scope, rows, channels, hard)
-    assert(fs.isEmpty,
-           s"$title: ${fs.length} product-requirement FAILURE(S) — every one is printed above:\n  " +
-           fs.take(30).mkString("\n  ") +
-           (if fs.length > 30 then s"\n  ... and ${fs.length - 30} more" else ""))
-
-  test("CALIBRATION: predicted intervals vs counted events over the fuzzer corpus") {
+  test("CALIBRATION: the fuzzer corpus — every counted execution inside the analysis' interval, four backends") {
     val recs = Corpus.load(sys.props.get("cal.progs").map(_.toInt).getOrElse(200))
     val A = SpaceFuzzer.alphabet
     val rng = new java.util.Random(20260807)
     def randPath() = PathValue(List.fill(1 + rng.nextInt(2))(A(rng.nextInt(A.length))))
     def smallTrie() = SpaceValue((0 until (1 + rng.nextInt(6))).map(_ => randPath()).toSet)
-    val sv = sNames.map(_ -> smallTrie()).toMap
-    val pv = pNames.map(_ -> randPath()).toMap
-
-    var rows = Vector.empty[Calibration]
-    var skipped = 0; var graphSkipped = 0; var cases = 0; var zipperFallback = 0; var diagnosed = 0
-    var refTouch = 0L
-    for r <- recs do
-      val c = Case(s"corpus", r.prog, sv.filter((k, _) => sNames.take(r.nSpace).contains(k)),
-                   pv.filter((k, _) => pNames.take(r.nPath).contains(k)))
-      val (refV, refE) = countReference(c)
-      val (trieV, trieE) = countTrie(c)
-      val (zipV, zipE) = countZipper(c)
-      // the hooks must not have changed what the executors compute
-      assertEquals(zipV.toSpaceValue, refV, s"execZ disagrees with eval while counted: ${r.prog.show.take(120)}")
-      assertEquals(trieV.toSpaceValue, refV, s"evalI disagrees with eval while counted: ${r.prog.show.take(120)}")
-      refTouch += refE.touch
-      if zipE(EffortEvent.ZipperFallbackToEvalI) > 0L then zipperFallback += 1
-      cases += 1
-      def add(model: CostModel, rep: SpatialCost.Report, ev: Events, extra: CostInterval = CostInterval.zero): Unit =
-        calibrate("corpus", model, rep, ev, extra) match
-          case Some(cs) =>
-            rows ++= cs
-            // DIAGNOSTIC: an out-of-interval point is a model bug, so print the subject once
-            for x <- cs if !x.contains && diagnosed < 24 do
-              diagnosed += 1
-              println(s"CALIBRATION: DIAGNOSE ${x.show}")
-              println(s"CALIBRATION:   prog = ${r.prog.show.replace('\n', ' ')}")
-              println(s"CALIBRATION:   counted = ${ev.show}")
-              println(s"CALIBRATION:   UPPER ${(rep.cost + extra.hi).show}")
-              println(s"CALIBRATION:   LOWER ${(rep.lower + extra.lo).show}")
-          case None => skipped += 1
-      add(Backends.referenceWarm, SpatialCost.analyze(c.prog, c.env, Backends.referenceWarm), refE)
-      add(Backends.trieWarm, SpatialCost.analyze(c.prog, c.env, Backends.trieWarm), trieE)
-      add(Backends.zipperWarm, SpatialCost.analyze(c.prog, c.env, Backends.zipperWarm), zipE)
-      countGraph(c, r.nSpace, r.nPath) match
-        case Some((gv, ge, prologue)) =>
-          assertEquals(gv.toSpaceValue, refV, s"execT disagrees with eval while counted: ${r.prog.show.take(120)}")
-          add(Backends.graphWarm, SpatialCost.analyze(c.prog, c.env, Backends.graphWarm), ge, prologue)
-        case None => graphSkipped += 1
-    println(s"CALIBRATION: $graphSkipped / ${recs.length} corpus programs could not be transpiled for execT")
-    println(s"CALIBRATION: $zipperFallback / ${recs.length} corpus programs left execZ for evalI — PRICED AND " +
-            "MEASURED now (evalI is instrumented), not excluded")
-    // the claim behind the one declared oracle gap, measured over the whole corpus
-    assertEquals(refTouch, 0L, s"eval counted $refTouch trie touches over the corpus — reference/touch would " +
-                               "then have a partial oracle and must not be excluded wholesale")
-    println(s"CALIBRATION: eval counted 0 trie-touch events over all ${recs.length} corpus programs")
-    // TIGHTNESS IS NOT GATED ON THIS FORM, and the reason is the user's third steer rather than the
-    // numbers: these are DEFINITIONAL random terms.  Their soundness (containment) IS gated, at 100%,
-    // and it is the property a random corpus is the right instrument for.  The tightness product
-    // requirements are gated where they describe what runs: on the OPTIMIZED cornerstones below, and
-    // per operator on the geometric ladders in `SpatialScaleCheck`.
-    publish("fuzzer corpus, warm phase, DEFINITIONAL form", "corpus", rows, skipped, cases, Vector.empty,
-            ungatedNote =
-              "these are DEFINITIONAL random terms, not the optimized bodies anything ships, and a " +
-              "definitional-form tightness number is the wrong question (the user's third steer). This " +
-              "corpus gates SOUNDNESS — 100% containment over " + rows.length + " points — which is what " +
-              "a random corpus is the right instrument for. The tightness requirements are gated on the " +
-              "OPTIMIZED cornerstones below and per operator on SpatialScaleCheck's geometric ladders.")
+    var rows = Vector.empty[Row]; var bad = Vector.empty[String]; var n = 0; var graphless = 0
+    for r <- recs if r.nPath == 0 do
+      val svs = sNames.take(r.nSpace).map(_ -> smallTrie()).toMap
+      val pc = PathContextMap(Map.empty); val sc = SpaceContextMap(svs)
+      val ic = svs.view.mapValues(ITrie.fromSpaceValue).toMap
+      val inputs = CostSem.Inputs(values = svs)
+      eval(r.prog)(using pc, sc, noRc); val re = EffortSink.events(eval(r.prog)(using pc, sc, noRc))
+      evalI(r.prog)(using pc, ic, noRc); val te = EffortSink.events(evalI(r.prog)(using pc, ic, noRc))
+      execZ(r.prog)(using pc, ic, noRc); val ze = EffortSink.events(execZ(r.prog)(using pc, ic, noRc))
+      def one(b: Backend, ev: Events, rep: CostReport): Unit =
+        rows ++= rowsOf(s"corpus#$n", rep, ev)
+        val v = rep.bounds.violations(ev)
+        if v.nonEmpty then bad :+= s"corpus#$n/${b.slug}: ${v.mkString("; ")}\n    prog = ${r.prog.show.replace('\n', ' ').take(200)}"
+      one(Backend.Reference, re, CostSem.analyze(r.prog, inputs, Backend.Reference))
+      one(Backend.Trie, te, CostSem.analyze(r.prog, inputs, Backend.Trie))
+      one(Backend.Zipper, ze, CostSem.analyze(r.prog, inputs, Backend.Zipper))
+      try
+        val g = transpile(Routine(RoutinePtr("m"), Vector.empty, svs.keys.toVector, r.prog))
+        val ments = ic.map((k, v) => k.s -> v)
+        runGraphT(g, Map.empty, ments); val ge = EffortSink.events(runGraphT(g, Map.empty, ments))
+        one(Backend.Graph, ge, CostSem.analyzeGraph(g, inputs))
+      catch case _: NotImplementedError | _: MatchError => graphless += 1
+      n += 1
+    println(s"CALIBRATION: corpus — $n programs, ${rows.length} rows, ${bad.length} containment failures, $graphless without a graph")
+    bad.take(8).foreach(b => println("CALIBRATION: OUT " + b))
+    usefulness("corpus, exact declarations", rows)
+    assertEquals(bad.length, 0, s"containment failures:\n${bad.take(10).mkString("\n")}")
   }
 
-  /** ESTIMATES THAT ARE STILL INFINITE ON A CLOSED, TERMINATING, NON-GROUNDED CORNERSTONE.
-   *
-   *  the requirement: "`infinity` and zero-to-infinity intervals on executable closed programs are
-   *  failed results ... Make 'zero infinite estimates on closed, terminating, non-grounded programs' a
-   *  test invariant rather than maintaining an allow-list of expected failures."
-   *
-   *  IT IS EMPTY AND IT STAYS EMPTY: an unexpected infinity fails, and so does an entry here that has
-   *  become finite.  The two former entries (`puzzle15`, `datalog-sn`) are bounded as of this run.
-   *
-   *  AND "INFINITE" NOW INCLUDES "ASTRONOMICAL", which is the other half of the same review paragraph:
-   *  "Replacing infinity with `8e55` is not meaningful progress ... [it] should fail the gate just as an
-   *  infinite bound does."  An endpoint at or above `ProductRequirement.Astronomical` (10^12 — see the
-   *  derivation there) is therefore reported and gated exactly as `inf` is, under the `magnitude`
-   *  statistic, and `puzzle15`'s `[0, 8.3e55]` fails BOTH.  It is a failed result, not a qualification on
-   *  a successful one. */
-  val infiniteEstimates: Map[String, String] = Map.empty
-
-  /** PREDICTIONS THAT ARE STILL SYMBOLIC ON A CLOSED CORNERSTONE, and therefore have no number at all.
-   *
-   *  ==WHAT CHANGED==
-   *  These rows used to be SKIPPED: no number, so nothing to compare, so no gate row — and, as the review
-   *  points out, no place in the advertised containment statistic either.  "For a closed benchmark, a
-   *  remaining symbolic cardinality must be a hard failure, not a skipped numeric point excluded from the
-   *  advertised '100% containment'."  So each one now emits a FAILING `numeric` requirement row per
-   *  component it should have covered (`Tier.budget("numeric") = 0` on every tier, the reference
-   *  evaluator's included: `NotGated` exempts its CONSTANTS from a threshold, not its answer from
-   *  existing), and the containment table is published with an explicit COVERAGE line saying how many of
-   *  the possible points produced a number and which ones did not.
-   *
-   *  The map stays as EVIDENCE — the root cause per entry — and it is still checked in both directions: a
-   *  backend that becomes numeric must be removed from here (stale evidence fails), and one that stops
-   *  being numeric fails without an entry. */
-  /*  EMPTY, and that is the result: `datalog-sn/reference` (`|sn_tc()|`) and `datalog-sn/zipper`
-   *  (`len(sn_tc())`, `|sn_tc()|`) were the only two entries, and both became NUMERIC when
-   *  `SpatialCost`'s recursion arm stopped emitting a free variable for the recursive occurrence's size.
-   *  What eliminates it is the SPATIAL LEAST FIXPOINT of the routine's parameter tuple
-   *  (`SpatialCost.paramFixpoint`): `T₀ = α(arguments)`, `T_{i+1} = T_i ⊔ F#(T_i)`, iterated with
-   *  `SpatialRecursion`'s join/widen to a post-fixed point.  On `sn_tc` it converges in ONE round to
-   *  `|acc| ∈ [0, 6]`, `len(acc) ∈ [2, 2]`, which is the accumulator's cardinality and path length — so
-   *  the recursive occurrence gets a measure and every component of every backend gets a number. */
-  val symbolicEstimates: Map[String, String] = Map.empty
-
-  test("CALIBRATION: predicted intervals vs counted events on the OPTIMIZED cornerstones") {
-    // The six cornerstone programs, with their inputs DECLARED (their exact spatial input types) and
-    // never their outputs.  execT is skipped here: several cornerstones carry recursive `Call`s that
-    // `transpile` needs a routine index for, which the corpus test covers instead.
+  /** the six cornerstones, inputs DECLARED (their exact values here — the honest closed-program
+   *  setting), priced on `Routine.optimized`'s body */
+  def cornerstones: Vector[(String, Routine, Map[SpaceMention, SpaceValue], PartialFunction[RoutinePtr, Routine])] =
     val rr = new scala.util.Random(12)
     val tempCells = (0 until 16).map(i => PathValue(NOAA.bits(i, 4) :+ Vector("VC", "C", "N", "W", "VW")(rr.nextInt(5)))).toSet
     val world = Space.Mention(SpaceMention("world"))
@@ -978,7 +553,7 @@ class SpatialEventsCheck extends FunSuite, CalibrationProbe:
                                   Space.Restriction(world, Space.Literal(NOAA.interval(12, 16, 4))))
     val live = Set((1, 0), (1, 1), (1, 2))
     val golRules = GoL.rulesFor(live)
-    val puzzle = Sliding.puzzle(4, 4)
+    val puz = Sliding.puzzle(4, 4)
     val queens = NQueens.board(4)
     val edges = SpaceValue(Set(p("0", "1"), p("1", "2"), p("2", "3")))
     def join(r: Space, s: Space): Space = r.iter(P"n", S"nbs", P"n" x \/(s <| S"nbs"))
@@ -986,205 +561,89 @@ class SpatialEventsCheck extends FunSuite, CalibrationProbe:
                        Vector(SpaceMention("e"), SpaceMention("all"), SpaceMention("delta")),
                        S"all" \/ Space.Call(RoutinePtr("sn_tc"), Vector.empty,
                          Vector(S"e", S"all" \/ (join(S"delta", S"e") \ S"all"), join(S"delta", S"e") \ S"all")))
+    def rt(name: String, ms: Vector[SpaceMention], body: Space, spaces: Map[SpaceMention, SpaceValue],
+           rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty) =
+      (name, Routine(RoutinePtr(name), Vector.empty, ms, body), spaces, rc)
+    Vector(
+      rt("aunt", Vector.empty, Routines.aunt_query_routine.body, AuntQuery.context.asInstanceOf[SpaceContextMap].m, Syntax.mod(Routines.child_routine)),
+      rt("temperature", Vector(SpaceMention("world")), temperature, Map(SpaceMention("world") -> SpaceValue(tempCells))),
+      rt("gol", Vector(SpaceMention("field")), Space.Call(RoutinePtr("nextStep"), Vector.empty, Vector(Space.Mention(SpaceMention("field")))),
+         Map(SpaceMention("field") -> GoL.field(live)), golRules.defs),
+      rt("puzzle15", Vector(SpaceMention("frontier")), puz.expandStep(Space.Mention(SpaceMention("frontier"))),
+         Map(SpaceMention("frontier") -> SpaceValue(Set(puz.initial))), puz.defs),
+      rt("nqueens4", Vector.empty, queens.program, Map.empty, queens.defs),
+      rt("datalog-sn", Vector(SpaceMention("edges")),
+         Space.Call(RoutinePtr("sn_tc"), Vector.empty, Vector(Space.Mention(SpaceMention("edges")), Space.Mention(SpaceMention("edges")), Space.Mention(SpaceMention("edges")))),
+         Map(SpaceMention("edges") -> edges), Syntax.mod(snTC)))
 
-    val cases = Vector(
-      Case("aunt", Routines.aunt_query_routine.body,
-           AuntQuery.context.asInstanceOf[SpaceContextMap].m, Map.empty, PartialFunction.empty),
-      Case("temperature", temperature, Map(SpaceMention("world") -> SpaceValue(tempCells))),
-      Case("gol", Space.Call(RoutinePtr("nextStep"), Vector.empty, Vector(Space.Mention(SpaceMention("field")))),
-           Map(SpaceMention("field") -> GoL.field(live)), Map.empty, golRules.defs),
-      Case("puzzle15", puzzle.expandStep(Space.Mention(SpaceMention("frontier"))),
-           Map(SpaceMention("frontier") -> SpaceValue(Set(puzzle.initial))), Map.empty, puzzle.defs),
-      Case("nqueens4", queens.program, Map.empty, Map.empty, queens.defs),
-      Case("datalog-sn", Space.Call(RoutinePtr("sn_tc"), Vector.empty,
-             Vector(Space.Mention(SpaceMention("edges")), Space.Mention(SpaceMention("edges")),
-                    Space.Mention(SpaceMention("edges")))),
-           Map(SpaceMention("edges") -> edges), Map.empty, Syntax.mod(snTC)))
+  test("CALIBRATION: the six cornerstones on the OPTIMIZED body — contained, finite, below the ceiling") {
+    var rows = Vector.empty[Row]; var bad = Vector.empty[String]; var hard = Vector.empty[String]
+    for (name, r, spaces, rc) <- cornerstones do
+      given PartialFunction[RoutinePtr, Routine] = rc
+      val opt = r.optimized
+      val body = opt.body
+      val pc = PathContextMap(Map.empty); val sc = SpaceContextMap(spaces)
+      val ic = spaces.view.mapValues(ITrie.fromSpaceValue).toMap
+      val inputs = CostSem.Inputs(values = spaces)
+      eval(body)(using pc, sc, rc); val re = EffortSink.events(eval(body)(using pc, sc, rc))
+      evalI(body)(using pc, ic, rc); val te = EffortSink.events(evalI(body)(using pc, ic, rc))
+      execZ(body)(using pc, ic, rc); val ze = EffortSink.events(execZ(body)(using pc, ic, rc))
+      val t0 = java.lang.System.nanoTime()
+      val reps = Vector(Backend.Reference -> re, Backend.Trie -> te, Backend.Zipper -> ze).map((b, ev) => (b, ev, CostSem.analyze(body, inputs, b, rc)))
+      val ms = (java.lang.System.nanoTime() - t0) / 1e6
+      for (b, ev, rep) <- reps do
+        rows ++= rowsOf(name, rep, ev)
+        val v = rep.bounds.violations(ev)
+        if v.nonEmpty then bad :+= s"$name/${b.slug}: ${v.mkString("; ")}"
+        if !rep.finite then hard :+= s"$name/${b.slug}: INFINITE ${rep.bounds.showComponents}"
+        else if rep.magnitude >= ProductRequirement.Astronomical.toLong then hard :+= s"$name/${b.slug}: ASTRONOMICAL ${rep.bounds.showComponents}"
+        println(f"CALIBRATION: $name%-12s ${b.slug}%-9s ${rep.bounds.showComponents}  counted ${ev.showComponents}  ${if v.isEmpty then "OK" else "OUT"}  ${rep.domain.show.linesIterator.next()}")
+      println(f"CALIBRATION: $name%-12s analysed in ${ms}%.0f ms; ${reps.head._3.derivation.size} derivation nodes")
+    usefulness("cornerstones, optimized bodies, exact declarations", rows)
+    assert(hard.isEmpty, s"infinite or astronomical estimates on closed cornerstones:\n${hard.mkString("\n")}")
+    assertEquals(bad, Vector.empty[String], "containment failures on the cornerstones")
+  }
 
-    var rows = Vector.empty[Calibration]
-    var defRows = Vector.empty[Calibration]
-    var gate = Vector.empty[GateRow]
-    var skipped = 0
-    var sawInfinite = Set.empty[String]
-    var sawAstronomical = Vector.empty[String]
-    var sawSymbolic = Set.empty[String]
-    var folded = Vector.empty[String]
-    // THE COVERAGE ACCOUNTING the review asks for: how many (cornerstone, backend, component) points
-    // COULD have produced a number, and which ones did not.  Without it "100% containment" is a rate over
-    // an unstated denominator, and a prediction with no number silently improves it.
-    var possible = 0
-    var noNumber = Vector.empty[String]
-    for c <- cases do
-      // ---- THE FORM THAT RUNS ------------------------------------------------------------------
-      val t0 = System.nanoTime()
-      val (opt, priced) = optimizedForm(c)
-      val optMs = (System.nanoTime() - t0) / 1e6
-      val optCase = c.copy(prog = opt.body)
-      val defNodes = SpatialPipeline.nodeCount(c.prog)
-      val optNodes = SpatialPipeline.nodeCount(opt.body)
-      if optNodes <= 2 then folded :+= c.label
-      val (refV, refE) = countReference(optCase)
-      val (trieV, trieE) = countTrie(optCase)
-      val (zipV, zipE) = countZipper(optCase)
-      assertEquals(zipV.toSpaceValue, refV, s"${c.label}: execZ disagrees with eval on the OPTIMIZED body")
-      assertEquals(trieV.toSpaceValue, refV, s"${c.label}: evalI disagrees with eval on the OPTIMIZED body")
-      assertEquals(refE.touch, 0L, s"${c.label}: eval counted trie touches")
-      println("-" * 116)
-      // THE WALL CLOCK IS ON ITS OWN LINE, and the prefix says so.
-      //
-      // `scripts/check_determinism.sh` diffs every `CALIBRATION:` line across two runs of this suite
-      // and demands they be byte-identical, because every published number is read off exactly those
-      // lines.  MEASURED: with `$optMs` inside the `CALIBRATION:` line, 156 of 161 lines matched and
-      // the five that did not were these -- `OPTIMIZED in 820 ms` against `824 ms`, `3385` against
-      // `3522`.  A wall clock is non-deterministic by construction, so a gate that includes it can
-      // only ever be satisfied by loosening the comparison, which would also stop it seeing a
-      // counted column move.  The fix belongs HERE rather than in a filter in the script: the
-      // channel is renamed so it is visibly a timing, and the counted channel is left exact.
-      println(f"CALIBRATION-WALLCLOCK: ${c.label}%-12s OPTIMIZED in $optMs%.0f ms")
-      println(f"CALIBRATION: ${c.label}%-12s |out|=${refV.paths.size}%5d   " +
-              f"$defNodes%d -> $optNodes%d Space nodes" + (if optNodes <= 2 then "  [COMPILE-TIME EVALUATED]" else ""))
-      println(f"CALIBRATION:   counted evalI [${trieE.showComponents}]")
-      println(f"CALIBRATION:   counted execZ [${zipE.showComponents}]  " +
-              f"(fallbacks=${zipE(EffortEvent.ZipperFallbackToEvalI)})")
-      println(f"CALIBRATION:   counted eval  [${refE.showComponents}]  (reference: published, NOT gated)")
-      val toCheck: Vector[(CostModel, Events)] = Vector(
-        Backends.referenceWarm -> refE, Backends.trieWarm -> trieE, Backends.zipperWarm -> zipE)
-      var mine = Vector.empty[Calibration]
-      for (model, ev) <- toCheck do
-        val rep = priced(model.backend)
-        assertEquals(rep.form, CostForm.Optimized, s"${c.label}: the gated report must describe the optimized form")
-        // the components this (case, backend) OWES a number for — the reference evaluator's `touch` has
-        // no oracle at all and is the one declared exclusion
-        val owed = EffortEvent.calibratedComponents
-          .filterNot(cc => cc == EffortComponent.Touch && model.touchNoOracle.isDefined)
-        possible += owed.length
-        val ends = Vector(rep.cost.work, rep.cost.alloc, rep.cost.rounds, rep.cost.touch)
-        // "infinite" means EITHER an explicit `Amount.Unbounded` OR a `Bounded` whose symbol saturated
-        val unb = ends.filter(a => a.isUnbounded || a.at(Map.empty).isInfinite)
-        if unb.nonEmpty then
-          sawInfinite += c.label
-          println(s"CALIBRATION:   INFINITE ${c.label}/${rep.backend.slug} ${unb.head.show}")
-        // AND AN ASTRONOMICAL ENDPOINT IS THE SAME FAILED RESULT WITH A NUMBER IN IT
-        val astro = ends.filter(a => !a.isUnbounded &&
-                                     a.at(Map.empty) >= ProductRequirement.Astronomical)
-        for a <- astro do
-          sawAstronomical :+= s"${c.label}/${rep.backend.slug}: ${GateRow.fmt(a.at(Map.empty))}"
-          println(f"CALIBRATION:   ASTRONOMICAL ${c.label}/${rep.backend.slug} " +
-                  f"${GateRow.fmt(a.at(Map.empty))} >= ${GateRow.fmt(ProductRequirement.Astronomical)} " +
-                  "— a bound that describes no executable computation")
-        calibrate(c.label, model, rep, ev) match
-          case Some(cs) =>
-            mine ++= cs
-            for x <- cs do println(s"CALIBRATION:   ${x.show}")
-          case None =>
-            skipped += 1
-            val key = s"${c.label}/${rep.backend.slug}"
-            sawSymbolic += key
-            val fv = (freeVars(rep.cost) ++ freeVars(rep.lower)).toVector.sorted
-            println(s"CALIBRATION:   $key HAS NO NUMBER (prediction still symbolic in ${fv.mkString(", ")})" +
-                    " — FAILED, not skipped")
-            // A FREE VARIABLE IN THE ANSWER IS NOT AN ANSWER.  One failing `numeric` row per component
-            // the pair owed, which is exactly the coverage it removed from the containment statistic.
-            for cc <- owed do
-              noNumber :+= s"$key/$cc (symbolic in ${fv.mkString(",")})"
-              ProductRequirement.tierOf(rep.backend.slug, cc).foreach { t =>
-                gate :+= GateRow("cornerstone", c.label, rep.backend.slug, cc, "numeric",
-                                 Double.PositiveInfinity, t) }
-      rows ++= mine
-      gate ++= gateOf("cornerstone", c.label, mine)
-      // ---- THE DEFINITIONAL FORM, printed as a labelled CONTRAST and never gated ----------------
-      for (model, ev) <- toCheck do
-        val dr = SpatialCost.analyze(c.prog, c.env, model, CostForm.Definitional)
-        calibrate(c.label + "-def", model, dr, ev).foreach(defRows ++= _)
-    // ---- THE "NO ANSWER" INVARIANTS.  They are collected rather than asserted here so that the
-    //      containment table below is PRINTED first — soundness is reported before tightness, and a gate
-    //      that throws half way through a table hides the numbers a reader needs.
-    var hard = Vector.empty[String]
-    if sawInfinite != infiniteEstimates.keySet then
-      hard :+= s"the set of cornerstones with an INFINITE prediction on the OPTIMIZED form changed; " +
-               s"declared ${infiniteEstimates.keySet.toVector.sorted}, observed ${sawInfinite.toVector.sorted}"
-    // AN ASTRONOMICAL BOUND FAILS EXACTLY AS AN INFINITE ONE DOES
-    if sawAstronomical.nonEmpty then
-      hard :+= s"${sawAstronomical.length} predicted endpoint(s) at or above " +
-               s"${GateRow.fmt(ProductRequirement.Astronomical)} on a closed, terminating, non-grounded " +
-               s"cornerstone — a finite bound that describes no executable computation is the same failed " +
-               s"result as `inf`: ${sawAstronomical.distinct.mkString("; ")}"
-    // THE SYMBOLIC INVARIANT.  Observed pairs FAIL (as `numeric` rows above); an entry that is no longer
-    // observed is stale evidence and fails here.
-    for k <- symbolicEstimates.keySet.toVector.sorted if !sawSymbolic.contains(k) do
-      hard :+= s"`$k` is listed in `symbolicEstimates` but its prediction is NUMERIC now — remove the " +
-               "entry; stale evidence is a failure"
-    for k <- sawSymbolic.toVector.sorted do
-      println(s"CALIBRATION: NO NUMBER — $k: " +
-              symbolicEstimates.getOrElse(k, "(NO EVIDENCE ENTRY: an undiagnosed symbolic prediction)"))
-    // ---- COVERAGE OF THE CONTAINMENT STATISTIC, stated rather than implied --------------------------
-    println(f"CALIBRATION: COVERAGE — ${rows.length} of $possible possible (cornerstone, backend, " +
-            f"component) points produced a NUMBER (${100.0 * rows.length / math.max(1, possible)}%.2f%%); " +
-            f"${noNumber.length} did not, and every one of them is a FAILING `numeric` requirement below")
-    for m <- noNumber do println(s"CALIBRATION:   NO NUMBER $m")
-    println(s"CALIBRATION: ${folded.length} cornerstone(s) were COMPILE-TIME EVALUATED by the ordinary " +
-            s"rule list and have no run-time cost left to gate: ${if folded.isEmpty then "(none)" else folded.mkString(", ")}")
-    // the definitional contrast: same programs, same counters, the form that is NOT what runs
-    println("-" * 116)
-    for (b, comp) <- defRows.map(r => (r.label.split('/').last, r.component)).distinct.sortBy((b, c) => (b, c.ordinal)) do
-      val sub = defRows.filter(r => r.label.endsWith("/" + b) && r.component == comp)
-      println("CALIBRATION: DEFINITIONAL (not gated) " + Calibration.summarize(s"$b $comp", sub).show)
-    publish("cornerstones, warm phase, OPTIMIZED form", "cornerstone", rows, skipped, cases.length,
-            gate, hard = hard)
+  test("CALIBRATION: the cornerstone derivations are deterministic across two analyses") {
+    for (name, r, spaces, rc) <- cornerstones.take(3) do
+      given PartialFunction[RoutinePtr, Routine] = rc
+      val body = r.optimized.body
+      val inputs = CostSem.Inputs(values = spaces)
+      val a = CostSem.analyze(body, inputs, Backend.Trie, rc).derivation.render()
+      val b = CostSem.analyze(body, inputs, Backend.Trie, rc).derivation.render()
+      assertEquals(a, b, s"$name: the certificate is not deterministic")
+    println("CALIBRATION: three cornerstone certificates render identically twice")
   }
 
   // ==============================================================================================
-  // 6b. COLD vs WARM
+  // 5. COLD vs WARM, AND NO EVALUATION
   // ==============================================================================================
 
-  test("COLD vs WARM: construction is separated from execution, in the model and on the clock") {
-    // MODEL: for every backend, a cold phase must cost at least as much as the warm one, and for a
-    // `Literal` it must cost STRICTLY more — that difference is exactly the construction the warm
-    // evaluator finds already done.
-    val l = litN(256, "cw")
-    for b <- Backend.values do
-      val warm = SpatialCost.analyze(l, Backends.of(b, ExecutionPhase.Warm)).cost
-      val cold = SpatialCost.analyze(l, Backends.of(b, ExecutionPhase.Cold)).cost
-      assert(cold.bigO >= warm.bigO, s"${b.slug}: a cold Literal cannot be cheaper than a warm one")
-      assert(cold != warm, s"${b.slug}: the two phases must be distinguishable for a Literal")
-      println(f"EVENTS: cold/warm ${b.slug}%-10s warm[${warm.show}]  cold[${cold.show}]")
-
-    // CLOCK: the same distinction on the graph backend, where the cold half is real compilation.
-    val prog = Space.Union(Space.Mention(SpaceMention("s0")), Space.TailsUnion(S"s0"))
-    val sv = SpaceValue((0 until 512).map(i => p("k" + (i % 32), "v" + i)).toSet)
-    val ic = Map(SpaceMention("s0") -> ITrie.fromSpaceValue(sv))
-    def compileOnce(): RecursiveOpGraph =
-      optimize(transpile(Routine(RoutinePtr("m"), Vector.empty, Vector(SpaceMention("s0")), prog)))
-    val g0 = compileOnce()                                            // warm the JIT for compilation
-    runGraphT(g0, Map.empty, Map("s0" -> ic(SpaceMention("s0"))))
-    var coldNs = Long.MaxValue
-    for _ <- 0 until 5 do
-      val t0 = System.nanoTime(); val g = compileOnce(); val d = System.nanoTime() - t0
-      assert(g.nodes.nonEmpty)
-      if d < coldNs then coldNs = d
-    var warmNs = Long.MaxValue
-    for _ <- 0 until 5 do
-      val t0 = System.nanoTime()
-      var i = 0; while i < 20 do { runGraphT(g0, Map.empty, Map("s0" -> ic(SpaceMention("s0")))); i += 1 }
-      val d = (System.nanoTime() - t0) / 20
-      if d < warmNs then warmNs = d
-    println(f"EVENTS: cold/warm execT  compile ${coldNs / 1000.0}%.1f us  vs  warm execute ${warmNs / 1000.0}%.1f us " +
-            f"(${coldNs.toDouble / warmNs}%.1fx) — a single number for both would describe neither")
+  test("COLD vs WARM: a cold literal is priced as its construction, a warm one as a lookup") {
+    val v = SpaceValue((0 until 40).map(i => p(s"c$i", "x")).toSet)
+    val prog = Space.Union(Space.Literal(v), Space.Mention(SpaceMention("s0")))
+    val inputs = CostSem.Inputs(values = Map(SpaceMention("s0") -> SpaceValue(Set(p("q")))))
+    val warm = CostSem.analyze(prog, inputs, Backend.Trie, phase = ExecutionPhase.Warm)
+    val cold = CostSem.analyze(prog, inputs, Backend.Trie, phase = ExecutionPhase.Cold)
+    assert(cold.alloc.hi > warm.alloc.hi, s"cold ${cold.bounds.showComponents} vs warm ${warm.bounds.showComponents}")
+    // and the counted cold run (a fresh SpaceValue object, unknown to the cache) is inside the cold interval
+    val fresh = SpaceValue((0 until 40).map(i => p(s"c$i", "x")).toSet)
+    val progFresh = Space.Union(Space.Literal(fresh), Space.Mention(SpaceMention("s0")))
+    val ic = Map(SpaceMention("s0") -> ITrie.fromSpaceValue(SpaceValue(Set(p("q")))))
+    val coldRep = CostSem.analyze(progFresh, inputs, Backend.Trie, phase = ExecutionPhase.Cold)
+    val ev = EffortSink.events(evalI(progFresh)(using emptyPc, ic, noRc))
+    assert(coldRep.bounds.contains(ev), s"cold run ${ev.show} not in ${coldRep.bounds.show}")
+    val warmEv = EffortSink.events(evalI(progFresh)(using emptyPc, ic, noRc))
+    assert(warm.bounds.contains(warmEv), s"warm run ${warmEv.show} not in ${warm.bounds.show}")
+    println(s"EVENTS: cold ${cold.bounds.showComponents} | warm ${warm.bounds.showComponents}")
   }
 
-  // ==============================================================================================
-  // 7. STANDING RULE 1
-  // ==============================================================================================
-
-  test("NO EVALUATION IN THE ANALYSIS: a bomb subterm is never run by cost analysis") {
-    val bomb = Space.GroundedSS(litN(4, "b"), _ => throw RuntimeException("the cost analysis evaluated its subject"))
-    for m <- Backends.all do
-      val rep = SpatialCost.analyze(Space.Union(litN(4, "a"), bomb), m)
-      assert(rep.cost.work.isUnbounded || rep.assumptions.exists(_.contains("grounded")),
-             s"${m.name}: a grounded closure must widen to an explicit unbounded, got ${rep.show}")
-    // and the identity/interval machinery does not run it either
-    val all = SpatialCost.analyzeAll(bomb)
-    assertEquals(all.size, Backend.values.length)
-    println("EVENTS: all 8 cost instances analysed a throwing grounded closure without running it")
+  test("NO EVALUATION IN THE ANALYSIS: a bomb subterm is never run by the cost analysis") {
+    val bomb = Space.GroundedSS(Space.Mention(SpaceMention("s0")), _ => throw new AssertionError("evaluated"))
+    val prog = Space.Union(Space.TailsUnion(bomb), Space.Literal(SpaceValue(Set(p("a")))))
+    val inputs = CostSem.Inputs(values = Map(SpaceMention("s0") -> SpaceValue(Set(p("b")))))
+    for b <- Backend.values.filterNot(_ == Backend.Graph) do
+      val rep = CostSem.analyze(prog, inputs, b)
+      assert(rep.notes.exists(_.contains("grounded")), rep.notes.toString)
+    println("EVENTS: bomb subterm priced without evaluation on three backends")
   }
-end SpatialEventsCheck

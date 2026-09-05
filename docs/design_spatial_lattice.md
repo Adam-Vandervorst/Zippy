@@ -317,7 +317,9 @@ result.
   *named* entry in `ProductRequirement.limitations` with an error cap, a width cap, an owning file and a
   stated fix; the ledger is asserted in both directions, so an entry that stops failing must be deleted or
   the suite goes red. A limitation entry records a **failed requirement**; it does not turn one into a
-  passing test.
+  passing test.  *(Superseded 2026-09-05, tasks.md A4: the ledger is gone.  `SpatialScaleCheck` gates
+  soundness and finiteness of the A4 analysis and prints every tier statistic per channel as
+  `NOT USEFUL` where it misses — see build.log's A4 record.)*
 - **No cornerstone prediction is unbounded any more; two are finite-but-useless, which is a different
   failure.** `SpatialPipelineCheck`'s "ITEM 5 INVARIANT" asserts **0 infinite estimates over 24
   (cornerstone, backend) pairs**, and it is an invariant, not an allow-list. `puzzle15` is now accurate to
@@ -432,10 +434,9 @@ size** on the whole-subtree families, but with a large crossover, because the Pa
 | `inter/shared-subtrie` | **86 at every rung 64 … 65536** | 26 | constant, 3.3× |
 | `absorption` (`x ∪ x`) | **1** | 1 | exact |
 
-The five-rung ladder in `SpatialScaleCheck` (64…1024) sits entirely inside the crossover, so its slope
-statistic reads 0.87–0.96 there. `LIM-4` records both the statistic and this correction; the fix is to
-subtract `FrontierSummary.reuse` from `touch := descents + patricia` and to lengthen the ladder, not to
-relabel the failure.
+The five-rung ladder in `SpatialScaleCheck` (64…1024) sat entirely inside the crossover, so its slope
+statistic read 0.87–0.96 there; the ladder now runs to 16384 and the A4 analysis (`SpatialCostSemantics`)
+replaced the `touch := descents + patricia` model, so `LIM-4` no longer exists as a ledger entry.
 
 **(c) Wrong slope — the genuine remaining growth-class failures.** Measured out to `n = 65536`, slope
 1.00 at every rung:

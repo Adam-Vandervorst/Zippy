@@ -727,10 +727,10 @@ class SpatialAcceptance extends FunSuite:
   def deltaOf(r: Routine, ann: SpatialAnnotations): (Delta, RoutineAnalysis, GuardedRoutine) =
     val a = noEval("analyzeRoutine")(SpatialPipeline.analyzeRoutine(r, ann))
     val g = noEval("optimizeGuarded")(SpatialPipeline.optimizeGuarded(r, a))
-    val cost = noEval("cost")(SpatialCost.analyze(g.residual.body, ann.costEnv, Backends.trieWarm))
+    val cost = noEval("cost")(CostSem.analyze(g.residual.body, ann.costInputs, Backend.Trie, ann.routines))
     (Delta((a.result.size.lo, a.result.size.hi), (a.result.len.lo, a.result.len.hi),
            a.facts.map(_.show).toSet, a.candidates.map(_.spec.show.takeWhile(_ != '(')).toSet,
-           SpatialPipeline.nodeCount(g.residual.body), cost.cost.work.show, a.result.isProvablyEmpty),
+           SpatialPipeline.nodeCount(g.residual.body), { val w = cost.work; if w.hi >= Ivl.INF then s"UNBOUNDED ${w.show}: ${cost.notes.headOption.getOrElse("no reason recorded")}" else if w.lo == w.hi then w.lo.toString else w.show }, a.result.isProvablyEmpty),
      a, g)
   def showDelta(tag: String, d: Delta): Unit =
     println(f"      $tag%-10s size=[${d.size._1}, ${if d.size._2 == SizeBounds.INF then "inf" else d.size._2}]" +
@@ -891,7 +891,8 @@ class SpatialAcceptance extends FunSuite:
     assertEquals(before.work.take(9), "UNBOUNDED", s"baseline closure work: ${before.work}")
     assertEquals(after.work.take(9), "UNBOUNDED",
                  s"the law's cardinality bound does NOT reach the cost model's recursion arm: ${after.work}")
-    assert(after.work.contains("spatial parameter fixpoint failed"),
+    // the A4 analysis names the refusal in the report's notes (`call to <r>: <why> — ⊤`), carried into `work`
+    assert(after.work.contains("call to") && after.work.contains("⊤"),
            s"and the refusal must still name its own reason: ${after.work}")
     assertEquals(before.residualNodes, after.residualNodes,
                  "and the closure routine's residual is unchanged by the law")
@@ -1420,7 +1421,7 @@ class SpatialAcceptance extends FunSuite:
     // (5) per-backend effort INTERVALS over the same facts.  No winner is named: choosing a backend
     // automatically is a non-goal, and four incommensurable components cannot be summed into a score.
     val lowered = Backend.values.toVector.map(b => b -> SpatialPipeline.lower(g, b, ann)).toMap
-    val cmp = SpatialPipeline.compareBackends(g.residual.body, ann, Map("N" -> 8.0))
+    val cmp = SpatialPipeline.compareBackends(g.residual.body, ann)
     println(cmp.show.linesIterator.map("[9] " + _).mkString("\n"))
     assertEquals(lowered.keySet, Backend.values.toSet)
     for (b, l) <- lowered do assert(l.callFree, s"${b.slug}: the lowered routine must be Call-free")

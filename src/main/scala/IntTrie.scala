@@ -756,6 +756,13 @@ def internConstStr(constant: String): List[Int] =
  *  costs one `size` each and mutates nothing. */
 def iCacheSizes: (Int, Int, Int) = (iLiteralCache.size, iLiteralStrCache.size, iConstStrCache.size)
 
+/** IS THIS LITERAL ALREADY MATERIALISED?  The event semantics (SpatialSemantics.scala, tasks.md A1)
+ *  states a `Literal`'s cost as a function of the CACHE STATE — a warm literal is one lookup, a cold one
+ *  is `fromSpaceValue` — so the state has to be observable without being changed.  Both are pure reads
+ *  of the two caches' key sets; neither inserts. */
+def iLiteralIsCached(sv: SpaceValue): Boolean = iLiteralCache.containsKey(sv)
+def iLiteralStrIsCached(constant: String): Boolean = iLiteralStrCache.containsKey(constant)
+
 def pathItemsI(x: Path)(using pc: PathContext, ic: Map[SpaceMention, ITrie],
                         rc: PartialFunction[RoutinePtr, Routine]): List[Int] =
   effort(EffortEvent.TriePathDispatch)                     // one Path subterm, `Deref` included

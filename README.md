@@ -26,6 +26,9 @@ executable and machine-checked counterpart of that paper.
 | [`docs/SUPERCOMPILER.md`](docs/SUPERCOMPILER.md) | Design, guiding examples, and limitations of the supercompiler. |
 | [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) | Executor, op-graph and zipper benchmark results, each stamped with the machine, toolchain and configuration it was produced on. |
 | [`docs/residuals.md`](docs/residuals.md) | Why the residuated-division operators are omitted from the algebra. |
+| [`docs/SPATIAL_SEMANTICS.md`](docs/SPATIAL_SEMANTICS.md) | tasks.md A1: the backend-parameterised event algebra and the compositional event semantics of every certified constructor, checked against the counted executors. |
+| [`docs/SPATIAL_DOMAIN.md`](docs/SPATIAL_DOMAIN.md) | tasks.md A3: the two-tier correlated spatial domain (exact hash-consed tries with alternatives, summaries, alias channel, named widenings). |
+| [`docs/SPATIAL_COST.md`](docs/SPATIAL_COST.md) | tasks.md A4–A6: resource bounds by abstract interpretation of the event semantics, the M1 gate, parametric call summaries and recursive systems, and the transfer certification (`proofs/spatial/`). |
 | [`docs/TRUSTED.md`](docs/TRUSTED.md) | **The complete trusted base**: every assumption a `PROVED` verdict rests on, and the three open obligations that are gaps rather than assumptions. |
 | [`docs/ACCEPTANCE.md`](docs/ACCEPTANCE.md) | **The acceptance status**: one row per review item, assigned only by its acceptance sentence and gate command, with the measured verdict (plan.md's successor). |
 | [`plan.md`](plan.md) | The plan against the acceptance review: every task with its files, its gate command and its dependencies; sequenced by dependency. |

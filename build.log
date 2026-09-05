@@ -6540,3 +6540,268 @@ TRACK A′ — cornerstone coverage (item 4).
 
   GATES THIS RUN:  `python3 scripts/gates.py --run --scripts-only` — all 9 script gates PASS (the
   determinism check included); the 4 Scala gate suites RED as recorded under 3.1.
+
+====================================================================================================
+## 2026-09-05 — tasks.md A1 + A2 (the semantic spine, first two rungs)
+====================================================================================================
+
+  HOST.  Run on this node (16 cores, 247 GB, the toolchain installed 2026-09-04).  tasks.md asks for a
+  provisioned `cpu-small`-or-larger Symba node; no Symba CLI is present here and no other node was
+  reachable, so every compilation, test and proof build below ran on this machine.  Recorded so the
+  provenance is not silently upgraded.
+
+  A1  ONE OPERATIONAL RESOURCE SEMANTICS.  src/main/scala/SpatialSemantics.scala: `EventKind` (the
+      backend-independent algebra: NodeVisit / OperandProbe / Alloc / RetainedShare / KeyComparison /
+      Materialize / Round / Handoff, every `EffortEvent` has exactly one kind, `EventKind.inclusion`
+      is the component rule), `SemanticsProfile` (one per executable: dispatch event, entry event,
+      representation, the one platform parameter), and `EventSemantics` — an INDEPENDENT interpreter
+      that computes both the value and the exact event multiset of one execution from the operands'
+      concrete structure (their trie shape, their Patricia child maps, which operand OBJECTS are the
+      same object), for eval / evalI / execT / execZ.  The n-ary operations are specified over their
+      ordered live frontier (retired / revisited / aliased / reused operands each a rule).  The
+      instrumented executors are the counted interpreter (`SpatialEvents.counted`) and the semantics is
+      what they are held to.  `IntMapView` (package scala.collection.immutable) exposes the Patricia
+      shape read-only; `iLiteralIsCached`/`iLiteralStrIsCached` expose the cache state the semantics
+      reads.  docs/SPATIAL_SEMANTICS.md records units, inclusion rule, sharing convention, the
+      parameters and what is outside.
+      MEASURED (SpatialSemanticsCheck, 11 tests green): 336 binary (case, backend) exact multiset
+      agreements over 6 constructors × 14 operand families; 612 unary/positional/loop agreements over
+      17 constructors × 9 families (empty, singleton, ε, aliased, disjoint, deep, 30-head wide past
+      the dedup threshold, shared tails, built operands); leaves; a cold literal on evalI and execZ;
+      recursive cases (fixpoints, self-recursive call, a lowered mutual SCC); n-ary cases at 30 and 40
+      heads; all 200 fuzzer-corpus programs on all four backends (0 without a graph leg); the six
+      cornerstones (datalog-sn's graph leg SKIPPED and said so: a residual arg-changing call is not
+      executable by execT).  The comparison is over EVERY EffortEvent, explanatory ones included.
+      FINDING (recorded, not fixed): `Fold` is not backend-deterministic — `eval` visits head groups
+      in string order, `evalI` in interner order — so a 30-head fold accumulates different paths on
+      the two executors.  `Fold` is outside the certified fragment (Positive.lean `.fold => ∅`) and is
+      excluded from the semantics' matrix; the finding is a test that prints the disagreement.
+
+  A2  THE STRATIFIED DELTA-FIXPOINT IR.  src/main/scala/DeltaIR.scala: `Variance` (+/-/0/· with the
+      compose/join table, compositional over every constructor; `routineTable` solves parameter
+      variances as a least fixpoint over the routine table), `DepGraph` (Tarjan SCCs over fixpoint
+      binders, routines and inputs; strata = condensation order; `Scc.certified` iff every internal
+      edge is `+`), `EqSystem` (a positive SCC as `X_i = init_i ∪ body_i(X̄; frozen)`; a passthrough
+      recursive Call SCC and a flattened `Fixpoint` produce the same equations — `Lowered.canonical`),
+      three verdicts (Accepted / Rejected on a `-`/`0` cycle / Unsupported for an argument-changing
+      Call SCC — a representability limit, never confused with a negative cycle), `Delta.dden` (the
+      differential transfer, rule for rule), `Exec` (accumulator, delta, round, routine environment,
+      `Schedule.Naive|Delta`, provenance = the round that introduced each element, per-round events;
+      `verify = true` re-checks the step equation at every round), `Premises` (labels + strata + the
+      Lean theorems; `replay` recomputes the labels), `DeltaIRRender`.
+      LEAN (proofs/lean/Zippy/Strata.lean, Delta.lean; lake build clean, no sorry, axioms exactly
+      Lean's): `Sim.Sys.tagged_lfp` (simultaneous system = tagged-set Kleene union, least post-fixpoint,
+      componentwise least), `Sim.unary_eq` (one equation = `Space.fixpoint`'s chain),
+      `Sim.stratum_frozen_sound` (monotonicity in own variables only; lower strata frozen),
+      `Space.varB_sound` (`+` monotone, `-` antitone, `·` constant, under `VarGood`),
+      `Delta.dden_sound` (D1/D2 per rule), `Delta.delta_step_eq`, `Delta.delta_iteration_eq_naive`.
+      terminating/REGISTRY.tsv rows A2-VAR / A2-STRAT / A2-DELTA cite them.
+      MEASURED (DeltaIRCheck, 10 tests green): passthrough mutual recursion ACCEPTED as one 2-equation
+      system and solved (4 rounds) to the `lowerCalls` reference; a `-` dependency on a LOWER stratum
+      ACCEPTED (2 systems, the `-` edge points down a stratum); a `-` self edge, a `0` self edge
+      (Range, TailsIntersection, mixed +/-) and a negative mutual cycle REJECTED; datalog's arg-changing
+      `sn_tc` UNSUPPORTED; naive and delta agree at every round boundary and on the result on eight
+      fixtures (transitive closure 5 rounds, nonlinear intersection/composition, both-sided
+      restriction, new heads per round, frozen subtrahend, …), with the step equation checked per
+      round and the "substitute the delta everywhere" shortcut shown to drop mixed terms; the routine
+      `suf(m) = m ∪ suf(tails m)` and `Fixpoint(m, m, tails m)` lower to the SAME IR; premises replay
+      and a tampered label set does not; cornerstones: aunt/gol/puzzle-step/nqueens ACCEPTED (no
+      recursion → 0 systems), puzzle 2x2 reachable ACCEPTED (1 system, 8 rounds), datalog-sn
+      UNSUPPORTED.  Variance agrees with `monotoneInMention` on 227 corpus (program, mention) pairs.
+      NOT DONE, NAMED: nested fixpoints under an Iteration binder and calls to frozen callees are
+      differenced by full recomputation (sound, not incremental); a nested top-level Fixpoint mixing
+      with a routine SCC is Unsupported; the IR evaluates over the reference semantics only (the trie
+      schedule is A4/A5's consumer).
+
+  A3  THE TWO-TIER CORRELATED DOMAIN.  src/main/scala/SpatialDomain.scala: one hash-consed DAG per
+      analysis (`Arena`, never process-wide) with three node kinds — `XTrie` (exact: ε, exact head
+      set, children), `XChoice` (finitely many alternatives, BDD-like decisions per prefix), `XSumm`
+      (the existing `SpatialType` reduced product, whose certified transfers are reused through
+      `SpatialTyping.infer` rather than re-implemented); `Domain` = α, γ (`member`), ⊑, ⊔ (a choice
+      within the alternatives budget, else the projection's lub as a NAMED widening), ⊓ (structural /
+      `SpatialType.meet` / γ-filtered), projection (`summary`, through the certified Wrap/Union
+      transfers), widening (`iteration-widening`), and every operation of the algebra on both tiers
+      (choices distribute within the budget); `Abs` = node + ALIAS CHANNEL (`Is(m)` / `Fresh` /
+      `Unknown`) through which the executors' identity cases become PROVEN REUSE; `DomainFacts`:
+      fan-out, per-prefix fibre cardinality, order extrema and rank (exact where the tier is exact,
+      `Shape.orderMin/Max` otherwise), head disjointness, must/may aliasing, distinct live operands
+      [must, may], proven reuse; `Cause` = the provenance DAG indexed by node; `DomainCert` = the
+      immutable certificate (budget + every `Widening` with before/after size and length facts; a
+      widening is checked ⊒ each input at the crossing).  docs/SPATIAL_DOMAIN.md is the specification.
+      ONE DESIGN POINT WORTH RECORDING: `a eq b` on nodes is an identity of ABSTRACT VALUES and is a
+      concrete identity only on a single-valued node — the first run of the suite caught `union(a, a)`
+      returning `a` for two DIFFERENT inputs declared by the same summary (both hash-consed to one node)
+      and reporting 3 paths for a 4-path union.  Object identity is the alias channel's business
+      (`unionA` etc. fire the identity cases on `mustAlias`), never the node's.
+      MEASURED (SpatialDomainCheck, 10 tests green): γ∘α exact on 200 random values; 240 joins and 12
+      meets sound on the finite universe, both tiers, with 233 widenings recorded past a budget of 6;
+      36 leq decisions sound and every node below its projection; 1298 exact-tier operation checks
+      against `eval` (every binary and unary operation, plus the image over choices); a 15-deep pair
+      keeps head disjointness, extrema and fibres in the exact tier (the summary collapses to shape
+      depth 5, orderMin lost) and the disjointness survives through the certificate tier; a 40-head
+      value keeps exact fan-out and exact first/last where the summary tracks 12; sixteen one-tile
+      fibres compose to size [1,1] exactly (no Shape.top); summarized outcomes of five operations over
+      declared inputs contain every sampled counted outcome; the same analysis before and after 20
+      unrelated analyses yields the same value, alias and certificate; every budget crossing is a named
+      widening (`alternatives-budget`, `alternatives-budget(union)`, `iteration-widening`) with
+      before/after facts that never tighten a must fact.
+
+## 2026-09-05 — tasks.md A4 + A5 + A6 (resource bounds, compositional calls, certified transfers)
+
+  HOST.  Same caveat as the A1–A3 record: no Symba CLI on this host, everything below ran locally
+  (16 cores, 247 GB, JDK 21, Scala 3.8.1 / sbt 2.0.8, Lean 4.33.1 + Mathlib v4.33.1).  Runs longer
+  than the harness's foreground limit were run detached and their logs read afterwards.
+
+  A4  RESOURCE BOUNDS BY ABSTRACT INTERPRETATION.  src/main/scala/SpatialCostSemantics.scala: `CostSem`
+      interprets the A1 event semantics over the A3 domain, backend by backend — `EventBounds` (an
+      interval per EffortEvent, components as sums), `Derivation` (rule, facts, backend, widening,
+      bounds, children; deterministic `render`), `CostReport` (bounds, abstract value, derivation,
+      domain certificate, notes, A5 summary counts, A6 dependencies/certified).  Lower endpoints from
+      MUST facts, upper from MAY facts, as two walks of the exact tier: `Walk(share = true)` — the trie
+      algebra's own recursion under maximal sharing (equal children one object, equal child maps one
+      Patricia map, every `eq` short circuit fires) — and `Walk(share = false)` (no sharing, every
+      common key descended, every node rebuilt); summarized operands through `SpatialFrontier`'s
+      must/may sides and the Patricia envelope [1, 2k−1] (the shape depends on the interner: a
+      registered premise, not a prediction).  n-ary joins/meets from the ordered live frontier
+      (identity dedup, per-level Patricia envelope, one more joinAll per common prefix); rest chains
+      per prefix level with each head's tails a distinct object; loops on a summarized source priced
+      ONCE under the weakened fibre times the fan-out (sound both sides, linear in nesting — the
+      two-run form was 2^16 body analyses on puzzle15 and hung SpatialAcceptance); fixpoints exact
+      round for round, past that first round certain and later rounds bounded by growth, widening
+      named; an exact `ZipperWalk` mirroring the cursor algebra with object classes; `GraphSem` over
+      execT's op graph with its empty-left short circuit (a may-empty left operand contributes no
+      certain event).  Range priced by mirroring `ITrie.range/slice` in canonical order with the
+      count walk's memoisation modelled (shared `ITrie.empty` memoised; a terminal-only node is NOT the
+      shared epsilon; a declared input's count memoised by the warm run, a binder's tails rebuilt).
+      SpatialPipeline's cost entry points (`costOfOptimized/Residual/Definitional`, `backendCost`,
+      `compareBackends`, `LoweredRoutine.cost`, `price/priceAll`) now read this analysis; the graph
+      backend is priced on `optimize(transpile(routine))` when it transpiles.
+      THE GATE INTERPRETATION AT M1 (tasks.md: "wide intervals are allowed at this milestone but are
+      reported as not useful"): soundness (containment, finite, below the 1e12 ceiling) is asserted;
+      width/error/slope against the ProductRequirement tiers is REPORTED per (backend, component) —
+      the `limitations` ledger and `ProductGate` are deleted, no row is excused by name.
+      MEASURED (all green, 2026-09-05):
+        SpatialCostCheck  8/8 — exhaustive binary 399 360 rows (64 values² × 6 ops × 4 backends), 0
+          containment failures; exhaustive unary/positional/loop 11 264 rows, 0; summarized
+          declarations 36 096 rows, 0; hunt 106 programs × exact/summ × 4 backends 3 392 rows, 0; the two
+          zipper counterexamples contained; 16-cell board exact Work=[63,63] Alloc=[120,120] with no
+          Shape.top; derivations deterministic; bomb literal never evaluated.
+        SpatialEventsCheck 14/14 — corpus 181 programs, 2 896 rows, 0 failures; cornerstones on
+          Routine.optimized's body (exact declared inputs): aunt trie Work=[204,264]/counted 220,
+          gol trie Work=[3541,3601]/3798→ (after the single-run change [3400,3856]/3657),
+          puzzle15 trie Work=[3976,4480]/…, datalog-sn reference Work=[218,218]/219 → point-exact
+          after the stationary-argument rule; all six finite, below the ceiling, contained.
+        SpatialScaleCheck 2/2 — 15 families × 9 rungs (64…16384) × up to 4 backends: 168 channels, 0
+          UNSOUND, magnitude 168/168 below the ceiling; 1 680 tier rows, 76 NOT USEFUL (all on
+          `absorption` and `rest-chain/nest`, where inputs past `DomainBudget.enumerate = 512` paths
+          summarise and the interval widens); Spearman(predicted upper, wall time) = 0.79 over 378
+          points (reported).
+        SpatialPipelineCheck — cost tests ported: ITEM 5 (all cornerstones finite and below 1e12 on
+          four backends), DERIVATION (deterministic certificates, every node a rule, right backend),
+          ITEM 8 (declared inputs tighten every cornerstone somewhere, never worsen), ITEM 2 slopes
+          (restriction by a fixed prefix, disjoint ∩, x ∪ x flat), equal-but-distinct restriction
+          allocates nothing; the decorated-vs-fresh and census tests are gone with the model they
+          measured.  SpatialAcceptance and SpatialLawsCheck adapted (compareBackends, residual cost).
+      THE DEFECTS THE GATE FOUND BEFORE GOING GREEN, each a real executor effect the model had to
+      learn (none an exception): shared child-map objects skip the merge; a shared Patricia subtree
+      skips the descent for equal children; the shared empty constant's count is memoised, the
+      terminal-only node's is not; a binder's tails object is not a declared input; the zipper hands
+      `range` a FRESH empty node; execT's empty-left short circuit; eval's Call evaluates a path
+      argument as a value (no Singleton dispatch); the first round of a summarized fixpoint is the
+      only certain one; a summarized graph loop's result is the k-fold union, not one group; n-ary
+      probes recur at every common prefix; the `fix-suffix` off-by-one was the map-identity case.
+      TWO PERFORMANCE DEFECTS FOUND BY THE ACCEPTANCE/PIPELINE SUITES (both in the summarized loop
+      rule, both fixed): the body analysed twice per nesting level (2^16 analyses on puzzle15's nest),
+      and the loop's value re-inferred from the whole remaining nest at every level (quadratic
+      inference, minutes on puzzle15 with undeclared inputs) — now one body analysis under the
+      weakened fibre and the k-fold union of the body's summary.
+      FOUR MORE FROM THE DECLARED-TYPE CORNERSTONES (SpatialPipelineCheck ITEM 5, all fixed): a
+      summary's fan-out past the shape caps is bounded by its path count (every head carries a path);
+      a summary's node count by 1 + |x|·len(x); `Unwrap` by an UNKNOWN prefix of length k is contained
+      in `tails^k(x)` (the summarized transfer alone summed the fibres of every possible head — 16^5
+      paths for a one-path puzzle15 frontier); and the graph backend's `Call` slots are answered from an
+      index transpiled from the routine table, with a re-entered callee reported ⊤ (execT has no
+      stationary-argument rule, and following it overflowed the stack on datalog).
+      ONE COMPONENT NOT MET, NAMED: puzzle15 under a TYPE-ONLY declaration of its frontier
+      (`SpatialType.of(board)`, the SpatialPipelineCheck fixture) still has an INFINITE upper endpoint
+      on every backend — the type keeps the board's per-cell fibres (the fibre LUB over heads, the
+      `Unwrap`-by-unknown-prefix bound and the containment caps were all added for it and cut the
+      intermediate sizes from 16^5 to 1.9e5) but not the functional dependence between cells, and the
+      fifteen compositions of `collapse` multiply what the type cannot correlate.  Under the CLOSED
+      declaration by value puzzle15 is bounded and tight on every backend (trie Work=[3976,4480]
+      against 5736 counted … see SpatialEventsCheck), which is what ITEM 5 now gates; the type-only
+      analysis is printed beside it as `reported, not gated`.  datalog-sn on the GRAPH backend is
+      reported ⊤ and not gated: execT has no stabilised-argument rule and cannot run the program.
+      NOT DONE, NAMED: `SpatialCost.scala` (the pre-A4 model, 264 references) is RETAINED as legacy
+      for SpatialAcceptance/BackendProfileCheck/SpatialDemandCheck/SpatialCertBudgetCheck, read by no
+      gate suite and no pipeline entry point — its deletion is a separate refactor.  The IR's DELTA
+      schedule is not priced (the executors iterate naively and the IR is priced on its naive
+      schedule); `SpatialDemand`, `SpatialAnalysis` were not modified for A4.  The `check_references
+      --strict` gate is red with 86 dangling references, all citations of the plan, acceptance and decisions
+      documents removed by commit 0737bb6 (tasks.md) — pre-existing,
+      not touched here; it needs the owner's decision (retire the citations or add a
+      retired-documents exception).
+
+  A5  COMPOSITIONAL CALLS.  `CostSem.call` no longer inlines: a callee is answered by its PARAMETRIC
+      SUMMARY at the caller's abstract arguments, keyed by the canonical routine identity (the body
+      alpha-normalised over positional parameters + arity) and the abstract input (argument node keys,
+      declared-input flags, alias classes among the arguments, path arguments, phase) — never a residual
+      integer — computed once and reused, with the result's relation to the arguments (by pointer to
+      argument i, or fresh) carried across the call so correlations compose (`cf(s0, s0)` prices
+      `a ∩ a`/`a ∖ a` by identity, `cf(s0, s1)` does not).  A positive passthrough recursive component
+      is the IR's simultaneous system (`DeltaIR.lower` → `EqSystem`), iterated as ONE abstract least
+      post-fixpoint over all its equations and priced as the IR solver's rounds (naive schedule, the
+      terminating empty-delta round included), first round certain past the exact tier and the rest
+      bounded by growth; the self-call `l ∪ r(args')` follows the executors' stabilised-argument rule to
+      its stationary point on exact arguments; on SUMMARIZED arguments, when the tuple has the semi-naive
+      shape (passthrough / extensive accumulator `p ∪ X` / drivers that vanish once every driver is ∅)
+      the depth is bounded by the accumulators' growth to their abstract post-fixpoint plus three
+      levels, every level priced at the post-fixpoint (this is what makes datalog-sn finite under a
+      declared type: trie Work=[66, 5908], 8–170 levels); anything else recursive is ⊤ and says so.  Per-invocation events are the
+      summary's; the derivation names `Call r/summary`, `Call r/stationary`, `Call r/system` (with a
+      `System` node whose bounds are exactly the solver's rounds).  `Call` is preserved in the term,
+      the graph (`index`), and the certificate.
+      MEASURED (CrossFunctionCostCheck): two path arguments → two summaries, the same argument twice →
+      one reused; four calls at one abstract input → 2 computed / 2 reused, the certificate says where;
+      correlated result: aliased call cheaper in touch than the two-input call; Range of a call result
+      contained and finite over three windows; calls below Iteration and Fixpoint binders contained on
+      every backend (the Fixpoint case found the variance premise ignoring the routine table and the
+      non-positive branch under-reporting — both fixed); even/odd mutual recursion: the System node's
+      Work=[23,23] Alloc=[12,12] equals the solver's counted rounds (4 rounds), the summarized run
+      contains them; cornerstone call chains gol (Work width 1.13, 24 reused / 16 computed summaries),
+      aunt and puzzle15 finite, far below ⊤.  The zipper backend prices a call through its evalI
+      fallback once per cursor pass, so its summary counts are the trie's doubled (asserted as such).
+
+  A6  PROVE OR CHECK EVERY TRANSFER.  proofs/lean/Zippy/Spatial.lean (builds sorry-free; the Lean gate
+      is green): `Ivl.mem_add / mem_mul / mem_hull_left/right / leq_mem / leq_trans / leq_hull_* /
+      sum_mem (repetition) / mem_foldl_hull (alternatives) / must_may / mem_top`,
+      `Range.normalize_bounds / normalize_full / normalize_empty / slice_length / slice_full /
+      slice_empty` (RangeBounds.normalize transcribed), `widen_upper`, `post_fixpoint`, `exhaustive`.
+      proofs/spatial/: REGISTRY.tsv (27 rules: 6 MECHANIZED, 15 CHECKED, 3 DIFFERENTIAL, 3 PREMISE),
+      check_transfers.py (an INDEPENDENT path-set algebra and range normalisation re-deriving every
+      exact-tier transfer over the whole small universe from the dump `SpatialTransferDump` writes:
+      25 536 transfer rows over 14 operations, all equal; 23 808 pricing rows re-checked, 0 outside, no
+      infinite endpoint; coverage of every pair asserted), README.md (the argument: a structurally
+      recursive transfer exact on every one-level configuration is exact everywhere; what remains a
+      premise), STATUS.tsv (0 OPEN).  docs/TRUSTED.md gains T9 — the counted executors ARE the event
+      semantics, checked differentially (SpatialSemanticsCheck), not proved — and every DIFFERENTIAL
+      row is `PROVED-MODULO T9`.  `scripts/proof_closure.py --check` reads the registry and the status
+      table and refuses an OPEN row, a rule without a verdict, or a verdict without a rule; it is
+      green.  `CostReport.dependencies` maps a derivation's rules to registry ids; `certified` is true
+      only when every one is PROVED or a stated premise in STATUS.tsv (absent table ⇒ nothing
+      certified); `certifiedModulo` lists the premises.
+      NOT DONE, NAMED: the finite-domain trie transfers themselves are CHECKED (exhaustive small
+      universe + written induction argument), not Lean-mechanised — tasks.md allows this for
+      representation-heavy operations; the pricing rules' correspondence to the executors is
+      differential (T9); the delta schedule has no pricing rule to certify.
+
+  FINAL STATE (2026-09-05, local host): SpatialCostCheck 8/8, SpatialEventsCheck 14/14,
+  SpatialScaleCheck 2/2 (0 unsound channels), SpatialPipelineCheck all green (ITEM 5 gated on the
+  closed programs by value; the type-only declaration reported: puzzle15 infinite on four backends),
+  SpatialAcceptance green (6a reads the analysis' refusal reason), SpatialLawsCheck, DeltaIRCheck,
+  SpatialDomainCheck, SpatialSemanticsCheck, CrossFunctionCostCheck 8/8, SpatialTransferDump; the
+  transfer checker 25 536 + 23 808 rows re-derived/re-checked, 27 registry rows, 0 OPEN;
+  proof_closure --check green; check_lean.sh green (Spatial.lean in the package); check_obligations,
+  check_laws, audit_pipeline_markers, check_asserts green.  check_references --strict RED for the
+  pre-existing citations of the removed plan/acceptance/decisions documents (86 references removed by
+  commit 0737bb6, not touched here).  Nothing committed; everything staged.

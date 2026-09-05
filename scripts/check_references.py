@@ -116,6 +116,9 @@ GENERATED = {
     "expressivity.csv": "morkl.ProgramExpressivity",
     "prog_matrix.tsv": "morkl.ProgramStats",
     "datalog-morkl.txt": "morkl.DatalogShowTest",
+    # A6: the transfer checker's inputs (proofs/spatial/out/, gitignored)
+    "transfers.tsv": "morkl.SpatialTransferDump",
+    "bounds.tsv": "morkl.SpatialTransferDump",
 }
 
 # Tokens that look like a path but are not: interpolated names, doc placeholders, scratch paths.
