@@ -1,4 +1,4 @@
-# SELECTION CERTIFICATE (tasks.md B2) — a pure function of the C rows and the objective; replay:
+# SELECTION CERTIFICATE — a pure function of the C rows and the objective; replay:
 # scripts/check_selection.py (independent), morkl.Pareto.replay (in-process).
 # objective	rounds
 # priority	rounds,work,alloc,touch

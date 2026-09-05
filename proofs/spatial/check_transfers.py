@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""THE INDEPENDENT CHECKER OF THE EXACT-TIER TRANSFERS AND OF THE PRICING'S CONTAINMENT (tasks.md A6).
+"""THE INDEPENDENT CHECKER OF THE EXACT-TIER TRANSFERS AND OF THE PRICING'S CONTAINMENT.
 
 `morkl.SpatialTransferDump` writes two tables under proofs/spatial/out/:
 
   transfers.tsv   one row per (operation, abstract inputs) over the WHOLE small universe — paths over
                   {a, b} of length <= 2, at most three per value (64 values, 4096 pairs) — with the
-                  abstract result the A3 domain (`SpatialDomain.scala`) computed, concretised;
+                  abstract result the correlated domain (`SpatialDomain.scala`) computed, concretised;
   bounds.tsv      one row per (operation, backend, inputs, component) with the COUNTED executor total
-                  and the A4 interval (`SpatialCostSemantics.scala`).
+                  and the resource interval (`SpatialCostSemantics.scala`).
 
 This script re-derives every concrete result with ITS OWN path-set algebra (Python sets of tuples; a
 restriction is a prefix filter, a composition a concatenation, a range a slice of the canonical
@@ -20,7 +20,7 @@ exhaustively (the principle is `proofs/lean/Zippy/Spatial.lean#Zippy.Spatial.exh
 
 WHAT THIS DOES NOT SHOW, said plainly (see README.md): the pricing rows re-check the arithmetic of
 containment on the Scala numbers; the counted totals come from the instrumented executors, which are
-the semantics (A1's `SpatialSemanticsCheck` is the differential check of the event semantics against
+the semantics (`SpatialSemanticsCheck` is the differential check of the event semantics against
 them).  The universe is small; the argument that a structurally recursive transfer correct on every
 one-level configuration is correct on every trie is written in README.md.
 

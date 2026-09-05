@@ -43,7 +43,7 @@ object GlobalState:
   val tables: Vector[Table] = Vector(
     // The two the plan names, and the two whose ids everything downstream is keyed by.
     Table("Interner.size", "IntTrie.scala", () => Interner.size.toLong),
-    // THE CERTIFICATE ARENA (plan.md 1C.1) — and it is the one table here that CANNOT change an
+    // THE CERTIFICATE ARENA  — and it is the one table here that CANNOT change an
     // answer, by construction rather than by argument: `Cert`'s `equals`/`hashCode` are structural
     // and the arena only hands back a canonical instance, so `Cert.reset()` mid-run changes nothing.
     // That is exactly what the `HeadAtoms` id table it replaces could not say, and why the ids had to

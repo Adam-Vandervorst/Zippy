@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==================================================================================================
- *  `SmtDiff.alphaNorm` IS TOTAL, AND EVERY CLAUSE IS CHECKED (plan.md 0.6).
+ *  `SmtDiff.alphaNorm` IS TOTAL, AND EVERY CLAUSE IS CHECKED.
  *
  *  ==WHY THIS SUITE EXISTS==
  *  `alphaNorm` is a DECISION PROCEDURE, not a convenience.  Three consumers act on its verdict:

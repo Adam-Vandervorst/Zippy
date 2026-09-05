@@ -7,7 +7,7 @@ import scala.language.implicitConversions
 /** ==============================================================================================
  *  A4 — RESOURCE BOUNDS AS ABSTRACTIONS OF THE COUNTED EXECUTION (gate suite 1 of 4).
  *
- *  tasks.md A4 acceptance: "zero containment failures under exhaustive small-model checks and
+ *   acceptance: "zero containment failures under exhaustive small-model checks and
  *  randomized soundness hunts; the two known zipper counterexamples are covered as permanent
  *  regressions; all four spatial cost suites pass without workload-specific exceptions or stale
  *  expected formulae."
@@ -16,7 +16,7 @@ import scala.language.implicitConversions
  *  constructor on every backend lies inside the predicted interval, over an exhaustive small universe
  *  (exact and summarized declarations) and a randomized hunt.  USEFULNESS — the interval width per
  *  (backend, component) against the selection/budget tiers — is REPORTED per row and per tier; it is
- *  not a pass/fail here, because tasks.md M1 says "wide intervals are allowed at this milestone but are
+ *  not a pass/fail here, because  separates soundness from usefulness: wide intervals are
  *  reported as not useful", and E1 is where usefulness becomes a published claim with its own gate.
  *  There is NO ledger of named exceptions: a containment failure fails, whatever its name.
  *  ============================================================================================== */

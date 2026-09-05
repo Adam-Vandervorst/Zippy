@@ -825,7 +825,7 @@ final case class Meas(size: Sym, len: Sym, heads: Sym,
  *  which are not the source's head children.  `collectJoin` therefore does NOT read this record. */
 final case class TailsFacts(distinctLo: Long, keyDisjoint: Boolean, arity: Long,
                            childKeys: Option[Long],
-                           /** THE PER-CHILD HEAD SETS `TailsFacts.of` ALREADY COMPUTES (plan.md 1B.2).
+                           /** THE PER-CHILD HEAD SETS `TailsFacts.of` ALREADY COMPUTES.
                             *
                             *  `of` builds `hs = kids.map(_.possibleHeads)` to decide `keyDisjoint`
                             *  and to sum `childKeys`, and then threw them away — so the KEY LAYOUT
@@ -1308,7 +1308,7 @@ final case class BackendProfile(repr: ReprProfile, algo: AlgoProfile, alloc: All
   def claimsFloor: Boolean = provenance.gated && target.claimsFloor
   /** retarget this profile for a control-flow handoff: the formulas stay, the event stream changes.
    *
-   *  ==IT IS WIRED (plan.md 1B.1), AND HERE IS WHERE==
+   *  ==IT IS WIRED, AND HERE IS WHERE==
    *  `CostModel.profile` is now DERIVED from `CostModel.eventsOf` through this method, and
    *  `Backends.handoff` is the only thing that sets `eventsOf` away from the instance's own
    *  `backend`.  `SpatialCost.go`'s [[CostModel.controlFlowFallback]] arm calls `handoff` instead of
@@ -1460,7 +1460,7 @@ trait CostModel:
    *  field of it.  What differs per model is [[BackendProfile.target]], which says whose counted
    *  event stream the answer will be compared against — and it is derived from [[eventsOf]], so a
    *  handoff instance reports `claimsFloor == false` without any call site having to remember to
-   *  ask.  (plan.md 1B.1.  Before it, `go`'s fallback arm handed the subterm to the fixed
+   *  ask.  (Before it, `go`'s fallback arm handed the subterm to the fixed
    *  `Backends.of(Trie, phase)` singleton, whose profile said `eventsOf == Trie`, so `claimsFloor`
    *  was TRUE across exactly the handoff [[PricingTarget]] was written to make false.) */
   def profile: BackendProfile =
@@ -1537,7 +1537,7 @@ trait CostModel:
     case Sym.Const(n) if n <= 2L => Sym.c(n * (n - 1) / 2)
     case _ => perProbe(k) * liveTotal(k, nodes)
 
-  /** the same, with the operand set's KEY LAYOUT met in where it is known (plan.md 1B.2).  Both
+  /** the same, with the operand set's KEY LAYOUT met in where it is known.  Both
    *  factors bound `Σ_calls |live|` so the meet is sound; see [[pkdLiveTotal]] for the derivation and
    *  for why the layout-exact version is not shipped. */
   protected def naryProbes(k: Sym, nodes: Sym, tails: Option[TailsFacts]): Sym = k match
@@ -1599,7 +1599,7 @@ trait CostModel:
     val spine = profile.repr.spineNodes(nodes)
     Sym.tighter(k * (spine + Sym.one), Sym.c(profile.repr.carryDepth) * (spine + k))
 
-  /** ==`Σ_calls |live|` FROM THE KEY LAYOUT, FOR A PAIRWISE-KEY-DISJOINT OPERAND SET (plan.md 1B.2)==
+  /** ==`Σ_calls |live|` FROM THE KEY LAYOUT, FOR A PAIRWISE-KEY-DISJOINT OPERAND SET ==
    *
    *  [[liveTotal]] bounds the aggregate two ways and meets them, and BOTH read the whole operand-node
    *  total: `k * (spineNodes + 1)` is calls x arity and `carryDepth * (spineNodes + k)` is entries x
@@ -1631,7 +1631,7 @@ trait CostModel:
    *  `Int` keys — `IntTrieOps` branches on raw key bits, not on the canonical name order.  Deriving it
    *  would make a cost prediction depend on `Interner`'s process-wide, first-seen-order state: a
    *  different program analysed earlier in the same JVM would change the ids and hence the
-   *  prediction.  That is exactly the fragility `HeadAtoms` was deleted for (plan.md 1C.1: "identity
+   *  prediction.  That is exactly the fragility `HeadAtoms` was deleted for ("identity
    *  must be a value"), so the bound here uses only the SIZES and the disjointness, which are
    *  program-determined. */
   protected def pkdLiveTotal(t: TailsFacts): Option[Sym] =
@@ -1722,7 +1722,7 @@ trait CostModel:
       // alone; [[liveTotal]]'s note has the measured refutation of that reading.
       Sym.c(profile.alloc.perOperationSlack) + Sym.c(5) * k + Sym.c(3) * liveTotal(k, nodes)
 
-  /** the same, with the key layout met in (plan.md 1B.2) */
+  /** the same, with the key layout met in  */
   protected def naryScratch(k: Sym, nodes: Sym, tails: Option[TailsFacts]): Sym = k match
     case Sym.Const(n) if n <= 2L => Sym.c(profile.alloc.perOperationSlack) + Sym.c(4) * k
     case _ =>
@@ -2106,7 +2106,7 @@ trait CostModel:
    *  which is what turned 122 counted rounds into a predicted 390,580 (and then into `inf`).
    *  `refCounted` selects the reference evaluator's `groupMap`, which regroups the whole surviving PATH
    *  set at every level rather than the distinct prefixes. */
-  /** ==THE FRAME COUNT IS A MUST-COUNT, AND `rounds` NOW CARRIES IT (plan.md 1B.7)==
+  /** ==THE FRAME COUNT IS A MUST-COUNT, AND `rounds` NOW CARRIES IT ==
    *
    *  `frames = Σ_{d=1..D} K_d` is described one screen up as "a STRUCTURAL IDENTITY, not an
    *  estimate": the level-`i` iteration groups the tails of one depth-`(i-1)` prefix, so its groups
@@ -3518,7 +3518,7 @@ final class ZipperCost(val phase: ExecutionPhase) extends CostModel:
     // `nd(src) >= 1 + heads` on every shape whose `nodesHi` comes from `SpatialFacts.trieNodes`
     // (`1 + Σ K_d` with `K_1 = heads`), so `anyEmptyOperand`'s at most `heads` probes are inside that
     // envelope.  1200 randomised tails shapes refute the trie endpoint at two heads and never this one.
-    // THE KEY LAYOUT REACHES THIS BACKEND TOO (plan.md 1B.2): it calls the same `ITrie.tailsIntersection`,
+    // THE KEY LAYOUT REACHES THIS BACKEND TOO: it calls the same `ITrie.tailsIntersection`,
     // so `pkdLiveTotal`'s per-operand bound on `Σ_calls |live|` applies here for exactly the reason the
     // arity cancellation above does — same entry point, same operand set.
     val hi = Cost.of(work = Sym.c(2) * reads(src) + naryProbes(src.heads, src.nodes, src.tails),
@@ -4135,7 +4135,7 @@ object SpatialCost:
     // the decorated path exists to avoid is `shapeAt`'s full `SpatialTyping.infer` (the reduced
     // product, shape included), and that is still skipped.  `histAt` is the size/length product only,
     // and the fresh path already spends the same budget unit on it.
-    // EVERY CERTIFICATE DEGRADATION REACHES THE PRICED RESULT (plan.md 1C.5).  `Cert.widen`'s two
+    // EVERY CERTIFICATE DEGRADATION REACHES THE PRICED RESULT.  `Cert.widen`'s two
     // rules are recorded on the certificate value, so a bound that was weakened by a budget rather
     // than by the program says so in the report's assumptions instead of looking exact.  One note per
     // distinct rule set, because the rule is the fact and the node is not.
@@ -4191,10 +4191,10 @@ object SpatialCost:
       // So what the decoration is WORTH here is its LAW AND BINDER REFINEMENTS — which a fresh
       // per-node infer genuinely cannot have — rather than a saved traversal.  Making
       // `SpatialAnalysis` strong enough per node to drop the re-inference is the right long-run fix
-      // and belongs there, not here; plan.md task 1B.6 records it.
+      // and belongs there, not here.
       case Some(t) =>
         st.note(DecoratedNote)
-        // ==THE RE-INFERENCE IS GONE FROM THIS BRANCH (plan.md 1B.6)==
+        // ==THE RE-INFERENCE IS GONE FROM THIS BRANCH ==
         //
         // It was here because the decorated type could be WEAKER than a fresh single-node inference:
         // the decoration is a whole-routine run under `SpatialConfig`'s budgets, so at an individual
@@ -4219,7 +4219,7 @@ object SpatialCost:
           case None => ()
         out.copy(heads = tighter(out.heads, out.size))
 
-  /** THE DISJOINT-SLICE BUDGET of a composition chain (plan.md 1B.5).
+  /** THE DISJOINT-SLICE BUDGET of a composition chain.
    *
    *  `Some(cap)` when every factor of the chain is `Unwrap(x, Constant(k_i))` over a COMMON `x` with
    *  pairwise distinct `k_i`: the slices are then disjoint subsets of `x`, so `Σ_i |slice_i| <= |x|`
@@ -4730,7 +4730,7 @@ object SpatialCost:
       case Some(fb) if isControlFlow(s) =>
         st.note(s"${model.name}: ${nodeName(s)} is NOT fused — transpileZ materialises it through evalI, " +
                 s"so this subterm is priced with the ${fb.slug} model (ZipperFallbackToEvalI is counted)")
-        // THE RETARGETED MODEL, not the plain singleton (plan.md 1B.1).  `handoff` returns an
+        // THE RETARGETED MODEL, not the plain singleton.  `handoff` returns an
         // instance whose `profile.claimsFloor` is FALSE, which is the fact the next line acts on.
         val inner = Backends.handoff(fb, model.phase, model.backend)
         val (c0, m) = goNode(s, env, inner, st, depth, id)
@@ -4874,7 +4874,7 @@ object SpatialCost:
         // concatenations of different pairs CAN collide ({a, a.b} x {b, ε}), so the only generic
         // lower bound is positivity
         val loSz = if ma.provablyNonEmpty && mb.provablyNonEmpty then Sym.one else Sym.zero
-        // ==DISJOINT SLICES OF ONE OBJECT SHARE A BUDGET (plan.md 1B.5)==
+        // ==DISJOINT SLICES OF ONE OBJECT SHARE A BUDGET ==
         //
         // `|a x b| <= |a| * |b|` is the generic bound and it ignores where the factors CAME FROM.
         // When the factor list of a composition chain is `Unwrap(x, k_1) x … x Unwrap(x, k_n)` with
@@ -4911,7 +4911,7 @@ object SpatialCost:
       case Space.Unwrap(src, p) =>
         val (cs, ms) = rec(src, 0)
         val lp = plen(p, env)
-        // ==ONE PREFIX, NOT THEIR UNION (plan.md 1B.5)==
+        // ==ONE PREFIX, NOT THEIR UNION ==
         //
         // `ms.size` is the whole operand's cardinality, which is a bound on the union over all
         // depth-`j` prefixes.  The operator selects ONE, so the largest per-prefix tail-set bounds it
@@ -4994,7 +4994,7 @@ object SpatialCost:
         val m = refineHere(Meas(ch.leaves * ml.size, ml.len, ch.leaves * ml.size))
         // the leaf runs at most `leaves = K_D` times — NOT `Π K_d` times — and one dispatch per FRAME is
         // charged by `chainNest`, which also carries the `rounds` component
-        // ==THE ACCUMULATE IS PRICED PER LEVEL, NOT AS ONE JOIN OVER EVERY LEAF (plan.md 1B.3)==
+        // ==THE ACCUMULATE IS PRICED PER LEVEL, NOT AS ONE JOIN OVER EVERY LEAF ==
         //
         // It was `collectJoin(ch.leaves, ..., ml)`: ONE n-ary join of `K_D` operands, each carrying
         // `nd(leaf)` nodes.  `evalI` does not do that.  At level `d` it performs one `joinAll` per
@@ -5329,7 +5329,7 @@ object SpatialCost:
                 else groupTailType(typeAt(src, env, st), typeAt(Space.TailsUnion(src), env, st))
     // `rest` is one head group's tail set — an `ITrie` CHILD of the source, i.e. a shared subtrie, so it
     // INHERITS the source's count-cache state (`count` recurses and memoises every descendant).
-    // ==THE `rest` MEASURE IS THE FIBER'S, NOT THE WHOLE SOURCE'S (plan.md 1B.5)==
+    // ==THE `rest` MEASURE IS THE FIBER'S, NOT THE WHOLE SOURCE'S ==
     //
     // `Meas(ms.size, …)` — one group's tails bounded by the ENTIRE source — is sound and was the only
     // bound here, and it is the one that actually priced puzzle15: the shape route gave
@@ -5363,7 +5363,7 @@ object SpatialCost:
    *  on 4-queens: 122 counted loop/call frames against a predicted upper bound of 28.  Widening the
    *  shape to ⊤ and zeroing the histogram's lower bounds costs precision in the loop body and buys
    *  back soundness, which is the required direction. */
-  /** THE FIBER BOUND, as one function (plan.md 1B.5).
+  /** THE FIBER BOUND, as one function.
    *
    *  A single head group's tail-set is a SUBSET of the level's whole tails-union, so a sound bound
    *  for it is the DOWNWARD CLOSURE of a bound on that union: every must-channel opened, every
@@ -5378,7 +5378,7 @@ object SpatialCost:
     // (`SpatialTyping.groupUnion`) so the two readings of the fiber bound cannot drift
     SpatialType(Shape.weaken(sh), SpatialTypes.mayOnlyLens(lens))
 
-  /** ==THE SINGLE-GROUP EXEMPTION (plan.md 1B.5)==
+  /** ==THE SINGLE-GROUP EXEMPTION ==
    *
    *  The weakening below is there because one group's tails are a PROPER SUBSET of the tails-union in
    *  general.  When the source has EXACTLY ONE HEAD they are not a proper subset: they are the whole
@@ -5408,7 +5408,7 @@ object SpatialCost:
     if hc.lo == 1 && hc.hi == 1 then t else groupTailType(t)
 
   private def groupTailType(t: SpatialType): SpatialType =
-    // ==THE FIBER BOUND, NOT ⊤ (plan.md 1B.5)==
+    // ==THE FIBER BOUND, NOT ⊤ ==
     //
     // `Shape.weaken(t.shape)` is the SHAPE half of exactly the reasoning the paragraph above gives
     // for the length half.  One group's tails are a SUBSET of all the tails, and `weaken` is the
@@ -5497,7 +5497,7 @@ object SpatialCost:
   /** THE FIXPOINT'S CHANGED FRONTIER.  The accumulator against one
    *  iterate: an ABSORBED iterate is `Identity(LEFT)` and rebuilds nothing, an unchanged subtrie is
    *  reused by pointer, and only the CHANGED frontier is merged. */
-  /** ==THE ACCUMULATING MERGE IS PRICED AGAINST THE UNION TOWER'S RESIDUE (plan.md 1B.4)==
+  /** ==THE ACCUMULATING MERGE IS PRICED AGAINST THE UNION TOWER'S RESIDUE ==
    *
    *  `IntTrie`'s `Fixpoint` arm is `nxt = ITrie.union(cur, evalI(body))`, and for a MONOTONE body the
    *  union tower contains the recursive mention: `body = Union(rec, E)` up to AC, so
@@ -5564,7 +5564,7 @@ object SpatialCost:
    *  `Π_{d} K_d` — `SpatialFacts.PrefixProfile.naiveProductBound`, which the profile itself documents as
    *  neither tight NOR sound — which the generic loop transfer produced by recursively multiplying the
    *  per-level group counts. */
-  /** ONE LEVEL OF A REST-CHAINED NEST, as the joins that level actually performs (plan.md 1B.3).
+  /** ONE LEVEL OF A REST-CHAINED NEST, as the joins that level actually performs.
    *
    *  `frames` is `K_{d-1}` — the depth-`(d-1)` prefixes, one `joinAll` each — and `arity` is that
    *  frame's fan-out `K_d / K_{d-1}`.  `operand` is the measure of ONE of those operands: the union
@@ -5662,7 +5662,7 @@ object SpatialCost:
               s"leafInvocations = K_$dd = ${leaves.show}, groupingVisits = Σ E_d = ${visits.show} — " +
               s"instead of the per-level product Π K_d = ${naive.show}, which the profile itself " +
               "documents as neither tight nor sound"
-            // THE PER-LEVEL JOIN STRUCTURE (plan.md 1B.3), read off the same profile the frame law
+            // THE PER-LEVEL JOIN STRUCTURE, read off the same profile the frame law
             // uses.  `ceilDiv` on the ENDPOINTS that make each quotient an upper bound: the fan-out
             // is at most `K_d.hi / K_{d-1}.lo` and the subtree factor at most `K_D.hi / K_d.lo`; a
             // zero lower endpoint means the quotient is unbounded and the level falls back to the

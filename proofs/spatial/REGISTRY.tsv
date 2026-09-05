@@ -1,4 +1,4 @@
-# proofs/spatial/REGISTRY.tsv — THE TRANSFER RULES OF THE RESOURCE ANALYSIS AND WHAT DISCHARGES EACH (tasks.md A6).
+# proofs/spatial/REGISTRY.tsv — THE TRANSFER RULES OF THE RESOURCE ANALYSIS AND WHAT DISCHARGES EACH.
 #
 # Columns:  id  kind  witness  code-site  statement
 #   kind     MECHANIZED (Lean, proofs/lean/Zippy/Spatial.lean; built sorry-free by scripts/check_lean.sh)

@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-T1, MECHANIZED (plan.md 1E.3).
+T1, MECHANIZED.
 
 `docs/TRUSTED.md` T1 is `proofs/unbounded/_path_induction.p`: STRUCTURAL INDUCTION OVER `path`, AT
 ONE PREDICATE.  Its own header says exactly why it is asserted rather than derived:
@@ -126,7 +126,7 @@ theorem mon_cancel_agrees_with_core :
     (∀ p q r : List Name, p ++ q = p ++ r → q = r) := Iff.rfl
 
 
-/-! ### THE SAME SCHEMA, FOR EVERY DATATYPE THE SMT TIER INDUCTS OVER (plan.md 2E.4)
+/-! ### THE SAME SCHEMA, FOR EVERY DATATYPE THE SMT TIER INDUCTS OVER
 
 `scripts/check_asserts.py` found the SMT corpora asserting the structural-induction schema 39 times
 with no marker: over `Path` (the T1 twin), but also over `KList` (key lists), `KV` (key/trie pair

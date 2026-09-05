@@ -1,6 +1,6 @@
-# THE ACCEPTANCE MAP (tasks.md E3) — which gates, which proof closures and which evidence files each
-# tasks.md item's acceptance sentence is held to.  `scripts/gen_acceptance.py` joins this table with the
-# acceptance sentences parsed from tasks.md, the gate results `scripts/gates.py --run` records in
+# THE ACCEPTANCE MAP — which gates, proof closures and evidence files each acceptance criterion is
+# held to. `scripts/gen_acceptance.py` joins this table with the development criteria and the gate
+# results `scripts/gates.py --run` records in
 # target/gates.tsv, the trace closure in target/trace-closure.tsv and the registries, and renders
 # docs/ACCEPTANCE.md.  Nothing in that document is typed by hand.
 #
@@ -11,21 +11,21 @@
 # evidence: generated files the row rests on (a dirty or missing one makes the row UNMEASURED)
 # item	gates	closure	evidence
 A1	S:morkl.SpatialSemanticsCheck|S:morkl.SpatialEventsCheck	-	-
-A2	S:morkl.DeltaIRCheck|S:mechanized theorems build (0.5)	-	-
+A2	S:morkl.DeltaIRCheck|S:mechanized theorems build	-	-
 A3	S:morkl.SpatialDomainCheck	-	-
 A4	S:morkl.SpatialCostCheck|S:morkl.SpatialEventsCheck|S:morkl.SpatialScaleCheck|S:morkl.SpatialPipelineCheck	-	-
 A5	S:morkl.CrossFunctionCostCheck	-	-
-A6	S:proof status vs the trusted base, one dependency graph over the traces (item 8, C4)|S:mechanized theorems build (0.5)	spatial	proofs/spatial/STATUS.tsv
+A6	S:proof status vs the trusted base, one dependency graph over the traces|S:mechanized theorems build	spatial	proofs/spatial/STATUS.tsv
 B1	S:morkl.AlternativesCheck	-	-
-B2	S:morkl.ParetoCheck|S:selection certificates replay independently (B2, B3, D2)	-	proofs/decisions
-B3	U:morkl.DecisionsCheck|S:selection certificates replay independently (B2, B3, D2)	-	proofs/decisions;docs/DECISIONS.md
-C1	S:mechanized theorems build (0.5)	O6a	-
-C2	S:mechanized theorems build (0.5)	O12a;O12b	-
-C3	S:morkl.ProofTraceCheck|S:typed proof traces: every declared cell resolves to a checked DAG (C3)	-	proofs/pipeline/traces
-C4	S:proof status vs the trusted base, one dependency graph over the traces (item 8, C4)|S:trust closure mutation: an injected open O6a reaches its consumers (C4)	traces	proofs/pipeline/traces
-D1	S:structural coverage: every feature inside a checked chain, census complete (D1)|S:structural coverage mutations are caught (D1)|S:pipeline marker/declaration audit (item 4)	traces	proofs/pipeline/COVERAGE.tsv
-D2	S:morkl.EquivPipelineTest|S:cornerstone resource certificates contain their counted runs; selections replay (D2)|S:pipeline claims accepted: no SINGLE-SIDE, BUDGET or chained cell (D2)	traces	proofs/pipeline/resources;proofs/pipeline/RESOURCES.tsv;proofs/pipeline/CLAIMS.tsv
+B2	S:morkl.ParetoCheck|S:selection certificates replay independently	-	proofs/decisions
+B3	U:morkl.DecisionsCheck|S:selection certificates replay independently	-	proofs/decisions;docs/DECISIONS.md
+C1	S:mechanized theorems build	O6a	-
+C2	S:mechanized theorems build	O12a;O12b	-
+C3	S:morkl.ProofTraceCheck|S:typed proof traces: every declared cell resolves to a checked DAG	-	proofs/pipeline/traces
+C4	S:proof status vs the trusted base, one dependency graph over the traces|S:trust closure mutation: an injected open O6a reaches its consumers	traces	proofs/pipeline/traces
+D1	S:structural coverage: every feature inside a checked chain, census complete|S:structural coverage mutations are caught|S:pipeline marker/declaration audit	traces	proofs/pipeline/COVERAGE.tsv
+D2	S:morkl.EquivPipelineTest|S:cornerstone resource certificates contain their counted runs; selections replay|S:pipeline claims accepted: no SINGLE-SIDE, BUDGET or chained cell	traces	proofs/pipeline/resources;proofs/pipeline/RESOURCES.tsv;proofs/pipeline/CLAIMS.tsv
 D3	U:morkl.Puzzle15Check	-	proofs/puzzle15
-E1	S:morkl.MutationGates|S:structural coverage mutations are caught (D1)|S:trust closure mutation: an injected open O6a reaches its consumers (C4)	-	-
-E2	S:publication reproduces from the accepted commit (E2)	-	-
-E3	S:acceptance status agrees with the evidence (E3)	-	docs/ACCEPTANCE.md;docs/acceptance.tsv
+E1	S:morkl.MutationGates|S:structural coverage mutations are caught|S:trust closure mutation: an injected open O6a reaches its consumers|S:counted columns are run-order independent|S:reference-checker self-test	-	-
+E2	S:benchmark publication checker self-test|S:publication reproduces from the accepted commit	-	-
+E3	S:acceptance mutations move their rows	-	-

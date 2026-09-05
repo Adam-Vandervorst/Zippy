@@ -5,8 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==================================================================================================
- *  THE INTERPROCEDURAL SUMMARY, OVER VARYING PATH ARGUMENTS, AND ITS PRODUCTION CONSUMER
- *  (plan.md 1D.1).
+ *  THE INTERPROCEDURAL SUMMARY, OVER VARYING PATH ARGUMENTS, AND ITS PRODUCTION CONSUMER.
  *
  *  `SpatialRecursion` solves the abstract result of a routine at an abstract argument tuple to a
  *  CERTIFIED post-fixed point.  Two things were wrong with that before this suite:

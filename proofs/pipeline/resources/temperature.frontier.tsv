@@ -1,4 +1,4 @@
-# RESIDUAL ALTERNATIVES (tasks.md B1) — one row per alternative on the frontier; every column is
+# RESIDUAL ALTERNATIVES — one row per alternative on the frontier; every column is
 # derived from the residual, its trace and its certificate (no timings, no counters, no hashes of closures).
 # budget	32
 # id	provenance	scope	size	routines	driver	certified	laws	intervals

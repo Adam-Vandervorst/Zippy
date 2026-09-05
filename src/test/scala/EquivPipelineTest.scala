@@ -6,7 +6,7 @@ import scala.language.implicitConversions
 
 /** The automated equivalence pipeline, proofed on the cornerstone examples (review item 4).
  *
- *  ==THE MATRIX (plan.md 2A.1 — proofs/pipeline/CLAIMS.tsv is the declaration this suite is measured
+ *  ==THE MATRIX ( — proofs/pipeline/CLAIMS.tsv is the declaration this suite is measured
  *  against)==  Seven cornerstones × three boundaries × two forms, one artifact per cell:
  *
  *    space   the program vs `SC.reduce(program)`, discharged by THE TRACE (`SC.reduceTraced`, 2A.3):
@@ -29,7 +29,7 @@ import scala.language.implicitConversions
  *  what its claim rests on, and `scripts/audit_pipeline_markers.py --accept` holds each cell to its
  *  CLAIMS.tsv row: kind, permitted trusts, artifact present.
  *
- *  ==WHAT THIS REPLACED, AND WHY (plan.md's fourth correction)==
+ *  ==WHAT THIS REPLACED, AND WHY ('s independent-construction requirement)==
  *  Eleven of the twelve REAL `.egg` cells compared one program against `Reflect(tnodeOf(resT))` — the
  *  executor's own output — and the stage-1 instance cells compared two materialised expansions, so a
  *  prover was asked to re-derive, on a 174 MB literal, an equivalence the optimiser had produced by a
@@ -122,11 +122,11 @@ class EquivPipelineTest extends FunSuite:
     realCount += 1
     assert(runEggFileOpt(name, content), s"egglog rejected pipeline/$name at every rounds budget")
 
-  // ---- THE TYPED PROOF TRACE of every cell (tasks.md C3): checked here by replay, written beside the
+  // ---- THE TYPED PROOF TRACE of every cell: checked here by replay, written beside the
   //      cell for the independent structural checker (scripts/check_traces.py) ----
   val traceDir = new java.io.File(smtDir, "traces"); traceDir.mkdirs()
   var traceCount = 0
-  /** every cell's trace DAG, for the structural coverage census (tasks.md D1) */
+  /** every cell's trace DAG, for the structural coverage census  */
   val cellDags = scala.collection.mutable.Map.empty[String, ProofTrace.Dag]
   def traceFile(cell: String, dag: ProofTrace.Dag, rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Unit =
     val bad = ProofTrace.Checker.check(dag, rc)
@@ -467,7 +467,7 @@ class EquivPipelineTest extends FunSuite:
     // REAL and fed the end-to-end wording in README.md.  It is now stamped in the file, given its own
     // kind in proofs/pipeline/DECLARED.tsv, and excluded from any end-to-end equivalence claim.
     val cuts = AgnosticPipeline.residualsOf(smtA) ++ AgnosticPipeline.residualsOf(smtB)
-    // THE CUT IS LIFTED, NOT STAMPED AS BOUNDED (plan.md 2E.1, O10b mechanized).  The two sides cut the
+    // THE CUT IS LIFTED, NOT STAMPED AS BOUNDED (O10b mechanized).  The two sides cut the
     // SAME routine at the same depth with the same arguments (`alignCuts` asserted it in graphCells), so
     // the recursion is identical on both sides and the cut stands for the same free input `X` in both.
     // A claim that holds for EVERY value of that input is then a claim about the recursion itself:
@@ -573,7 +573,7 @@ class EquivPipelineTest extends FunSuite:
     val smtText = Certified.trustsHeader(trusts) + s"\n; BOUNDARY: $stage\n" + boundedNote +
       SmtDiff.obligationsFile(s"pipeline $stage ($name), data-agnostic", smtA, smtB)
     runSmtFile(s"$name-$stage-agnostic.smt2", smtText)
-    // THE TYPED TRACE of this cell (tasks.md C3): an identity (alpha-equivalence + the verified optimiser
+    // THE TYPED TRACE of this cell: an identity (alpha-equivalence + the verified optimiser
     // no-op) or positional steps at the differing positions, each a replayed law chain or the cell's own
     // prover obligation; written for the agnostic cell and its instance twin (the same claim)
     val artifact = s"proofs/pipeline/$name-$stage-agnostic.smt2"
@@ -643,7 +643,7 @@ class EquivPipelineTest extends FunSuite:
     case _ => false
 
   // ==============================================================================================
-  // THE HOLE ABSTRACTION for the zipper boundary (plan.md 2A.4)
+  // THE HOLE ABSTRACTION for the zipper boundary
   // ==============================================================================================
   /** The maximal subterms `transpileZ` MATERIALISES — `traversal(evalI(...))` for control flow, `Range`,
    *  `Call` and grounded nodes, the trie-level meet for `TailsIntersection`, and any `Singleton`/`Wrap`/
@@ -698,7 +698,7 @@ class EquivPipelineTest extends FunSuite:
     writeStatus()
 
   // ==============================================================================================
-  // SPACE — the trace (plan.md 2A.3, 2A.5)
+  // SPACE — the trace
   // ==============================================================================================
   def spaceCells(name: String, prog: Space, reference: SpaceValue)
                 (using PathContext, SpaceContext, PartialFunction[RoutinePtr, Routine]): Unit =
@@ -797,12 +797,12 @@ class EquivPipelineTest extends FunSuite:
         lawCount += 1
         val marker = s"; LAW-JUSTIFIED: the movement observations did not converge within the rounds ladder for\n" +
                      s"; some pair; every step is a certified ∀-law (certificates in the STEP lines below), and\n" +
-                     s"; those certificates carry the cell (plan.md 2A.5: decomposition through the trace, never\n" +
+                     s"; those certificates carry the cell (decomposition through the trace, never\n" +
                      s"; a budget).\n"
         ArtifactSink.write(new java.io.File(pipeDir, s"$name-space-agnostic.egg"), marker + body)
 
   // ==============================================================================================
-  // ZIPPER — the refinement theorem, instantiated (plan.md 2A.4)
+  // ZIPPER — the refinement theorem, instantiated
   // ==============================================================================================
   def zipperCells(name: String, prog: Space, sc: SpaceContext, rc: PartialFunction[RoutinePtr, Routine],
                   reference: SpaceValue)(using PathContext, SpaceContext, PartialFunction[RoutinePtr, Routine]): Unit =
@@ -887,7 +887,7 @@ class EquivPipelineTest extends FunSuite:
     runSmtFile(s"$name-graph.smt2", instance.replace("data-agnostic", "instance (data-agnostic obligation + differential)"))
 
   // ==============================================================================================
-  // STRUCTURAL COVERAGE (tasks.md D1): every constructor, binder, call pattern, recursive transformation,
+  // STRUCTURAL COVERAGE: every constructor, binder, call pattern, recursive transformation,
   // optimiser law, resource rule and backend boundary a cornerstone exercises — each row anchored to a
   // TERM of a trace's term table (by digest) or a NODE of the trace DAG (by id), to the cell artifact's
   // structured header, and to the CLAIMS.tsv cell whose trace closure discharges it.  Nothing here is a
@@ -984,7 +984,7 @@ class EquivPipelineTest extends FunSuite:
       val discharged = SpatialTransfers.status.get(id).exists(_ != "OPEN")
       row("resource", id, "proofs/spatial/REGISTRY.tsv", s"RULE:$id", stf, s"N:${sd.root}", sClaim, if sState == "covered" && discharged then "covered" else "exercised-unproved")
   // ==============================================================================================
-  // RESOURCE AND SELECTION CERTIFICATES PER CORNERSTONE (tasks.md D2): the program priced on every
+  // RESOURCE AND SELECTION CERTIFICATES PER CORNERSTONE: the program priced on every
   // backend over its actual inputs (A4/A5, with the counted run beside every interval and the derivation
   // spelled out), its residual alternatives (B1) and the certified selection under `alloc` (B2).
   // `scripts/check_resources.py` re-checks containment and replays every selection certificate.
@@ -997,9 +997,12 @@ class EquivPipelineTest extends FunSuite:
     val inputs = CostSem.Inputs(values = values)
     val res = Residual(prog, SC.materialize(prog, rc))
     val sb = new StringBuilder
-    sb ++= s"# RESOURCE CERTIFICATE (tasks.md D2) — $name priced by the A4/A5 analysis over its actual inputs, per backend,\n"
+    sb ++= s"# RESOURCE CERTIFICATE — $name priced by the compositional resource analysis over its actual inputs, per backend,\n"
     sb ++= "# with the counted run of the executor beside every interval; the derivation follows (D rows).\n"
-    sb ++= s"# inputs\t${Alternatives.renderInputs(inputs).take(4000)}\n"
+    val renderedInputs = Alternatives.renderInputs(inputs).take(4000)
+    sb ++= "# inputs"
+    if renderedInputs.nonEmpty then sb ++= s"\t$renderedInputs"
+    sb += '\n'
     sb ++= "# B\tbackend\twork\talloc\trounds\ttouch\tcounted-work\tcounted-alloc\tcounted-rounds\tcounted-touch\tcertified\tdependencies\tsummaries(reused,computed)\n"
     var contained = true
     for b <- Backend.values do
@@ -1026,7 +1029,7 @@ class EquivPipelineTest extends FunSuite:
                            cntSel.map(_.toString).getOrElse("-"), if alt.certified then "CERTIFIED" else "UNCERTIFIED",
                            TraceClosure.of(alt.trace +: alt.nodeTraces.values.toVector).render, s"proofs/pipeline/resources/$name-alloc.tsv").mkString("\t")
   def writeResources(): Unit =
-    val hdr = "# RESOURCES (tasks.md D2) — one row per cornerstone: the residual alternatives explored, the alloc-minimising\n" +
+    val hdr = "# RESOURCES — one row per cornerstone: the residual alternatives explored, the alloc-minimising\n" +
               "# certified choice, its predicted and counted alloc, its certification and trace closure, its certificate.\n" +
               "# cornerstone\talternatives\tselected\tpredicted-alloc\tcounted-alloc\tcertified\tclosure\tcertificate\n"
     ArtifactSink.write(new java.io.File(smtDir, "RESOURCES.tsv"), hdr + resourceRows.sorted.mkString("\n") + "\n")
@@ -1034,7 +1037,7 @@ class EquivPipelineTest extends FunSuite:
     val census =
       allConstructors.filterNot(exercisedCtors).map(c => s"*\tconstructor\t$c\tcensus\tcensus\tcensus\tcensus\tcensus\tunsupported") ++
       TraceClosure.lawCertificates.keys.toVector.sorted.filterNot(exercisedLaws).map(l => s"*\tlaw\t$l\tcensus\tcensus\tcensus\tcensus\tcensus\tproved-unexercised")
-    val hdr = "# STRUCTURAL COVERAGE (tasks.md D1) — every feature a cornerstone exercises, anchored to a term or node\n" +
+    val hdr = "# STRUCTURAL COVERAGE — every feature a cornerstone exercises, anchored to a term or node\n" +
               "# of its typed proof trace and to the claim cell whose closure discharges it.  Written by EquivPipelineTest\n" +
               "# from the parsed AST and the trace DAGs; re-derived row by row by `scripts/check_coverage.py`.\n" +
               "# Census rows (`*`) list the constructors no cornerstone exercises and the certified laws no trace fires.\n" +
@@ -1212,7 +1215,7 @@ class EquivPipelineTest extends FunSuite:
   // the control flow, so a stone on the fallback path emits a claim about a ground computation.
   //
   // IT WENT FROM 5 OF 7 TO 7 OF 7, and not by loosening anything: `expandKeepBinders` now INLINES
-  // an acyclic `Call` through `Subst` (plan.md 1D.4, and 2A.2's first clause) instead of refusing
+  // an acyclic `Call` through `Subst`  instead of refusing
   // it.  `puzzle15` and `nqueens` were the two fallbacks and both were a `Call` reading an enclosing
   // `Iteration`'s variable — which needs a simultaneous capture-avoiding substitution, which is why
   // it could not be done before Track A.

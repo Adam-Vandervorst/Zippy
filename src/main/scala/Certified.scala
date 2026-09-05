@@ -1,34 +1,34 @@
 package morkl
 
 /** ==================================================================================================
- *  THE CERTIFIED LANGUAGE BOUNDARY, AND THE ONE FORMAT ITEMS 4 AND 8 BOTH READ.
+ *  THE CERTIFIED LANGUAGE BOUNDARY, AND THE ONE FORMAT TRACE EMITTERS AND TRUST CLOSURE BOTH READ.
  *
  *  ==THE CYCLE THIS BREAKS==
- *  Review item 4 (cornerstone coverage) has to record, per emitted artifact, WHAT ITS CLAIM RESTS ON:
+ *  Cornerstone coverage has to record, per emitted artifact, WHAT ITS CLAIM RESTS ON:
  *  a cell whose two sides were brought together by an admitted law or by a term outside the certified
  *  algebra is not the same kind of evidence as one discharged by a prover on the bare denotation, and
- *  an audit that cannot tell them apart measures nothing.  Review item 8 (the proof closure) has to
+ *  an audit that cannot tell them apart measures nothing.  The proof closure has to
  *  know what each artifact CLAIMS in order to decide whether an unqualified `PROVED` anywhere in the
- *  six status tables is honest.  Each therefore needs the other's output — which is the only real
- *  cycle in plan.md's dependency graph, and the reason 0.8 exists BEFORE either item builds.
+ *  six status tables is honest.  Both therefore depend on this shared format rather than on each
+ *  other's output.
  *
  *  It is broken by fixing the FORMAT first, in one place, with no consumer yet:
  *
- *    1. `; TRUSTS:` — the artifact header line.  Item 4's emitters WRITE it, item 8's readers
+ *    1. `; TRUSTS:` — the artifact header line.  The emitters WRITE it and the trust-closure readers
  *       (`scripts/proof_closure.py`) CONSUME it.  Spec: [[trustsHeader]] and `docs/TRUSTED.md`.
  *    2. [[Certified.boundary]] — the decision "is this term inside the certified language?", which is
  *       what an emitter has to ask in order to write an honest `; TRUSTS:` line at all.
  *    3. `proofs/pipeline/CLAIMS.tsv`'s `trusts` column — the DECLARATION, written before anything is
- *       built (2A.1), so the audit measures the emitted artifacts against a claim rather than against
+ *       built, so the audit measures the emitted artifacts against a claim rather than against
  *       whatever came out.
  *
- *  ==WHAT IS AND IS NOT HERE (0.8 is a stub, and says so)==
+ *  ==WHAT IS AND IS NOT HERE==
  *  The FORMAT and the BOUNDARY PREDICATE are here and are checked (`CertifiedFormatCheck`).  The
- *  ENFORCEMENT is 2E.5's: "a term outside the certified language cannot enter a fully proved claim",
+ *  ENFORCEMENT is 's: "a term outside the certified language cannot enter a fully proved claim",
  *  enforced in the API and by `proof_closure.py` and the marker audit.  Nothing in the tree calls
  *  [[boundary]] yet, and that is deliberate — a mechanism with no consumer reported as progress is
- *  exactly the failure plan.md's opening paragraph names.  What 0.8 delivers is that when 2A.2's
- *  emitters and 2E.4's readers arrive, they agree, because they were written against this file.
+ *  exactly the failure  opening paragraph names.  The shared format ensures that emitters
+ *  and readers agree because they are written against this file.
  *
  *  ==THE DUAL OF `% MECHANIZED-IN:`==
  *  `% MECHANIZED-IN:` (see `scripts/check_lean.sh`) DISCHARGES a trusted entry: it says "the
@@ -230,7 +230,7 @@ object Certified:
    *  Declared here, in code, rather than only in the file's own header comment, so the emitter (2A.1
    *  writes the rows; 2A.6 adds the coverage columns) and the readers (`audit_pipeline_markers.py`,
    *  `proof_closure.py`) cannot disagree about the column order.  The file is a DECLARATION written
-   *  BEFORE the artifacts exist — plan.md 2A.1: "one row per cornerstone x boundary, declared before
+   *  BEFORE the artifacts exist — "one row per cornerstone x boundary, declared before
    *  anything is built, so the audit measures against a claim rather than against whatever was
    *  emitted."
    *  ------------------------------------------------------------------------------------------------ */

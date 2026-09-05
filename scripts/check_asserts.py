@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ASSERT-LEVEL CLOSURE FOR THE SMT TIERS (plan.md 2E.4).
+"""ASSERT-LEVEL CLOSURE FOR THE SMT TIERS.
 
 WHY THIS EXISTS.  `scripts/proof_closure.py` computes what each reported `PROVED` rests on by following
 `include(...)` edges -- which SMT-LIB does not have.  An SMT obligation carries its axioms INLINE as

@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-DRIVING TRACES INSTANTIATE THE FOLD THEOREM (tasks.md C2).
+DRIVING TRACES INSTANTIATE THE FOLD THEOREM.
 
 `Supercompile.lean` proves the fold theorem PARAMETRICALLY: under `FoldPremises` (the original
 meaning is a fixpoint of the residual system, one unfold per node, approximants from ⊥) the residual

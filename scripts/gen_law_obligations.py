@@ -374,7 +374,7 @@ law("law_guard_hoist", "hoisting an invariant wrap / composition factor / body-u
          eq(ITERC(A, UNION(B, C)), UNION(ITERC(A, B), ITERC(A, C))),
          eq(ITERC(A, COMP(C, B)), COMP(C, ITERC(A, B)))),
     decls=SETS + CONSTS)
-# ---- the positional boundary: `range-singleton` (plan.md 1D.3) ------------------------------------
+# ---- the positional boundary: `range-singleton`  ------------------------------------
 #
 # `Lower.Range_Singleton` rewrites `Range(Singleton(p), start, end)` to `Singleton(p)` or `Empty` by
 # computing `RangeBounds.normalize(1, start, end)` and testing `lo < hi`.  The law was registered
@@ -560,7 +560,7 @@ REG = [
     ("iter-tails", "FILE", "laws/law_tailsu_set.smt2,keyfolds.smt2", "iteration realizing tails-union"),
     ("tailsunion-singleton", "FILE", "laws/law_tailsu_set.smt2", "tails of singleton sources"),
     ("range-singleton", "FILE", "laws/law_range_singleton.smt2",
-     "the positional boundary at size 1, certified (plan.md 1D.3); was GROUND/executor-evaluated"),
+     "the positional boundary at size 1, certified; was GROUND/executor-evaluated"),
     ("unwrap-wrap", "FILE", "laws/law_unwrap_set.smt2", "unwrap of a wrap (all comparability cases)"),
     # formal.egg set-algebra family
     ("union-idem", "FILE", "laws/law_union_idem.smt2", "formal.egg"),
@@ -576,7 +576,7 @@ REG = [
     ("inter-distrib", "FILE", "laws/law_inter_distrib.smt2", "formal.egg"),
     ("sub-distrib", "FILE", "laws/law_sub_distrib.smt2", "formal.egg"),
     ("demorgan-sub", "FILE", "laws/law_demorgan_sub.smt2", "formal.egg + the De Morgan family"),
-    # THE ZIPPER BACKEND'S REFINEMENT LAW (plan.md 2A.4): not an optimiser rewrite but the ∀-certificate the
+    # THE ZIPPER BACKEND'S REFINEMENT LAW: not an optimiser rewrite but the ∀-certificate the
     # stage-2 pipeline cells cite -- transpileZ observes the set semantics for every term of the local algebra.
     # The .smt2 is the first-order shadow over the key-free fragment; proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement
     # is the full theorem (every constructor, boundaries named), and the .smt2 carries the MECHANIZED-IN marker to it.

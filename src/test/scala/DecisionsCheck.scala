@@ -6,7 +6,7 @@ import scala.language.implicitConversions
 import morkl.Space.*
 import morkl.EffortComponent.*
 
-/** tasks.md B3 — DECISIONS EXISTING OPTIMIZERS CANNOT MAKE SAFELY.
+/** DECISIONS EXISTING OPTIMIZERS CANNOT MAKE SAFELY.
  *
  *  Acceptance: every selected alternative is semantically certified (closed trace, certified derivation);
  *  its counted resources lie in the predicted intervals; at least one case per transformation family is

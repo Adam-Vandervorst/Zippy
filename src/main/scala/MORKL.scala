@@ -1843,7 +1843,7 @@ object Lower:
     case Space.TailsUnion(src) => SizeBounds(0, 0, sizeBounds(src, env, rc, stack).hi)
     case Space.TailsIntersection(src) => SizeBounds(0, 0, sizeBounds(src, env, rc, stack).hi)
     case Space.Range(x, a, b) =>
-      // ==ONE `normalize`, AND THIS WAS THE THIRD COPY OF THE ARITHMETIC (plan.md 1D.3)==
+      // ==ONE `normalize`, AND THIS WAS THE THIRD COPY OF THE ARITHMETIC ==
       //
       // It used to reason about the window itself: a prefix/suffix special case (`a == 0 && b > 0`,
       // `b == 0 && a < 0`) with everything else falling to a same-sign `b - a` and `INF` on the mixed

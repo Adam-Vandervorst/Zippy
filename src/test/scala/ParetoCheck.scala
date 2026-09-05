@@ -7,7 +7,7 @@ import morkl.Space.*
 import morkl.EffortComponent.*
 import scala.jdk.CollectionConverters.*
 
-/** tasks.md B2 — SELECTION FROM A CERTIFIED PARETO FRONTIER.
+/** SELECTION FROM A CERTIFIED PARETO FRONTIER.
  *
  *  Acceptance: selection is deterministic; every removal is replayable by an independent checker
  *  (`scripts/check_selection.py`, run from here on the certificates this suite writes); changing the

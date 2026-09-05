@@ -1,4 +1,4 @@
-# PUZZLE15 CERTIFICATE (tasks.md D3) — one expansion priced under four declarations on four backends; re-derived by scripts/check_puzzle15.py
+# PUZZLE15 CERTIFICATE — one expansion priced under four declarations on four backends; re-derived by scripts/check_puzzle15.py
 # C	declaration	backend	frontier	work.lo	work.hi	alloc.lo	alloc.hi	rounds.lo	rounds.hi	touch.lo	touch.hi	counted-work	counted-alloc	counted-rounds	counted-touch	size.lo	size.hi	certified
 C	value:1	reference	1	74195	75923	33434	33434	3191	3191	0	0	75059	33434	3191	0	2	2	CERTIFIED
 C	value:1	trie	1	27444	5331756	30208	1748053	3191	3191	24084	1138504	49160	42457	3191	32512	2	2	CERTIFIED

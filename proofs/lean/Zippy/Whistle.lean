@@ -1,15 +1,15 @@
 /-
 ==================================================================================================
-THE WHISTLE IS A WELL-QUASI-ORDER (plan.md 2E.3) — KRUSKAL'S TREE THEOREM FROM HIGMAN'S LEMMA.
+THE WHISTLE IS A WELL-QUASI-ORDER  — KRUSKAL'S TREE THEOREM FROM HIGMAN'S LEMMA.
 
 `docs/TRUSTED.md` T3 / `terminating/REGISTRY.tsv` O12d: "the homeomorphic embedding on the
 configuration signature is a well-quasi-order, hence driving terminates."  ADMITTED, because the
 standard proof is Kruskal's tree theorem and there was no checked library boundary to import it
-from.  plan.md named the toolchain risk — "Kruskal in Mathlib: verify before 2E.3; the fallback is
-proving it from Higman" — and `scripts/check_lean.sh --probe-kruskal` answered it on 2026-09-04:
+from. The toolchain probe — "Kruskal in Mathlib; otherwise prove it from
+Higman" — was answered by `scripts/check_lean.sh --probe-kruskal` on 2026-09-04:
 Mathlib has HIGMAN'S LEMMA (`Set.PartiallyWellOrderedOn.partiallyWellOrderedOn_sublistForall₂`) and
 the minimal-bad-sequence machinery it is proved with, and does NOT have Kruskal (its `Kruskal` files
-are Kruskal–Katona, a shadow theorem).  So this file takes the fallback.
+are Kruskal–Katona, a shadow theorem). This file therefore supplies the proof from Higman's lemma.
 
 ==THE THEOREM==
 `Emb r` is homeomorphic embedding on finitely branching trees over a label type `L` with a relation

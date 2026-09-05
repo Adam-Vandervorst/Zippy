@@ -199,7 +199,7 @@ object SpatialRecursion:
                 limits: Limits = Limits()): Summaries =
     new Solver(routines, limits).solve(entry)
 
-  /** ==THE PRODUCTION CONSUMER (plan.md 1D.1)==
+  /** ==THE PRODUCTION CONSUMER ==
    *
    *  `SpatialTypeSystem`'s and `SpatialTypes`' `Call` arms analyse a callee INTERPROCEDURALLY —
    *  bind the parameters to the argument types and run the transfers on the body — and that stops at

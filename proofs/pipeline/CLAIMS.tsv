@@ -7,7 +7,7 @@
 # regression guard: it catches a cell whose kind changed.  It cannot catch a cell that was never
 # meant to be `TRIVIAL` in the first place, because it learns the expectation from the emission.
 #
-# plan.md's fourth correction is the reason that matters: "Item 4's honest baseline is ~8 REAL cells,
+# 's independent-construction requirement is the reason that matters: the honest baseline was ~8 REAL cells,
 # not 19.  Eleven of the twelve REAL `.egg` cells compare one program against
 # `Reflect(tnodeOf(resT))` -- the executor's own output."  A table derived from what was emitted
 # cannot report that, because the emission is exactly what is in question.  So THIS table is the

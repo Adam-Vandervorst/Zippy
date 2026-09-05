@@ -14,8 +14,8 @@ import scala.collection.immutable.SortedMap
  *
  *  IT WAS FOUR, THEN FIVE, THEN SIX, AND IT IS FIVE AGAIN.  (a)-(d) are the original shape/count
  *  channels.  (e) is the CERTIFICATE, and it is now ONE channel rather than two: a [[Cert]] prefix
- *  trie replaces the flat `otherKeys` name set and the interned `headAtoms` form of the same claim
- *  (plan.md 1C.2).  The trie subsumes both — a name set is a trie whose keys carry ⊤, and one
+ *  trie replaces the flat `otherKeys` name set and the interned `headAtoms` form of the same claim.
+ *  The trie subsumes both — a name set is a trie whose keys carry ⊤, and one
  *  interned reference holds a set of any size, which was channel (f)'s whole job — and it says the
  *  one thing neither could: what is BELOW a level the width spill or the depth cut collapsed.
  *  Every "four-channel" and "six-channel" description in this tree was stale and is corrected where
@@ -155,8 +155,7 @@ final case class Shape(eps: Presence,
                        heads: SortedMap[PathItem, Shape],
                        others: Ivl,
                        otherTail: Option[Shape],
-                       /** (e)+(f) THE CERTIFICATE — ONE CHANNEL, AND IT IS A PREFIX TRIE
-                        *  (plan.md 1C.1/1C.2).
+                       /** (e)+(f) THE CERTIFICATE — ONE CHANNEL, AND IT IS A PREFIX TRIE.
                         *
                         *  `L(this) ⊆ L(cert)`: every path this shape admits is admitted by the
                         *  certificate.  [[Cert.top]] is "no claim" and is the default, so a
@@ -263,12 +262,12 @@ final case class Shape(eps: Presence,
   /** an upper bound on how many heads the certificate allows.  `Ivl.INF` when ⊤. */
   def certSize: Long = cert.headBound
 
-  /** WHICH BUDGET RULES WEAKENED THIS SHAPE'S CERTIFICATE (plan.md 1C.5).  Empty means the claim is
+  /** WHICH BUDGET RULES WEAKENED THIS SHAPE'S CERTIFICATE.  Empty means the claim is
    *  exactly what the transfers derived; a non-empty set names the rule that gave something up, and
    *  `SpatialCost` reports it in the priced result's assumptions. */
   def certDegradations: Set[Cert.Degradation] = cert.degradationsBelow
 
-  /** THE UNTRACKED BUCKET'S TAIL BOUND, certificate included (plan.md 1C.4).
+  /** THE UNTRACKED BUCKET'S TAIL BOUND, certificate included.
    *
    *  `weaken(otherTail)` is channel (d)'s per-head summary and was the only answer here.  The
    *  certificate's own tails-union over the untracked heads is a second, independent bound on the
@@ -283,8 +282,8 @@ final case class Shape(eps: Presence,
       if fromCert.isTop then base else if base.isTop then fromCert
       else Shape.inter(base, fromCert)
 
-  /** THE CERTIFICATE FOR THE TAILS UNDER `h`, AS A SHAPE — the sub-structure a collapsed level keeps
-   *  (plan.md 1C.3).  `Shape.top` when the certificate says nothing, so meeting it is always sound
+  /** THE CERTIFICATE FOR THE TAILS UNDER `h`, AS A SHAPE — the sub-structure a collapsed level keeps.
+   *  `Shape.top` when the certificate says nothing, so meeting it is always sound
    *  and is a no-op where there is no claim. */
   def certUnder(h: PathItem): Shape = Shape.ofCert(cert.under(h))
 
@@ -306,7 +305,7 @@ final case class Shape(eps: Presence,
         Ivl.add(heads.count((_, t) => t.possiblyNonEmpty).toLong, others.hi))
 
   /** ==============================================================================================
-   *  THE RANK ABSTRACTION (plan.md 1D.2): the LEAST and GREATEST path this shape's language can
+   *  THE RANK ABSTRACTION: the LEAST and GREATEST path this shape's language can
    *  contain, when the shape determines them.
    *
    *  ==WHY THIS TIER AND NOT THE LENGTH TIER==
@@ -386,7 +385,7 @@ final case class Shape(eps: Presence,
           case None => Ivl.INF
       Ivl(lo, if hi < lo then lo else hi)
 
-  /** THE LARGEST TAIL-SET UNDER ANY DEPTH-`j` PREFIX (plan.md 1B.5).
+  /** THE LARGEST TAIL-SET UNDER ANY DEPTH-`j` PREFIX.
    *
    *  `Unwrap(x, p)` with `|p| = j` KNOWN selects the tail-set under ONE depth-`j` prefix, so its
    *  cardinality is bounded by the largest of them — NOT by their sum, which is what
@@ -477,7 +476,7 @@ final case class Shape(eps: Presence,
    *  summary, WEAKENED: channel (d) is a may-only summary of a set we cannot name, so reading a must
    *  claim out of it would be exactly the ⊤-meets-must leak this domain kept hitting.
    *
-   *  ==AND THE CERTIFICATE IS CONSULTED HERE (plan.md 1C.3), WHICH IS THE WHOLE POINT OF THE TIER==
+   *  ==AND THE CERTIFICATE IS CONSULTED HERE, WHICH IS THE WHOLE POINT OF THE TIER==
    *  `cert.under(h)` is the sub-trie the width spill or the level collapse kept, and meeting it with
    *  the summary is how a spilled head's own structure re-enters the domain.  Two things it fixes:
    *
@@ -540,7 +539,7 @@ object Shape:
    *  the domain, not to a call.  A per-call cap would need `Shape` to carry its own budget. */
   val MaxDepth: Int = SpatialConfig.default.shapeDepth
   val MaxHeads: Int = SpatialConfig.default.shapeWidth
-  /** THE CERTIFICATE'S BUDGETS (plan.md 1C.5), read from the ONE analysis configuration.
+  /** THE CERTIFICATE'S BUDGETS, read from the ONE analysis configuration.
    *
    *  `certKeys` bounds how many NAMES one certificate level carries and `certDepth` how many levels
    *  it carries at all.  Both are WORK bounds and not precision cliffs, which is the difference from
@@ -558,7 +557,7 @@ object Shape:
   /** exactly the empty path */
   val epsOnly: Shape = Shape(Presence.Must, SortedMap.empty, Ivl.zero, None, Cert.epsOnly)
 
-  /** A SHAPE WHOSE ONLY CLAIM IS A CERTIFICATE (plan.md 1C.3).
+  /** A SHAPE WHOSE ONLY CLAIM IS A CERTIFICATE.
    *
    *  This is how the sub-structure a collapsed level keeps re-enters the shape domain: `certUnder`
    *  hands back `ofCert(cert.under(h))` and the caller MEETS it with whatever the count/summary
@@ -727,7 +726,7 @@ object Shape:
       // THE COLLAPSED LEVEL'S certificate survives, and now survives at ANY WIDTH: `capKeys2` puts
       // the overflow in channel (f) instead of degrading to ⊤ at `MaxSpillKeys`.
       //
-      // THE DEPTH HALF IS NO LONGER OPEN (plan.md 1C.3/1C.4).  The levels below the collapse still
+      // THE DEPTH HALF IS NO LONGER OPEN.  The levels below the collapse still
       // get `otherTail = None` = ⊤ on the SUMMARY channel — that channel is a per-head tail bound and
       // has nothing to say about a level it does not have — but the CERTIFICATE keeps the whole
       // sub-trie, and the two consumers that used to lose the pair now read it:
@@ -750,7 +749,7 @@ object Shape:
     else Shape(s.eps, SortedMap.from(s.heads.view.mapValues(capDepth(_, d - 1))), s.others,
                s.otherTail.map(capDepth(_, d - 1)), s.cert)
 
-  /** THE SPILL CERTIFICATE (plan.md 1C.3): the shapes leaving the tracked set, kept as one trie.
+  /** THE SPILL CERTIFICATE: the shapes leaving the tracked set, kept as one trie.
    *
    *  `SpatialAnalysis.capWidth` and [[mk]]'s width spill both drop tracked heads into the untracked
    *  bucket, and both used to keep only the NAMES.  Keeping the sub-tries is the difference the tier
@@ -837,7 +836,7 @@ object Shape:
       val tail = spill.foldLeft(base)((a, kv) => unionTransfer(a, weaken(kv._2)))
       val cnt = Ivl(Ivl.add(others.lo, spill.count((_, t) => t.definitelyNonEmpty).toLong),
                     Ivl.add(others.hi, spill.size.toLong))
-      // THE WIDTH SPILL, AND WHAT IT NO LONGER LOSES (plan.md 1C.3).  The count and the per-head
+      // THE WIDTH SPILL, AND WHAT IT NO LONGER LOSES.  The count and the per-head
       // tail summary survive as before.  What channel (e) recovered was the spilled head NAMES; what
       // the certificate recovers now is their WHOLE SUB-SHAPES, so a query about a spilled head can
       // still be answered — `Shape.certUnder` hands the sub-trie back as a shape and the caller meets
@@ -901,7 +900,7 @@ object Shape:
 
   /** does `a` permit a path `b`'s certificate forbids?  `true` REFUTES `a ⊑ b`.
    *
-   *  ==THIS IS ONE TRIE COMPARISON AND IT HAS TO BE (plan.md 1C.2)==
+   *  ==THIS IS ONE TRIE COMPARISON AND IT HAS TO BE ==
    *  γ enforces `L(v) ⊆ L(b.cert)` for every `v ∈ γ(b)`, so the order has to enforce the same
    *  containment or it accepts pairs γ rejects.  The flat channels let this be a HEAD-NAME test,
    *  because a flat certificate only ever claimed about heads.  A trie claims about the language, and
@@ -1159,7 +1158,7 @@ object Shape:
       if depth <= 0 then
         // the value is KNOWN, so the collapsed level's head names are exact
         // THE VALUE IS KNOWN, so the collapsed level's certificate is EXACT — and now it is exact
-        // BELOW the level too (plan.md 1C.3): each group's own sub-value becomes that key's sub-trie
+        // BELOW the level too: each group's own sub-value becomes that key's sub-trie
         // instead of ⊤, so `Unwrap(literal, k)` past `MaxDepth` still knows what is under `k`.
         Shape(e, SortedMap.empty, Ivl(groups.size.toLong, groups.size.toLong), None,
               Cert.widen(certOfValue(v), CertDepth, CertKeys))
@@ -1243,7 +1242,7 @@ object Shape:
     if a.definitelyEmpty then empty
     else if b.definitelyEmpty then capDepth(a, d)
     else if d <= 0 then
-      // THE THIRD ⊤-DEGRADING SITE (plan.md 1C.3): `sub` out of budget used to keep only the left
+      // THE THIRD ⊤-DEGRADING SITE: `sub` out of budget used to keep only the left
       // operand's head NAMES.  `A ∖ B ⊆ A`, so the left operand's whole language bound is sound here
       // and the sub-structure survives the cut.
       Shape(a.eps.minus(b.eps), SortedMap.empty, Ivl(0, a.headCount.hi), None,
@@ -1308,7 +1307,7 @@ object Shape:
     if s.definitelyEmpty || k.isEmpty then empty
     else if k.hi == LenBounds.INF || k.hi > MaxDepth + 2 then weaken(top)
     else
-      // ONE PREFIX AT EACH DEPTH, AND ONE DEPTH AMONG `k` (plan.md 1B.5).  Both aggregations are
+      // ONE PREFIX AT EACH DEPTH, AND ONE DEPTH AMONG `k`.  Both aggregations are
       // ALTERNATIVES and neither is a union: `Unwrap(x, p)` selects the tail-set under the single
       // depth-`|p|` prefix `p`, and when `|p|` is only bracketed by `k` the depth is unknown but
       // still one of them.  So the descent is `tailsAlternative` (the lub over per-head tail-sets)
@@ -1343,7 +1342,7 @@ object Shape:
     if parts.isEmpty then empty else parts.reduce((x, y) => unionTransfer(x, y))
 
   /** THE UNTRACKED BUCKET'S CONTRIBUTION TO [[tailsUnion]], WITH THE COUNTS OPENED ONLY WHEN THERE
-   *  IS SOMETHING TO AGGREGATE OVER (plan.md 1B.5).
+   *  IS SOMETHING TO AGGREGATE OVER.
    *
    *  `otherTail` is a PER-HEAD summary: every untracked head's tail-set is admitted by it.  Turning
    *  that into a bound on the UNION of those tail-sets needs the counts opened, because "at most `k`
@@ -1372,7 +1371,7 @@ object Shape:
     else weaken(t)
 
   /** THE TAIL-SET OF *ONE* HEAD, WHICHEVER IT IS — the ALTERNATIVE over the per-head tail-sets, not
-   *  their union (plan.md 1B.5).
+   *  their union.
    *
    *  ==THE DISTINCTION, AND WHY IT IS THE WHOLE OF `Unwrap`'s PRICE==
    *  [[tailsUnion]] abstracts `⋃_h tails(h)`: `unionTransfer` is the transfer for a set union, so it
@@ -1486,7 +1485,7 @@ object Shape:
       else mk(s.eps, s.heads, Ivl(0, width), s.otherTail, s.langLevel)
 
   /** ==============================================================================================
-   *  THE RANKED `Range` TRANSFER (plan.md 1D.2).
+   *  THE RANKED `Range` TRANSFER.
    *
    *  [[range]] above knows only the WIDTH of the window: it keeps every head and caps the count, so
    *  `Range(x, 0, 1)` over a four-head literal reports "one path, any of four heads".  That is

@@ -7,7 +7,7 @@ import scala.language.implicitConversions
 /** ==============================================================================================
  *  A2 — THE STRATIFIED DELTA-FIXPOINT IR, AGAINST ITS ACCEPTANCE SENTENCE.
  *
- *  tasks.md A2: "positive mutual recursion and negative dependencies on lower strata are accepted;
+ *  "positive mutual recursion and negative dependencies on lower strata are accepted;
  *  cycles containing a negative or unknown edge are rejected; naive and delta execution produce the
  *  same accumulator at every round boundary and the same stationary result; recursive `Call` SCCs
  *  and explicit `Fixpoint` lower to the same IR when extensionally equivalent; every accepted IR

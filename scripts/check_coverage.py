@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""STRUCTURAL COVERAGE (tasks.md D1): every claimed feature occurs inside a checked end-to-end chain.
+"""STRUCTURAL COVERAGE: every claimed feature occurs inside a checked end-to-end chain.
 
 `proofs/pipeline/COVERAGE.tsv` is written by `EquivPipelineTest` from the PARSED source AST and the typed
-proof-trace DAGs (tasks.md C3), one row per (cornerstone, kind, feature):
+proof-trace DAGs, one row per (cornerstone, kind, feature):
 
     cornerstone  kind  feature  artifact  artifact-node  trace  trace-node  claim  state
 

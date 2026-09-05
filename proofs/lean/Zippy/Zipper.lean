@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-THE UNIVERSAL ZIPPER REFINEMENT THEOREM (plan.md 2A.4).
+THE UNIVERSAL ZIPPER REFINEMENT THEOREM.
 
 `transpileZ` (Zipper.scala) lifts a `Space` into a tree of `SpaceZipper` cursors — one virtual node per
 local set operator — whose meaning is given OPERATIONALLY: a node answers `terminal` (is the focus path

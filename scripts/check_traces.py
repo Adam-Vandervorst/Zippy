@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""THE INDEPENDENT STRUCTURAL CHECK OF THE TYPED PROOF TRACES (tasks.md C3).
+"""THE INDEPENDENT STRUCTURAL CHECK OF THE TYPED PROOF TRACES.
 
 `morkl.ProofTrace.Checker` REPLAYS a trace in Scala (re-applies each law, re-runs each substitution,
 re-checks each instance).  This script is the second, independent reader of the same artifacts: it

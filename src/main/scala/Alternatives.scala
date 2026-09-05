@@ -3,15 +3,15 @@ package morkl
 import scala.collection.mutable
 
 /** ==============================================================================================
- *  RESIDUAL ALTERNATIVES (tasks.md B1).
+ *  RESIDUAL ALTERNATIVES.
  *
  *  The supercompiler used to COMMIT: one law table, fold-first, one residual.  Whether the fused
  *  loop or the two loops, the hoisted invariant or the per-head recomputation, the pushed restriction
  *  or the restriction of the union is the cheaper program depends on the inputs and on the backend —
  *  and none of those decisions is made where the costs are known.  This module makes the choices
  *  EXPLICIT: an [[Alternative]] is a residual program together with everything a later decision needs
- *  — its semantic proof trace (C3), the spatial input assumptions it was priced under, its resource
- *  certificate per backend (A4/A5) and its provenance (which choice produced it) — and a [[Frontier]]
+ *  — its semantic proof trace, the spatial input assumptions it was priced under, its resource
+ *  certificate per backend and its provenance (which choice produced it) — and a [[Frontier]]
  *  is the set of alternatives that survived hash-consing, subsumption and the widening budget, with
  *  EVERY pruned alternative and the reason recorded.
  *
@@ -58,7 +58,7 @@ import scala.collection.mutable
  *  ============================================================================================== */
 object Alternatives:
 
-  /** the choice families tasks.md B1 names */
+  /** the choice families  names */
   enum Choice:
     case Unfold, Fold, Fusion, Sharing, PrefixRestriction, RangeReduction, Materialization, BackendTranslation
     def slug: String = toString
@@ -86,9 +86,9 @@ object Alternatives:
       residual: Residual,
       /** the parameters of the configuration (what the residual is a function of) */
       refs: Vector[PathRef], mentions: Vector[SpaceMention],
-      /** C3: configuration → residual top */
+      /** configuration → residual top */
       trace: ProofTrace.Dag,
-      /** C3: one unfold of each residual node's configuration → its body */
+      /** one unfold of each residual node's configuration → its body */
       nodeTraces: Map[RoutinePtr, ProofTrace.Dag],
       /** the residual nodes (configuration and parameters), what the fold steps are checked against */
       nodes: ProofTrace.NodeTable,
@@ -96,7 +96,7 @@ object Alternatives:
       scope: FactScope,
       /** the spatial input assumptions the certificate was computed under */
       assumptions: CostSem.Inputs,
-      /** A4/A5: the resource certificate per backend */
+      /** the resource certificate per backend */
       certificate: Map[Backend, CostReport],
       provenance: Vector[Provenance],
       /** the supercompiler's own account of the run */
@@ -134,7 +134,7 @@ object Alternatives:
     /** deterministic TSV: the alternatives, the pruned ones, the refused variants */
     def render: String =
       val sb = new StringBuilder
-      sb ++= "# RESIDUAL ALTERNATIVES (tasks.md B1) — one row per alternative on the frontier; every column is\n"
+      sb ++= "# RESIDUAL ALTERNATIVES — one row per alternative on the frontier; every column is\n"
       sb ++= "# derived from the residual, its trace and its certificate (no timings, no counters, no hashes of closures).\n"
       sb ++= s"# budget\t$budget\n"
       sb ++= "# id\tprovenance\tscope\tsize\troutines\tdriver\tcertified\tlaws\tintervals\n"

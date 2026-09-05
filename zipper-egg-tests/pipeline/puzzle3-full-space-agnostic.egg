@@ -1,6 +1,6 @@
 ; LAW-JUSTIFIED: the movement observations did not converge within the rounds ladder for
 ; some pair; every step is a certified ∀-law (certificates in the STEP lines below), and
-; those certificates carry the cell (plan.md 2A.5: decomposition through the trace, never
+; those certificates carry the cell (decomposition through the trace, never
 ; a budget).
 ; TRUSTS: law:constant-ops
 

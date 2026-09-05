@@ -3,7 +3,7 @@ package morkl
 import munit.FunSuite
 import morkl.Space.*
 
-/** tasks.md E1 — THE GATES DISCRIMINATE: for each property the analysis claims, one mutation that removes it
+/** THE GATES DISCRIMINATE: for each property the analysis claims, one mutation that removes it
  *  and one assertion that fails under the mutation and passes without it.
  *
  *   dropped alias facts        → the same-object union must allocate nothing on the trie (exact `same` case)

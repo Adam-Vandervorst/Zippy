@@ -1,4 +1,4 @@
-# STRUCTURAL COVERAGE (tasks.md D1) — every feature a cornerstone exercises, anchored to a term or node
+# STRUCTURAL COVERAGE — every feature a cornerstone exercises, anchored to a term or node
 # of its typed proof trace and to the claim cell whose closure discharges it.  Written by EquivPipelineTest
 # from the parsed AST and the trace DAGs; re-derived row by row by `scripts/check_coverage.py`.
 # Census rows (`*`) list the constructors no cornerstone exercises and the certified laws no trace fires.

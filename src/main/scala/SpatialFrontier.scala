@@ -247,8 +247,8 @@ final case class FrontierConfig(facts: SpatialFacts.Config = SpatialConfig.defau
                                 maxFrames: Int = 512,
                                 /** depths the walk descends (the profile reaches further on its own) */
                                 maxWalkDepth: Int = 64,
-                                /** RETAINED FOR THE CONFIG'S SHAPE ONLY, and read by nothing in the walk
-                                 *  (plan.md 1C.4).  It used to cap how many heads the walk would
+                                /** RETAINED FOR THE CONFIG'S SHAPE ONLY, and read by nothing in the walk.
+                                 *  It used to cap how many heads the walk would
                                  *  ENUMERATE, and that cap was a precision cliff dressed as a work
                                  *  bound: below it a key-disjoint family's `|Q|` was 0 and above it
                                  *  `min(K_d, K_d) = n`, for the same program.  `Cert.headsDisjoint`
@@ -424,7 +424,7 @@ object SpatialFrontier:
           // measures the crossover and LIM-5 records what carrying one costs.
           if !f.x.headsClosed && !f.y.headsClosed then
             val tracked = f.x.heads.keySet ++ f.y.heads.keySet
-            // THE `maxKeys` CLIFF IS GONE (plan.md 1C.4).  It expired the relational answer at a fixed
+            // THE `maxKeys` CLIFF IS GONE.  It expired the relational answer at a fixed
             // key count, which is the same defect as the certificate's own old `MaxSpillKeys`: a
             // key-disjoint family's `|Q|` was 0 below the cap and `min(K_d, K_d) = n` above it, for the
             // same program.  Two things replace it, and neither has a size at which it stops working:
@@ -611,7 +611,7 @@ object SpatialFrontier:
     if exact.isDefined then notes += "both operands pinned to exact values: the case is computed, not bounded"
     if hd then notes += "head-disjoint at the root: " + op.wholeSubtree
     if shared then notes += "shared representation: the pointer-identity short circuit fires"
-    // WHAT THE CERTIFICATE TIER COSTS ON THIS PAIR (plan.md 1C.7).  The tier's benefit is priced
+    // WHAT THE CERTIFICATE TIER COSTS ON THIS PAIR.  The tier's benefit is priced
     // everywhere else in this file — `rebuilt`, `|Q|`, the disjoint reject — so its own construction,
     // lookup, intersection and retained memory are quoted here rather than left as an assumption.
     for n <- Cert.costNote(l.shape.cert, r.shape.cert) do notes += n

@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-THE RESOURCE DOMAIN'S ARITHMETIC, ORDER, RANGE NORMALISATION AND WIDENING (tasks.md A6).
+THE RESOURCE DOMAIN'S ARITHMETIC, ORDER, RANGE NORMALISATION AND WIDENING.
 
 The A4 analysis (`SpatialCostSemantics.scala`) reports every event count as an INTERVAL `Ivl(lo, hi)`
 with `hi` possibly infinite (`Ivl.INF`), combines intervals by `add`, `mul` (repetition), `hull`

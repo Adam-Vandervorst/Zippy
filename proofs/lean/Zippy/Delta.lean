@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-VARIANCE AND THE DELTA STEP (tasks.md A2).
+VARIANCE AND THE DELTA STEP.
 
 Two of the five A2 mechanizations live here; `Strata.lean` has the other three.
 

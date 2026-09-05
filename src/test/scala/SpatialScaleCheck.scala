@@ -47,7 +47,7 @@ import scala.language.implicitConversions
  *  `n` vs `n^2` is 1.0), so 0.35 separates constant-or-depth from linear — which is the distinction the
  *  whole optimal-backend argument rests on — while tolerating the log factors that are genuinely there.
  *
- *  ==AND WHEN A CHANNEL CANNOT MEET ITS TIER (tasks.md, milestone M1)==
+ *  ==AND WHEN A CHANNEL CANNOT MEET ITS TIER ==
  *  The gate is SOUNDNESS: every counted rung inside its predicted interval, every endpoint finite and
  *  below [[ProductRequirement.Astronomical]].  A channel that is sound but wider than its tier is printed
  *  `NOT USEFUL` for that tier — "wide intervals are allowed at this milestone but are reported as not
@@ -625,7 +625,7 @@ class SpatialScaleCheck extends FunSuite, CalibrationProbe:
   }
 
   test("SCALE LADDERS: counted executions inside the predicted intervals on the OPTIMIZED form; slopes and widths reported") {
-    // THE GATE AT M1 (tasks.md): soundness — every counted rung inside its interval — finiteness and the
+    // THE GATE AT M1: soundness — every counted rung inside its interval — finiteness and the
     // absolute ceiling are hard; the width/error/slope statistics are measured against the tiers and
     // REPORTED per channel ("wide intervals are allowed at this milestone but are reported as not
     // useful").  No ledger of excused rows exists: a row either meets its tier or is printed NOT USEFUL.

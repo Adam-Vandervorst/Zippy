@@ -265,7 +265,7 @@ class SpatialFrontierCheck extends FunSuite:
     for l <- shown do println("    " + l)
   }
 
-  test("CONTINUITY ACROSS THE DEPTH CAP: EXACT at every depth (plan.md 1C.3/1C.4)") {
+  test("CONTINUITY ACROSS THE DEPTH CAP: EXACT at every depth ") {
     // `Shape.capDepth` is the OTHER half of the spill and it lost the names the same way: the
     // collapsed level's tracked keys became an anonymous count.  Four key-disjoint keys under a
     // shared prefix of length d-1 measured `rebuilt = [d,d]` for d ≤ MaxDepth and then `[5,9]`,
@@ -346,7 +346,7 @@ class SpatialFrontierCheck extends FunSuite:
              s"n=$n: the head set must stay enumerable past the width cap: ${ty(l).shape.show}")
       assertEquals(ty(l).shape.possibleHeads.get, (0 until n).map(i => s"a$i").toSet,
                    s"n=$n: and it must name EXACTLY the real heads: ${ty(l).shape.show}")
-      // AND THE CERTIFICATE IS WHAT IS ANSWERING, above the width cap (plan.md 1C.6).  Without this
+      // AND THE CERTIFICATE IS WHAT IS ANSWERING, above the width cap.  Without this
       // the rows at n ≤ Shape.MaxHeads carry the whole test: there the root is CLOSED and
       // `possibleHeads` reads `heads` directly, so the certificate is trivially defined and the
       // assertions above hold whether it works or not.
@@ -503,16 +503,16 @@ class SpatialFrontierCheck extends FunSuite:
     gate(Scale("equal values, UNSHARED, fixed depth — union descents", rows), expected = 1.0)
   }
 
-  test("RETIRED GAP: past the shape's tracked levels the frontier is now EXACT (plan.md 1C.4)") {
+  test("RETIRED GAP: past the shape's tracked levels the frontier is now EXACT ") {
     // ==WHAT THIS TEST USED TO PUBLISH, AND WHY IT NO LONGER DOES==
     // `K_d` was bounded by the SHAPE for `d ≤ Shape.MaxDepth` and only by `E_d` (the total path
     // count) below it, so `Σ_d min(K_d, K_d)` over a family whose DEPTH grows was `N·len` rather
     // than `N` — a log factor, published rather than hidden, and named in `Shape.capDepth`'s own
     // note as the half of the review's ambition that was OPEN and deferred to Track C.
     //
-    // THE CERTIFICATE TIER CLOSED IT.  `capDepth` keeps the collapsed level's whole sub-trie
-    // (`Cert`, plan.md 1C.3) instead of its head names, `Shape.under`/`untrackedTailBound` consult
-    // it, and the relational walk's summary frame descends WITH it (1C.4) instead of into a ⊤
+    // THE CERTIFICATE TIER CLOSED IT. `capDepth` keeps the collapsed level's whole sub-trie
+    // (`Cert`) instead of its head names, `Shape.under`/`untrackedTailBound` consult
+    // it, and the relational walk's summary frame descends with it instead of into a ⊤
     // `otherTail`.  So `K_d` is bounded at every depth, not just the first `MaxDepth` of them.
     //
     // THIS TEST IS THE LEDGER ENTRY'S RETIREMENT, and it is written so it cannot silently rot in

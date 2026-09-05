@@ -1,4 +1,4 @@
-# RESOURCE CERTIFICATE (tasks.md D2) — temperature priced by the A4/A5 analysis over its actual inputs, per backend,
+# RESOURCE CERTIFICATE — temperature priced by the compositional resource analysis over its actual inputs, per backend,
 # with the counted run of the executor beside every interval; the derivation follows (D rows).
 # inputs	world=SpaceValue("0.0.0.0.C", "0.0.0.1.N", "0.0.1.0.C", "0.0.1.1.W", "0.1.0.0.VW", "0.1.0.1.C", "0.1.1.0.VC", "0.1.1.1.VC", "1.0.0.0.C", "1.0.0.1.C", "1.0.1.0.W", "1.0.1.1.N", "1.1.0.0.C", "1.1.0.1.N", "1.1.1.0.VC", "1.1.1.1.VW")
 # B	backend	work	alloc	rounds	touch	counted-work	counted-alloc	counted-rounds	counted-touch	certified	dependencies	summaries(reused,computed)

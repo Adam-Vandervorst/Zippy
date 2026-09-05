@@ -1,13 +1,13 @@
 /-
 ==================================================================================================
-SUBSTITUTION, MECHANIZED (plan.md 1E.1).
+SUBSTITUTION, MECHANIZED.
 
 This is the Lean mirror of `src/main/scala/Subst.scala`: simultaneous in both sorts,
-capture-avoiding, total over every constructor.  Item 3's `O6a` — beta-soundness of capture-avoiding
+capture-avoiding, total over every constructor. `O6a` — beta-soundness of capture-avoiding
 inlining — was OPEN as a first-order theorem because it needs a model of the substitution FUNCTION.
 Here the function is a DEFINITION and the hygiene statements are theorems about it, checked by
 Lean's kernel; its SEMANTIC half — substitution denotes environment extension — is `SubstSem.lean`
-(`substS_denT`, tasks.md C1), which closes O6a.
+(`substS_denT`), which closes O6a.
 
 ==THE ONE PLACE THIS DEFINITION DIFFERS FROM THE SCALA, AND WHY==
 At a binder that would capture, `Subst.scala` does TWO passes over the body: first a rename
@@ -342,7 +342,7 @@ theorem seq_ne_simul_gyx (F : FreshSupply) :
 ### THEOREM 3 — CAPTURE AVOIDANCE
 
 The theorem `SubstConformance` structurally cannot see, because it substitutes closed `Literal`s
-only (plan.md's third correction).  Capture needs a replacement with a FREE name that an inner binder
+only (the capture case required by ).  Capture needs a replacement with a FREE name that an inner binder
 can swallow, and a closed replacement has none.
 
 THE STATEMENT.  If a name `m` occurs free in `s` and the substitution replaces it by `t`, then every

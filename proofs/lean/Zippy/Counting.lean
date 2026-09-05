@@ -1,7 +1,7 @@
 /-
 ==================================================================================================
 T7: A MODEL OF THE COUNTING AXIOMS — WHICH IS NOT THE SAME AS DISCHARGING THEM, AND SAYING SO IS
-THE POINT (plan.md 1E.3).
+THE POINT.
 
 `docs/TRUSTED.md` T7 is `proofs/unbounded/_card.p`: four counting axioms plus an injective-image
 axiom and one comprehension.  `1E.3`'s gate asks for `mon_cancel`, `wrap_roundtrip`, `card_wrap` and

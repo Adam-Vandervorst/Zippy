@@ -128,7 +128,7 @@ class RangeOrderCheck extends FunSuite:
     (4, 2), (-1, -3),          // INVERTED: hi <= lo, must be empty
   )
 
-  test("THE COMPARATOR, not the outputs: ITrie's canonical order IS pathValueOrdering (plan.md 1D.3)") {
+  test("THE COMPARATOR, not the outputs: ITrie's canonical order IS pathValueOrdering ") {
     // ==WHY THE OUTPUT CHECKS BELOW ARE NOT ENOUGH==
     // `IntTrie.slice` is an ORDER-STATISTIC operation: it never compares two paths.  It walks
     // `ordered`'s child sequence and its running terminal offsets, so "every backend slices by

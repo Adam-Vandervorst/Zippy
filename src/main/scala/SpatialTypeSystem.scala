@@ -451,7 +451,7 @@ object SpatialTyping:
    *  out yields ⊤, which is always sound. */
   private final class Budget(var left: Int):
     def spend(): Boolean = { left -= 1; left > 0 }
-    /** ONE SUMMARY SOLVE PER (routine, abstract arguments) PER ANALYSIS (plan.md 1D.1).
+    /** ONE SUMMARY SOLVE PER (routine, abstract arguments) PER ANALYSIS.
      *
      *  `SpatialRecursion.summaryAt` runs a whole worklist solve, so a recursive `Call` reached from
      *  several positions must not re-solve it.  The memo lives on the BUDGET because that is the one
@@ -605,7 +605,7 @@ object SpatialTyping:
             // with the parameters bound to the ARGUMENT shapes is sound, must channels included.
             // The callee scope starts empty — inheriting the caller's bindings would let a body read
             // a mention it does not have.
-            // THE ARGUMENT'S LENGTH TYPE GOES WITH IT (plan.md 1B.5).  `SpaceType.unknown` here threw
+            // THE ARGUMENT'S LENGTH TYPE GOES WITH IT.  `SpaceType.unknown` here threw
             // the whole length half of the interprocedural argument away, and the length half is the
             // one channel with no depth cap: `Sliding.superpose`'s `res` parameter is bound to
             // `Singleton(tupleP)` — one path of `n-1` items — and inside the callee its path count was
@@ -613,7 +613,7 @@ object SpatialTyping:
             // THE ARGUMENT TYPES ARE COMPUTED ONCE and used by both branches — the interprocedural
             // descent binds them as parameters, and the recursive branch turns them into the summary
             // KEY.  Sharing them is what makes the key the one the solver would have built for this
-            // site (plan.md 1D.1); two spellings of the arguments would silently miss the table.
+            // site; two spellings of the arguments would silently miss the table.
             val argTypes = mentions.zipWithIndex.map((m, i) =>
               SpatialType(rec(i, m), SpatialTypes.infer(m, env.lengths)))
             val argPathsAll = refns.zip(refs.map(p => constPath(p, env) -> pathLenOf(p, env)))
@@ -640,7 +640,7 @@ object SpatialTyping:
         case Space.GroundedPS(_, _) | Space.GroundedSS(_, _) => Shape.top
       v.visit(pos, s, env, out, cause)
 
-  /** ==A RECURSIVE CALLEE'S SUMMARY, INSTEAD OF ⊤ (plan.md 1D.1)==
+  /** ==A RECURSIVE CALLEE'S SUMMARY, INSTEAD OF ⊤ ==
    *
    *  The arm above descends into a callee and binds its parameters, and `env.lenv.active(rp)` is what
    *  stops that descent at a recursive call — correctly, since the descent would not terminate.  What
@@ -676,7 +676,7 @@ object SpatialTyping:
                         (using b: Budget, v: ShapeVisitor): Shape =
     if x.definitelyEmpty || x.headCount.hi == 0 then Shape.empty
     else
-      // ==THE GROUP COUNT IS ALSO BOUNDED BY THE PATH COUNT (plan.md 1B.5)==
+      // ==THE GROUP COUNT IS ALSO BOUNDED BY THE PATH COUNT ==
       //
       // Every group is a distinct FIRST ITEM of some path, so there cannot be more groups than paths.
       // That is trivial and it is the one bound in this transfer that does NOT go through the shape,
@@ -711,7 +711,7 @@ object SpatialTyping:
         val bs = goShape(body, bind(Some(h), tail), depth + 1, pos :+ 1, s"head=$h")
         parts += (if tail.definitelyNonEmpty then bs else Shape.weaken(bs))
       if x.others.hi > 0 then
-        // ==THE SINGLE-GROUP EXEMPTION (plan.md 1B.5)==
+        // ==THE SINGLE-GROUP EXEMPTION ==
         //
         // `headCount == [1,1]` PROVES the source has exactly one head, so this untracked arm is the
         // ONLY group and it definitely runs.  Two weakenings then have nothing to weaken away:

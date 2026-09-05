@@ -7,7 +7,7 @@ import scala.language.implicitConversions
 /** ==============================================================================================
  *  A3 — THE TWO-TIER CORRELATED DOMAIN, AGAINST ITS ACCEPTANCE SENTENCE.
  *
- *  tasks.md A3: "lattice and gamma checks pass; exact-tier disjointness and extrema survive depth and
+ *  "lattice and gamma checks pass; exact-tier disjointness and extrema survive depth and
  *  width collapse; summarized results contain all counted outcomes; results are invariant under prior
  *  analyses in the same JVM; every loss of precision is present in the returned analysis certificate."
  *  ============================================================================================== */

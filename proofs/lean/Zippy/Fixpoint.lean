@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-T2, MECHANIZED (plan.md 1E.3).
+T2, MECHANIZED.
 
 `docs/TRUSTED.md` T2 is "the four bridging induction principles of `fixpoint_is_lfp.smt2`".  That
 file proves each of them in three parts — base, step, then the bridging principle asserted "exactly

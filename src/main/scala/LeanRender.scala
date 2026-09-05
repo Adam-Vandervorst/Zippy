@@ -1,7 +1,7 @@
 package morkl
 
 /** ==================================================================================================
- *  THE CORRESPONDENCE RENDERER (plan.md 1E.2).
+ *  THE CORRESPONDENCE RENDERER.
  *
  *  `1E.2`: "Correspondence to the executable: a Lean-checked TRACE of the production substitutions —
  *  `LeanRender` emits each `(term, substitution, result)` the Scala performed, Lean re-checks it.
@@ -151,7 +151,7 @@ object LeanRender:
     val sb = new StringBuilder
     sb.append(s"""/-
 ==================================================================================================
-GENERATED — the correspondence trace (plan.md 1E.2).  DO NOT EDIT.
+GENERATED — the correspondence trace.  DO NOT EDIT.
 
 Regenerate with `ZIPPY_REGENERATE=1 sbt --server 'testOnly morkl.SubstTrace'`; without the flag the suite
 writes to `target/artifact-scratch` and DIFFS against this file, so a drift in EITHER
@@ -216,7 +216,7 @@ private def F : FreshSupply := FreshSupply.byLength
     if ps.isEmpty then "[]"
     else ps.map((n, t) => s"(${str(n)}, ${path(t)})").mkString("[", ", ", "]")
 
-  /** `proofs/lean/Zippy/WhistleTrace.lean` (plan.md 2E.3): one `example` per recorded whistle comparison,
+  /** `proofs/lean/Zippy/WhistleTrace.lean`: one `example` per recorded whistle comparison,
    *  re-decided by `Zippy.Whistle.embedsB` on the label trees `Matching.toLabel` renders. */
   def renderWhistle(entries: Vector[Matching.WhistleTrace.Entry], dropped: Int, origin: String): String =
     val sb = new StringBuilder
@@ -224,7 +224,7 @@ private def F : FreshSupply := FreshSupply.byLength
     val skipped = entries.length - emitted.length
     sb.append("/-\n")
     sb.append("==================================================================================================\n")
-    sb.append("GENERATED — the whistle correspondence trace (plan.md 2E.3).  DO NOT EDIT.\n\n")
+    sb.append("GENERATED — the whistle correspondence trace.  DO NOT EDIT.\n\n")
     sb.append("Regenerate with `ZIPPY_REGENERATE=1 sbt --server 'testOnly morkl.WhistleTrace'`; without the flag the suite\n")
     sb.append("writes to `target/artifact-scratch` and DIFFS against this file.\n\n")
     sb.append("WHAT THIS FILE IS.  Each `example` below is a pair of configurations `Matching.embeds` ACTUALLY\n")

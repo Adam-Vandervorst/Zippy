@@ -1,4 +1,4 @@
-# RESOURCE CERTIFICATE (tasks.md D2) — puzzle15 priced by the A4/A5 analysis over its actual inputs, per backend,
+# RESOURCE CERTIFICATE — puzzle15 priced by the compositional resource analysis over its actual inputs, per backend,
 # with the counted run of the executor beside every interval; the derivation follows (D rows).
 # inputs	frontier=SpaceValue("c0.1.2.3.4.5.6.7.8.9.10.11.12.13.14.15")
 # B	backend	work	alloc	rounds	touch	counted-work	counted-alloc	counted-rounds	counted-touch	certified	dependencies	summaries(reused,computed)

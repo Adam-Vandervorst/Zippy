@@ -69,7 +69,7 @@ object Subst:
   import Matching.{freeMentions, freeRefs}
 
   /** ================================================================================================
-   *  THE CORRESPONDENCE TRACE (plan.md 1E.2).
+   *  THE CORRESPONDENCE TRACE.
    *
    *  `1E.2` asks for "a Lean-checked TRACE of the production substitutions — `LeanRender` emits each
    *  `(term, substitution, result)` the Scala performed, Lean re-checks it.  Not a citation."  This

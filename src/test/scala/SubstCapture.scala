@@ -5,13 +5,13 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==================================================================================================
- *  CAPTURE, SHADOWING AND SIMULTANEITY — THE THREE THINGS `SubstConformance` CANNOT SEE (plan.md 1A.2).
+ *  CAPTURE, SHADOWING AND SIMULTANEITY — THE THREE THINGS `SubstConformance` CANNOT SEE.
  *
  *  ==WHY A SECOND SUBSTITUTION SUITE==
  *  `SubstConformance` is a randomized differential: it checks `eval(subst(body, m, arg))` against
  *  `eval(body)` under an extended environment, over generated programs biased to shadow their
  *  binders.  It found three real bugs and it is the right tool for the semantic statement.  But it
- *  has one structural blind spot, and plan.md's third correction names it: **it substitutes closed
+ *  has one structural blind spot addressed by **it substitutes closed
  *  `Literal`s only, so it cannot see capture.**  Capture needs a replacement with a FREE name that an
  *  inner binder can swallow; a closed replacement has none, so every capture-avoidance clause in the
  *  substitution is unexercised by that suite.

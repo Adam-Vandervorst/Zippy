@@ -3,7 +3,7 @@ package morkl
 import scala.collection.mutable
 
 /** ==============================================================================================
- *  SELECTION FROM A CERTIFIED PARETO FRONTIER (tasks.md B2).
+ *  SELECTION FROM A CERTIFIED PARETO FRONTIER.
  *
  *  A [[Alternatives.Frontier]] holds semantically equivalent residuals with interval-valued resource
  *  certificates per backend.  This module CHOOSES among them — and the whole point is what a choice
@@ -100,7 +100,7 @@ object Pareto:
     def restsOn: Set[String] = selected.map(_.closure).collect { case TraceClosure.Status.Conditional(t) => t }.getOrElse(Set.empty)
     def render: String =
       val sb = new StringBuilder
-      sb ++= "# SELECTION CERTIFICATE (tasks.md B2) — a pure function of the C rows and the objective; replay:\n"
+      sb ++= "# SELECTION CERTIFICATE — a pure function of the C rows and the objective; replay:\n"
       sb ++= "# scripts/check_selection.py (independent), morkl.Pareto.replay (in-process).\n"
       sb ++= s"# objective\t${objective.name}\n"
       sb ++= s"# priority\t${objective.priority.map(slug).mkString(",")}\n"

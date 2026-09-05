@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """THE ONE ACCEPTANCE-GATE LIST.
 
-WHY THIS FILE EXISTS.  The gate list was duplicated: `scripts/publish_benchmarks.py` held one copy
-and `plan.md` prose held another, and they disagreed -- an earlier revision of the publisher listed
+WHY THIS FILE EXISTS.  The gate list was duplicated between the publisher and development prose,
+and the copies disagreed -- an earlier revision of the publisher listed
 only the four Scala suites, so item 7's declared gate (`check_references.py --strict`) and item 8's
 (`proof_closure.py --check`) were never run by the thing that gates publication.  A gate an item
 declares for itself and the publisher does not run is not a gate.  So the list lives HERE, once, and
@@ -28,7 +28,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEFAULT_RUNNER = ROOT / "target" / "test-runtime" / "run-suite.sh"
 
 # ---------------------------------------------------------------------------------------------
-# THE SCALA GATE SUITES.  The first four are review item 1's declared gate and the publisher's;
+# THE SCALA GATE SUITES.  The first four cover operational semantics and resource analysis;
 # the B1/B2 suites are the decision layer's acceptance.
 # ---------------------------------------------------------------------------------------------
 GATE_SUITES = [
@@ -36,11 +36,11 @@ GATE_SUITES = [
     "morkl.SpatialEventsCheck",
     "morkl.SpatialScaleCheck",
     "morkl.SpatialPipelineCheck",
-    # tasks.md B1/B2: residual alternatives are explicit and evaluation-free; selection is by certified
+    # Residual alternatives are explicit and evaluation-free; selection is by certified
     # dominance, deterministic, and every removal replays through scripts/check_selection.py
     "morkl.AlternativesCheck",
     "morkl.ParetoCheck",
-    # tasks.md B3: the decision cases — certified choice, counted containment, scalar predictors compared
+    # Decision cases: certified choice, counted containment, scalar predictors compared.
     "morkl.DecisionsCheck",
     # the acceptance suites of the spine, registered so docs/ACCEPTANCE.md can be generated from gate results
     "morkl.SpatialSemanticsCheck",   # A1
@@ -57,49 +57,51 @@ GATE_SUITES = [
 # THE SCRIPT GATES.  Each is (label, argv-relative-to-scripts/).  A `.py` entry is run with
 # python3; anything else is run directly, so a `.sh` gate needs no special case here.
 #
-# The first six are the pre-existing set that `publish_benchmarks.py` held.  The last two are
-# Phase 0's own gates, added here rather than left as prose for the reason in this file's header:
-#   - check_determinism.sh (0.2) -- two runs of one gate suite must agree on every CALIBRATION line.
-#   - check_lean.sh        (0.5) -- `lake build` over proofs/lean, which is where items 3 and 8
-#                                   put every mechanized theorem.
+# `check_determinism.sh` runs one suite twice and therefore consumes the same explicit runner as
+# the suite loop. `check_lean.sh` builds every theorem used by the proof closure.
 # ---------------------------------------------------------------------------------------------
 GATE_SCRIPTS = [
-    ("reference checking on one snapshot (item 7)",
+    ("reference checking on one snapshot",
      ["check_references.py", "--snapshot=index", "--strict"]),
-    ("reference-checker self-test (item 7)", ["check_references.py", "--selftest"]),
-    ("pipeline marker/declaration audit (item 4)", ["audit_pipeline_markers.py"]),
-    ("pipeline claims accepted: no SINGLE-SIDE, BUDGET or chained cell (D2)", ["audit_pipeline_markers.py", "--accept"]),
-    ("typed proof traces: every declared cell resolves to a checked DAG (C3)", ["check_traces.py"]),
-    # D1: structural coverage — after proof_closure.py --check has written target/trace-closure.tsv (below);
-    # the ordering is by the closure gate's dependency, so these two run at the end of the list
-
-    ("law certificates discharged (item 3/4)", ["check_laws.py"]),
-    ("cited obligations discharged (item 3/4)", ["check_obligations.py"]),
-    ("counted columns are run-order independent (0.2)", ["check_determinism.sh"]),
-    ("mechanized theorems build (0.5)", ["check_lean.sh"]),
+    ("reference-checker self-test", ["check_references.py", "--selftest"]),
+    ("benchmark publication checker self-test", ["publish_benchmarks.py", "--selftest"]),
+    ("pipeline marker/declaration audit", ["audit_pipeline_markers.py"]),
+    ("typed proof traces: every declared cell resolves to a checked DAG", ["check_traces.py"]),
+    ("law certificates discharged", ["check_laws.py"]),
+    ("cited obligations discharged", ["check_obligations.py"]),
+    ("counted columns are run-order independent", ["check_determinism.sh"]),
+    ("mechanized theorems build", ["check_lean.sh"]),
     # AFTER check_lean.sh, and not before: the closure check lifts a `PROVED-MODULO` row only on the
     # strength of the witness `check_lean.sh` writes (`target/lean-mechanized.tsv`), so on a clean
     # checkout the closure check run FIRST reports every mechanized row as a problem.  Measured
     # (2026-09-04): 4 problems on a fresh clone with the tables byte-identical to a passing run.
     # the assert-level closure of the SMT tiers writes target/assert-closure.tsv, which the closure
-    # check below reads; an unclassified assert fails here (2E.4).
-    ("every SMT assert classified: goal, definition, derived, or a named assumption (2E.4)",
+    # check below reads; an unclassified assert fails here.
+    ("every SMT assert classified: goal, definition, derived, or a named assumption",
      ["check_asserts.py"]),
-    ("proof status vs the trusted base, one dependency graph over the traces (item 8, C4)", ["proof_closure.py", "--check"]),
+    ("proof status vs the trusted base, one dependency graph over the traces", ["proof_closure.py", "--check"]),
+    # Everything below consumes target/trace-closure.tsv.  Keep it after proof_closure.py: a clean
+    # checkout has no target table, while a warm checkout may contain a stale one.  Running a
+    # consumer first made the same commit fail clean and pass warm.
+    ("pipeline claims accepted: no SINGLE-SIDE, BUDGET or chained cell", ["audit_pipeline_markers.py", "--accept"]),
     # C4's acceptance as a gate: marking O6a open must turn every trace that unfolds or folds conditional
-    ("trust closure mutation: an injected open O6a reaches its consumers (C4)",
+    ("trust closure mutation: an injected open O6a reaches its consumers",
      ["proof_closure.py", "--inject-open", "O6a", "--expect-consumers", "1"]),
     # B2/B3: every committed selection certificate re-derives from its own candidate rows
-    ("selection certificates replay independently (B2, B3, D2)", ["check_selection.py", "proofs/decisions", "proofs/pipeline/resources"]),
-    ("structural coverage: every feature inside a checked chain, census complete (D1)", ["check_coverage.py"]),
-    ("structural coverage mutations are caught (D1)", ["check_coverage.py", "--selftest"]),
-    ("cornerstone resource certificates contain their counted runs; selections replay (D2)", ["check_resources.py"]),
-    ("puzzle15: legal expansion, counted runs inside, bounds under the proved maximum, thresholds (D3)", ["check_puzzle15.py"]),
+    ("selection certificates replay independently", ["check_selection.py", "proofs/decisions", "proofs/pipeline/resources"]),
+    ("structural coverage: every feature inside a checked chain, census complete", ["check_coverage.py"]),
+    ("structural coverage mutations are caught", ["check_coverage.py", "--selftest"]),
+    ("cornerstone resource certificates contain their counted runs; selections replay", ["check_resources.py"]),
+    ("puzzle15: legal expansion, counted runs inside, bounds under the proved maximum, thresholds", ["check_puzzle15.py"]),
     # E3: the acceptance document is derived from the gate record this run writes (see main: the record is
     # written BEFORE these two run, so `--check` sees this run's results)
-    ("acceptance mutations move their rows (E3)", ["gen_acceptance.py", "--selftest"]),
-    ("acceptance status agrees with the evidence (E3)", ["gen_acceptance.py", "--check"]),
+    ("acceptance mutations move their rows", ["gen_acceptance.py", "--selftest"]),
+    # This one consumes the current run's target/gates.tsv. main() deliberately excludes it from
+    # run_scripts(), writes the current record, runs it, then atomically rewrites the final record.
+    ("acceptance status agrees with the evidence", ["gen_acceptance.py", "--check"]),
 ]
+
+ACCEPTANCE_STATUS_GATE = "acceptance status agrees with the evidence"
 
 
 def gate_count():
@@ -122,16 +124,37 @@ def resolve_runner(explicit=None):
     return None
 
 
-def run_scripts(verbose=True):
-    """every script gate, in order.  Returns [(label, rc, output)] for the failures."""
+def run_scripts(entries=None, runner=None, verbose=True):
+    """The selected script gates, in order. Returns [(label, rc, output)] for failures."""
     failed = []
-    for label, argv in GATE_SCRIPTS:
-        r = subprocess.run(script_argv(argv), capture_output=True, text=True, cwd=ROOT)
+    env = None if runner is None else dict(os.environ, ZIPPY_RUNNER=runner[0])
+    for label, argv in (GATE_SCRIPTS if entries is None else entries):
+        r = subprocess.run(script_argv(argv), capture_output=True, text=True, cwd=ROOT, env=env)
         if verbose:
             print(f"  {'PASS' if r.returncode == 0 else 'FAIL'}  {label}", flush=True)
         if r.returncode != 0:
             failed.append((label, r.returncode, (r.stdout + r.stderr).strip().splitlines()))
     return failed
+
+
+def write_record(path, failed, suites_ran, pending=()):
+    """Atomically write the exact status of this run; never leave a previous or partial record."""
+    failed_names = {name for name, _, _ in failed}
+    pending_names = set(pending)
+    rec = pathlib.Path(path)
+    rec.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    tmp = rec.with_name(rec.name + f".tmp-{os.getpid()}")
+    with tmp.open("w") as f:
+        f.write(f"# gate results\t{stamp}\n# kind\tname\tstatus\n")
+        for label, _argv in GATE_SCRIPTS:
+            status = "NOT-RUN" if label in pending_names else "FAIL" if label in failed_names else "PASS"
+            f.write(f"script\t{label}\t{status}\n")
+        for suite in GATE_SUITES:
+            status = "NOT-RUN" if not suites_ran else "FAIL" if suite in failed_names else "PASS"
+            f.write(f"suite\t{suite}\t{status}\n")
+    os.replace(tmp, rec)
+    return rec
 
 
 # The JUnit verdict line, and the lines that name a FAILING REQUIREMENT.  Both are picked out
@@ -189,28 +212,25 @@ def main():
     ran = len(GATE_SCRIPTS) + (0 if a.scripts_only else len(GATE_SUITES))
     scope = "" if ran == gate_count() else f" of {gate_count()} (--scripts-only: the Scala suites are skipped)"
     print(f"=== {ran} ACCEPTANCE GATES{scope} ===", flush=True)
-    # SCRIPTS FIRST, and this order is deliberate: they cost seconds and the suites cost minutes, so
-    # a broken reference or an unqualified PROVED is reported before a prover-backed suite has run.
-    failed = run_scripts()
+    # All scripts except the final status comparison run first in dependency order. The comparison is
+    # later: it consumes the record containing THIS run's script and suite results.
+    ordinary_scripts = [e for e in GATE_SCRIPTS if e[0] != ACCEPTANCE_STATUS_GATE]
+    status_entry = next(e for e in GATE_SCRIPTS if e[0] == ACCEPTANCE_STATUS_GATE)
+    runner = resolve_runner(a.runner)
+    if runner is None:
+        print(f"\nGATES ABORTED: no one-suite runner at {DEFAULT_RUNNER.relative_to(ROOT)}.\n"
+              f"Run `sbt exportTestRuntime` (or `sbt check`, which depends on it).")
+        return 2
+    failed = run_scripts(ordinary_scripts, runner=runner)
     suites_ran = False
     if not a.scripts_only:
-        runner = resolve_runner(a.runner)
-        if runner is None:
-            print(f"\nGATES ABORTED: no one-suite runner at {DEFAULT_RUNNER.relative_to(ROOT)}.\n"
-                  f"Run `sbt exportTestRuntime` (or `sbt check`, which depends on it).")
-            return 2
         failed += run_suites(runner)
         suites_ran = True
-    # THE RECORD (E3): one row per gate, what actually happened to it in this run
-    failed_names = {name for name, _, _ in failed}
-    rec = pathlib.Path(a.record); rec.parent.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    with rec.open("w") as f:
-        f.write(f"# gate results\t{stamp}\n# kind\tname\tstatus\n")
-        for label, _argv in GATE_SCRIPTS:
-            f.write(f"script\t{label}\t{'FAIL' if label in failed_names else 'PASS'}\n")
-        for suite in GATE_SUITES:
-            f.write(f"suite\t{suite}\t{'NOT-RUN' if not suites_ran else 'FAIL' if suite in failed_names else 'PASS'}\n")
+    # First record all evidence the acceptance document actually depends on. The status comparison
+    # is pending, not optimistically PASS. After --check reads the record, rewrite it with the result.
+    rec = write_record(a.record, failed, suites_ran, pending=[ACCEPTANCE_STATUS_GATE])
+    failed += run_scripts([status_entry], runner=runner)
+    rec = write_record(a.record, failed, suites_ran)
     print(f"\nrecorded to {rec.relative_to(ROOT) if rec.is_relative_to(ROOT) else rec}")
 
     if failed:

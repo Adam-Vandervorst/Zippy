@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-SIMULTANEOUS LEAST-POST-FIXPOINT SYSTEMS, STRATA, AND THE UNARY CASE (tasks.md A2).
+SIMULTANEOUS LEAST-POST-FIXPOINT SYSTEMS, STRATA, AND THE UNARY CASE.
 
 `DeltaIR.scala` represents every positive SCC as a SIMULTANEOUS system `X_i = init_i ∪ F_i(X̄; L)`
 over a finite index set, with the values `L` of lower strata FROZEN.  This module is the semantics

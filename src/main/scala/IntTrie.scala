@@ -661,7 +661,7 @@ object ITrie:
       if i < k then effortN(EffortEvent.SubtrieRejectedByPointer, (k - i).toLong)
       if ch.isEmpty && !term then empty else node(term, ch)
 
-  /** THE CANONICAL TERMINAL ORDER THE SLICE MACHINERY USES, ENUMERATED (plan.md 1D.3).
+  /** THE CANONICAL TERMINAL ORDER THE SLICE MACHINERY USES, ENUMERATED.
    *
    *  `slice` is an ORDER-STATISTIC operation: it never compares two paths, it walks [[ordered]]'s
    *  child sequence and its running terminal offsets.  So the claim "`Range` slices in
@@ -756,7 +756,7 @@ def internConstStr(constant: String): List[Int] =
  *  costs one `size` each and mutates nothing. */
 def iCacheSizes: (Int, Int, Int) = (iLiteralCache.size, iLiteralStrCache.size, iConstStrCache.size)
 
-/** IS THIS LITERAL ALREADY MATERIALISED?  The event semantics (SpatialSemantics.scala, tasks.md A1)
+/** IS THIS LITERAL ALREADY MATERIALISED? The event semantics in `SpatialSemantics.scala`
  *  states a `Literal`'s cost as a function of the CACHE STATE — a warm literal is one lookup, a cold one
  *  is `fromSpaceValue` — so the state has to be observable without being changed.  Both are pure reads
  *  of the two caches' key sets; neither inserts. */

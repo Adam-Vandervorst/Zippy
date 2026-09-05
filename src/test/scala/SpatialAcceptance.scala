@@ -790,7 +790,7 @@ class SpatialAcceptance extends FunSuite:
     showDelta("no law", before); showDelta("with law", after)
     println(s"      facts gained      ${(after.facts -- before.facts).mkString(", ")}")
     println(s"      candidates gained ${(after.candidates -- before.candidates).mkString(", ")}")
-    // ==WHAT THE TRANSFERS ALONE NOW BOUND, AND WHAT THEY STILL DO NOT (plan.md 1D.1)==
+    // ==WHAT THE TRANSFERS ALONE NOW BOUND, AND WHAT THEY STILL DO NOT ==
     //
     // This used to assert that BOTH the cardinality and the length are unbounded without the law,
     // because "the inner self-call is ⊤".  It is not ⊤ any more: `SpatialRecursion.summaryAt` is the
@@ -806,7 +806,7 @@ class SpatialAcceptance extends FunSuite:
                  "says nothing about how many closure edges there are")
     assert(before.len._2 <= 2L,
            s"the summary's LENGTH half must bound the closure's paths without the law " +
-           s"(plan.md 1D.1): got ${before.len._2}")
+           s": got ${before.len._2}")
     // with the law: |closure| <= |E|^2 = 9, and every closure edge is a length-2 path
     assertEquals(after.size, (3L, 9L), s"the law must give [|E|, |E|²]: ${aAfter.result.show}")
     assertEquals(after.len, (2L, 2L), "the law must pin the path length to 2")
@@ -850,7 +850,7 @@ class SpatialAcceptance extends FunSuite:
     println(s"[6a] $sound law-refined analyses of the real Zippy closure, every one γ-admitting `eval`")
 
     // ---- (5) THE RESIDUAL THE TRANSFERS NOW REACH WITHOUT THE LAW ------------------------------
-    // ==WHAT CHANGED HERE, AND WHY THE ASSERTIONS INVERTED (plan.md 1D.1)==
+    // ==WHAT CHANGED HERE, AND WHY THE ASSERTIONS INVERTED ==
     //
     // `closure ∩ {a.b.c, x.y.z}`: the literal holds only length-3 paths, so if the closure holds only
     // length-2 ones the intersection is EMPTY.  This block used to assert that the LAW is what sees
@@ -1153,7 +1153,7 @@ class SpatialAcceptance extends FunSuite:
     //
     //      IT NOW MEASURES 4, WITH AND WITHOUT THE LAW.  `SpatialTyping.groupUnion` bounds the group
     //      count by the source's PATH COUNT as well as by the shape's head count, and binds the
-    //      `rest` mention's own length type instead of `SpaceType.unknown` (plan.md 1B.5).  The
+    //      `rest` mention's own length type instead of `SpaceType.unknown`.  The
     //      source here is 4 paths of length 3, so ANY tail-set inside it has at most 4 paths and the
     //      body is a `Singleton` — 4 is EXACT, and it is better than both figures this case recorded.
     //      `chainBound` therefore reports `Unchanged` for the same reason (i) does: it adds nothing.
@@ -1368,7 +1368,7 @@ class SpatialAcceptance extends FunSuite:
 
     // (1) the inferred input→output type, and (2) the three-way conformance verdict.
     //
-    // ==THIS ASSERTION IS STRENGTHENED, WHICH IS WHAT ITS OWN MESSAGE ASKED FOR (plan.md 1D.1)==
+    // ==THIS ASSERTION IS STRENGTHENED, WHICH IS WHAT ITS OWN MESSAGE ASKED FOR ==
     //
     // It used to be `assert(!rep.check.isProved)` with the note "the ordinary transfer cannot prove a
     // contract across a self-call; if it ever can, this test should be strengthened rather than
@@ -1388,7 +1388,7 @@ class SpatialAcceptance extends FunSuite:
       s"the contract must not be REFUTED across a self-call: ${rep.check.show}")
     assert(rep.check.isProved,
       "the contract across a self-call is now provable, through `SpatialRecursion.summaryAt` " +
-      s"(plan.md 1D.1): ${rep.check.show}.  If the summary consumer is removed this is the gate that " +
+      s": ${rep.check.show}.  If the summary consumer is removed this is the gate that " +
       "reports it.")
     assert(SpatialType.leq(rep.check.inferredType, sig.result),
       s"the inferred result must be inside the declared contract: ${rep.check.inferredType.show} " +

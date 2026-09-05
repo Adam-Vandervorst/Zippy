@@ -115,7 +115,7 @@ final case class SpatialAnnotations(
   import Lower.LenBounds
 
   /** the fact/profile/candidate stage's budgets — a PROJECTION of [[config]], not a second value */
-  /** THE DECLARED INPUTS AS THE RESOURCE ANALYSIS READS THEM (tasks.md A4): summaries for the spaces,
+  /** THE DECLARED INPUTS AS THE RESOURCE ANALYSIS READS THEM: summaries for the spaces,
    *  values or length bounds for the paths.  Nothing is evaluated to build them. */
   def costInputs: CostSem.Inputs = CostSem.Inputs(summaries = spaces, paths = paths, pathLens = pathLens)
   def factConfig: SpatialFacts.Config = config.facts
@@ -1000,7 +1000,7 @@ object SpatialPipeline:
    *
    *  NOTE FOR THE WIDTH SPILL: `headDisjoint` goes through `Shape.possibleHeads`, so this rewrite's
    *  yield is bounded by whether the head set is enumerable — which is what the [[Cert]] certificate
-   *  restored past `Shape.MaxHeads`, at any width (plan.md 1C.2). */
+   *  restored past `Shape.MaxHeads`, at any width. */
   private def frontierEdits(d: SpatialAnalysis, ann: SpatialAnnotations)
       : Vector[(NodeId, Space, Rewrite)] =
     import FrontierCase.*

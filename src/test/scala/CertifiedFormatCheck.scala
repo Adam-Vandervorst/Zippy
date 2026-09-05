@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==================================================================================================
- *  THE ITEM 4 <-> ITEM 8 INTERFACE, CHECKED (plan.md 0.8).
+ *  THE ITEM 4 <-> ITEM 8 INTERFACE, CHECKED.
  *
  *  0.8's acceptance sentence is "both items' emitters and readers agree on one format".  Agreement is
  *  not something a specification document can establish — `docs/TRUSTED.md` describing a header and

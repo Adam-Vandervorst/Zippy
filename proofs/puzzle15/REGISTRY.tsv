@@ -1,7 +1,7 @@
-# THE PUZZLE15 STATE-SPACE THEOREMS (tasks.md D3) — stated and proved independently of the cost model in
+# THE PUZZLE15 STATE-SPACE THEOREMS  — stated and proved independently of the cost model in
 # proofs/lean/Zippy/Puzzle15.lean; `scripts/check_puzzle15.py` verifies every row names a theorem that
 # file declares, and `scripts/check_lean.sh` builds them.  The concrete instantiation over the MORKL
-# encoding (paths `blank . t1 … t15`) is CHECKED by Puzzle15Check and re-checked by check_puzzle15.py on
+# encoding (paths `blank. t1 … t15`) is CHECKED by Puzzle15Check and re-checked by check_puzzle15.py on
 # the committed expansion (proofs/puzzle15/EXPANSION.tsv); it is not a Lean theorem about the MORKL program.
 # id	kind	theorem	statement
 P15-BOARD	MECHANIZED	Zippy.Puzzle15.Board	a board is a permutation of the 16 cells' tiles; a move stays a board by type

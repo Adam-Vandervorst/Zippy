@@ -21,8 +21,8 @@
 __pycache__/
 *.py[cod]
 
-# REVIEW INPUTS, not artifacts.  An acceptance review handed to this tree is an input to the work,
-# and plan.md is the tracked plan against it.  Keeping the input out of the tree also keeps
+# REVIEW INPUTS, not artifacts.  An acceptance review handed to this tree is an input to the work.
+# Keeping the input out of the tree also keeps
 # scripts/check_references.py honest: it scans every TRACKED file, and a review document quotes
 # paths and file names from the state it reviewed, several of which no longer exist by design.
 /review.md

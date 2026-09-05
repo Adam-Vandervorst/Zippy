@@ -3,7 +3,7 @@ package morkl
 import munit.FunSuite
 import morkl.Space.*
 
-/** tasks.md A6 — THE CHECKER'S INPUT.  Every exact-tier transfer of the A3 domain, over the whole small
+/** THE CHECKER'S INPUT. Every exact-tier transfer of the correlated domain, over the whole small
  *  universe (paths over {a, b} of length ≤ 2, at most 3 per value), one row per (operation, inputs) with
  *  the abstract result the domain computed — and, for the pricing, one row per (operation, backend,
  *  inputs) with the counted component totals and the A4 interval.  `proofs/spatial/check_transfers.py`

@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-SEMANTIC SUBSTITUTION — O6a AS A THEOREM (tasks.md C1).
+SEMANTIC SUBSTITUTION — O6a AS A THEOREM.
 
 `Subst.lean` defines the production substitution (`substS`/`substP`: simultaneous in both sorts,
 capture-avoiding, total) and proves its HYGIENE.  `terminating/REGISTRY.tsv` row O6a — the

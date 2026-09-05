@@ -2,7 +2,7 @@ package morkl
 
 import scala.collection.mutable
 
-/** TYPED, COMPOSITIONAL PROOF TRACES (tasks.md C3).
+/** TYPED, COMPOSITIONAL PROOF TRACES.
  *
  *  A transformation claim `a ≡ b` is a finite DAG of typed nodes whose leaves are universal theorems
  *  (a certified optimiser law, applied at named positions with its exact instance), definitional steps
@@ -102,7 +102,7 @@ object ProofTrace:
       def sha(s: Space): String = { val h = ProofTrace.sha(s); terms.getOrElseUpdate(h, ProofTrace.structural(Matching.canon(s))); h }
       def kv(pairs: Iterable[(String, String)]): String = pairs.map((k, v) => s"$k=$v").mkString(";")
       val sb = new StringBuilder
-      sb ++= "# PROOF TRACE (tasks.md C3) — a typed DAG; every node carries its endpoint terms by digest, every\n"
+      sb ++= "# PROOF TRACE — a typed DAG; every node carries its endpoint terms by digest, every\n"
       sb ++= "# dependency is an earlier id, every leaf is a law instance, a definitional step or a backend obligation.\n"
       sb ++= "# Replay: morkl.ProofTrace.Checker (Scala, re-runs each step); scripts/check_traces.py (structural, independent).\n"
       sb ++= s"# root\t$root\n# id\tkind\tbefore\tafter\tfields\tdeps\n"
@@ -131,7 +131,7 @@ object ProofTrace:
 
   /** Terms are digested ALPHA-CANONICALLY (binders renamed by `Matching.canon`) so a trace does not
    *  depend on the fresh names a particular run happened to draw, and in the STRUCTURAL rendering so
-   *  an independent reader can parse constructors out of the term table (tasks.md D1). */
+   *  an independent reader can parse constructors out of the term table. */
   def sha(s: Space): String = digest(structural(Matching.canon(s)))
 
   /** THE STRUCTURAL RENDERING of a term: every constructor by its name, fully parenthesised, binders

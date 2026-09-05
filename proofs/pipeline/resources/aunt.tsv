@@ -1,4 +1,4 @@
-# RESOURCE CERTIFICATE (tasks.md D2) — aunt priced by the A4/A5 analysis over its actual inputs, per backend,
+# RESOURCE CERTIFICATE — aunt priced by the compositional resource analysis over its actual inputs, per backend,
 # with the counted run of the executor beside every interval; the derivation follows (D rows).
 # inputs	family=SpaceValue("child.Ann.Bob", "child.Bob.Pam", "child.Bob.Tom", "child.Jim.Pat", "child.Liz.Tom", "child.Pat.Bob", "female.Ann", "female.Liz", "female.Pam", "female.Pat", "male.Bob", "male.Jim", "male.Tom", "parent.Bob.Ann", "parent.Bob.Pat", "parent.Pam.Bob", "parent.Pat.Jim", "parent.Tom.Bob", "parent.Tom.Liz", "person.Ann", "person.Bob", "person.Jim", "person.Liz", "person.Pam", "person.Pat", "person.Tom");people=SpaceValue("Ann", "Bob", "Jim", "Liz", "Pam", "Pat", "Tom")
 # B	backend	work	alloc	rounds	touch	counted-work	counted-alloc	counted-rounds	counted-touch	certified	dependencies	summaries(reused,computed)

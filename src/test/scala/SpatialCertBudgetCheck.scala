@@ -4,7 +4,7 @@ import munit.FunSuite
 import scala.collection.immutable.SortedMap
 
 /** ==================================================================================================
- *  THE CERTIFICATE'S BUDGETS, ON BOTH SIDES OF EVERY ONE OF THEM (plan.md 1C.6).
+ *  THE CERTIFICATE'S BUDGETS, ON BOTH SIDES OF EVERY ONE OF THEM.
  *
  *  `1C.5` puts two budgets in `SpatialConfig` — `certKeys` and `certDepth` — with a widening rule and
  *  a record of every degradation.  `1C.6` is the gate, and it asks for three things at once, because

@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-THE POSITIVE FRAGMENT, MECHANIZED (plan.md 2E.1).
+THE POSITIVE FRAGMENT, MECHANIZED.
 
 `terminating/REGISTRY.tsv` row O10b is "k-unrolling equivalence for ALL k plus omega-continuity
 implies lfp equivalence", and it was OPEN for two reasons the row states: nothing in the tree said

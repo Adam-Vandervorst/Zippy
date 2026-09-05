@@ -78,7 +78,7 @@ final case class SpatialConfig(
    *  transfer is not compositional (`Iteration`, `Fold`, `Fixpoint`) plus the root.  This is the
    *  budget `SpatialCost.FactBudget` spends per NODE; here it is spent per BINDER. */
   histQueries: Int = 2000,
-  /** SINGLE-NODE STRENGTHENING QUERIES the decorated traversal may make (plan.md 1B.6).
+  /** SINGLE-NODE STRENGTHENING QUERIES the decorated traversal may make.
    *
    *  The decorated type at a node comes from the COMPOSITIONAL traversal under this run's budgets, so
    *  it can be weaker than an unbudgeted single-node inference of the same subterm — and
@@ -93,7 +93,7 @@ final case class SpatialConfig(
    *  about the binders, so it is a sound bound whichever group is being visited, and the binder
    *  precision the observations do have is already in `refined`. */
   strengthenQueries: Int = 4000,
-  /** the largest SUBTERM the single-node strengthening will infer (plan.md 1B.6).
+  /** the largest SUBTERM the single-node strengthening will infer.
    *
    *  The strengthening is one `SpatialTyping.infer` per position, and `infer` walks the whole
    *  subterm — so on a large term it is `O(positions x subterm)`, i.e. quadratic.  MEASURED:
@@ -437,7 +437,7 @@ object SpatialAnalysis:
         val tail = spill.foldLeft(Shape.weaken(base))((a, kv) => Shape.unionTransfer(a, Shape.weaken(kv._2)))
         val cnt = Ivl(Ivl.add(sh.others.lo, spill.count((_, t) => t.definitelyNonEmpty).toLong),
                       Ivl.add(sh.others.hi, spill.size.toLong))
-        // THE CONFIG'S OWN WIDTH SPILL GOES THROUGH THE SAME OWNER AS `Shape.mk`'s (plan.md 1C.3),
+        // THE CONFIG'S OWN WIDTH SPILL GOES THROUGH THE SAME OWNER AS `Shape.mk`'s,
         // so a narrowed config cannot reintroduce the discontinuity the certificate exists to remove:
         // `SpatialConfig.cheap` (shapeWidth = 6) has to predict the same GROWTH CLASS as the default
         // (12) on the same program.  It keeps the spilled heads' whole SUB-SHAPES now, not just their
@@ -515,7 +515,7 @@ object SpatialAnalysis:
     /** the law audit trail per position, merged over observations ([[LawApplication.occurrences]]) */
     private val lawLog = collection.mutable.HashMap.empty[Vector[Int], Vector[LawApplication]]
     private var queries = cfg.histQueries
-    /** THE PER-POSITION SINGLE-NODE STRENGTHENING (plan.md 1B.6).  Memoised on the position, computed
+    /** THE PER-POSITION SINGLE-NODE STRENGTHENING.  Memoised on the position, computed
      *  with an EMPTY environment so one answer is sound for every observation of that position. */
     private val strongMemo = collection.mutable.HashMap.empty[Vector[Int], Option[SpatialType]]
     private var strengthenLeft = cfg.strengthenQueries
@@ -557,7 +557,7 @@ object SpatialAnalysis:
             lawBudget -= 1
             lawLog(pos) = SpatialLaws.mergeApplications(lawLog.getOrElse(pos, Vector.empty), apps)
           r
-      // ==THE DECORATION IS MADE TO DOMINATE A FRESH SINGLE-NODE INFERENCE, HERE (plan.md 1B.6)==
+      // ==THE DECORATION IS MADE TO DOMINATE A FRESH SINGLE-NODE INFERENCE, HERE ==
       //
       // `refined` is the compositional traversal's answer under THIS run's budgets, so at an
       // individual node it may have widened or capped where an unbudgeted single-node

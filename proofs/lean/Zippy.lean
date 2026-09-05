@@ -5,7 +5,7 @@ stops compiling cannot hide by having no importer.
 
   Syntax     — the MORKL `Space`/`Path` grammar, free variables, size.  ONE syntax for the package.
   Pointwise  — its denotational semantics on the pointwise fragment, and `wrap_roundtrip`.
-  Subst      — the one substitution, and its hygiene theorems (plan.md 1E.1).
+  Subst      — the one substitution, and its hygiene theorems.
   PathInduction — T1 discharged: the induction SCHEMA over `path`, and `mon_cancel` (1E.3).
   Fixpoint   — T2 discharged: the four bridging inductions of fixpoint_is_lfp.smt2 (1E.3).
   Counting   — T7 is NOT discharged (it axiomatises an uninterpreted measure); this is a

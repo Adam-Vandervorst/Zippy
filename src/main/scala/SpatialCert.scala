@@ -3,7 +3,7 @@ package morkl
 import scala.collection.immutable.SortedMap
 
 /** ==================================================================================================
- *  THE UNTRACKED-HEAD CERTIFICATE, AS A PREFIX TRIE (plan.md 1C.1).
+ *  THE UNTRACKED-HEAD CERTIFICATE, AS A PREFIX TRIE.
  *
  *  ==WHAT IT REPLACES, AND WHY A FLAT NAME SET WAS NOT ENOUGH==
  *  `Shape` used to carry the certificate in TWO flat channels: (e) `otherKeys: Option[Set[PathItem]]`
@@ -13,7 +13,7 @@ import scala.collection.immutable.SortedMap
  *  opened the moment they are aggregated, so everything the analysis knew about the sub-structure of
  *  a collapsed level was thrown away with the level.
  *
- *  MEASURED CONSEQUENCE, which is why this tier exists (plan.md 1B.5): `Sliding.superpose`'s per-cell
+ *  MEASURED CONSEQUENCE, which is why this tier exists: `Sliding.superpose`'s per-cell
  *  arm types EXACTLY — `{c0?{_?{eps}}, c1?{+[1,1] more}, ...}`, size `[13, 28]`, one tile per cell —
  *  and `shapeDepth = 4` cannot hold a 15-item path, so `capDepth` collapsed the level and the
  *  `+[1,1]` became `+[0, 38654705664]`.  `Sliding.collapse`'s `Unwrap(state, c_i)` then cost the
@@ -43,7 +43,7 @@ import scala.collection.immutable.SortedMap
 final class Cert private (val eps: Boolean,
                           val keys: SortedMap[PathItem, Cert],
                           val outside: Cert.Outside,
-                          /** WHICH BUDGET RULES WERE APPLIED TO GET HERE (plan.md 1C.5).
+                          /** WHICH BUDGET RULES WERE APPLIED TO GET HERE.
                             *
                             *  `1C.5` asks for every degradation to be RECORDED IN THE RESULT and
                             *  justified by the rule that caused it.  It is carried on the value and
@@ -217,7 +217,7 @@ object Cert:
     case Unbounded
     case Bounded(c: Cert)
 
-  /** A BUDGET RULE THAT WAS APPLIED, with the rule as the identity of the record (plan.md 1C.5).
+  /** A BUDGET RULE THAT WAS APPLIED, with the rule as the identity of the record.
    *
    *  There are exactly two, because [[Cert.widen]] has exactly two rules, and each names what it
    *  gave up rather than merely that something was given up. */
@@ -285,7 +285,7 @@ object Cert:
   def of(eps: Boolean, keys: SortedMap[PathItem, Cert], outside: Outside,
          degraded: Set[Degradation] = Set.empty): Cert =
     val live = keys.filter((_, c) => !c.isEmpty)
-    // NORMALISATION MUST NOT SWALLOW A RECORD (plan.md 1C.5).  Both rewrites below DELETE a
+    // NORMALISATION MUST NOT SWALLOW A RECORD.  Both rewrites below DELETE a
     // sub-certificate, and if that sub-certificate was the one a budget rule degraded then the record
     // disappears with it — `SpatialCertCheck` G caught exactly that: a depth cut one level down
     // produced a ⊤ child, `Bounded(⊤)` normalised to `Unbounded`, and the whole certificate came back
@@ -429,7 +429,7 @@ object Cert:
       case Some(ks) => (ks diff tracked).size.toLong
 
   /** the union over the heads NOT in `tracked` — the bound on what an open shape's untracked bucket
-   *  holds below the level, which is what the relational frontier walk descends into (plan.md 1C.4).
+   *  holds below the level, which is what the relational frontier walk descends into.
    *
    *  It differs from [[Cert.tailsUnion]] in exactly the way the walk needs: the tracked heads have
    *  their own frames already, so folding their sub-tries in here would make the summary frame
@@ -452,7 +452,7 @@ object Cert:
     else if !a.headsNamed || !b.headsNamed then false
     else (a.keys.keySet intersect b.keys.keySet).isEmpty
 
-  /** WHAT THE CERTIFICATE ITSELF COSTS, as one line for `FrontierSummary.notes` (plan.md 1C.7).
+  /** WHAT THE CERTIFICATE ITSELF COSTS, as one line for `FrontierSummary.notes`.
    *
    *  The tier adds a channel to a carrier every lattice operation recurses over, so its own cost has
    *  to be quoted rather than assumed small.  Four quantities, each named with the operation it
@@ -487,7 +487,7 @@ object Cert:
 
   private def show(n: Long): String = if n >= Ivl.INF then "unnamed" else n.toString
 
-  /** THE WIDENING (plan.md 1C.5): bring a certificate inside the budgets, RECORDING nothing here —
+  /** THE WIDENING: bring a certificate inside the budgets, RECORDING nothing here —
    *  the caller records, because only the caller knows which shape degraded.
    *
    *  Two budgets, and each degrades in the one direction that stays sound:

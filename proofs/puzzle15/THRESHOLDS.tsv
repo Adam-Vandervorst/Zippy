@@ -1,4 +1,4 @@
-# USEFULNESS THRESHOLDS for the puzzle15 stress theorem (tasks.md D3) — the committed claims Puzzle15Check
+# USEFULNESS THRESHOLDS for the puzzle15 stress theorem — the committed claims Puzzle15Check
 # holds every certificate to.  A threshold is a claim about the WIDTH of a predicted interval,
 # `(hi + 1) / (lo + 1)`, per declaration, backend and component: `finite` claims only that the bound is finite,
 # a number claims the width is at most that.  Soundness (the counted run inside the interval) is gated

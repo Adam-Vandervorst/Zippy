@@ -5,7 +5,7 @@ import scala.collection.immutable.SortedMap
 import scala.util.Random
 
 /** ==================================================================================================
- *  THE CERTIFICATE VALUE'S OWN LAWS (plan.md 1C.1/1C.2).
+ *  THE CERTIFICATE VALUE'S OWN LAWS.
  *
  *  `Cert` is a new carrier channel and the domain's own history says what that costs if it is not
  *  gated: `Shape.isTop`'s note records a key-certificate prototype that looked like ⊤ to the order's

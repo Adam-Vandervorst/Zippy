@@ -46,7 +46,7 @@ ap.add_argument("--run", action="store_true",
                 help="actually invoke egglog/z3 on every non-marker artifact and fail on rejection")
 ap.add_argument("--timeout", type=int, default=60, help="per-file prover/egglog budget in seconds")
 ap.add_argument("--accept", action="store_true",
-                help="plan.md 2A.6: hold every cell to proofs/pipeline/CLAIMS.tsv — artifact present, kind "
+                help="hold every cell to proofs/pipeline/CLAIMS.tsv — artifact present, kind "
                      "acceptable for the declared kind, `; TRUSTS:` header a subset of the permitted set, "
                      "no undeclared artifact, no SINGLE-SIDE/BUDGET/BOUNDED cell at all, and every "
                      "COVERAGE.tsv row backed by the artifact it names")
@@ -72,7 +72,7 @@ args = ap.parse_args()
 # This is the honest half of the acceptance review's item 3: the pipeline matrix is NOT a
 # full-support table, and rather than let a reader infer its shape from marker vocabulary the shape
 # is written down and checked.  Discharging the cells is the other half and is open — see
-# plan.md, Track A′ (item 4).
+#.
 DECLARED_FILE = root / "proofs" / "pipeline" / "DECLARED.tsv"
 
 
@@ -523,7 +523,7 @@ if args.accept:
             problems.append(f"--accept: {counts[kind_bad]} {kind_bad} cell(s); the gate requires 0")
     if expected_open:
         problems.append(f"--accept: {len(expected_open)} marker-to-marker chain(s); the gate requires 0")
-    # ---- COVERAGE.tsv: STRUCTURAL coverage (tasks.md D1) — one authority, scripts/check_coverage.py:
+    # ---- COVERAGE.tsv: STRUCTURAL coverage  — one authority, scripts/check_coverage.py:
     #      every row's feature is parsed out of a trace term or a trace node, its claim's closure is read from
     #      target/trace-closure.tsv, and the census of unsupported constructors / unexercised laws is complete
     if not COVERAGE_FILE.exists():

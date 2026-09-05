@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-GENERATED — the whistle correspondence trace (plan.md 2E.3).  DO NOT EDIT.
+GENERATED — the whistle correspondence trace.  DO NOT EDIT.
 
 Regenerate with `ZIPPY_REGENERATE=1 sbt --server 'testOnly morkl.WhistleTrace'`; without the flag the suite
 writes to `target/artifact-scratch` and DIFFS against this file.

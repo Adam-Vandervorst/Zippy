@@ -162,7 +162,7 @@ object EquivPipeline:
     def go(x: Space, bm: Set[String], bp: Set[String], active: Set[RoutinePtr] = Set.empty): Space =
       def sub(y: Space) = go(y, bm, bp, active)
       x match
-        // ---- AN ACYCLIC CALL IS INLINED, NOT REFUSED (plan.md 1D.4, and 2A.2's first clause) ----
+        // ---- AN ACYCLIC CALL IS INLINED, NOT REFUSED  ----
         //
         // This arm did not exist and the `Call` fell through to the throw below whenever it read an
         // enclosing binder.  MEASURED: that is what made `puzzle15` and `nqueens` the two
@@ -180,8 +180,8 @@ object EquivPipeline:
         // proves the SEMANTIC half — a call IS its body applied to the argument — and the SYNTACTIC
         // half is `O6a`, beta-soundness of capture-avoiding inlining, which is OPEN as a theorem and
         // carried by `SubstConformance` + `SubstCapture` + `proofs/lean/Zippy/Subst.lean`.  Recording
-        // that pair in the emitted artifact's `; TRUSTS:` header is 2A.2's clause; the format is
-        // fixed (`Certified.Trust`, plan.md 0.8) and `outside:Call` maps to `O6a`.
+        // that pair in the emitted artifact's `; TRUSTS:` header is required; the format is
+        // fixed by `Certified.Trust`, and `outside:Call` maps to `O6a`.
         //
         // `active` is the cycle guard: a SELF-recursive callee cannot be inlined (it would not
         // terminate) and falls through to the same honest refusal as before.
@@ -227,7 +227,7 @@ object EquivPipeline:
             throw IllegalStateException(
               s"expandKeepBinders: ${other.getClass.getSimpleName} reads a variable bound by an " +
               s"enclosing Iteration/Fixpoint, so it cannot be executed and no renderer models it. " +
-              s"Carrying this node symbolically is the open part of the instance tier (plan.md, " +
+              s"Carrying this node symbolically is the open part of the instance tier (" +
               s"item 3); the caller must fall back to `expand` and record the marker.  " +
               (other match
                  case Call(rp, _, _) if !rc.isDefinedAt(rp) =>
@@ -1316,7 +1316,7 @@ object AgnosticPipeline:
         val f = fresh("fix")
         decls += s"(declare-fun $f (Path) Bool)"
         emitDef(s"; FIXPOINT $f — first-class: the LEAST post-fixpoint above init (never unrolled)")
-        // THE MARKER `scripts/check_asserts.py` READS (plan.md 2E.4).  These two clauses and the
+        // THE MARKER `scripts/check_asserts.py` READS.  These two clauses and the
         // Park instance below say the executor's fixpoint is the least post-fixpoint of
         // `X ↦ init ∪ body[rec := X]`; that it IS one is `Zippy.Space.fixpoint_is_lfp`
         // (proofs/lean/Zippy/Positive.lean), whose hypothesis — the body positive in `rec` — is the
@@ -1515,7 +1515,7 @@ ${smt.defsText}
    *  COMPILE ERROR here rather than a silent identity.  Every closed case is listed by name with
    *  the reason it needs no descent.
    *
-   *  ==IT DELEGATES TO `Subst` (plan.md 0.6/1A.1), AND THE SHAPE CHANGED WITH IT==
+   *  ==IT DELEGATES TO `Subst`, AND THE SHAPE CHANGED WITH IT==
    *  This used to thread two rename maps (`pm`, `mm`) down the traversal and apply them at `Deref`
    *  and `Mention`.  It now renames EACH BINDER'S OWN OCCURRENCES with one `Subst` call at that
    *  binder and then descends into the result, so the maps are gone: by the time `go` reaches a

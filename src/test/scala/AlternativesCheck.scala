@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 import morkl.Space.*
 
-/** tasks.md B1 — RESIDUAL ALTERNATIVES ARE EXPLICIT.
+/** RESIDUAL ALTERNATIVES ARE EXPLICIT.
  *
  *  Acceptance: a deterministic fixture exposes at least three semantically equivalent residual choices
  *  with pairwise different certified cost, created and merged with NO ground evaluation.  Beyond the

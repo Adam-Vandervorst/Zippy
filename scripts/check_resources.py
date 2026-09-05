@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""RESOURCE CERTIFICATES OF THE CORNERSTONES (tasks.md D2): every claimed resource result contains its counted run.
+"""RESOURCE CERTIFICATES OF THE CORNERSTONES: every claimed resource result contains its counted run.
 
 `proofs/pipeline/resources/<stone>.tsv` (written by EquivPipelineTest) carries, per backend, the predicted
 interval of every calibrated component and the counted value of the executor's run (`B` rows), then the

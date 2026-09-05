@@ -96,7 +96,7 @@ SEARCH_ROOTS = [
 # Extensions that make a token a file reference.  `.sh` and `.p` are only honoured when the token
 # also contains a `/`: bare `a.sh` is overwhelmingly a Scala field access (`a.show` abbreviated to
 # `.sh`), and bare `x.p` is a variable.
-# `.lean` (plan.md 3.2): proofs/lean is where every mechanized theorem lives and docs/TRUSTED.md,
+# `.lean`: proofs/lean is where every mechanized theorem lives and docs/TRUSTED.md,
 # the registries and the SMT files cite its modules by path, so a renamed module must fail here.
 ALWAYS = (".md", ".scala", ".py", ".egg", ".smt2", ".tsv", ".csv", ".png", ".sbt", ".ser", ".rle", ".lean")
 PATH_ONLY = (".sh", ".p", ".txt", ".json", ".jsonl")
@@ -151,12 +151,8 @@ SKIP_DIRS = {".git", ".tools", "target", ".bsp", ".idea", ".scala-build", ".bloo
 #       the narrative is the artifact, so the citation is a fact about the past, not a pointer;
 #   (c) a token that is a MEASUREMENT or an identifier and only looks like a filename;
 #   (d) a tool binary named with an extension-like suffix;
-#   (e) a file that plan.md PROPOSES TO CREATE.  A plan has to name its future files precisely or
-#       it is not a plan, and the checker has to reject a path that does not exist or it is not a
-#       checker.  The resolution is that each proposed path is declared here, per token, and the
-#       `--strict` unused-exception check turns into the retirement rule: the moment the file lands
-#       the entry is unused, `--strict` fails, and the entry AND the plan line that named it must go.
-#       So the plan cannot outlive its own execution silently.
+#   (e) a declared future file. Each proposed path is declared here per token; `--strict` retires
+#       the exception as soon as the file lands.
 TOKEN_EXCEPTIONS = {
     # (a) carac is an EXTERNAL Datalog benchmark whose fixtures these programs were derived from.
     # The citation is `carac:<its own repo-relative path>`; the scanner sees the path part, since
@@ -184,19 +180,7 @@ TOKEN_EXCEPTIONS = {
         "(c) shorthand for the four stones' -space egg cells of the previous matrix (deleted in 2A.2)",
     ("build.log", "impl_wrap/unwrap/head.smt2"):
         "(c) shorthand for impl_wrap.smt2, impl_unwrap.smt2, impl_head.smt2",
-    # `review.md` is a REVIEW INPUT and is deliberately untracked (see .gitignore): a review
-    # document quotes the state it reviewed, several of whose files no longer exist by design.
-    # `plan.md` is the tracked plan against it and cites it by name; `build.log`'s narrative
-    # cites it throughout.
-    ("plan.md", "review.md"):
-        "(b) the untracked review input this plan answers; see .gitignore",
-    # (e) FILES plan.md PROPOSES.  Delete each entry when its task lands -- `--strict` will insist.
-    #     PHASE 0 IS DONE, so its seven entries are GONE, not commented out: an unused exception
-    #     is itself a `--strict` failure, which is what makes this list shrink instead of rot.
-    #     (0.2 check_determinism.sh, 0.3 ArtifactSink.scala, 0.4 gates.py, 0.5 check_lean.sh,
-    #      0.6 AlphaNormCheck.scala, 0.8 Certified.scala + proofs/pipeline/CLAIMS.tsv)
-    #     TRACK A IS DONE, so 1A.1's `Subst.scala` entry is gone too.
-    # (f') GENERATED WITNESS TABLES UNDER `target/` (2E.4 / 0.5): written by check_asserts.py and
+    # (f') GENERATED WITNESS TABLES UNDER `target/`: written by check_asserts.py and
     #      check_lean.sh, read by proof_closure.py; git-ignored like every build output.
     ("scripts/check_asserts.py", "target/assert-closure.tsv"): "(f') the assert-closure witness this script writes",
     ("scripts/check_asserts.py", "assert-closure.tsv"): "(f') the same table, by its bare name in the docstring",
@@ -220,14 +204,14 @@ TOKEN_EXCEPTIONS = {
     # (j) SYNTHETIC NAMES of selftest (e): an in-memory name set that deliberately disagrees with the disk
     ("scripts/check_references.py", "docs/in-set-only.md"): "(j) selftest (e) synthetic name",
     ("scripts/check_references.py", "in-set-only.md"): "(j) selftest (e) synthetic name",
-    ("scripts/check_references.py", "docs/Plan.md"): "(j) selftest (e) synthetic name",
-    ("scripts/check_references.py", "docs/plan.md"): "(j) selftest (e) synthetic name (case variant)",
+    ("scripts/check_references.py", "docs/Spec.md"): "(j) selftest (e) synthetic name",
+    ("scripts/check_references.py", "docs/spec.md"): "(j) selftest (e) synthetic name (case variant)",
     ("scripts/check_references.py", "scripts/x.py"): "(j) selftest (e) synthetic name",
     ("scripts/check_references.py", "../scripts/x.py"): "(j) selftest (e) synthetic relative name",
     ("scripts/check_references.py", "docs/readme.md"): "(j) selftest (e) synthetic origin",
     ("scripts/check_references.py", "on-disk-only.md"): "(j) selftest (e) synthetic file that IS on disk and must not resolve",
 
-    # (g) THE IGNORE FILE'S OWN TOKENS (plan.md 3.2 — a per-token exception replaces the former
+    # (g) THE IGNORE FILE'S OWN TOKENS — a per-token exception replaces the former
     #     whole-file skip).  Each names a TRANSIENT file a script creates and removes; the ignore
     #     exists so a mid-run `git add -A` cannot catch it, and the path is absent by design.
     (".gitignore", "proofs/unbounded/.probe.p"): "(g) run.sh's transient vacuity probe, removed by run.sh",
@@ -269,10 +253,42 @@ TOKEN_EXCEPTIONS = {
     ("scripts/proof_closure.py", "lean-mechanized.tsv"):
         "(f) as above; the bare filename in that file's prose, same artifact",
 
-    # `CLAIMS.tsv`'s (e) entry is GONE: 0.8 created `proofs/pipeline/CLAIMS.tsv` (the format; 2A.1
-    # declares the rows), so plan.md's bare `CLAIMS.tsv` token resolves and the exception is unused.
-    # 2A.4 / 2A.6 (2026-09-04): the zipper refinement obligation and the pipeline coverage table now
-    # exist, so plan.md's tokens for them resolve and their two exceptions are gone.
+    # (f'') OTHER GENERATED OUTPUTS AND WITNESSES.  These tokens are assembled with a directory at
+    # run time or deliberately live under ignored target/.  Name every producer/consumer pair so a
+    # fresh index snapshot and a warm worktree receive exactly the same verdict.
+    ("docs/TRUSTED.md", ".trace.tsv"): "(f'') suffix of the per-cell trace files generated by EquivPipelineTest",
+    ("docs/TRUSTED.md", "target/trace-closure.tsv"): "(f'') proof_closure.py's generated closure witness",
+    ("docs/atlas.md", ".trace.tsv"): "(f'') suffix of the per-cell trace files generated by EquivPipelineTest",
+    ("scripts/audit_pipeline_markers.py", "target/trace-closure.tsv"): "(f'') generated by proof_closure.py, consumed here",
+    ("scripts/check_coverage.py", "target/trace-closure.tsv"): "(f'') generated by proof_closure.py, consumed here",
+    ("scripts/check_coverage.py", "trace-closure.tsv"): "(f'') same generated closure witness by basename",
+    ("scripts/check_traces.py", ".trace.tsv"): "(f'') runtime suffix for committed per-cell traces",
+    ("scripts/gates.py", "target/gates.tsv"): "(f'') this script's generated gate record",
+    ("scripts/gates.py", "gates.tsv"): "(f'') same generated gate record by basename",
+    ("scripts/gates.py", "target/trace-closure.tsv"): "(f'') generated by proof_closure.py before its consumers run",
+    ("scripts/gen_acceptance.py", "target/gates.tsv"): "(f'') generated by gates.py, consumed here",
+    ("scripts/gen_acceptance.py", "gates.tsv"): "(f'') same generated gate record by basename",
+    ("scripts/gen_acceptance.py", "target/trace-closure.tsv"): "(f'') generated by proof_closure.py, consumed here",
+    ("scripts/gen_acceptance.py", "trace-closure.tsv"): "(f'') same generated closure witness by basename",
+    ("scripts/proof_closure.py", ".trace.tsv"): "(f'') runtime suffix for committed per-cell traces",
+    ("scripts/proof_closure.py", "target/trace-closure.tsv"): "(f'') this script's generated closure witness",
+    ("scripts/proof_closure.py", "trace-closure.tsv"): "(f'') same generated closure witness by basename",
+    ("scripts/proof_closure.py", "trace-closure-injected.tsv"): "(f'') this script's mutation-only generated witness",
+    ("scripts/publish_benchmarks.py", "gates.tsv"): "(f'') generated gate record updated after reproduction",
+    ("src/test/scala/ProofTraceCheck.scala", "target/artifact-scratch/marker-only.smt2"):
+        "(f'') scratch artifact deliberately generated under target by this mutation test",
+    ("src/test/scala/DecisionsCheck.scala", ".frontier.tsv"): "(f'') runtime suffix for generated decision frontiers",
+    ("src/test/scala/DecisionsCheck.scala", "DECISIONS.tsv"): "(f'') generated decision index assembled under proofs/decisions",
+    ("scripts/check_puzzle15.py", "CERTIFICATE.tsv"): "(f'') Puzzle15Check output assembled under proofs/puzzle15",
+    ("scripts/check_puzzle15.py", "EXPANSION.tsv"): "(f'') Puzzle15Check output assembled under proofs/puzzle15",
+    ("scripts/check_puzzle15.py", "THRESHOLDS.tsv"): "(f'') committed puzzle threshold input assembled under proofs/puzzle15",
+    ("src/test/scala/Puzzle15Check.scala", "CERTIFICATE.tsv"): "(f'') output generated under proofs/puzzle15",
+    ("src/test/scala/Puzzle15Check.scala", "EXPANSION.tsv"): "(f'') output generated under proofs/puzzle15",
+    ("src/test/scala/Puzzle15Check.scala", "REPORT.md"): "(f'') output generated under proofs/puzzle15",
+    ("src/test/scala/Puzzle15Check.scala", "SELECTION-alloc.tsv"): "(f'') output generated under proofs/puzzle15",
+
+    # `CLAIMS.tsv`, the zipper-refinement obligation and pipeline coverage now exist, so their
+    # former future-file exceptions are gone.
 
     # (The ELIDED-GOAL exception for puzzle15-space.smt2 is gone: since 2A.3 that cell is a trace
     # record, not a 174 MB denotation, and nothing is elided.)
@@ -286,6 +302,17 @@ TOKEN_EXCEPTIONS = {
         "(b) the archived copy of formal.egg from the scala-cli era; removed when the port finished",
     ("build.log", "IntegrationLadderProbe.scala"):
         "(b) a throwaway probe suite, and the entry itself says `DELETED before this entry`",
+    ("build.log", "plan.md"): "(b) the append-only narrative cites the superseded plan that existed then",
+    ("build.log", ".frontier.tsv"): "(b) generated-artifact suffix recorded by the append-only narrative",
+    ("build.log", ".trace.tsv"): "(b) generated-artifact suffix recorded by the append-only narrative",
+    ("build.log", "CERTIFICATE.tsv"): "(b) Puzzle15Check output recorded by the append-only narrative",
+    ("build.log", "EXPANSION.tsv"): "(b) Puzzle15Check output recorded by the append-only narrative",
+    ("build.log", "REPORT.md"): "(b) Puzzle15Check output recorded by the append-only narrative",
+    ("build.log", "SELECTION-alloc.tsv"): "(b) Puzzle15Check output recorded by the append-only narrative",
+    ("build.log", "THRESHOLDS.tsv"): "(b) puzzle threshold artifact recorded by the append-only narrative",
+    ("build.log", "target/gates.tsv"): "(b) ignored gate witness recorded by the append-only narrative",
+    ("build.log", "target/trace-closure.tsv"): "(b) ignored closure witness recorded by the append-only narrative",
+    ("build.log", "target/trace-closure-injected.tsv"): "(b) ignored mutation witness recorded by the append-only narrative",
     ("build.log", ".test.scala"):
         "(c) the scala-cli test-scope SUFFIX `*.test.scala` / `<Name>.test.scala`, not a filename",
     ("build.log", "keys_intersection/subtraction/composition/restriction/filter_exact.smt2"):
@@ -304,7 +331,7 @@ DATA_FILES = {
     "proofs/laws/MINED.tsv": "mined law candidates; the `file` column names files that resolve, the rest are terms",
     "datalog-morkl.txt": "generated program dump",
 }
-# `.gitignore` is NO LONGER a whole-file skip (plan.md 3.2).  Its lines are patterns naming paths
+# `.gitignore` is NO LONGER a whole-file skip. Its lines are patterns naming paths
 # that are absent BY DESIGN, and each such token is excused individually in TOKEN_EXCEPTIONS with
 # the reason it is absent -- so a pattern that names a path which is neither tracked nor declared
 # absent (a typo, or a stale ignore for a file that moved) fails like any other dangling reference.
@@ -560,16 +587,16 @@ def selftest():
     #     case-insensitive filesystem, so this is exactly the check that cannot be delegated to the
     #     filesystem.
     tmp = fresh_repo()
-    (tmp / "selftest-Plan.md").write_text("the plan\n")
-    (tmp / "selftest-d.md").write_text("see [p](selftest-plan.md)\n")
-    git(tmp, "add", "selftest-Plan.md", "selftest-d.md"); git(tmp, "commit", "-qm", "four")
-    expect("(d) case-only mismatch, head", run(tmp, "head"), "selftest-plan.md", True)
+    (tmp / "selftest-Spec.md").write_text("the spec\n")
+    (tmp / "selftest-d.md").write_text("see [p](selftest-spec.md)\n")
+    git(tmp, "add", "selftest-Spec.md", "selftest-d.md"); git(tmp, "commit", "-qm", "four")
+    expect("(d) case-only mismatch, head", run(tmp, "head"), "selftest-spec.md", True)
     got = run(tmp, "head")
-    if any("selftest-Plan.md" in g and "does not exist" in g for g in got):
+    if any("selftest-Spec.md" in g and "does not exist" in g for g in got):
         failures.append(f"(d) the correctly-cased name must resolve, got {got}")
     _sh.rmtree(tmp, ignore_errors=True)
 
-    # (e) `resolves()` IS SET MEMBERSHIP, WITH THE FILESYSTEM DISAGREEING (plan.md 3.2).  The
+    # (e) `resolves()` IS SET MEMBERSHIP, WITH THE FILESYSTEM DISAGREEING. The
     #     regressions above run the whole scanner against git snapshots; this one calls `resolves`
     #     directly against an in-memory name set inside a directory whose contents CONTRADICT it,
     #     so the test discriminates the checker's own resolution from anything Linux answers:
@@ -578,7 +605,7 @@ def selftest():
     #       * a case-only variant of a set member must not, whatever the filesystem says.
     tmp = fresh_repo()
     (tmp / "on-disk-only.md").write_text("present on disk, absent from the set\n")
-    names = {"docs/in-set-only.md", "docs/Plan.md", "scripts/x.py"}
+    names = {"docs/in-set-only.md", "docs/Spec.md", "scripts/x.py"}
     global ROOT
     keep = ROOT
     ROOT = tmp
@@ -589,7 +616,7 @@ def selftest():
             failures.append("(e) a repo-relative name in the set did not resolve from the root")
         if resolves("on-disk-only.md", "README.md", names):
             failures.append("(e) a file present on disk but absent from the set resolved")
-        if resolves("docs/plan.md", "README.md", names):
+        if resolves("docs/spec.md", "README.md", names):
             failures.append("(e) a case-only variant of a set member resolved")
         if not resolves("../scripts/x.py", "docs/readme.md", names):
             failures.append("(e) a relative path into another directory of the set did not resolve")

@@ -1,4 +1,4 @@
-; UNIVERSAL ZIPPER REFINEMENT over the SYNTAX of the key-free local algebra (plan.md 2A.4).
+; UNIVERSAL ZIPPER REFINEMENT over the SYNTAX of the key-free local algebra.
 ;
 ; For every term of the local algebra and every path, the zipper `transpileZ` builds observes exactly
 ; the set `eval` denotes.  Induction over the Term datatype; each constructor's step is its own

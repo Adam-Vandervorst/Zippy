@@ -7,7 +7,7 @@ import scala.language.implicitConversions
 /** ==============================================================================================
  *  A1 — THE EVENT SEMANTICS IS THE COUNTED INTERPRETER'S SPECIFICATION, DIFFERENTIALLY.
  *
- *  tasks.md A1 acceptance: "differential tests show that instrumented executions and
+ *   acceptance: "differential tests show that instrumented executions and
  *  `SpatialEvents` produce the same event MULTISET for every constructor and backend; the test
  *  corpus includes empty, singleton, aliased, disjoint, deeply shared, recursive, and n-ary cases."
  *

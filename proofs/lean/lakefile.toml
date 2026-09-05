@@ -1,5 +1,5 @@
 # ==================================================================================================
-# THE LEAN DEVELOPMENT.  plan.md items 3 and 8 make a Lean-checked theorem a PRECONDITION of any
+# THE LEAN DEVELOPMENT.   items 3 and 8 make a Lean-checked theorem a PRECONDITION of any
 # unqualified `PROVED` for the substitution and fixpoint claims, so this package is where every
 # mechanized theorem lands.  Phase 0 (task 0.5) builds the scaffold ONCE, so that Phase 1's `1E.*`
 # and Phase 2's `2E.*` add theorems to a package that already builds inside `sbt check`.

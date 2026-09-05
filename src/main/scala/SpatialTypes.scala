@@ -129,7 +129,7 @@ object SpatialTypes:
   /** THE LENGTH-SIDE `TailsUnion` TRANSFER, as a function rather than only as a `case` arm.
    *
    *  Extracted because `SpatialCost.ChainCost.leafEnv` needs it to iterate the PER-LEVEL FIBER
-   *  BOUND down a rest-chain nest (plan.md 1B.5): each level's `rest` is a group of the previous
+   *  BOUND down a rest-chain nest: each level's `rest` is a group of the previous
    *  level's tails, so the bound is `tailsUnion` applied once per level.  Re-deriving the shift
    *  there would be a second copy of the arithmetic, which is exactly the kind of duplication that
    *  drifts — `windowWidthOf` was one and it was unsound.
@@ -145,7 +145,7 @@ object SpatialTypes:
       LenBounds(Ivl.relu(x.restLens.lo - 1),
                 if x.restLens.hi == LenBounds.INF then LenBounds.INF
                 else Ivl.relu(x.restLens.hi - 1)))
-  /** THE MAY-ONLY LENGTH TYPE — the length half of the FIBER BOUND (plan.md 1B.5), in ONE place.
+  /** THE MAY-ONLY LENGTH TYPE — the length half of the FIBER BOUND, in ONE place.
    *
    *  One head group's tails are a SUBSET of the level's tails-union, so the union's UPPER bounds hold
    *  of the group and its LOWER bounds do not: `Literal({a, b.a})`'s tails-union has a path of length
@@ -510,7 +510,7 @@ object SpatialTypes:
           routines = env.routines, active = env.active + rp)
         go(body, callee, depth + 1)
 
-      // ==A RECURSIVE CALLEE'S SUMMARY ON THE LENGTH SIDE TOO (plan.md 1D.1)==
+      // ==A RECURSIVE CALLEE'S SUMMARY ON THE LENGTH SIDE TOO ==
       //
       // `active(rp)` stops the interprocedural descent above, and this arm returned
       // `SpaceType.unknown` — no claim about the length histogram OR the cardinality of a recursive

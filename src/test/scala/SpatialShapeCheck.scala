@@ -126,7 +126,7 @@ class SpatialShapeCheck extends FunSuite:
     // ==THIS TEST USED TO ASSERT THE OLD IMPRECISION AS A REQUIREMENT==
     // It read `assertEquals(t.headCount.lo, 0L, "and no lower bound: the window may be empty")` for
     // `Range({a,b,c}, 1, 2)`.  That window is `[0, 1)` over a THREE-path source, so it definitely
-    // selects a path and the lower bound 0 was slack, not a fact.  plan.md 1D.2's rank abstraction
+    // selects a path and the lower bound 0 was slack, not a fact.  's rank abstraction
     // (`Shape.orderMin`/`orderMax`, `Shape.rangeAt`) pins the answer to the SINGLETON `{a}`, which
     // is what `eval` returns, and the old assertion then failed — correctly.
     //

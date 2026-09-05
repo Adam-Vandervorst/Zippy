@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 import morkl.Space.*
 
-/** tasks.md A5 — CALLS AND RECURSIVE COMPONENTS ARE COMPOSITIONAL IN THE RESOURCE DOMAIN.
+/** CALLS AND RECURSIVE COMPONENTS ARE COMPOSITIONAL IN THE RESOURCE DOMAIN.
  *
  *  Every bound here is produced by `CostSem` WITHOUT inlining as an analysis step: a `Call` is answered by
  *  the callee's PARAMETRIC SUMMARY at the caller's abstract arguments (computed once per canonical routine

@@ -3,8 +3,8 @@
 # THE LEAN GATE.  `lake build` over `proofs/lean`, plus the two things a build alone does not say.
 #
 # ==WHY IT IS A GATE AND NOT A NOTE==
-# plan.md items 3 and 8 make a Lean-checked theorem a PRECONDITION of any unqualified `PROVED` for
-# the substitution and fixpoint claims: `docs/TRUSTED.md` T1 is an induction SCHEMA that first-order
+# A Lean-checked theorem is a PRECONDITION of any unqualified `PROVED` for the substitution and
+# fixpoint claims: `docs/TRUSTED.md` T1 is an induction SCHEMA that first-order
 # logic cannot state, T2 is four induction principles asserted inside one SMT file, and T3 admits
 # Kruskal's tree theorem outright.  A mechanized theorem that has stopped compiling is not a weaker
 # claim than before -- it is the SAME claim with nothing behind it, and the status tables would go on
@@ -28,14 +28,13 @@
 #   5. THE AXIOM AUDIT.  For each marked theorem, `#print axioms` lists what it actually depends on.
 #      A theorem closed with `sorry` still BUILDS -- with a warning that a log filter can lose -- and
 #      would then be lifting a status while proving nothing.  `sorryAx` in the axiom list is a hard
-#      failure; the rest of the list is printed, so `2E.6`'s requirement ("check_lean.sh lists the
-#      axioms each theorem uses and they are exactly Lean's") has its output from the start.
+#      failure; the rest of the list is printed so the axioms each theorem uses are explicit and
+#      limited to Lean's declared base.
 #
 # Usage:  scripts/check_lean.sh              the gate
 #         scripts/check_lean.sh --probe-kruskal
-#             answers plan.md's named TOOLCHAIN RISK for 2E.3 -- is Kruskal's tree theorem (or
-#             Higman's lemma) in the pinned Mathlib?  Reported, never asserted: 2E.3 has to know
-#             before it starts, and the fallback is proving Kruskal from Higman.
+#             reports whether Kruskal's tree theorem or Higman's lemma is in the pinned Mathlib.
+#             When Kruskal is absent, the package supplies its proof from Higman's lemma.
 # ==================================================================================================
 set -u
 cd "$(dirname "$0")/.." || exit 1
@@ -66,12 +65,11 @@ else
   \"Mathlib pinned to the installed toolchain\" means."
 fi
 
-# ---- the Kruskal probe (plan.md's named toolchain risk for 2E.3) ----------------------------------
+# ---- the Kruskal probe ---------------------------------------------------------------------------
 if [ "${1:-}" = "--probe-kruskal" ]; then
   echo
-  echo "LEAN: probing the pinned Mathlib for the whistle's well-quasi-order theorems (2E.3)."
-  echo "      This is a REPORT, not a gate: plan.md requires the answer BEFORE 2E.3 starts, and the"
-  echo "      fallback if Kruskal is absent is to prove it from Higman."
+  echo "LEAN: probing the pinned Mathlib for the whistle's well-quasi-order theorems."
+  echo "      This is a REPORT, not a gate. If Kruskal is absent, the package proves it from Higman."
   MATHLIB=$LEAN_DIR/.lake/packages/mathlib
   [ -d "$MATHLIB" ] || fail "Mathlib is not fetched: run \`lake update\` in proofs/lean"
   echo
@@ -154,7 +152,7 @@ ENTRY_MARKERS=$(grep -hoE '^MECHANIZED-IN:[[:space:]]*[^[:space:]`<>|]+#[^[:spac
                 | sed 's|^MECHANIZED-IN:[[:space:]]*||' | sort -u)
 MARKERS=$(printf '%s\n%s\n' "$MARKERS" "$ENTRY_MARKERS" | grep -v '^$' | sort -u)
 if [ -z "$MARKERS" ]; then
-  echo "  none yet (plan.md 1E.3 attaches the first ones; 0.5 only makes the marker MEAN something)."
+  echo "  none yet ( attaches the first mechanized entries)."
   echo "  The marker Zippy/Pointwise.lean documents is checked below as the self-test."
   MARKERS="proofs/lean/Zippy/Pointwise.lean#Zippy.Space.unwrap_wrap"
   SELFTEST=1
@@ -199,16 +197,16 @@ for m in $MARKERS; do
       [ -z "$ax" ] && ax="(none)"
       case "$ax" in
         *sorryAx*)
-          echo "  SORRIED     $m  axioms: $ax"; rc=1 ;;
+          echo "  SORRIED     $m  axioms: $ax"; rc=1;;
         *)
           echo "  OK          $m"
           echo "              axioms: $ax"
           printf '%s\t%s\t%s\t%s\n' "$m" "$thm" "$ax" "MECHANIZED" >> "$WITNESS.tmp" ;;
-      esac ;;
+      esac;;
     *)
       echo "  UNRESOLVED  $m"
       printf '%s\n' "$out" | grep -v '^ *$' | head -4 | sed 's/^/              /'
-      rc=1 ;;
+      rc=1;;
   esac
 done
 
@@ -284,7 +282,7 @@ SEEN=$(printf '%s\n' "$AXLINES" | sed -n 's/^AXIOMS [^:]*: //p' | grep -v '^(non
 NAXFREE=$(printf '%s\n' "$AXLINES" | grep -c ': (none)$' || true)
 echo "  $NTHM theorem(s) audited; $NAXFREE depend on NO axiom at all"
 echo "  axioms used across the package: $(printf '%s\n' "$SEEN" | tr '\n' ' ')"
-# The per-theorem list, which is what 2E.6's gate sentence asks this script to print.
+# Print the per-theorem list as part of the gate record.
 printf '%s\n' "$AXLINES" | sed 's/^AXIOMS /    /'
 if printf '%s\n' "$SEEN" | grep -q 'sorryAx'; then
   printf '%s\n' "$AXOUT" | grep -B0 'sorryAx' | head -10 | sed 's/^/    /'

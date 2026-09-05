@@ -1,7 +1,7 @@
 package morkl
 
 /** ==============================================================================================
- *  MUTATION SWITCHES (tasks.md E1): weaken one property of the analysis on purpose, so a gate can be
+ *  MUTATION SWITCHES: weaken one property of the analysis on purpose, so a gate can be
  *  shown to FAIL exactly when that property is weakened.
  *
  *  A gate that only ever passes proves nothing about what it guards.  Each switch below removes one

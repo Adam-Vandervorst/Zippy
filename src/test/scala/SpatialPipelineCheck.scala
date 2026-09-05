@@ -811,7 +811,7 @@ class SpatialPipelineCheck extends FunSuite, CalibrationProbe:
                    s"narrow(${sh.show}, ${cfg.shapeDepth}x${cfg.shapeWidth}) = ${n.show} DROPPED " +
                    s"${u.pretty}, which the original admits")
         // THE FAILURE MESSAGE NAMES THE CHANNEL, and that is not decoration: this gate found the
-        // certificate tier's `Cert.of` canonicalisation bug (plan.md 1C.2), and a bare "not above it"
+        // certificate tier's `Cert.of` canonicalisation bug, and a bare "not above it"
         // sent the first two diagnosis attempts at the certificate when the channel was `otherTail`
         // and the certificate comparison was already returning `true`.
         assert(Shape.leqStrong(sh, n),
@@ -1255,7 +1255,7 @@ class SpatialPipelineCheck extends FunSuite, CalibrationProbe:
   }
 
   test("DERIVATION: every cornerstone interval carries a rule, and the certificate is deterministic") {
-    // the requirement (tasks.md A4): "Attach a derivation DAG to each reported interval: rule, input
+    // the requirement: "Attach a derivation DAG to each reported interval: rule, input
     // facts, backend parameter, widening event, and resulting bound" with a DETERMINISTIC renderer.
     println("\n[derivation] the certificates on the OPTIMIZED bodies")
     for (name, r, ann) <- cornerstones do

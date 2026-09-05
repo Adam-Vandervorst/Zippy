@@ -47,7 +47,7 @@
 % =============================================================================
 
 % ---------------------------------------------------------------------------
-% DISCHARGED (plan.md 1E.3).  The schema this file asserts is a THEOREM in Lean:
+% DISCHARGED.  The schema this file asserts is a THEOREM in Lean:
 % `path_induction` is it, for every predicate, and it is not an axiom there
 % because `List` is an inductive type and the schema IS its recursor.
 % `PathInduction.lean` reproduces this file's derivation exactly rather than

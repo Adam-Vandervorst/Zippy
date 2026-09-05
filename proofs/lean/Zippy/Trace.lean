@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-GENERATED — the correspondence trace (plan.md 1E.2).  DO NOT EDIT.
+GENERATED — the correspondence trace.  DO NOT EDIT.
 
 Regenerate with `ZIPPY_REGENERATE=1 sbt --server 'testOnly morkl.SubstTrace'`; without the flag the suite
 writes to `target/artifact-scratch` and DIFFS against this file, so a drift in EITHER

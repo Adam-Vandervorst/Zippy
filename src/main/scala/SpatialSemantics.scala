@@ -5,11 +5,11 @@ import scala.collection.mutable
 import scala.collection.mutable.Stack
 
 /** ==================================================================================================
- *  THE OPERATIONAL RESOURCE SEMANTICS (tasks.md A1).
+ *  THE OPERATIONAL RESOURCE SEMANTICS.
  *
  *  ==WHAT THIS FILE IS==
  *  ONE definition of what every backend and the counted oracle mean by "resource use".  It has three
- *  layers, and the layers are the artifacts A1 names:
+ *  layers:
  *
  *   1. [[EventKind]] — the backend-INDEPENDENT event algebra: node visits, operand probes,
  *      allocation, retained sharing, key comparisons, materialisation, rounds (plus the one hand-off
@@ -34,7 +34,7 @@ import scala.collection.mutable.Stack
  *  interpreter of this semantics — [[SpatialEvents.counted]] is the entry point — and this file is
  *  what they are counted AGAINST.  An executor whose hooks disagree with the semantics is a bug in
  *  one of the two, and the differential suite says which constructor and which event.  Nothing in
- *  the analysis (tasks.md A4) may derive a cost from anything but the rules in this file: the
+ *  the analysis may derive a cost from anything but the rules in this file: the
  *  abstract transfers bound the STRUCTURAL QUANTITIES these rules count (paired prefix frontiers,
  *  live operands, Patricia shapes, forced cursor nodes), never a constant read off a benchmark.
  *

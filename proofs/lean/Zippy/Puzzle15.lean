@@ -6,7 +6,7 @@ import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import Mathlib.Tactic
 
 /-!
-# The 15-puzzle's state space, independently of the cost model (tasks.md D3)
+# The 15-puzzle's state space, independently of the cost model
 
 A board is a permutation of the sixteen cells' tiles (`Board := Equiv.Perm (Fin 16)`, cell ↦ tile,
 tile `0` the blank).  A move swaps the blank with one of its grid neighbours; the result is a

@@ -33,7 +33,7 @@ directions unfalsifiable.
 | `; TRUSTS: <list>` | an **emitted artifact** (SMT, egglog, TPTP) | *this artifact's claim rests on* these entries | `proof_closure.py`, `audit_pipeline_markers.py` |
 | `% MECHANIZED-IN: <file>#<thm>` | the file that *asserts* an entry | *that entry is a Lean-checked theorem*, so it is no longer assumed | `check_lean.sh`, then `proof_closure.py` |
 | `MECHANIZED-IN: <file>#<thm>` | an entry's section **in this file** | *the entry's schema itself* is a Lean-checked theorem, so every row reaching the entry is discharged at once | `check_lean.sh`, then `proof_closure.py` |
-| `; ASSUMED: T<n>` / `; PREMISE: …` / `; DERIVED-FROM: <file>` / `; DEFINITION` / `; STONE` / `; GOAL` | the comment **directly above one `(assert …)`** in an SMT obligation | what that one assert *is*: a trusted entry, a hypothesis of the stated theorem, a lemma certified elsewhere, a characterisation of a declared symbol, an in-file stepping stone, the negated goal | `scripts/check_asserts.py` (plan.md 2E.4), which writes the SMT tiers' closure table for `proof_closure.py` |
+| `; ASSUMED: T<n>` / `; PREMISE: …` / `; DERIVED-FROM: <file>` / `; DEFINITION` / `; STONE` / `; GOAL` | the comment **directly above one `(assert …)`** in an SMT obligation | what that one assert *is*: a trusted entry, a hypothesis of the stated theorem, a lemma certified elsewhere, a characterisation of a declared symbol, an in-file stepping stone, the negated goal | `scripts/check_asserts.py`, which writes the SMT tiers' closure table for `proof_closure.py` |
 
 **The per-assert markers exist because the SMT tiers had no closure at all.** SMT-LIB has no
 `include`; an obligation carries its axioms inline, and `proof_closure.py` could not tell a
@@ -58,10 +58,9 @@ deleted a declaration would leave nothing to audit, which is why `% MECHANIZED-I
 
 `src/main/scala/Certified.scala` is the single specification: `Certified.trustsHeader` writes the
 line, `Certified.readTrusts` reads it, `Certified.HeaderPattern` is the one regex, and
-`Certified.Trust` is the vocabulary. It exists because review items 4 and 8 each need the other's
-output — item 4 must record what each cornerstone cell's claim rests on, item 8 must know what each
-artifact claims in order to decide whether any unqualified `PROVED` is honest — and that is the only
-real cycle in `plan.md`'s dependency graph. Fixing the format first, with no consumer, breaks it.
+`Certified.Trust` is the vocabulary. It exists because emitters must record what each cornerstone
+claim rests on while the trust closure must know what each artifact claims before deciding whether
+an unqualified `PROVED` is honest. A shared format breaks that dependency cycle.
 
     ; TRUSTS: -
     ; TRUSTS: T4, law:unwrap-merge
@@ -116,10 +115,9 @@ Two things are deliberately *not* on this list, because they are checked rather 
 Each entry says what is assumed, why it cannot be derived here, what stands in for a proof, and what
 would break if it were false.
 
-## Four entries are DISCHARGED (plan.md 1E.3, 2E.3, 2E.4)
+## Four entries are DISCHARGED
 
-**T1, T2, T3 and T8 are no longer assumed.** Both are induction principles over free algebras — the reason
-each is here is a limitation of first-order logic, not a fact anyone doubted — and both are now
+**T1, T2, T3 and T8 are no longer assumed.** Their schemas are now
 theorems in `proofs/lean`, checked by Lean's kernel with no axiom of its own beyond `propext` /
 `Quot.sound` (`path_induction` uses **none**). `scripts/check_lean.sh` witnesses them and
 `scripts/proof_closure.py` lifts the rows that reach them:
@@ -231,7 +229,7 @@ now conservative (rows O3d-X1, O3d-X2).
 MECHANIZED-IN: proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.kruskal
 MECHANIZED-IN: proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.whistle_terminates
 
-> **DISCHARGED** (plan.md 2E.3) by `proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.kruskal` —
+> **DISCHARGED** by `proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.kruskal` —
 > Kruskal's tree theorem, proved from Mathlib's Higman lemma by Nash-Williams' minimal bad sequence,
 > because the pinned Mathlib has Higman and not Kruskal (`scripts/check_lean.sh --probe-kruskal`) —
 > and `whistle_terminates`: extending a whistle-free path is a well-founded relation.
@@ -279,9 +277,8 @@ into pure local algebra before the instance proofs run. Each expansion step *is*
 cornerstone before emitting anything, so the expansion is checked per instance against the executor.
 
 **If it were false**, the instance obligations would be about a different program than the one that
-runs. Note that the acceptance review of `f6832fc` requires this trusted boundary to be **removed**
-for `Iteration`/`Fixpoint` — the binders should reach the renderers — and that work is open; see
-`plan.md`, Track A′ (item 4) and Track D (item 2).
+runs. This trusted boundary must be removed for `Iteration` and `Fixpoint`: binders must reach the
+renderers. That implementation and proof work remains open.
 
 ## T5. `Range` is outside the certified path-set algebra
 
@@ -417,14 +414,14 @@ would not: `Nat.rec` is a theorem of Lean's kernel and `nat_induction` is its tr
 ## T9. The counted executors are the event semantics
 
 **Files:** `proofs/spatial/REGISTRY.tsv` rows `A6-EVENTS`, `A6-BACKENDS`, `A6-SUMM` (kind
-DIFFERENTIAL) · **Checked by:** `SpatialSemanticsCheck` (A1), `SpatialCostCheck`,
-`SpatialEventsCheck`, `SpatialScaleCheck` (A4)
+DIFFERENTIAL) · **Checked by:** `SpatialSemanticsCheck`, `SpatialCostCheck`,
+`SpatialEventsCheck`, `SpatialScaleCheck`
 
 **What it is.** The resource analysis (`SpatialCostSemantics.scala`) bounds the events the
 instrumented executors emit — `eval`, `evalI`, `execT`, `execZ` with their `effort(...)` hooks
 (`SpatialEvents.scala`).  Those executors are the operational semantics of the language; there is no
 other definition of "the cost of running this program on this backend".  The compositional event
-semantics (`SpatialSemantics.scala`, A1) is written rule for rule after them and checked to produce
+semantics (`SpatialSemantics.scala`) is written rule for rule after them and checked to produce
 the same event multiset on every constructor and backend, the fuzzer corpus and the cornerstones; the
 pricing is checked to contain the counted executions exhaustively on the small universe and on the
 ladders.  That correspondence is DIFFERENTIAL — a check that two implementations agree on every case
@@ -448,12 +445,12 @@ it is open, and the registries say so.
 
 | row | statement | what stands in for it |
 |---|---|---|
-| O6a | beta-soundness of capture-avoiding inlining | **mechanized** (tasks.md C1): `proofs/lean/Zippy/SubstSem.lean#Zippy.substS_denT` — substituting into a term denotes evaluating it in the environment the substitution denotes, every constructor, every fresh-name supply; the Scala's correspondence with `substS` is the generated `Trace.lean` plus the differentials `SubstConformance`/`SubstCapture`.  No longer open. |
-| O10b | *k*-unrolling equivalence for all *k* ⇒ lfp equivalence | **mechanized** (plan.md 2E.1): `proofs/lean/Zippy/Positive.lean` — `Space.fixpoint_is_lfp` (the Kleene union of a positive body is the least post-fixpoint) and `fixpoint_denT_eq_of_step_eq` (one-step agreement for every value of the cut ⇒ the fixpoints agree). What a residual-cut cell still owes is the antecedent for its *own* cut, stated in its header. |
-| O12b | the supercompiler fold | **mechanized and instantiated** (tasks.md C2): `proofs/lean/Zippy/Drive.lean#Zippy.DriveSystem.drive_correct` derives the `FoldPremises` of `Supercompile.lean#Zippy.Fold.resid_lfp_eq_orig` from the run's typed driving trace and the `SC.State` invariants (configurations are calls with call-free arguments, closed bodies, positive residuals, one unfold per node, every fold an instance); the substitution lemma is O6a's `substS_denT`.  What a run still cites is each law step's own SMT certificate.  No longer open. |
+| O6a | beta-soundness of capture-avoiding inlining | **mechanized**: `proofs/lean/Zippy/SubstSem.lean#Zippy.substS_denT` — substituting into a term denotes evaluating it in the environment the substitution denotes, every constructor, every fresh-name supply; the Scala's correspondence with `substS` is the generated `Trace.lean` plus the differentials `SubstConformance`/`SubstCapture`.  No longer open. |
+| O10b | *k*-unrolling equivalence for all *k* ⇒ lfp equivalence | **mechanized**: `proofs/lean/Zippy/Positive.lean` — `Space.fixpoint_is_lfp` (the Kleene union of a positive body is the least post-fixpoint) and `fixpoint_denT_eq_of_step_eq` (one-step agreement for every value of the cut ⇒ the fixpoints agree). What a residual-cut cell still owes is the antecedent for its *own* cut, stated in its header. |
+| O12b | the supercompiler fold | **mechanized and instantiated**: `proofs/lean/Zippy/Drive.lean#Zippy.DriveSystem.drive_correct` derives the `FoldPremises` of `Supercompile.lean#Zippy.Fold.resid_lfp_eq_orig` from the run's typed driving trace and the `SC.State` invariants (configurations are calls with call-free arguments, closed bodies, positive residuals, one unfold per node, every fold an instance); the substitution lemma is O6a's `substS_denT`.  What a run still cites is each law step's own SMT certificate.  No longer open. |
 
 `terminating/REGISTRY.tsv` and `proofs/unbounded/REGISTRY.tsv` are the authoritative lists; this
-table is the short form for the three the acceptance review names.
+table is the short form for these three obligations.
 
 ---
 
@@ -476,7 +473,7 @@ verdict to `PROVED-MODULO T1`, `proofs/unbounded/run.sh` calls it after every co
 and the closure decides whether that verdict is unqualified. The annotation only ever weakens a
 verdict, and it is idempotent.
 
-**The same closure runs over the typed proof traces (tasks.md C4).** Every
+**The same closure runs over the typed proof traces.** Every
 `proofs/pipeline/traces/*.trace.tsv` is a DAG whose leaves are law instances, unfold/fold steps,
 generalizations, backend-refinement obligations or optimizer no-ops; `proof_closure.py` resolves each
 leaf — a law to its certificate rows in `proofs/STATUS.tsv`, a refinement obligation to its registry

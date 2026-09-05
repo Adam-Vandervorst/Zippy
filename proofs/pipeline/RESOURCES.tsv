@@ -1,4 +1,4 @@
-# RESOURCES (tasks.md D2) — one row per cornerstone: the residual alternatives explored, the alloc-minimising
+# RESOURCES — one row per cornerstone: the residual alternatives explored, the alloc-minimising
 # certified choice, its predicted and counted alloc, its certification and trace closure, its certificate.
 # cornerstone	alternatives	selected	predicted-alloc	counted-alloc	certified	closure	certificate
 aunt	1	f585ddb6282aaeb2/graph	[34, 36]	34	CERTIFIED	CLOSED	proofs/pipeline/resources/aunt-alloc.tsv

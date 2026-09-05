@@ -34,7 +34,7 @@ WHAT THIS DOES, in order, aborting at the first failure:
 red, because it says exactly what blocks publication.
 """
 
-import argparse, os, pathlib, re, subprocess, sys, tempfile, datetime
+import argparse, csv, datetime, os, pathlib, re, subprocess, sys, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
@@ -45,9 +45,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------------------------
 OUTPUTS = {
     "corpus_runtimes.csv":  dict(kind="csv", header="idx,nodes,nSpace,nPath,uniqueOut,evalI_ms_per1000",
-                                 min_rows=900, max_rows=1100),
+                                 min_rows=900, max_rows=1100,
+                                 identity=("idx",),
+                                 timing={"evalI_ms_per1000": dict(rel=0.35, abs=0.50)}),
     "expressivity.csv":     dict(kind="csv", header="uniqueOut,entropy,nEmpty,nSpace,nPath,respSpace,respPath,respFrac,avgSize,nodes",
-                                 min_rows=90, max_rows=100_100),
+                                 min_rows=90, max_rows=100_100,
+                                 identity=("uniqueOut", "entropy", "nEmpty", "nSpace", "nPath",
+                                           "respSpace", "respPath", "respFrac", "avgSize", "nodes"),
+                                 timing={}),
     # THE HEADER WAS `None` HERE, AND THIS IS THE ONE ARTIFACT WITH A KNOWN SCHEMA DRIFT: its own
     # generator records that a `Transformation` column outlived the constructor it counted.  Leaving
     # the schema unchecked on the file whose schema has actually drifted is the wrong place to save
@@ -57,12 +62,17 @@ OUTPUTS = {
                                  # a hand-copied 19-column tab-separated header is exactly
                                  # the kind of declaration that drifts silently
                                  header="row\tMention\tLiteral\tSingleton\tUnion\tIntersection\tSubtraction\tRestriction\tRaffination\tComposition\tWrap\tUnwrap\tTailsUnion\tTailsIntersection\tRange\tIteration\tConstant\tDeref\tConcat",
-                                 min_rows=1, max_rows=500),
+                                 min_rows=1, max_rows=500, identity=("row",), timing={}),
     # `header=None` is not "unchecked": a markdown document has no header ROW, and its schema is
     # its SECTION MARKER SET, which the `md` branch of validate() compares against HEAD -- a
     # section that appeared or vanished is a failure there.
-    "docs/BENCHMARKS.md":   dict(kind="md",  header=None, min_rows=1, max_rows=100_000),
+    "docs/BENCHMARKS.md":   dict(kind="md",  header=None, min_rows=1, max_rows=100_000, timing={}),
 }
+
+EXPECTED_SECTIONS = (
+    "subgraph-hoisting", "sc-domains", "op-graph-backend", "executor-scaling",
+    "pipeline-ablation",
+)
 
 # The suites that PRODUCE the declared outputs.  Each is run once, in one JVM per suite, with the
 # manifest in the environment.
@@ -70,11 +80,11 @@ OUTPUTS = {
 # ALL FOUR OUTPUTS, NOT THREE.  An earlier revision listed only the three data artifacts, so
 # `docs/BENCHMARKS.md` -- which bullet 2 names explicitly -- had no producer at all: stage 5's
 # "a declared output did NOT change" check would have failed every publication, and green gates
-# would not have helped.  Its five sections come from two suites: GraphBench writes
-# subgraph-hoisting, sc-domains, op-graph-backend and pipeline-ablation; TrieBench writes
-# executor-scaling.
+# would not have helped.  The five sections live in five separate test classes; naming only the
+# source file's first class silently refreshed two sections and left three stale.
 GENERATORS = ["morkl.CorpusRuntimes", "morkl.ProgramExpressivity", "morkl.ProgramStats",
-              "morkl.GraphBench", "morkl.TrieBench"]
+              "morkl.GraphBench", "morkl.TrieBench", "morkl.SubgraphHoistBench",
+              "morkl.SCOptBench", "morkl.AblationStages"]
 
 # The acceptance gates that must be green before anything is regenerated.
 #
@@ -86,7 +96,8 @@ GENERATORS = ["morkl.CorpusRuntimes", "morkl.ProgramExpressivity", "morkl.Progra
 # proceeded with a dangling reference in a tracked file or an unqualified `PROVED` resting on an
 # admitted schema.  A gate an item declares for itself and the publisher does not run is not a gate.
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from gates import GATE_SUITES, GATE_SCRIPTS, script_argv, resolve_runner   # noqa: E402
+from gates import gate_count, resolve_runner   # noqa: E402
+from toolpath import missing_message, resolve as resolve_tool             # noqa: E402
 
 # Inputs whose modification would invalidate the numbers.  An untracked file here is as bad as a
 # modified one: it may be what the run picked up.
@@ -110,6 +121,219 @@ def die(msg, code=1):
 
 def step(n, what):
     print(f"\n=== {n}. {what} " + "=" * max(0, 60 - len(what)), flush=True)
+
+
+SECTION_RE = re.compile(
+    r"<!-- BEGIN benchmark:([\w-]+) -->(.*?)<!-- END benchmark:\1 -->", re.S)
+MD_NUMBER = re.compile(r"(?<![\w])-?\d+\.\d+(?:x)?")
+MEASURED_PROSE = re.compile(
+    r"^(?:compile\s*=|compile/K\s*\+\s*run|\*\*comp\+run geomean|"
+    r"Geometric-mean evalI speedup|reference Set, and )")
+MD_MEASURE_COLUMNS = {
+    "exec off ms", "exec on ms", "speedup", "evali ms", "exect unopt ms", "exect opt ms",
+    "opt speedup", "exect opt(no-hoist) ms", "hoist", "exec ms", "exect ms", "exect(opt) ms",
+    "exect(inline+opt) ms", "vs evali", "transpile ms", "push_out ms", "optimize_sharing ms",
+    "compile ms", "compile+run ms", "eval ms", "evalt ms", "evali/eval", "evali/evalt",
+    "eval(def)", "evali(def)", "evali(sc)", "exect(opt)", "exect(sc+opt)",
+}
+
+
+def sections(text):
+    """Ordered generated Markdown sections as `(slug, body)` pairs."""
+    return SECTION_RE.findall(text)
+
+
+def markdown_provenance_problems(text, commit, ts=None):
+    """Every generated section—not merely one—must name the same manifest."""
+    blocks = sections(text)
+    problems = []
+    slugs = [slug for slug, _body in blocks]
+    if tuple(slugs) != EXPECTED_SECTIONS:
+        problems.append(f"section order/set is {slugs}, expected {list(EXPECTED_SECTIONS)}")
+    for slug, body in blocks:
+        commits = re.findall(r"\|\s*git commit\s*\|\s*([^| ]+)\s*\|", body)
+        if commits != [commit]:
+            problems.append(f"section {slug}: commit rows {commits}, expected exactly [{commit!r}]")
+        stamps = re.findall(r"\|\s*timestamp \(UTC\)\s*\|\s*([^|]+?)\s*\|", body)
+        if ts is not None and stamps != [ts]:
+            problems.append(f"section {slug}: timestamp rows {stamps}, expected exactly [{ts!r}]")
+        clean = re.findall(r"\|\s*source tree\s*\|\s*([^|]+?)\s*\|", body)
+        if len(clean) != 1 or "CLEAN" not in clean[0]:
+            problems.append(f"section {slug}: source-tree row is not uniquely CLEAN")
+    return problems
+
+
+def delimited(text, spec):
+    lines = text.splitlines()
+    if len(lines) < 2:
+        return (), [], ["missing provenance or schema row"]
+    sep = "\t" if spec["kind"] == "tsv" else ","
+    parsed = list(csv.reader(lines[1:], delimiter=sep))
+    if not parsed:
+        return (), [], ["missing schema row"]
+    header, data = tuple(parsed[0]), parsed[1:]
+    bad = [i + 1 for i, row in enumerate(data) if len(row) != len(header)]
+    return header, data, ([f"{len(bad)} row(s) have the wrong field count"] if bad else [])
+
+
+def numeric(cell):
+    s = cell.strip()
+    if s.endswith("x"):
+        s = s[:-1]
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def within(a, b, rel, absolute):
+    return abs(a - b) <= max(absolute, rel * max(abs(a), abs(b)))
+
+
+def compare_delimited(rel, published, regenerated, spec, enforce_timing):
+    """Exact deterministic fields; explicitly tolerated timing fields on same-commit reproduction."""
+    ph, pr, problems = delimited(published, spec)
+    rh, rr, other = delimited(regenerated, spec)
+    problems += other
+    if ph != rh:
+        problems.append(f"{rel}: schema differs")
+        return problems, 0
+    if len(pr) != len(rr):
+        problems.append(f"{rel}: row count differs ({len(pr)} vs {len(rr)})")
+        return problems, 0
+    timing = spec.get("timing", {})
+    identity = set(spec.get("identity", (ph[0],)))
+    changed = 0
+    for rowno, (a, b) in enumerate(zip(pr, rr), 1):
+        if a != b:
+            changed += 1
+        for col, (av, bv) in enumerate(zip(a, b)):
+            name = ph[col]
+            if name not in timing:
+                if (enforce_timing or name in identity) and av != bv:
+                    problems.append(f"{rel}: deterministic field {name!r} differs at row {rowno}")
+                continue
+            aa, bb = numeric(av), numeric(bv)
+            if aa is None or bb is None:
+                if av != bv:
+                    problems.append(f"{rel}: timing field {name!r} is not numeric at row {rowno}")
+            elif enforce_timing:
+                tol = timing[name]
+                if not within(aa, bb, tol["rel"], tol["abs"]):
+                    problems.append(
+                        f"{rel}: {name} row {rowno} moved from {aa:g} to {bb:g}, beyond "
+                        f"rel={tol['rel']:.0%}/abs={tol['abs']:g}")
+        if len(problems) >= 30:
+            break
+    return problems, changed
+
+
+def md_cells(line):
+    # The executor table contains the prose token `|TC|` inside a cell.  It is not a delimiter.
+    return tuple(x.strip() for x in line.replace("|TC|", "TC").strip().strip("|").split("|"))
+
+
+def md_tables(body):
+    """Return `(header, rows)` for each Markdown table in a generated section."""
+    lines = body.splitlines()
+    out, consumed = [], set()
+    i = 0
+    while i + 1 < len(lines):
+        if lines[i].lstrip().startswith("|") and re.match(r"^\s*\|(?:\s*:?-+:?\s*\|)+\s*$", lines[i + 1]):
+            header = md_cells(lines[i]); rows = []
+            consumed.update((i, i + 1)); i += 2
+            while i < len(lines) and lines[i].lstrip().startswith("|"):
+                rows.append(md_cells(lines[i])); consumed.add(i); i += 1
+            out.append((header, rows))
+        else:
+            i += 1
+    prose = [line for i, line in enumerate(lines) if i not in consumed]
+    return out, prose
+
+
+def measured_column(name, header):
+    n = name.strip().lower()
+    # `hoist` is a deterministic node count in the compile-accounting table, and a measured ratio
+    # in the SC-domain table.
+    if n == "hoist" and "push_out ms" in {h.lower() for h in header}:
+        return False
+    return n in MD_MEASURE_COLUMNS
+
+
+def compare_measured_text(label, old, new, enforce_timing, problems):
+    """Compare a known measured prose line while retaining its exact non-numeric wording."""
+    ao, an = MD_NUMBER.findall(old), MD_NUMBER.findall(new)
+    if MD_NUMBER.sub("<measurement>", old) != MD_NUMBER.sub("<measurement>", new):
+        problems.append(f"{label}: measured prose structure differs")
+        return
+    if enforce_timing:
+        for x, y in zip(ao, an):
+            xx, yy = numeric(x), numeric(y)
+            if xx is None or yy is None or not within(xx, yy, 0.50, 1.0):
+                problems.append(f"{label}: prose measurement moved from {x} to {y} beyond rel=50%/abs=1")
+
+
+def compare_markdown(rel, published, regenerated, enforce_timing):
+    problems, changed = [], 0
+    ps, rs = sections(published), sections(regenerated)
+    if [s for s, _ in ps] != [s for s, _ in rs]:
+        return [f"{rel}: generated section order/set differs"], 0
+    for (slug, pb), (_slug, rb) in zip(ps, rs):
+        pt, pp = md_tables(pb); rt, rp = md_tables(rb)
+        if len(pt) != len(rt):
+            problems.append(f"{rel}#{slug}: table count differs")
+            continue
+        for table_no, ((ph, prows), (rh, rrows)) in enumerate(zip(pt, rt), 1):
+            if ph != rh:
+                problems.append(f"{rel}#{slug}: table {table_no} schema differs")
+                continue
+            if len(prows) != len(rrows):
+                problems.append(f"{rel}#{slug}: table {table_no} row count differs")
+                continue
+            environment = tuple(h.lower() for h in ph) == ("environment", "value")
+            for rowno, (a, b) in enumerate(zip(prows, rrows), 1):
+                if len(a) != len(ph) or len(b) != len(ph):
+                    problems.append(f"{rel}#{slug}: table {table_no} malformed row {rowno}")
+                    continue
+                if a != b:
+                    changed += 1
+                for col, (av, bv) in enumerate(zip(a, b)):
+                    if environment:
+                        if col == 0 and av != bv:
+                            problems.append(f"{rel}#{slug}: environment key differs at row {rowno}")
+                        elif enforce_timing and col == 1 and a[0] != "timestamp (UTC)" and av != bv:
+                            problems.append(f"{rel}#{slug}: environment {a[0]!r} differs")
+                    elif measured_column(ph[col], ph):
+                        aa, bb = numeric(av), numeric(bv)
+                        if aa is None or bb is None:
+                            if av != bv:
+                                problems.append(f"{rel}#{slug}: non-numeric measurement {ph[col]!r} row {rowno}")
+                        elif enforce_timing and not within(aa, bb, 0.50, 1.0 if "ms" in ph[col].lower() or "(" in ph[col] else 0.5):
+                            problems.append(f"{rel}#{slug}: {ph[col]} row {rowno} moved {aa:g} -> {bb:g} beyond tolerance")
+                    elif enforce_timing and av != bv:
+                        problems.append(f"{rel}#{slug}: deterministic field {ph[col]!r} differs at row {rowno}")
+                if len(problems) >= 30:
+                    break
+        if len(pp) != len(rp):
+            problems.append(f"{rel}#{slug}: prose line count differs")
+        else:
+            for line_no, (a, b) in enumerate(zip(pp, rp), 1):
+                if a == b:
+                    continue
+                if MEASURED_PROSE.match(a) and MEASURED_PROSE.match(b):
+                    compare_measured_text(f"{rel}#{slug} prose line {line_no}", a, b, enforce_timing, problems)
+                else:
+                    problems.append(f"{rel}#{slug}: deterministic prose differs at line {line_no}")
+                if len(problems) >= 30:
+                    break
+    return problems, changed
+
+
+def compare_output(rel, published, regenerated, enforce_timing):
+    spec = OUTPUTS[rel]
+    if spec["kind"] in ("csv", "tsv"):
+        return compare_delimited(rel, published, regenerated, spec, enforce_timing)
+    return compare_markdown(rel, published, regenerated, enforce_timing)
 
 
 # =============================================================================================
@@ -142,43 +366,16 @@ def preflight():
 
 def run_gates(runner):
     step(2, "ACCEPTANCE GATES (a red gate blocks publication)")
-    failed = []
-    # the STATIC checkers first: they take seconds, and failing fast on a dangling reference beats
-    # discovering it after four prover-backed suites have run
-    for label, argv in GATE_SCRIPTS:
-        # `script_argv` comes from gates.py with the list, because the list now contains `.sh`
-        # gates as well as `.py` ones and `[sys.executable, ...]` silently mis-invokes those.
-        r = subprocess.run(script_argv(argv), capture_output=True, text=True, cwd=ROOT)
-        print(f"  {'PASS' if r.returncode == 0 else 'FAIL'}  {label}")
-        if r.returncode != 0:
-            tail = [l.strip() for l in (r.stdout + r.stderr).splitlines() if l.strip()][-6:]
-            failed.append((label, tail))
-    for suite in GATE_SUITES:
-        r = subprocess.run(runner + [suite], capture_output=True, text=True, cwd=ROOT)
-        tail = [l for l in r.stdout.splitlines() if "Tests run" in l or "OK (" in l]
-        status = "PASS" if r.returncode == 0 else "FAIL"
-        print(f"  {status}  {suite:34s} {tail[-1].strip() if tail else ''}")
-        if r.returncode != 0:
-            # THE FAILING REQUIREMENTS, not the defect notes.  A `DEFECT:` line is the long-form
-            # explanation attached to an entry and can run to thousands of characters; printing it
-            # here buries the one thing the reader needs, which is WHICH requirement is red.
-            lines = [l.strip() for l in r.stdout.splitlines()
-                     if ("exceeds the" in l or "UNSOUND" in l or "STALE EVIDENCE" in l)
-                     and not l.lstrip().startswith("DEFECT:")]
-            failed.append((suite, [l if len(l) <= 200 else l[:197] + "..." for l in lines]))
-    total = len(GATE_SUITES) + len(GATE_SCRIPTS)
-    if failed:
-        print()
-        for suite, lines in failed:
-            print(f"  {suite}:")
-            for l in lines[:12]:
-                print("    " + l.strip())
-            if len(lines) > 12:
-                print(f"    ... and {len(lines) - 12} more")
-        die(f"{len(failed)} of {total} acceptance gate(s) FAILED.  The review's requirement is "
-            "\"regenerate the artifacts only after all acceptance gates pass\": publishing now would "
-            "put numbers in the tree that the next gate fix invalidates.")
-    print(f"all {total} gates green")
+    # Do not reimplement the runner here.  gates.py owns ordering, fresh target witnesses, the
+    # current-run record, suite diagnostics and the final status-check phase.
+    r = subprocess.run(
+        [sys.executable, "scripts/gates.py", "--run", "--runner", runner[0]],
+        capture_output=True, text=True, cwd=ROOT)
+    print(r.stdout, end="")
+    if r.returncode != 0:
+        tail = "\n".join((r.stdout + r.stderr).splitlines()[-60:])
+        die(f"acceptance gates failed (exit {r.returncode}); publication is blocked.\n{tail}")
+    print(f"all {gate_count()} gates green")
 
 
 def capture(head):
@@ -259,27 +456,13 @@ def validate(commit, ts):
             if not (spec["min_rows"] <= rows <= spec["max_rows"]):
                 problems.append(f"{rel}: {rows} data rows, outside the declared "
                                 f"[{spec['min_rows']}, {spec['max_rows']}]")
-            # THE ROW SET, WHICH IS WHAT THE REQUIREMENT ASKS FOR.  A count range is not a row set:
-            # it passes a table whose every row changed identity, which is exactly the failure a
-            # provenance check exists to catch.  The set is taken over the KEY COLUMN -- the first
-            # field, which is the row's identity in all three data artifacts (`idx`, the first
-            # measurement column, the matrix row label) -- and compared against HEAD.  A key that
-            # appeared or vanished is reported; a key whose VALUES changed is expected and is what
-            # a regeneration is for.
-            sep = "\t" if spec["kind"] == "tsv" else ","
-            def keyset(text):
-                ls = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
-                return {l.split(sep, 1)[0] for l in ls[1:]} if len(ls) > 1 else set()
+            # Compare the ordered deterministic row identity, not the first-column SET.  The first
+            # column of expressivity.csv has only about a hundred values for 100,000 rows; treating
+            # it as a key allowed almost the whole workload to be replaced without detection.
             old_text = git("show", f"HEAD:{rel}", check=False)
             if old_text:
-                was, now = keyset(old_text), keyset(f.read_text())
-                gone, added = sorted(was - now), sorted(now - was)
-                if gone or added:
-                    problems.append(
-                        f"{rel}: the ROW SET changed -- {len(gone)} key(s) gone "
-                        f"({', '.join(gone[:5])}), {len(added)} added ({', '.join(added[:5])}). "
-                        "A regeneration replaces VALUES; a changed row set means the workload or "
-                        "the generator changed and the two tables are not comparable.")
+                cmp, _changed = compare_delimited(rel, old_text, f.read_text(), spec, False)
+                problems.extend(cmp)
         else:  # markdown: section boundaries
             begins = re.findall(r"<!-- BEGIN benchmark:([\w-]+) -->", "\n".join(lines))
             ends = re.findall(r"<!-- END benchmark:([\w-]+) -->", "\n".join(lines))
@@ -292,31 +475,23 @@ def validate(commit, ts):
                 problems.append(f"{rel}: the SET of generated sections changed "
                                 f"({sorted(set(oldb) ^ set(begins))}) -- a publication regenerates "
                                 "sections in place, it does not add or drop them")
-            # `BenchmarkReport` records the commit as a provenance TABLE ROW (`| git commit | <sha> |`),
-            # not as the `git=` token the CSV headers use.  An earlier revision looked for `git=` here,
-            # which no section ever carries -- so the md validation could never have passed.
-            if not re.search(r"\|\s*git commit\s*\|\s*" + re.escape(commit) + r"\s*\|", "\n".join(lines)):
-                problems.append(f"{rel}: no section's provenance row names the manifest's commit {commit}")
+            problems.extend(f"{rel}: {p}" for p in markdown_provenance_problems("\n".join(lines), commit, ts))
 
     for p in problems:
         print(f"  FAIL  {p}")
     if problems:
         die(f"{len(problems)} validation failure(s); the working tree is NOT publishable")
-    print("provenance, schema, row sets and section boundaries all check out")
+    print("provenance, schema, ordered row identities and section boundaries all check out")
 
 
 def report():
     step(6, "REPORT")
     stat = git("diff", "--stat", "--", *OUTPUTS).rstrip()
     print(stat or "  (no change)")
-    # THE DIFF IS CHECKED, NOT JUST SHOWN.  "Validate ... and the resulting diff before committing
-    # them" is a requirement, and an earlier revision only printed `--stat`, which validates
-    # nothing.  What is checkable about a benchmark diff without re-running the benchmark is its
-    # SHAPE: a regeneration should touch the provenance header and the measurement values of
-    # existing rows.  A diff that adds or removes whole rows has already been caught by the row-set
-    # check; what is caught here is a diff that touches NOTHING (the generator silently did not
-    # run) or that rewrites a file essentially in full (a format change masquerading as new
-    # numbers), because both make the published numbers incomparable with the previous commit.
+    # Whole-line churn is not a validity condition for a timing table: when one timing column is in
+    # every row, a legitimate rerun changes 100% of its lines.  Validate the declared structure and
+    # row identity instead, and report measurement churn without rejecting it.  Same-commit timing
+    # tolerances belong to reproduce(), not to a publication made after code changes.
     problems = []
     for rel in sorted(OUTPUTS):
         numstat = git("diff", "--numstat", "--", rel).strip()
@@ -327,13 +502,14 @@ def report():
         if add in ("-", "") or rem in ("-", ""):
             problems.append(f"{rel}: binary or unparseable diff ({numstat})")
             continue
-        add, rem = int(add), int(rem)
-        total = max(1, len(pathlib.Path(ROOT / rel).read_text().splitlines()))
-        churn = (add + rem) / (2.0 * total)
-        print(f"  {rel:24s} +{add} -{rem}   churn {churn:.0%} of {total} lines")
-        if churn > 0.98:
-            problems.append(f"{rel}: {churn:.0%} of the file changed -- that is a rewrite rather "
-                            "than a regeneration; the new numbers are not comparable with HEAD's")
+        old = git("show", f"HEAD:{rel}", check=False)
+        if not old:
+            problems.append(f"{rel}: no previous artifact at HEAD to compare")
+            continue
+        current = (ROOT / rel).read_text()
+        cmp, changed = compare_output(rel, old, current, enforce_timing=False)
+        problems.extend(cmp)
+        print(f"  {rel:24s} +{add} -{rem}; {changed} measurement/data row(s) changed")
     for pb in problems:
         print(f"  FAIL  {pb}")
     if problems:
@@ -343,7 +519,7 @@ def report():
 
 
 # =============================================================================================
-# REPRODUCE (plan.md 3.1).  The published outputs name ONE commit; a reader must be able to check that
+# REPRODUCE.  The published outputs name ONE commit; a reader must be able to check that
 # commit out, re-run the gates and the generation, and get the same tables back.  This mode does
 # exactly that, in a throwaway `git worktree`, and reports the diff in the terms that matter:
 #
@@ -371,12 +547,13 @@ def output_commit(rel, text):
 
 def reproduce(runner_hint):
     step(0, "REPRODUCE the publication the four outputs name")
-    named = {}
+    named, published = {}, {}
     for rel in sorted(OUTPUTS):
         f = ROOT / rel
         if not f.is_file():
             die(f"{rel}: missing; there is no publication to reproduce")
-        c = output_commit(rel, f.read_text())
+        published[rel] = f.read_text()
+        c = output_commit(rel, published[rel])
         if not c:
             die(f"{rel}: carries no `git=<commit>` provenance")
         if len(c) > 1:
@@ -394,16 +571,21 @@ def reproduce(runner_hint):
     if subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", f"{sha}^{{commit}}"],
                       capture_output=True).returncode != 0:
         die(f"commit {sha} is not in this repository")
+    sbt = resolve_tool("sbt")
+    if sbt is None:
+        die(missing_message("sbt"))
     wt = pathlib.Path(tempfile.mkdtemp(prefix="zippy-reproduce-")) / "tree"
     git("worktree", "add", "--detach", str(wt), sha)
     print(f"  worktree at {wt} for {sha}")
     try:
         step(1, "GATES at the named commit (its own gate list)")
-        r = subprocess.run(["sbt", "--server", "--batch", "exportTestRuntime"], cwd=wt,
+        r = subprocess.run([sbt, "--server", "--batch", "exportTestRuntime"], cwd=wt,
                            capture_output=True, text=True)
         if r.returncode != 0:
             die(f"`sbt exportTestRuntime` failed in the worktree:\n{r.stdout[-1500:]}")
-        r = subprocess.run([sys.executable, "scripts/gates.py", "--run"], cwd=wt, capture_output=True, text=True)
+        wrunner = str(wt / "target/test-runtime/run-suite.sh")
+        r = subprocess.run([sys.executable, "scripts/gates.py", "--run", "--runner", wrunner],
+                           cwd=wt, capture_output=True, text=True)
         print("\n".join("  " + l for l in r.stdout.splitlines() if l.startswith(("  PASS", "  FAIL", "PASS", "FAIL"))))
         if r.returncode != 0:
             die(f"the named commit's own gates are not green; its published numbers were not held to "
@@ -419,71 +601,112 @@ def reproduce(runner_hint):
         mf = wt.parent / "manifest.properties"
         mf.write_text(f"commit={sha[:7]}\ntimestamp={ts}\nenv={envrec.stdout.strip()}\n"
                       f"outputs={','.join(sorted(OUTPUTS))}\n")
-        wrunner = [str(wt / "target/test-runtime/run-suite.sh")]
+        wrunner = [wrunner]
         genv = dict(env, ZIPPY_PUBLISH_MANIFEST=str(mf))
         for suite in GENERATORS:
             r = subprocess.run(wrunner + [suite], capture_output=True, text=True, cwd=wt, env=genv)
             print(f"  {'PASS' if r.returncode == 0 else 'FAIL'}  {suite}")
             if r.returncode != 0:
                 die(f"generator {suite} failed in the worktree:\n{r.stdout[-1500:]}")
-        step(3, "DIFF the regenerated outputs against the published ones (structure must match)")
+        step(3, "COMPARE the regenerated outputs with the publication")
         problems = []
         for rel, spec in sorted(OUTPUTS.items()):
             new = (wt / rel).read_text()
-            old = git("show", f"{sha}:{rel}")
-            if spec["kind"] in ("csv", "tsv"):
-                ol, nl = old.splitlines(), new.splitlines()
-                if len(ol) < 2 or len(nl) < 2 or ol[1] != nl[1]:
-                    problems.append(f"{rel}: schema row differs")
-                sep = "\t" if spec["kind"] == "tsv" else ","
-                def keys(ls):
-                    body = [l for l in ls if l.strip() and not l.startswith("#")]
-                    return [l.split(sep, 1)[0] for l in body[1:]]
-                ko, kn = keys(ol), keys(nl)
-                if ko != kn:
-                    problems.append(f"{rel}: row set differs ({len(set(ko) ^ set(kn))} key(s))")
-                if f"git={sha[:7]}" not in nl[0]:
-                    problems.append(f"{rel}: regenerated provenance does not name {sha[:7]}")
-                changed = sum(1 for a, b in zip(ol[2:], nl[2:]) if a != b)
-                print(f"  {rel:24s} {len(ko)} rows, {changed} row value(s) differ (measurement churn)")
+            if spec["kind"] == "md":
+                problems.extend(f"{rel}: {p}" for p in markdown_provenance_problems(new, sha[:7], ts))
             else:
-                so = re.findall(r"<!-- BEGIN benchmark:([\w-]+) -->", old)
-                sn = re.findall(r"<!-- BEGIN benchmark:([\w-]+) -->", new)
-                if set(so) != set(sn):
-                    problems.append(f"{rel}: section set differs ({sorted(set(so) ^ set(sn))})")
-                if not re.search(r"\|\s*git commit\s*\|\s*" + re.escape(sha[:7]) + r"\s*\|", new):
-                    problems.append(f"{rel}: no regenerated section names {sha[:7]}")
-                print(f"  {rel:24s} {len(sn)} sections, same set: {set(so) == set(sn)}")
+                first = new.splitlines()[0] if new else ""
+                if f"git={sha[:7]}" not in first or f"ts={ts}" not in first or "clean=yes" not in first:
+                    problems.append(f"{rel}: regenerated provenance does not match its manifest")
+            cmp, changed = compare_output(rel, published[rel], new, enforce_timing=True)
+            problems.extend(cmp)
+            print(f"  {rel:24s} {changed} measurement/data row(s) differ within declared policy")
         for pb in problems:
             print(f"  FAIL  {pb}")
         if problems:
-            die(f"{len(problems)} structural difference(s): the named commit does NOT reproduce its publication")
-        print(f"\nREPRODUCED: commit {sha} regenerates all four outputs with the same schema, row sets and "
-              "sections under its own green gates; only measurement values moved.")
+            die(f"{len(problems)} reproduction difference(s): the named commit does NOT reproduce its publication")
+        print(f"\nREPRODUCED: commit {sha} regenerates the publication: deterministic fields are exact and "
+              "timings are within their declared tolerances under its own green gates.")
         # E3 reads this: the one gate no in-tree run can produce, recorded by the run that did
         rec = ROOT / "target" / "gates.tsv"
         rec.parent.mkdir(parents=True, exist_ok=True)
-        with rec.open("a") as f:
-            f.write(f"script\tpublication reproduces from the accepted commit (E2)\tPASS\n")
+        existing = rec.read_text().splitlines() if rec.exists() else []
+        label = "publication reproduces from the accepted commit"
+        kept = [line for line in existing if not (line.startswith("script\t") and line.split("\t")[1] == label)]
+        kept.append(f"script\t{label}\tPASS")
+        tmp = rec.with_name(rec.name + f".tmp-{os.getpid()}")
+        tmp.write_text("\n".join(kept) + "\n")
+        os.replace(tmp, rec)
     finally:
         subprocess.run(["git", "-C", str(ROOT), "worktree", "remove", "--force", str(wt)], capture_output=True)
+
+
+def selftest():
+    failures = []
+    spec = OUTPUTS["corpus_runtimes.csv"]
+    header = spec["header"]
+    a = "# git=abcdef0; ts=t1; clean=yes\n" + header + "\n0,10,2,3,4,10.0\n"
+    near = "# git=abcdef0; ts=t2; clean=yes\n" + header + "\n0,10,2,3,4,12.0\n"
+    far = "# git=abcdef0; ts=t2; clean=yes\n" + header + "\n0,10,2,3,4,30.0\n"
+    forged = "# git=abcdef0; ts=t2; clean=yes\n" + header + "\n0,10,2,3,99,12.0\n"
+    if compare_delimited("corpus_runtimes.csv", a, near, spec, True)[0]:
+        failures.append("an in-tolerance timing change was rejected")
+    if not compare_delimited("corpus_runtimes.csv", a, far, spec, True)[0]:
+        failures.append("an out-of-tolerance timing change was accepted")
+    if not compare_delimited("corpus_runtimes.csv", a, forged, spec, True)[0]:
+        failures.append("a deterministic data mutation was accepted")
+
+    def document(commit="abcdef0", timing="10.0", depth="2"):
+        chunks = []
+        for slug in EXPECTED_SECTIONS:
+            chunks.append(
+                f"<!-- BEGIN benchmark:{slug} -->\n## {slug}\n\n"
+                "| environment | value |\n|---|---|\n"
+                f"| timestamp (UTC) | 2026-01-01T00:00:00Z |\n| git commit | {commit} |\n"
+                "| source tree | CLEAN at manifest |\n\n"
+                "| program | evalI ms | depth off |\n|---|---:|---:|\n"
+                f"| fixture | {timing} | {depth} |\n"
+                f"<!-- END benchmark:{slug} -->")
+        return "\n\n".join(chunks)
+
+    doc = document()
+    if markdown_provenance_problems(doc, "abcdef0", "2026-01-01T00:00:00Z"):
+        failures.append("a complete one-manifest Markdown publication was rejected")
+    mixed = doc.replace("| git commit | abcdef0 |", "| git commit | 7654321 |", 1)
+    if not markdown_provenance_problems(mixed, "abcdef0", "2026-01-01T00:00:00Z"):
+        failures.append("mixed per-section provenance was accepted")
+    if compare_markdown("docs/BENCHMARKS.md", doc, document(timing="12.0"), True)[0]:
+        failures.append("an in-tolerance Markdown timing change was rejected")
+    if not compare_markdown("docs/BENCHMARKS.md", doc, document(timing="30.0"), True)[0]:
+        failures.append("an out-of-tolerance Markdown timing change was accepted")
+    if not compare_markdown("docs/BENCHMARKS.md", doc, document(depth="3"), True)[0]:
+        failures.append("a deterministic Markdown field mutation was accepted")
+
+    for failure in failures:
+        print(f"  FAIL  {failure}")
+    print("benchmark publisher selftest: " + ("PASS" if not failures else f"FAIL ({len(failures)})"))
+    return 1 if failures else 0
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--reproduce", action="store_true",
-                    help="plan.md 3.1: check out the commit the four outputs name in a worktree, re-run its "
+                    help="check out the commit the four outputs name in a worktree, re-run its "
                          "gates and generation, and diff the result structurally (exit 0 = reproduced)")
     ap.add_argument("--dry-run", action="store_true",
                     help="preflight and gates only; report what blocks publication and stop")
+    ap.add_argument("--selftest", action="store_true",
+                    help="exercise provenance, deterministic-data and timing-tolerance mutations")
     ap.add_argument("--runner", default=os.environ.get("ZIPPY_RUNNER", ""),
                     help="command that runs one JUnit suite; defaults to the IN-TREE runner "
                          "target/test-runtime/run-suite.sh written by `sbt exportTestRuntime`, "
                          "then to $ZIPPY_RUNNER")
     a = ap.parse_args()
+    if a.selftest:
+        return selftest()
     if a.reproduce:
         reproduce(a.runner)
-        return
+        return 0
     # THE IN-TREE RUNNER IS THE DEFAULT, and $ZIPPY_RUNNER is now only an override.  Requiring an
     # environment variable put a variable between the repository and its own acceptance gates: a
     # reader who checked out this commit could not run them, and two runs could disagree because
@@ -509,4 +732,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -3,7 +3,7 @@ package morkl
 import munit.FunSuite
 
 /** ==================================================================================================
- *  THE TWO THINGS `ArtifactSink` REFUSES, AND THE ONE IT MUST NOT PASS SILENTLY (plan.md 0.3).
+ *  THE TWO THINGS `ArtifactSink` REFUSES, AND THE ONE IT MUST NOT PASS SILENTLY.
  *
  *  The sink's value is entirely in its failure modes: in VERIFY mode it writes to a scratch twin and
  *  compares, so the only way it can be WRONG is by reporting agreement where there is none.  Three

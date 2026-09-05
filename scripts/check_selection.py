@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""INDEPENDENT REPLAY OF SELECTION CERTIFICATES (tasks.md B2).
+"""INDEPENDENT REPLAY OF SELECTION CERTIFICATES.
 
 A selection certificate (`morkl.Pareto.Selection.render`) lists every candidate (alternative x backend)
 with its interval per component, the objective, and the decision: rejections (NOT-ADMITTED, INFEASIBLE,

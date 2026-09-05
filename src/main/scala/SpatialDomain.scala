@@ -5,7 +5,7 @@ import scala.collection.mutable
 import Lower.LenBounds
 
 /** ==================================================================================================
- *  THE TWO-TIER CORRELATED SPATIAL DOMAIN (tasks.md A3).
+ *  THE TWO-TIER CORRELATED SPATIAL DOMAIN.
  *
  *  ==WHAT IT REPLACES==
  *  The cost analysis used to project every operand to independent scalars — a size interval, a length

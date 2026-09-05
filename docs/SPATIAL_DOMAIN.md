@@ -1,6 +1,6 @@
-# The two-tier correlated spatial domain (tasks.md A3)
+# The two-tier correlated spatial domain
 
-The domain specification A3 asks for.  The executable form is
+The executable domain is
 [SpatialDomain.scala](../src/main/scala/SpatialDomain.scala) and its acceptance suite is
 [SpatialDomainCheck](../src/test/scala/SpatialDomainCheck.scala); the summarized tier's own laws
 remain in [design_spatial_lattice.md](design_spatial_lattice.md) and `proofs/spatial*`.
@@ -11,8 +11,8 @@ The cost analysis projected every operand to independent scalars (a size interva
 a head count) before a transfer ran.  What decides operational cost is *relational*: which keys two
 operands share, how many distinct objects an n-ary operation sees, whether a result is an operand by
 pointer, where a path sits in the order, how many paths lie under one prefix.  Those facts were gone by
-the time an operation was priced, and the loss compounded (puzzle15's fifteen compositions, build.log
-1B.5).  The domain below keeps them.
+the time an operation was priced, and the loss compounded through puzzle15's projection chain. The
+domain below keeps them.
 
 ## 2. The carrier
 
@@ -107,5 +107,5 @@ crossing.  A run with no widening reports `exact`.
 Every node records its `Cause` in the arena — an input mention, a literal, an operation over operand
 nodes, an alternative of a join, a fixpoint round, a widening, a summarisation — indexed by the node.
 The same DAG serves the denotational reading (a node's meaning is its structure) and the resource
-reading (what was computed from what), without conflating them.  A4 attaches the event sites that
+reading (what was computed from what), without conflating them. The cost analysis attaches the event sites that
 consumed a node to the same table.

@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==================================================================================================
- *  THE WHISTLE CORRESPONDENCE (plan.md 2E.3): the pairs `Matching.embeds` actually compared, re-decided
+ *  THE WHISTLE CORRESPONDENCE: the pairs `Matching.embeds` actually compared, re-decided
  *  by Lean.
  *
  *  `proofs/lean/Zippy/Whistle.lean` proves Kruskal's tree theorem for `Emb (· = ·)` on label trees and

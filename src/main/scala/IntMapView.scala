@@ -1,6 +1,6 @@
 package scala.collection.immutable
 
-/** A READ-ONLY VIEW of `IntMap`'s Patricia structure, for the event semantics (tasks.md A1).
+/** A READ-ONLY VIEW of `IntMap`'s Patricia structure, for the event semantics.
  *
  *  `IntMap.Bin` / `IntMap.Tip` / `IntMap.Nil` are `private[immutable]`, which is why `IntTrieOps`
  *  lives in this package.  The event SEMANTICS (`SpatialSemantics.scala`, package `morkl`) has to

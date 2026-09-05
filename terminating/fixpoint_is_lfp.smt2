@@ -7,9 +7,9 @@
 ; EquivPipeline.scala:75-84 `expand`) is, for `Fixpoint(init, rec, body)` with
 ; F := \X. [[body]][rec := X]:
 ;
-;     cur := I ; acc := I
+;     cur := I; acc := I
 ;     loop: nxt := F(cur) ; if nxt = cur then return acc
-;           acc := acc u nxt ; cur := nxt
+;           acc := acc u nxt; cur := nxt
 ;
 ; so with  C_0 = I,  C_{k+1} = F(C_k)  (the KLEENE chain) the returned value is
 ; the ACCUMULATOR  A_n = U_{j<=n} C_j  at the least n with C_{n+1} = C_n - NOT
@@ -194,7 +194,7 @@
   (=> (>= n 0) (= (A (+ n 1)) (cup (A n) (C (+ n 1))))) :pattern ((A (+ n 1))))))
 
 ; -----------------------------------------------------------------------------
-; DISCHARGED (plan.md 1E.3).  The FOUR bridging induction principles this file
+; DISCHARGED.  The FOUR bridging induction principles this file
 ; asserts -- the four `(assert (forall ((n Int)) ...))` lines below -- are
 ; THEOREMS in Lean, where induction over the chain index is `Nat.rec`:
 ;

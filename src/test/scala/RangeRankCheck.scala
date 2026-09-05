@@ -3,7 +3,7 @@ package morkl
 import munit.FunSuite
 
 /** ==================================================================================================
- *  THE RANK ABSTRACTION, CHECKED AGAINST EVERY EXECUTOR (plan.md 1D.2).
+ *  THE RANK ABSTRACTION, CHECKED AGAINST EVERY EXECUTOR.
  *
  *  `Range` is the one operator whose result is not a function of membership: which paths survive
  *  depends on their RANK in the canonical order, which is why `docs/TRUSTED.md` T5 records `Range` as

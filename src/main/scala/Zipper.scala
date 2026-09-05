@@ -96,7 +96,7 @@ object SpaceZipper:
    *  node's ENTIRE child map (`IntMap.transform`) and allocates one wrapper per entry, which is why it
    *  emits one [[ZipperDemandEvent.LitTransformEntry]] per entry on top of the single
    *  [[EffortEvent.ZipperCursorRead]] the whole operation has always counted. */
-  /** AN OPAQUE SOURCE (plan.md 2A.4): a space the transpiler knows only by NAME.  It cannot be
+  /** AN OPAQUE SOURCE: a space the transpiler knows only by NAME.  It cannot be
    *  materialised — every cursor operation throws — and that is the point: it exists so that
    *  `transpileZ` can run DATA-AGNOSTICALLY, producing the zipper PROGRAM (the shell of virtual nodes
    *  over named sources) that `EquivPipelineTest` reads back with `spaceOfZipper` and checks against the

@@ -5,12 +5,12 @@ import scala.collection.mutable
 import Lower.LenBounds
 
 /** ==================================================================================================
- *  RESOURCE BOUNDS BY ABSTRACT INTERPRETATION OF THE EVENT SEMANTICS (tasks.md A4).
+ *  RESOURCE BOUNDS BY ABSTRACT INTERPRETATION OF THE EVENT SEMANTICS.
  *
  *  ==THE ONE IDEA==
  *  A lower and an upper bound on every counted event are TWO ABSTRACTIONS OF THE SAME COUNTED
- *  EXECUTION.  `EventSemantics` (A1) says, rule for rule, what one execution costs as a function of
- *  the operands' concrete structure; [[CostSem]] runs the SAME rules over the two-tier domain (A3):
+ *  EXECUTION. `EventSemantics` says, rule for rule, what one execution costs as a function of
+ *  the operands' concrete structure; [[CostSem]] runs the same rules over the two-tier domain:
  *
  *    * on the EXACT tier the rule is re-run on the abstract value — a single-valued node IS the
  *      operand's structure, so every structure-determined event (dispatches, `TrieNodeVisit`,
@@ -39,10 +39,10 @@ import Lower.LenBounds
  *  fan-out is the fibre the domain gives at that prefix, so a 16-cell board contributes ONE tile per
  *  cell and no `Shape.top` (the puzzle15 requirement — `SpatialDomainCheck` has the fibre law,
  *  `SpatialCostCheck` the priced chain).  A fixpoint is interpreted over the IR's accumulator/delta
- *  recurrence (A2): the exact tier runs the rounds; the summarized tier bounds them by the accumulator's
+ *  recurrence: the exact tier runs the rounds; the summarized tier bounds them by the accumulator's
  *  growth, prices the body at the seed (must) and at the post-fixpoint (may), and adds the terminating
  *  empty-delta round and the equality frontier.  A `Call` is priced by binding the parameters to the
- *  arguments' abstract values and pricing the body (A5 makes this compositional; here a recursive call
+ *  arguments' abstract values and pricing the body (the summary store makes this compositional; a recursive call
  *  outside the IR's reach is `⊤` with a note, never a guess).
  *
  *  ==THE DERIVATION DAG==

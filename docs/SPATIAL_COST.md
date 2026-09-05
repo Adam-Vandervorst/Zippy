@@ -1,12 +1,12 @@
-# Resource bounds by abstract interpretation (tasks.md A4–A6)
+# Resource bounds by abstract interpretation
 
 The cost analysis is `CostSem` / `GraphSem` in
 [SpatialCostSemantics.scala](../src/main/scala/SpatialCostSemantics.scala): an abstract
-interpretation of the counted event semantics of [SPATIAL_SEMANTICS.md](SPATIAL_SEMANTICS.md) (A1)
-over the two-tier correlated domain of [SPATIAL_DOMAIN.md](SPATIAL_DOMAIN.md) (A3), with fixpoints
-and recursive components read through the stratified IR of `DeltaIR.scala` (A2).  Its product entry
+interpretation of the counted event semantics in [SPATIAL_SEMANTICS.md](SPATIAL_SEMANTICS.md)
+over the two-tier correlated domain in [SPATIAL_DOMAIN.md](SPATIAL_DOMAIN.md), with fixpoints
+and recursive components read through the stratified IR in `DeltaIR.scala`. Its product entry
 points are `SpatialPipeline.costOfOptimized` / `compareBackends` / `LoweredRoutine.cost`.  There is no
-second cost model: the pre-A4 formulae in `SpatialCost.scala` are legacy, read by no gate suite and no
+second cost model: the older formulae in `SpatialCost.scala` are legacy, read by no gate suite and no
 pipeline entry point.
 
 ## 1. What a result is
@@ -15,12 +15,12 @@ A `CostReport` carries, per backend (`reference`, `trie`, `zipper`, `graph`):
 
 - `bounds: EventBounds` — an interval `[lo, hi]` per `EffortEvent`, so every component
   (`Work`, `Alloc`, `Rounds`, `Touch`) is the sum of its events' intervals; `hi` may be `inf`;
-- `value: Abs` — the abstract value of the term in the A3 domain;
+- `value: Abs` — the abstract value of the term in the correlated domain;
 - `derivation: Derivation` — the DAG: one node per rule applied, with its facts, backend parameter,
   widening event, resulting bounds and children; `render()` is deterministic (two analyses of one
   program render identically);
 - `domain: DomainCert` — every widening the domain applied, named;
-- `notes`, `summaries` (A5 reuse counts), `dependencies` / `certified` / `certifiedModulo` (A6).
+- `notes`, `summaries` (including reuse counts), `dependencies`, `certified`, and `certifiedModulo`.
 
 Nothing is evaluated: a `GroundedSS` that throws when run is priced as `⊤`, never detonated
 (`SpatialCostCheck` "NO EVALUATION").
@@ -58,7 +58,7 @@ endpoints, linear in the nesting depth) times the fan-out, the value inferred th
 round is certain, later rounds are bounded by the accumulator's growth, and the widening is named.
 A body not positive in its recursion variable is `⊤` (the IR's variance analysis is the premise).
 
-**Calls** (A5): a non-recursive callee is answered by its *parametric summary* at the caller's
+**Calls**: a non-recursive callee is answered by its *parametric summary* at the caller's
 abstract arguments — computed once per (canonical routine identity, abstract input) and reused, the
 result's relation to the arguments (by pointer to one of them, or fresh) carried across the call so
 correlations compose; the body is never inlined as an analysis step.  A positive passthrough
@@ -67,7 +67,7 @@ abstract least post-fixpoint and priced as the IR solver's rounds (`DeltaIR.Exec
 schedule, terminating round included).  A self-call of the shape `l ∪ r(args')` follows the
 executors' stabilised-argument rule to its stationary point.  Anything else recursive is `⊤`, said.
 
-## 3. The gate at milestone M1
+## 3. The soundness gate
 
 Soundness is the gate: every counted execution inside its interval, every endpoint finite and below
 `ProductRequirement.Astronomical` (10^12).  Checked by:
@@ -78,7 +78,7 @@ Soundness is the gate: every counted execution inside its interval, every endpoi
 | `SpatialEventsCheck` | the fuzzer corpus (181 programs, 4 backends) and the six cornerstones on `Routine.optimized`'s body, cold vs warm literals |
 | `SpatialScaleCheck` | 15 generator families over a 9-rung geometric ladder to 16 384, on the optimized form |
 | `SpatialPipelineCheck` | the pipeline's entry points: cornerstones finite and below the ceiling, deterministic certificates, declared inputs tighten, restriction/intersection/union slopes, the equal-but-distinct restriction allocating nothing |
-| `CrossFunctionCostCheck` (A5) | changing path arguments, summary reuse, correlated results through a call, range of a call result, calls below binders, mutual recursion against the IR solver's counted rounds, cornerstone call chains |
+| `CrossFunctionCostCheck` | changing path arguments, summary reuse, correlated results through a call, range of a call result, calls below binders, mutual recursion against the IR solver's counted rounds, cornerstone call chains |
 
 Width against the product tiers is *reported* per (backend, component) — "wide intervals are
 allowed at this milestone but are reported as not useful" — with no ledger of excused rows.
@@ -86,7 +86,7 @@ Measured on the ladders (2026-09-05): 1680 tier rows, 76 `NOT USEFUL`, all on `a
 `rest-chain/nest`, where the exact tier's budget (`DomainBudget.enumerate = 512`) summarises inputs
 beyond 512 paths and the interval widens.
 
-## 4. Certification (A6)
+## 4. Certification
 
 `proofs/spatial/REGISTRY.tsv` names every transfer rule and what discharges it: Lean
 (`proofs/lean/Zippy/Spatial.lean`: interval arithmetic and order, the must/may rule, range

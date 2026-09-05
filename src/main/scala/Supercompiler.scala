@@ -300,7 +300,7 @@ object Matching:
         case _ => p == t
     if ms(pattern, term) then Some((sm.toMap, pm.toMap)) else None
 
-  // ---- THE LABEL ALPHABET OF THE WHISTLE (plan.md 2E.3) --------------------------------------
+  // ---- THE LABEL ALPHABET OF THE WHISTLE  --------------------------------------
   //
   // Kruskal's tree theorem (proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.kruskal) makes the
   // homeomorphic embedding a well-quasi-order PROVIDED the relation on node LABELS is one.  Over a
@@ -309,8 +309,7 @@ object Matching:
   // `Range` bounds, closure identity), and with them the embedding was NOT a well-quasi-order: the
   // nested-`Iteration` family whose innermost `Mention` is `#s0`, `#s1`, `#s2`, … at successive depths
   // is an infinite antichain, so the whistle could stay silent forever and termination rested on the
-  // caps alone.  `labelOf` is the alphabet the WHISTLE couples over instead ("decide and engineer
-  // each", plan.md 2E.3):
+  // caps alone. `labelOf` is the alphabet the WHISTLE couples over instead:
   //
   //   Mention / Deref    ONE label per sort, bound or free.  Two variables of a sort always couple.
   //   Call               the ORIGINAL routine's name plus both arities.  A residual `f_sc7` is
@@ -442,7 +441,7 @@ object Matching:
     WhistleTrace.note(a, b, litAtoms, v)
     v
 
-  /** THE WHISTLE CORRESPONDENCE TRACE (plan.md 2E.3, the `Matching.toLabel` connection).  Every pair
+  /** THE WHISTLE CORRESPONDENCE TRACE (the `Matching.toLabel` connection).  Every pair
    *  the whistle compared during a recorded run, with its verdict, rendered as label trees for
    *  `proofs/lean/Zippy/WhistleTrace.lean` to re-decide with `Zippy.Whistle.embedsB` — the function
    *  `embedsB_iff` proves equal to the relation `kruskal` is about.  A disagreement is a failing
@@ -766,7 +765,7 @@ object SC:
   /** THE GROUND LAWS: the two that EVALUATE a closed subterm (`Lower.ConstantOps` tries `eval` on every
    *  node, `Lower.LiteralSpaceOps` evaluates literal-operand algebra).  proofs/laws/REGISTRY.tsv files
    *  them as kind GROUND; `AlternativesCheck` holds this set to that table.  An exploration that must
-   *  be evaluation-free (tasks.md B1) drives with `sourceLaws` minus these. */
+   *  be evaluation-free  drives with `sourceLaws` minus these. */
   val groundLaws: Set[String] = Set("constant-ops", "literal-space-ops")
   def lawsWithout(names: Set[String]): List[(String, Space => Space)] = sourceLaws.filterNot((n, _) => names(n))
 
@@ -776,7 +775,7 @@ object SC:
   def reduce(s: Space, cap: Int = 100000, deadline: Deadline = Deadline.never): Space =
     reduceTraced(s, cap, deadline, record = false)._1
 
-  /** ONE STEP of the reduction trace (plan.md 2A.3): the named law that fired, and the term before
+  /** ONE STEP of the reduction trace: the named law that fired, and the term before
    *  and after it.  A law is a whole-term congruence (`subs`), so ONE step may rewrite several
    *  positions at once; the certificate that discharges the step is the law's ∀-certificate in
    *  proofs/laws/REGISTRY.tsv, which covers every instance, and [[verifyTrace]] re-applies the law
@@ -862,14 +861,14 @@ object SC:
   case class Config(maxNodes: Int = 2000, maxDepth: Int = 400, generalize: Boolean = true,
                     literalsAreAtoms: Boolean = true, maxReduce: Int = 100000,
                     compileBudgetMs: Double = Config.DefaultBudgetMs,
-                    /** record the typed proof trace of the run (tasks.md C3): one DAG per residual node */
+                    /** record the typed proof trace of the run: one DAG per residual node */
                     trace: Boolean = false,
-                    /** THE LAW TABLE THIS RUN DRIVES WITH (tasks.md B1): a subset of [[sourceLaws]].  Two runs
+                    /** THE LAW TABLE THIS RUN DRIVES WITH: a subset of [[sourceLaws]].  Two runs
                      *  over two subsets reach two normal forms of the same program — two residual
                      *  ALTERNATIVES, each with its own law trace — which is how fusion, hoisting and
                      *  push choices are exposed instead of committed. */
                     laws: List[(String, Space => Space)] = sourceLaws,
-                    /** UNROLL BEFORE FOLDING (tasks.md B1): the first `unroll` times a configuration would
+                    /** UNROLL BEFORE FOLDING: the first `unroll` times a configuration would
                      *  fold to a node, unfold it once more instead.  0 is the ordinary fold-first driver. */
                     unroll: Int = 0)
   object Config:
@@ -924,7 +923,7 @@ object SC:
     // function nodes: (residual name, configuration at creation, ordered ref params, ordered mention params)
     val fnodes = mutable.ArrayBuffer.empty[(RoutinePtr, Space, Vector[PathRef], Vector[SpaceMention])]
     val routines = mutable.Map.empty[RoutinePtr, Routine]
-    // ---- THE TYPED PROOF TRACE (tasks.md C3): every unfold, law step, fold and generalization ----
+    // ---- THE TYPED PROOF TRACE: every unfold, law step, fold and generalization ----
     val traceBuilder = new ProofTrace.Builder
     /** per residual node: the trace from one unfold of its configuration to its body */
     val traces = mutable.LinkedHashMap.empty[RoutinePtr, Int]
@@ -935,7 +934,7 @@ object SC:
     def topTraceDag: Option[ProofTrace.Dag] = if topTrace >= 0 then Some(traceBuilder.dag(topTrace)) else None
 
     def fresh(hint: String): RoutinePtr = { counter += 1; RoutinePtr(s"${hint}_sc$counter") }
-    /** A COLLISION-SAFE CANONICAL IDENTITY for a residual node (tasks.md C2): the name carries a digest
+    /** A COLLISION-SAFE CANONICAL IDENTITY for a residual node: the name carries a digest
      *  of the ALPHA-NORMALISED configuration and its parameter arity, so two nodes with the same
      *  configuration up to renaming have the same identity and two different configurations never
      *  share one — an integer counter alone is neither.  The counter is kept as a readable prefix

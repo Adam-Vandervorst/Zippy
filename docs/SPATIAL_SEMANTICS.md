@@ -1,6 +1,6 @@
-# The operational resource semantics (tasks.md A1)
+# The operational resource semantics
 
-This document is the record A1 asks for: **the unit, the inclusion rule and the sharing convention**
+This document fixes **the unit, the inclusion rule and the sharing convention**
 of each of `Work`, `Alloc`, `Touch` and `Rounds`, and the one semantics every backend and the
 counted oracle are held to.  The semantics itself is executable — `EventSemantics` in
 [SpatialSemantics.scala](../src/main/scala/SpatialSemantics.scala) — and it is held to the
@@ -131,7 +131,7 @@ forced chains (`TailsUnion`, `TailsIntersection`, a deferred descent) read their
 
 ## 7. What consumes this
 
-* `SpatialSemanticsCheck` — the differential acceptance of A1.
-* The abstract transfers of tasks.md A4 bound the **structural quantities these rules count** —
+* `SpatialSemanticsCheck` — differential conformance between the rules and counted executions.
+* The abstract cost transfers bound the **structural quantities these rules count** —
   paired prefix frontiers, live operand counts, Patricia shapes, forced cursor nodes — and nothing
   else; a cost constant that is not the coefficient of a rule here is not admissible there.

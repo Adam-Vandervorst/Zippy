@@ -399,7 +399,7 @@ class SpatialCheckCheck extends FunSuite:
     val r = Routine(RoutinePtr("id"), Vector.empty, Vector(mS), Space.Mention(mS))
     val sig = SpatialSignature(Map.empty, Map(mS -> fnA), fnB)
     val rep = SpatialCheck.report(r, sig)
-    // THE SAME CLAIM, NOT THE SAME CARRIER (plan.md 1C.2).  `SpatialCheck.report` runs
+    // THE SAME CLAIM, NOT THE SAME CARRIER.  `SpatialCheck.report` runs
     // `SpatialType.reduce`, whose `constrainShape` now installs a CERTIFICATE where the declaration
     // carried none — `fnA`'s children have `Cert.top` and the inferred ones have `{ε}`, because the
     // length constraint proves those levels hold nothing but the empty path.  That is `reduce` doing
@@ -704,7 +704,7 @@ class SpatialCheckCheck extends FunSuite:
     val rep = SpatialCheck.report(r, sig, { case `self` => r })
     assert(rep.diagnosis.assumptions.contains(SpatialAssumption.RecursionWidened(self)),
            rep.diagnosis.show)
-    // ==A RECURSIVE ROUTINE *CAN* BE PROVED NOW, AND THE ASSUMPTION IS STILL NAMED (plan.md 1D.1)==
+    // ==A RECURSIVE ROUTINE *CAN* BE PROVED NOW, AND THE ASSUMPTION IS STILL NAMED ==
     //
     // This used to assert `!rep.check.isProved` — "a recursive routine cannot be proved by this
     // checker" — because the self-call widened to ⊤.  `SpatialRecursion.summaryAt` is the production
@@ -716,7 +716,7 @@ class SpatialCheckCheck extends FunSuite:
     // on a summary must say so, and it does.  So the pair asserted here is "provable AND the premise
     // is named", which is strictly more than "not provable".
     assert(rep.check.isProved,
-           s"a recursive routine's contract is provable through the certified summary (plan.md " +
+           s"a recursive routine's contract is provable through the certified summary ( " +
            s"1D.1); if the consumer is removed this is the gate that reports it: ${rep.check.show}")
     assert(rep.diagnosis.assumptions.contains(SpatialAssumption.RecursionWidened(self)),
            s"the self-call must still be NAMED as a premise even when the summary proves the " +

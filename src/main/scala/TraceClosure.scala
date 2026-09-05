@@ -3,7 +3,7 @@ package morkl
 import scala.collection.mutable
 
 /** ==============================================================================================
- *  THE DEPENDENCY CLOSURE OF A PROOF TRACE, IN SCALA (tasks.md C4 → B2).
+ *  THE DEPENDENCY CLOSURE OF A PROOF TRACE, IN SCALA ( → B2).
  *
  *  `scripts/proof_closure.py check_trace_closure` is the INDEPENDENT checker of the committed traces.
  *  This is the same resolution, in the process that has to make a decision: an alternative may enter

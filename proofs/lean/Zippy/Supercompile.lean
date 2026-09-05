@@ -1,6 +1,6 @@
 /-
 ==================================================================================================
-FOLDING PRESERVES THE LEAST-FIXPOINT DENOTATION (plan.md 2E.2) — PARAMETRIC IN `LawOK`.
+FOLDING PRESERVES THE LEAST-FIXPOINT DENOTATION  — PARAMETRIC IN `LawOK`.
 
 `terminating/REGISTRY.tsv` row O12b: "FOLD: if C_new = C_anc.σ then residualising with the call
 ρ(σ) at the fold point gives a routine whose least fixpoint equals [[C_anc]]."  This module proves
@@ -62,7 +62,7 @@ lattice to the residual system built from actual `Space` bodies.
     proofs/lean/Zippy/Supercompile.lean#Zippy.Fold.fold_correct
     proofs/lean/Zippy/Supercompile.lean#Zippy.Fold.resid_lfp_eq_orig
 
-==INSTANTIATED (tasks.md C2, `Drive.lean`)==
+==INSTANTIATED (`Drive.lean`)==
 `DriveSystem.premises` DERIVES `FoldPremises` from a run's typed driving trace: the unfold clause
 plus C1's semantic substitution theorem give the unfold step, `instance_denT` gives the fold step,
 `Ctx.plug_congr` lifts a certified law to its position, and the mixed valuations (original names at

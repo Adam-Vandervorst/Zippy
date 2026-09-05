@@ -3,7 +3,7 @@ package morkl
 import scala.collection.mutable
 
 /** ==================================================================================================
- *  THE STRATIFIED DELTA-FIXPOINT IR (tasks.md A2).
+ *  THE STRATIFIED DELTA-FIXPOINT IR.
  *
  *  ONE explicit recursive representation, shared by execution, analysis, proof and residual
  *  generation, for every certified `Fixpoint` and every recursive `Call` component:

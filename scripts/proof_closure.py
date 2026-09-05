@@ -125,8 +125,8 @@ SPATIAL_STATUS = ROOT / "proofs/spatial/STATUS.tsv"
 
 
 # ==================================================================================================
-# C4: ONE DEPENDENCY GRAPH OVER THE TYPED PROOF TRACES.  A pipeline cell's claim is its trace
-# (proofs/pipeline/traces/<cell>.trace.tsv, tasks.md C3); every leaf names what it rests on — a law
+# ONE DEPENDENCY GRAPH OVER THE TYPED PROOF TRACES. A pipeline cell's claim is its trace
+# (proofs/pipeline/traces/<cell>.trace.tsv); every leaf names what it rests on — a law
 # (proofs/laws/REGISTRY.tsv, whose certificates have rows in proofs/STATUS.tsv), a backend artifact
 # (proofs/pipeline/STATUS.tsv verdict + its `; TRUSTS:` header of T/O ids), the substitution and fold
 # theorems (terminating/REGISTRY.tsv O6a/O12b), a mechanized boundary theorem.  This traverses them
@@ -388,7 +388,7 @@ def check_spatial_transfers(problems):
 
 
 # ---------------------------------------------------------------------------------------------
-# ENTRY-LEVEL MECHANIZATION (plan.md 2E.6).  docs/TRUSTED.md may carry, inside an entry's section,
+# ENTRY-LEVEL MECHANIZATION.  docs/TRUSTED.md may carry, inside an entry's section,
 #     MECHANIZED-IN: proofs/lean/Zippy/<File>.lean#<Theorem>
 # naming the Lean theorem that IS that entry's schema (T1's `path_induction` is the schema for every
 # predicate, not one conclusion).  When `scripts/check_lean.sh` has witnessed every such theorem as
@@ -441,7 +441,7 @@ ASSUMED_BLOCK = re.compile(r"^%\s*ASSUMED\b", re.M)
 TRUSTED_ENTRY = re.compile(r"^%\s*TRUSTED-ENTRY:\s*(T\d+)", re.M)
 
 # ==================================================================================================
-# THE MARKER THAT DISCHARGES A TRUSTED ENTRY, RATHER THAN DECLARING ONE (plan.md 0.5).
+# THE MARKER THAT DISCHARGES A TRUSTED ENTRY, RATHER THAN DECLARING ONE.
 #
 # `TRUSTED-ENTRY` above says "this file asserts something the corpus does not derive".  Its converse
 # is `% MECHANIZED-IN: <lean file>#<fully qualified theorem>`: "the principle this file's closure
@@ -868,7 +868,7 @@ def main():
             elif not compatible(r["verdict"], want):
                 problems.append(f"{r['name']}: reported as `{r['verdict']}` but its closure says "
                                 f"`{want}`")
-        # --- the Lean lifts, and the markers that could not be honoured (plan.md 0.5) ------------
+        # --- the Lean lifts, and the markers that could not be honoured  ------------
         mech = [r for r in rows if r.get("mechanized")]
         unwitnessed = [r for r in rows
                        if r.get("mech_claimed") and not r.get("mechanized")]

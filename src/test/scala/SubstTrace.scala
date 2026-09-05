@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
 /** ==================================================================================================
- *  THE CORRESPONDENCE BETWEEN THE TWO SUBSTITUTIONS, AS A TRACE (plan.md 1E.2).
+ *  THE CORRESPONDENCE BETWEEN THE TWO SUBSTITUTIONS, AS A TRACE.
  *
  *  `1E.2` asks for correspondence to the executable — "a Lean-checked TRACE of the production
  *  substitutions ... Not a citation."  This suite is the producer: it runs real programs through the

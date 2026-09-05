@@ -5,7 +5,7 @@ import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 import morkl.Space.*
 
-/** tasks.md C3 — typed proof traces REPLAY, and every mutation of a matcher, a side condition, an
+/** Typed proof traces replay, and every mutation of a matcher, a side condition, an
  *  endpoint term or a dependency makes the replay FAIL. */
 class ProofTraceCheck extends FunSuite:
   override val munitTimeout = scala.concurrent.duration.Duration(10, "min")

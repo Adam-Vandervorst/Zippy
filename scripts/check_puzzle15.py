@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""THE PUZZLE15 STRESS THEOREM, RE-CHECKED INDEPENDENTLY (tasks.md D3).
+"""THE PUZZLE15 STRESS THEOREM, RE-CHECKED INDEPENDENTLY.
 
 Puzzle15Check writes, through ArtifactSink:
   proofs/puzzle15/EXPANSION.tsv    parent board -> successor board, for the BFS levels it expanded

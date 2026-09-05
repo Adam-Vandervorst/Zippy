@@ -1,6 +1,6 @@
-# RESOURCE CERTIFICATE (tasks.md D2) — nqueens priced by the A4/A5 analysis over its actual inputs, per backend,
+# RESOURCE CERTIFICATE — nqueens priced by the compositional resource analysis over its actual inputs, per backend,
 # with the counted run of the executor beside every interval; the derivation follows (D rows).
-# inputs	
+# inputs
 # B	backend	work	alloc	rounds	touch	counted-work	counted-alloc	counted-rounds	counted-touch	certified	dependencies	summaries(reused,computed)
 B	reference	[13587, 13587]	[4560, 4560]	[122, 122]	[0, 0]	13587	4560	122	0	CERTIFIED	A6-BACKENDS,A6-EVENTS,A6-EXACT-COMP,A6-EXACT-INTER,A6-EXACT-INTER-SAME,A6-EXACT-SUB,A6-EXACT-SUB-SAME,A6-EXACT-UNION,A6-EXACT-UNION-SAME,A6-EXACT-UNWRAP,A6-EXACT-WRAP,A6-IVL,A6-IVL-IMPL,A6-MUSTMAY,A6-ORDER,A6-PATRICIA	2,14
 D	reference	Iteration/eval [reference]
