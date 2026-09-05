@@ -20,6 +20,7 @@
 (assert (forall ((x Trie) (pp Trie) (k Int))
   (= (child (tr x pp) k) (u (g (term pp) (child x k)) (tr (child x k) (child pp k))))))
 (define-fun PP ((p Path)) Bool (forall ((x Trie) (pp Trie)) (= (mem (tr x pp) p) (zr x pp p))))
+; ASSUMED: T1
 (assert (=> (and (PP nil) (forall ((k Int) (q Path)) (=> (PP q) (PP (cons k q))))) (forall ((p Path)) (PP p))))
 (assert (not (forall ((p Path)) (PP p))))
 (check-sat)

@@ -1,0 +1,44 @@
+; LAW-JUSTIFIED: the movement observations did not converge within the rounds ladder for
+; some pair; every step is a certified ∀-law (certificates in the STEP lines below), and
+; those certificates carry the cell (decomposition through the trace, never
+; a budget).
+; TRUSTS: law:constant-ops
+
+; BOUNDARY: space
+; AUTO-GENERATED pipeline stage 1 (puzzle3-full) — DATA-AGNOSTIC: the program vs SC.reduce(program).
+; 1 trace step(s), 1 differing subterm pair(s) in total, each checked OBSERVATIONALLY
+; under the certified movement rules with surrounding binders freed; each step is also a
+; certified ∀-law (the certificates below), so a pair the egg ladder does not reach is carried
+; by its certificate and never by a budget.
+; STEP   0  constant-ops                  1 differing pair(s)   certificate(s): constant-ops ⟶ GROUND — per-op threeway_*/impl_* characterizations, eval-gated (registry: constant-ops)
+(include "prelude.egg")
+(let $glit0 (Union (Union (Union (Wrap1 43 (Wrap1 43 (Eps))) (Wrap1 44 (Wrap1 44 (Eps)))) (Wrap1 49 (Wrap1 49 (Eps)))) (Wrap1 53 (Wrap1 53 (Eps)))))
+(let $glit1 (Union (Union (Union (Wrap1 43 (Union (Union (Wrap1 16 (Wrap1 18 (Wrap1 17 (Eps)))) (Wrap1 17 (Wrap1 16 (Wrap1 18 (Eps))))) (Wrap1 18 (Wrap1 17 (Wrap1 16 (Eps)))))) (Wrap1 44 (Union (Union (Wrap1 16 (Wrap1 18 (Wrap1 17 (Eps)))) (Wrap1 17 (Wrap1 16 (Wrap1 18 (Eps))))) (Wrap1 18 (Wrap1 17 (Wrap1 16 (Eps))))))) (Wrap1 49 (Union (Union (Wrap1 16 (Wrap1 17 (Wrap1 18 (Eps)))) (Wrap1 17 (Wrap1 18 (Wrap1 16 (Eps))))) (Wrap1 18 (Wrap1 16 (Wrap1 17 (Eps))))))) (Wrap1 53 (Union (Union (Wrap1 16 (Wrap1 17 (Wrap1 18 (Eps)))) (Wrap1 17 (Wrap1 18 (Wrap1 16 (Eps))))) (Wrap1 18 (Wrap1 16 (Wrap1 17 (Eps))))))))
+(rewrite (App (BodyK 0 (INil) (ZCons cz0 (ZNil))) h5 t) (Union (Union (Union (Composition (Intersection (Wrap1 h5 (Eps)) (Wrap1 49 (Eps))) (Composition (Composition (Sub 53 cz0) (Sub 43 cz0)) (Sub 44 cz0))) (Composition (Intersection (Wrap1 h5 (Eps)) (Wrap1 53 (Eps))) (Composition (Composition (Sub 49 cz0) (Sub 43 cz0)) (Sub 44 cz0)))) (Composition (Intersection (Wrap1 h5 (Eps)) (Wrap1 43 (Eps))) (Composition (Composition (Sub 49 cz0) (Sub 53 cz0)) (Sub 44 cz0)))) (Composition (Intersection (Wrap1 h5 (Eps)) (Wrap1 44 (Eps))) (Composition (Composition (Sub 49 cz0) (Sub 53 cz0)) (Sub 43 cz0)))))
+(rewrite (App (BodyK 1 (INil) (ZNil)) h7 t) (Wrap1 h7 (Eps)))
+(rewrite (App (BodyK 2 (ICons ci0 (INil)) (ZNil)) h6 t) (Wrap1 ci0 (Wrap1 h6 (Union (Raffination $glit0 (Iter t (BodyK 1 (INil) (ZNil)))) t))))
+(rewrite (App (BodyK 3 (INil) (ZNil)) h5 t) (Iter t (BodyK 2 (ICons h5 (INil)) (ZNil))))
+(rewrite (App (BodyK 4 (ICons ci0 (INil)) (ZNil)) h4 t) (Iter (Sub ci0 (Sub h4 (Sub ci0 (Iter (Union (Union (Union (Union (Union (Union (Union (Composition (Wrap1 49 (Wrap1 43 (Eps))) (Union (Wrap1 43 (Wrap1 49 (Eps))) (Wrap1 49 (Wrap1 43 (Eps))))) (Composition (Wrap1 49 (Wrap1 53 (Eps))) (Union (Wrap1 49 (Wrap1 53 (Eps))) (Wrap1 53 (Wrap1 49 (Eps)))))) (Composition (Wrap1 53 (Wrap1 44 (Eps))) (Union (Wrap1 44 (Wrap1 53 (Eps))) (Wrap1 53 (Wrap1 44 (Eps)))))) (Composition (Wrap1 53 (Wrap1 49 (Eps))) (Union (Wrap1 49 (Wrap1 53 (Eps))) (Wrap1 53 (Wrap1 49 (Eps)))))) (Composition (Wrap1 43 (Wrap1 49 (Eps))) (Union (Wrap1 43 (Wrap1 49 (Eps))) (Wrap1 49 (Wrap1 43 (Eps)))))) (Composition (Wrap1 43 (Wrap1 44 (Eps))) (Union (Wrap1 43 (Wrap1 44 (Eps))) (Wrap1 44 (Wrap1 43 (Eps)))))) (Composition (Wrap1 44 (Wrap1 53 (Eps))) (Union (Wrap1 44 (Wrap1 53 (Eps))) (Wrap1 53 (Wrap1 44 (Eps)))))) (Composition (Wrap1 44 (Wrap1 43 (Eps))) (Union (Wrap1 43 (Wrap1 44 (Eps))) (Wrap1 44 (Wrap1 43 (Eps)))))) (BodyK 3 (INil) (ZNil)))))) (BodyK 0 (INil) (ZCons t (ZNil)))))
+(rewrite (App (BodyK 5 (ICons ci0 (INil)) (ZCons cz0 (ZNil))) h5 t) (Composition (Wrap1 h5 (Sub ci0 t)) cz0))
+(rewrite (App (BodyK 6 (ICons ci0 (INil)) (ZNil)) h4 t) (Iter (Sub ci0 (Iter (Union (Union (Union (Union (Union (Union (Union (Composition (Wrap1 49 (Wrap1 43 (Eps))) (Union (Wrap1 43 (Wrap1 49 (Eps))) (Wrap1 49 (Wrap1 43 (Eps))))) (Composition (Wrap1 49 (Wrap1 53 (Eps))) (Union (Wrap1 49 (Wrap1 53 (Eps))) (Wrap1 53 (Wrap1 49 (Eps)))))) (Composition (Wrap1 53 (Wrap1 44 (Eps))) (Union (Wrap1 44 (Wrap1 53 (Eps))) (Wrap1 53 (Wrap1 44 (Eps)))))) (Composition (Wrap1 53 (Wrap1 49 (Eps))) (Union (Wrap1 49 (Wrap1 53 (Eps))) (Wrap1 53 (Wrap1 49 (Eps)))))) (Composition (Wrap1 43 (Wrap1 49 (Eps))) (Union (Wrap1 43 (Wrap1 49 (Eps))) (Wrap1 49 (Wrap1 43 (Eps)))))) (Composition (Wrap1 43 (Wrap1 44 (Eps))) (Union (Wrap1 43 (Wrap1 44 (Eps))) (Wrap1 44 (Wrap1 43 (Eps)))))) (Composition (Wrap1 44 (Wrap1 53 (Eps))) (Union (Wrap1 44 (Wrap1 53 (Eps))) (Wrap1 53 (Wrap1 44 (Eps)))))) (Composition (Wrap1 44 (Wrap1 43 (Eps))) (Union (Wrap1 43 (Wrap1 44 (Eps))) (Wrap1 44 (Wrap1 43 (Eps)))))) (BodyK 3 (INil) (ZNil)))) (BodyK 5 (ICons h4 (INil)) (ZCons t (ZNil)))))
+(rewrite (App (BodyK 7 (ICons ci0 (ICons ci1 (INil))) (ZNil)) h6 t) (Union (Union (Union (Wrap1 49 (Wrap1 68 (Eps))) (Wrap1 53 (Wrap1 ci0 (Eps)))) (Wrap1 43 (Wrap1 ci1 (Eps)))) (Wrap1 44 (Wrap1 h6 (Eps)))))
+(rewrite (App (BodyK 8 (ICons ci0 (INil)) (ZNil)) h5 t) (Iter t (BodyK 7 (ICons ci0 (ICons h5 (INil))) (ZNil))))
+(rewrite (App (BodyK 9 (INil) (ZNil)) h4 t) (Iter t (BodyK 8 (ICons h4 (INil)) (ZNil))))
+(rewrite (App (BodyK 10 (ICons ci0 (ICons ci1 (INil))) (ZNil)) h6 t) (Union (Union (Union (Wrap1 53 (Wrap1 68 (Eps))) (Wrap1 49 (Wrap1 ci0 (Eps)))) (Wrap1 43 (Wrap1 ci1 (Eps)))) (Wrap1 44 (Wrap1 h6 (Eps)))))
+(rewrite (App (BodyK 11 (ICons ci0 (INil)) (ZNil)) h5 t) (Iter t (BodyK 10 (ICons ci0 (ICons h5 (INil))) (ZNil))))
+(rewrite (App (BodyK 12 (INil) (ZNil)) h4 t) (Iter t (BodyK 11 (ICons h4 (INil)) (ZNil))))
+(rewrite (App (BodyK 13 (ICons ci0 (ICons ci1 (INil))) (ZNil)) h6 t) (Union (Union (Union (Wrap1 43 (Wrap1 68 (Eps))) (Wrap1 49 (Wrap1 ci0 (Eps)))) (Wrap1 53 (Wrap1 ci1 (Eps)))) (Wrap1 44 (Wrap1 h6 (Eps)))))
+(rewrite (App (BodyK 14 (ICons ci0 (INil)) (ZNil)) h5 t) (Iter t (BodyK 13 (ICons ci0 (ICons h5 (INil))) (ZNil))))
+(rewrite (App (BodyK 15 (INil) (ZNil)) h4 t) (Iter t (BodyK 14 (ICons h4 (INil)) (ZNil))))
+(rewrite (App (BodyK 16 (ICons ci0 (ICons ci1 (INil))) (ZNil)) h6 t) (Union (Union (Union (Wrap1 44 (Wrap1 68 (Eps))) (Wrap1 49 (Wrap1 ci0 (Eps)))) (Wrap1 53 (Wrap1 ci1 (Eps)))) (Wrap1 43 (Wrap1 h6 (Eps)))))
+(rewrite (App (BodyK 17 (ICons ci0 (INil)) (ZNil)) h5 t) (Iter t (BodyK 16 (ICons ci0 (ICons h5 (INil))) (ZNil))))
+(rewrite (App (BodyK 18 (INil) (ZNil)) h4 t) (Iter t (BodyK 17 (ICons h4 (INil)) (ZNil))))
+(rewrite (App (BodyK 19 (ICons ci0 (ICons ci1 (ICons ci2 (INil)))) (ZNil)) h3 t) (Iter (Iter (Union (Union (Union (Composition (TailsUnion (Intersection (Wrap1 ci0 (Eps)) (Wrap1 49 (Eps)))) (Iter (Wrap1 ci1 (Wrap1 ci2 (Wrap1 h3 (Eps)))) (BodyK 9 (INil) (ZNil)))) (Composition (TailsUnion (Intersection (Wrap1 ci0 (Eps)) (Wrap1 53 (Eps)))) (Iter (Wrap1 ci1 (Wrap1 ci2 (Wrap1 h3 (Eps)))) (BodyK 12 (INil) (ZNil))))) (Composition (TailsUnion (Intersection (Wrap1 ci0 (Eps)) (Wrap1 43 (Eps)))) (Iter (Wrap1 ci1 (Wrap1 ci2 (Wrap1 h3 (Eps)))) (BodyK 15 (INil) (ZNil))))) (Composition (TailsUnion (Intersection (Wrap1 ci0 (Eps)) (Wrap1 44 (Eps)))) (Iter (Wrap1 ci1 (Wrap1 ci2 (Wrap1 h3 (Eps)))) (BodyK 18 (INil) (ZNil))))) (BodyK 6 (ICons ci0 (INil)) (ZNil))) (BodyK 4 (ICons ci0 (INil)) (ZNil))))
+(rewrite (App (BodyK 20 (ICons ci0 (ICons ci1 (INil))) (ZNil)) h2 t) (Iter t (BodyK 19 (ICons ci0 (ICons ci1 (ICons h2 (INil)))) (ZNil))))
+(rewrite (App (BodyK 21 (ICons ci0 (INil)) (ZNil)) h1 t) (Iter t (BodyK 20 (ICons ci0 (ICons h1 (INil))) (ZNil))))
+(rewrite (App (BodyK 22 (INil) (ZNil)) h0 t) (Iter t (BodyK 21 (ICons h0 (INil)) (ZNil))))
+(rewrite (FApp (BodyK 23 (INil) (ZNil)) x) (Union x (Iter x (BodyK 22 (INil) (ZNil)))))
+(let $s0_0 (Term (Fix (Wrap1 49 (Wrap1 16 (Wrap1 17 (Wrap1 18 (Eps))))) (BodyK 23 (INil) (ZNil)))))
+(let $t0_0 (Term $glit1))
+(run-schedule (repeat ROUNDS (run) (run park)))
+(check (= $s0_0 $t0_0))

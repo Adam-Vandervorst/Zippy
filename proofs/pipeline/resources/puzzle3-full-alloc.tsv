@@ -1,0 +1,42 @@
+# SELECTION CERTIFICATE — a pure function of the C rows and the objective; replay:
+# scripts/check_selection.py (independent), morkl.Pareto.replay (in-process).
+# objective	alloc
+# priority	alloc,work,rounds,touch
+# dominance	work,alloc,rounds,touch
+# constraints	-
+# backends	reference,trie,graph,zipper
+# tie-rule	lexicographic (hi, lo) over the priority components, then alternative id, then backend order reference,trie,graph,zipper
+# reference-touch	modelled, no counted oracle: taken as [0, inf]; not compared between two reference candidates
+# columns	C	alt	backend	work.lo	work.hi	alloc.lo	alloc.hi	rounds.lo	rounds.hi	touch.lo	touch.hi	certified	closure
+C	0a425a388be8adf1	reference	107263	111871	64368	64368	9008	9008	0	inf	CERTIFIED	CLOSED
+C	0a425a388be8adf1	trie	67425	530104	69169	399968	9008	9008	55679	326256	CERTIFIED	CLOSED
+C	0a425a388be8adf1	graph	95320	95320	36027	36054	9008	9008	57643	111887	CERTIFIED	CLOSED
+C	0a425a388be8adf1	zipper	67426	530105	69169	399968	9008	9008	55679	326256	CERTIFIED	CLOSED
+C	0b90a871d1f64797	reference	107263	111871	64368	64368	9008	9008	0	inf	CERTIFIED	CLOSED
+C	0b90a871d1f64797	trie	67425	530104	69169	399968	9008	9008	55679	326256	CERTIFIED	CLOSED
+C	0b90a871d1f64797	graph	95320	95320	36027	36054	9008	9008	57643	111887	CERTIFIED	CLOSED
+C	0b90a871d1f64797	zipper	67426	530105	69169	399968	9008	9008	55679	326256	CERTIFIED	CLOSED
+C	274b88dfcc4a8746	reference	103039	107647	62640	62640	9008	9008	0	inf	CERTIFIED	CLOSED
+C	274b88dfcc4a8746	trie	67809	530488	69169	399968	9008	9008	60479	331056	CERTIFIED	CLOSED
+C	274b88dfcc4a8746	graph	98392	98392	36027	36054	9008	9008	62443	116687	CERTIFIED	CLOSED
+C	274b88dfcc4a8746	zipper	67810	530489	69169	399968	9008	9008	60479	331056	CERTIFIED	CLOSED
+C	c2a33d3a364ba3a4	reference	108415	113023	65520	65520	9200	9200	0	inf	CERTIFIED	CLOSED
+C	c2a33d3a364ba3a4	trie	68577	531256	70129	400928	9200	9200	56447	327408	CERTIFIED	CLOSED
+C	c2a33d3a364ba3a4	graph	97624	97624	36411	36438	9200	9200	58411	113039	CERTIFIED	CLOSED
+C	c2a33d3a364ba3a4	zipper	68578	531257	70129	400928	9200	9200	56447	327408	CERTIFIED	CLOSED
+X	c2a33d3a364ba3a4	reference	DOMINATED	by 274b88dfcc4a8746/reference: work 107647<=108415 alloc 62640<=65520 rounds 9008<=9200
+S	0a425a388be8adf1	graph	ranked first by the tie rule among 15 incomparable survivors
+K	0a425a388be8adf1	reference	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	0a425a388be8adf1	trie	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	0a425a388be8adf1	zipper	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	0b90a871d1f64797	reference	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	0b90a871d1f64797	trie	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	0b90a871d1f64797	graph	INCOMPARABLE with the selected: overlaps on work,alloc,rounds,touch
+K	0b90a871d1f64797	zipper	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	274b88dfcc4a8746	reference	INCOMPARABLE with the selected: overlaps on rounds,touch
+K	274b88dfcc4a8746	trie	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	274b88dfcc4a8746	graph	INCOMPARABLE with the selected: overlaps on alloc,rounds,touch
+K	274b88dfcc4a8746	zipper	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	c2a33d3a364ba3a4	trie	INCOMPARABLE with the selected: overlaps on work,touch
+K	c2a33d3a364ba3a4	graph	INCOMPARABLE with the selected: overlaps on touch
+K	c2a33d3a364ba3a4	zipper	INCOMPARABLE with the selected: overlaps on work,touch

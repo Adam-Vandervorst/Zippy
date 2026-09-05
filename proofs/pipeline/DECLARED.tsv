@@ -1,0 +1,65 @@
+# THE DECLARED PIPELINE MATRIX — what each emitted artifact IS.
+#
+# Regenerate with `python3 scripts/audit_pipeline_markers.py --declare`, and READ THE DIFF:
+# every line that changes is a change to what this tree claims about that cell.
+# `scripts/audit_pipeline_markers.py` fails on any artifact whose observed kind differs
+# from its declaration, on an artifact with no declaration, and on a declaration whose
+# artifact is MISSING.
+#
+# The kinds, and what each is worth:
+#   REAL           a prover/egglog obligation with actual checks or a real goal.  The only
+#                  kind that is a certified equivalence for that cell.
+#   TRIVIAL        the two sides are the same term after alpha-normalisation; there is NO
+#                  obligation to discharge.
+#   IDENT          both sides materialised to byte-equal terms (IDENTICAL-LITERAL /
+#                  IDENTICAL-STRUCTURE); no equivalence obligation exists here either.
+#   SINGLE-SIDE    ONE side observed against the reference output.  A real computation,
+#                  NOT an equivalence.
+#   LAW-JUSTIFIED  every differing pair replayed as an instance of a certified law, so the
+#                  universal certificates in proofs/ are the proof; not proved per program.
+#   BUDGET         neither prover / no rounds rung reached it; the attempt log is in the
+#                  file header.  An OPEN obligation, not an acceptance.
+#
+# artifact	declared-kind
+proofs/pipeline/aunt-graph-agnostic.smt2	TRIVIAL
+proofs/pipeline/aunt-graph.smt2	TRIVIAL
+proofs/pipeline/aunt-space.smt2	LAW-JUSTIFIED
+proofs/pipeline/aunt-zipper-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/aunt-zipper.smt2	LAW-JUSTIFIED
+proofs/pipeline/datalog-sn-graph-agnostic.smt2	TRIVIAL
+proofs/pipeline/datalog-sn-graph.smt2	TRIVIAL
+proofs/pipeline/datalog-sn-space.smt2	TRIVIAL
+proofs/pipeline/datalog-sn-zipper-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/datalog-sn-zipper.smt2	LAW-JUSTIFIED
+proofs/pipeline/gol-graph-agnostic.smt2	TRIVIAL
+proofs/pipeline/gol-graph.smt2	TRIVIAL
+proofs/pipeline/gol-space.smt2	TRIVIAL
+proofs/pipeline/gol-zipper-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/gol-zipper.smt2	LAW-JUSTIFIED
+proofs/pipeline/nqueens-graph-agnostic.smt2	TRIVIAL
+proofs/pipeline/nqueens-graph.smt2	TRIVIAL
+proofs/pipeline/nqueens-space.smt2	LAW-JUSTIFIED
+proofs/pipeline/nqueens-zipper-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/nqueens-zipper.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle15-graph-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle15-graph.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle15-space.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle15-zipper-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle15-zipper.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle3-full-graph-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle3-full-graph.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle3-full-space.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle3-full-zipper-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/puzzle3-full-zipper.smt2	LAW-JUSTIFIED
+proofs/pipeline/temperature-graph-agnostic.smt2	TRIVIAL
+proofs/pipeline/temperature-graph.smt2	TRIVIAL
+proofs/pipeline/temperature-space.smt2	TRIVIAL
+proofs/pipeline/temperature-zipper-agnostic.smt2	LAW-JUSTIFIED
+proofs/pipeline/temperature-zipper.smt2	LAW-JUSTIFIED
+zipper-egg-tests/pipeline/aunt-space-agnostic.egg	LAW-JUSTIFIED
+zipper-egg-tests/pipeline/datalog-sn-space-agnostic.egg	TRIVIAL
+zipper-egg-tests/pipeline/gol-space-agnostic.egg	TRIVIAL
+zipper-egg-tests/pipeline/nqueens-space-agnostic.egg	REAL
+zipper-egg-tests/pipeline/puzzle15-space-agnostic.egg	LAW-JUSTIFIED
+zipper-egg-tests/pipeline/puzzle3-full-space-agnostic.egg	LAW-JUSTIFIED
+zipper-egg-tests/pipeline/temperature-space-agnostic.egg	TRIVIAL

@@ -1,3 +1,6 @@
+; TRUSTS: -
+
+; BOUNDARY: graph
 ; AUTO-GENERATED — pipeline graph (nqueens), data-agnostic
 ; TRIVIAL-NO-OBLIGATION: the two sides are syntactically identical after alpha-normalisation
 ; (0 candidate pair(s), 0 reflexive after freeing binders).  Recorded as a

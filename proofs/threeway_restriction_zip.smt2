@@ -28,6 +28,7 @@
   (match p ((nil (and (term x) (term pp)))
             ((cons k q) (or (and (term pp) (mem (child x k) q)) (zr (child x k) (child pp k) q))))))
 (define-fun PP ((p Path)) Bool (forall ((x Trie) (pp Trie)) (= (zr x pp p) (den x pp p))))
+; ASSUMED: T1
 (assert (=> (and (PP nil) (forall ((k Int) (q Path)) (=> (PP q) (PP (cons k q))))) (forall ((p Path)) (PP p))))
 (assert (not (forall ((p Path)) (PP p))))
 (check-sat)

@@ -1,24 +1,55 @@
-; AUTO-GENERATED — pipeline stage 3 (datalog-sn): graph vs space (instance observations, folded)
-; Both sides compiled to their denotational membership formulas over the same inputs;
-; the goal (negated): the programs produce the SAME OUTPUT — equal membership at every path.
-(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
-(declare-fun append (Path Path) Path)
-(assert (forall ((q Path)) (= (append nil q) q)))
-(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
-(declare-fun isPrefix (Path Path) Bool)
-(assert (forall ((p Path)) (isPrefix nil p)))
-(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
-(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
-  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
-; certified lemmas (proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2 — both PROVED)
-(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
-  (= (= (cons k2 p) (append q r))
-     (or (and (= q nil) (= r (cons k2 p)))
-         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
-(assert (forall ((q Path)) (= (append q nil) q)))
+; TRUSTS: -
+; INSTANCE-DIFFERENTIAL: GraphExec.runGraphT(optimize(transpile(program))) == eval(program) on this input
+; (Scala assertEquals); the obligation below is the instance (data-agnostic obligation + differential) one, which covers this input.
 
-(define-fun m_1 ((p Path)) Bool (or (= p (cons 165 (cons 166 nil))) (= p (cons 165 (cons 167 nil))) (= p (cons 165 (cons 169 nil))) (= p (cons 166 (cons 167 nil))) (= p (cons 166 (cons 169 nil))) (= p (cons 167 (cons 169 nil)))))
-(define-fun m_2 ((p Path)) Bool (or (= p (cons 165 (cons 166 nil))) (= p (cons 165 (cons 167 nil))) (= p (cons 165 (cons 169 nil))) (= p (cons 166 (cons 167 nil))) (= p (cons 166 (cons 169 nil))) (= p (cons 167 (cons 169 nil)))))
-
-(assert (not (and (= (m_1 (cons 165 (cons 166 nil))) (m_2 (cons 165 (cons 166 nil)))) (= (m_1 (cons 165 (cons 167 nil))) (m_2 (cons 165 (cons 167 nil)))) (= (m_1 (cons 165 (cons 169 nil))) (m_2 (cons 165 (cons 169 nil)))) (= (m_1 (cons 166 (cons 167 nil))) (m_2 (cons 166 (cons 167 nil)))) (= (m_1 (cons 166 (cons 169 nil))) (m_2 (cons 166 (cons 169 nil)))) (= (m_1 (cons 167 (cons 169 nil))) (m_2 (cons 167 (cons 169 nil)))) (= (m_1 (cons 169 nil)) (m_2 (cons 169 nil))) (= (m_1 (cons 165 (cons 165 nil))) (m_2 (cons 165 (cons 165 nil)))) (= (m_1 (cons 165 (cons 166 (cons 165 nil)))) (m_2 (cons 165 (cons 166 (cons 165 nil))))) (= (m_1 (cons 165 (cons 166 (cons 166 nil)))) (m_2 (cons 165 (cons 166 (cons 166 nil))))) (= (m_1 (cons 165 (cons 166 (cons 167 nil)))) (m_2 (cons 165 (cons 166 (cons 167 nil))))) (= (m_1 (cons 165 (cons 166 (cons 169 nil)))) (m_2 (cons 165 (cons 166 (cons 169 nil))))) (= (m_1 (cons 165 (cons 167 (cons 165 nil)))) (m_2 (cons 165 (cons 167 (cons 165 nil))))) (= (m_1 (cons 165 (cons 167 (cons 166 nil)))) (m_2 (cons 165 (cons 167 (cons 166 nil))))) (= (m_1 (cons 165 (cons 167 (cons 167 nil)))) (m_2 (cons 165 (cons 167 (cons 167 nil))))) (= (m_1 (cons 165 (cons 167 (cons 169 nil)))) (m_2 (cons 165 (cons 167 (cons 169 nil))))) (= (m_1 (cons 165 (cons 169 (cons 165 nil)))) (m_2 (cons 165 (cons 169 (cons 165 nil))))) (= (m_1 (cons 165 (cons 169 (cons 166 nil)))) (m_2 (cons 165 (cons 169 (cons 166 nil))))) (= (m_1 (cons 165 (cons 169 (cons 167 nil)))) (m_2 (cons 165 (cons 169 (cons 167 nil))))) (= (m_1 (cons 165 (cons 169 (cons 169 nil)))) (m_2 (cons 165 (cons 169 (cons 169 nil))))) (= (m_1 (cons 166 (cons 165 nil))) (m_2 (cons 166 (cons 165 nil)))) (= (m_1 (cons 166 (cons 166 nil))) (m_2 (cons 166 (cons 166 nil)))) (= (m_1 (cons 166 (cons 167 (cons 165 nil)))) (m_2 (cons 166 (cons 167 (cons 165 nil))))) (= (m_1 (cons 166 (cons 167 (cons 166 nil)))) (m_2 (cons 166 (cons 167 (cons 166 nil))))) (= (m_1 (cons 166 (cons 167 (cons 167 nil)))) (m_2 (cons 166 (cons 167 (cons 167 nil))))) (= (m_1 (cons 166 (cons 167 (cons 169 nil)))) (m_2 (cons 166 (cons 167 (cons 169 nil))))) (= (m_1 (cons 166 (cons 169 (cons 165 nil)))) (m_2 (cons 166 (cons 169 (cons 165 nil))))) (= (m_1 (cons 166 (cons 169 (cons 166 nil)))) (m_2 (cons 166 (cons 169 (cons 166 nil))))) (= (m_1 (cons 166 (cons 169 (cons 167 nil)))) (m_2 (cons 166 (cons 169 (cons 167 nil))))) (= (m_1 (cons 166 (cons 169 (cons 169 nil)))) (m_2 (cons 166 (cons 169 (cons 169 nil))))) (= (m_1 (cons 167 (cons 165 nil))) (m_2 (cons 167 (cons 165 nil)))))))
-(check-sat)
+; BOUNDARY: graph
+; RESIDUAL CUT (k=2) LIFTED: the sides carry 1 residual cut(s), the SAME on both sides:
+;   sn_tc@2(; S"edges", (((S"edges" \/ (S"edges".iter(P"av1", S"ar2", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar2")))
+) \ S"edges")) \/ ((S"edges".iter(P"av5", S"ar6", 
+ (P"av5" x TailsUnion((S"edges" <| S"ar6")))
+) \ S"edges").iter(P"av3", S"ar4", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar4")))
+) \ (S"edges" \/ (S"edges".iter(P"av7", S"ar8", 
+ (P"av7" x TailsUnion((S"edges" <| S"ar8")))
+) \ S"edges")))) \/ (((S"edges".iter(P"av13", S"ar14", 
+ (P"av13" x TailsUnion((S"edges" <| S"ar14")))
+) \ S"edges").iter(P"av11", S"ar12", 
+ (P"av11" x TailsUnion((S"edges" <| S"ar12")))
+) \ (S"edges" \/ (S"edges".iter(P"av15", S"ar16", 
+ (P"av15" x TailsUnion((S"edges" <| S"ar16")))
+) \ S"edges"))).iter(P"av9", S"ar10", 
+ (P"av9" x TailsUnion((S"edges" <| S"ar10")))
+) \ ((S"edges" \/ (S"edges".iter(P"av17", S"ar18", 
+ (P"av17" x TailsUnion((S"edges" <| S"ar18")))
+) \ S"edges")) \/ ((S"edges".iter(P"av21", S"ar22", 
+ (P"av21" x TailsUnion((S"edges" <| S"ar22")))
+) \ S"edges").iter(P"av19", S"ar20", 
+ (P"av19" x TailsUnion((S"edges" <| S"ar20")))
+) \ (S"edges" \/ (S"edges".iter(P"av23", S"ar24", 
+ (P"av23" x TailsUnion((S"edges" <| S"ar24")))
+) \ S"edges")))))), (((S"edges".iter(P"av5", S"ar6", 
+ (P"av5" x TailsUnion((S"edges" <| S"ar6")))
+) \ S"edges").iter(P"av3", S"ar4", 
+ (P"av3" x TailsUnion((S"edges" <| S"ar4")))
+) \ (S"edges" \/ (S"edges".iter(P"av7", S"ar8", 
+ (P"av7" x TailsUnion((S"edges" <| S"ar8")))
+) \ S"edges"))).iter(P"av1", S"ar2", 
+ (P"av1" x TailsUnion((S"edges" <| S"ar2")))
+) \ ((S"edges" \/ (S"edges".iter(P"av9", S"ar10", 
+ (P"av9" x TailsUnion((S"edges" <| S"ar10")))
+) \ S"edges")) \/ ((S"edges".iter(P"av13", S"ar14", 
+ (P"av13" x TailsUnion((S"edges" <| S"ar14")))
+) \ S"edges").iter(P"av11", S"ar12", 
+ (P"av11" x TailsUnion((S"edges" <| S"ar12")))
+) \ (S"edges" \/ (S"edges".iter(P"av15", S"ar16", 
+ (P"av15" x TailsUnion((S"edges" <| S"ar16")))
+) \ S"edges"))))))
+; so this cell's claim is quantified over the cut's free input, and holds for EVERY value of it;
+; the recursion is identical on both sides, so by proofs/lean/Zippy/Positive.lean#
+; Zippy.Space.fixpoint_denT_eq_of_step_eq (2E.1) the claim about the unrollings IS the claim
+; about the recursion.  (Formerly stamped BOUNDED-UNROLLING under O10b, which is now mechanized.)
+; AUTO-GENERATED — pipeline graph (datalog-sn), instance (data-agnostic obligation + differential)
+; TRIVIAL-NO-OBLIGATION: the two sides are syntactically identical after alpha-normalisation
+; (0 candidate pair(s), 0 reflexive after freeing binders).  Recorded as a
+; no-obligation marker; the runner counts these and invokes no prover on them.

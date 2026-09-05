@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -177,7 +179,7 @@ class SCGeneralization extends FunSuite:
         S"delta".iter(P"n", S"nbs", P"n" x \/(S"edges" <| S"nbs")) \ S"all")
     val snDefs = Syntax.mod(sn)
     def edges(es: Vector[(String, String)]) =
-      SpaceValue(es.map((a, b) => PathValue(List(PathItem.Symbol(a), PathItem.Symbol(b)))).toSet)
+      SpaceValue(es.map((a, b) => PathValue(List(a, b))).toSet)
     def nodes(es: SpaceValue) = SC.supercompile(
       Space.Call(RoutinePtr("sn_tc"), Vector(), Vector(Space.Literal(es), Space.Literal(es), Space.Literal(es))),
       snDefs).routines.size

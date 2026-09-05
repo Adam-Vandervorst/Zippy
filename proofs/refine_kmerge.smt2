@@ -25,6 +25,7 @@
            (forall ((k2 Int) (r2 KList)) (=> (Q (kcons k1 r1) r2) (Q (kcons k1 r1) (kcons k2 r2)))))
       (P (kcons k1 r1)))))
 ; outer schema
+; ASSUMED: T1
 (assert (=> (and (P knil) (forall ((k1 Int) (r1 KList)) (=> (P r1) (P (kcons k1 r1)))))
             (forall ((a KList)) (P a))))
 (assert (not (forall ((a KList) (b KList)) (Q a b))))

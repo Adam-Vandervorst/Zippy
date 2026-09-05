@@ -21,6 +21,7 @@
 (declare-const w Path)
 (declare-const u Path)
 (declare-const q0 Path)
+; PREMISE: the two singletons are distinct paths (the law's hypothesis p ≠ q)
 (assert (distinct w u))
 (assert (not (and
   (forall ((p Path)) (= (and (= p w) (not (= p u))) (= p w)))

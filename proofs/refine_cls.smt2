@@ -27,6 +27,7 @@
 (assert (= (srt kvnil) true))
 (assert (forall ((j Int) (v FT) (r KV)) (= (srt (kvcons j v r)) (and (lbnd j r) (srt r)))))
 (define-fun PL0 ((l KV)) Bool (forall ((lo Int) (h Int)) (=> (and (lbnd lo l) (<= h lo)) (= (getk l h) emp))))
+; ASSUMED: T1
 (assert (=> (and (PL0 kvnil) (forall ((j Int) (v FT) (r KV)) (=> (PL0 r) (PL0 (kvcons j v r))))) (forall ((l KV)) (PL0 l)))
 )
 (declare-fun consIf (Int FT KV) KV)
@@ -52,6 +53,7 @@
              (=> (and (QB (kvcons k1 v1 r1) r2) (QB r1 (kvcons k2 v2 r2)) (QB r1 r2))
                  (QB (kvcons k1 v1 r1) (kvcons k2 v2 r2)))))
       (PB (kvcons k1 v1 r1)))))
+; ASSUMED: T1
 (assert (=> (and (PB kvnil) (forall ((k1 Int) (v1 FT) (r1 KV)) (=> (PB r1) (PB (kvcons k1 v1 r1)))))
             (forall ((a KV)) (PB a))))
 ; (iii) the main statement
@@ -65,6 +67,7 @@
              (=> (and (QQ (kvcons k1 v1 r1) r2) (QQ r1 (kvcons k2 v2 r2)) (QQ r1 r2))
                  (QQ (kvcons k1 v1 r1) (kvcons k2 v2 r2)))))
       (PP (kvcons k1 v1 r1)))))
+; ASSUMED: T1
 (assert (=> (and (PP kvnil) (forall ((k1 Int) (v1 FT) (r1 KV)) (=> (PP r1) (PP (kvcons k1 v1 r1)))))
             (forall ((a KV)) (PP a))))
 (assert (not (forall ((a KV) (b KV)) (QQ a b))))

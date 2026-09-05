@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -12,7 +14,7 @@ class OptimizerProperties extends FunSuite:
   private val mentionNames = Vector("a", "b", "c")
   private val syms = Vector("p", "q", "r")
 
-  private def pathItem(rng: scala.util.Random): PathItem = PathItem.Symbol(syms(rng.nextInt(syms.length)))
+  private def pathItem(rng: scala.util.Random): PathItem = syms(rng.nextInt(syms.length))
   private def randPath(rng: scala.util.Random): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(pathItem(rng)))
   private def randLiteral(rng: scala.util.Random): SpaceValue =
     SpaceValue((0 to rng.nextInt(4)).map(_ => randPath(rng)).toSet)
@@ -86,11 +88,10 @@ class OptimizerProperties extends FunSuite:
       val rng = new scala.util.Random(seed.toLong * 0x85EBCA77L + 1)
       val n = 2 + rng.nextInt(5)
       val es = (0 to rng.nextInt(n * 2)).map(_ => (rng.nextInt(n), rng.nextInt(n))).toSet
-      val edges = SpaceValue(es.map((x, y) => PathValue(List(PathItem.Symbol(x.toString), PathItem.Symbol(y.toString)))))
+      val edges = SpaceValue(es.map((x, y) => PathValue(List(x.toString, y.toString))))
       val fix: Space = Space.Fixpoint(Literal(edges), SpaceMention("edges"), next)
       val g = optimize(transpile(R"tc"() := fix))
-      val got = runGraphT(g).toSpaceValue.paths.map(p => (p.items(0), p.items(1)) match
-        case (PathItem.Symbol(x), PathItem.Symbol(y)) => (x.toInt, y.toInt))
+      val got = runGraphT(g).toSpaceValue.paths.map(p => (p.items(0).toInt, p.items(1).toInt))
       assertEquals(got, refClosure(es), s"fixpoint closure seed=$seed edges=$es")
   }
 end OptimizerProperties

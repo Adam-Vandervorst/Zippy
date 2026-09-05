@@ -1,8 +1,13 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 
-/** Tests for the soundness/robustness hardening called for in critique_on_b.md. */
+/** SOUNDNESS/ROBUSTNESS HARDENING, one test per hazard: B1 capture-avoiding substitution,
+ *  B2 reserved-prefix rejection, B3 acyclic inline index, B4 bounded simplification loops,
+ *  B5 the headedness guard.  Each is a shape that `docs/traps.md` names as a silent-wrong-answer
+ *  family; the tests are the regressions that keep them named. */
 class SCHardening extends FunSuite:
   import Space.*
   import Matching.*
@@ -126,10 +131,10 @@ class SCFacade extends FunSuite:
     for _ <- 0 until 25 do
       val n = 2 + rnd.nextInt(4)
       val es = (0 until (n + rnd.nextInt(n * 2))).map(_ => (rnd.nextInt(n), rnd.nextInt(n))).toSet
-      val edges = SpaceValue(es.map((a, b) => PathValue(List(PathItem.Symbol(a.toString), PathItem.Symbol(b.toString)))))
+      val edges = SpaceValue(es.map((a, b) => PathValue(List(a.toString, b.toString))))
       val res = SC.supercompile(Space.Call(RoutinePtr("transitive"), Vector(), Vector(Space.Literal(edges))), defs)
       val got = eval(res.top)(using PathContextMap(Map.empty), SpaceContextMap(Map.empty), res.env).paths
-        .map(p => (p.items(0), p.items(1)) match { case (PathItem.Symbol(a), PathItem.Symbol(b)) => (a.toInt, b.toInt) })
+        .map(p => (p.items(0).toInt, p.items(1).toInt))
       assertEquals(got, refTC(es), s"mismatch on edges=$es")
   }
 

@@ -1,3 +1,8 @@
-; AUTO-GENERATED pipeline space (aunt) — DATA-AGNOSTIC.
-; TRIVIAL-NO-OBLIGATION: all 2 candidate pair(s) render identically after
-; freeing binders (the rewrite is definitionally absorbed by the rendering).
+; TRUSTS: law:unwrap-concat-unwraps
+
+; BOUNDARY: space
+; AUTO-GENERATED pipeline stage 1 (aunt) — DATA-AGNOSTIC: the program vs SC.reduce(program).
+; LAW-JUSTIFIED-NO-RESIDUAL: 1 trace step(s) (SC.verifyTrace: 0 failure(s)); every
+; differing pair renders identically after freeing binders (the rewrite is absorbed by the
+; rendering), so the steps' ∀-certificates carry the cell and no egg run is needed.
+; STEP   0  unwrap-concat-unwraps         0 differing pair(s)   certificate(s): unwrap-concat-unwraps ⟶ proofs/laws/law_unwrap_merge.smt2

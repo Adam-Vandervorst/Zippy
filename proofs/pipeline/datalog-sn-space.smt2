@@ -1,24 +1,7 @@
-; AUTO-GENERATED — pipeline stage 1 (datalog-sn): original vs optimised (instance observations, folded)
-; Both sides compiled to their denotational membership formulas over the same inputs;
-; the goal (negated): the programs produce the SAME OUTPUT — equal membership at every path.
-(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
-(declare-fun append (Path Path) Path)
-(assert (forall ((q Path)) (= (append nil q) q)))
-(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
-(declare-fun isPrefix (Path Path) Bool)
-(assert (forall ((p Path)) (isPrefix nil p)))
-(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
-(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
-  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
-; certified lemmas (proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2 — both PROVED)
-(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
-  (= (= (cons k2 p) (append q r))
-     (or (and (= q nil) (= r (cons k2 p)))
-         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
-(assert (forall ((q Path)) (= (append q nil) q)))
+; TRUSTS: -
 
-(define-fun m_1 ((p Path)) Bool (or (= p (cons 165 (cons 166 nil))) (= p (cons 165 (cons 167 nil))) (= p (cons 165 (cons 169 nil))) (= p (cons 166 (cons 167 nil))) (= p (cons 166 (cons 169 nil))) (= p (cons 167 (cons 169 nil)))))
-(define-fun m_2 ((p Path)) Bool (or (= p (cons 165 (cons 166 nil))) (= p (cons 165 (cons 167 nil))) (= p (cons 165 (cons 169 nil))) (= p (cons 166 (cons 167 nil))) (= p (cons 166 (cons 169 nil))) (= p (cons 167 (cons 169 nil)))))
-
-(assert (not (and (= (m_1 (cons 165 (cons 166 nil))) (m_2 (cons 165 (cons 166 nil)))) (= (m_1 (cons 165 (cons 167 nil))) (m_2 (cons 165 (cons 167 nil)))) (= (m_1 (cons 165 (cons 169 nil))) (m_2 (cons 165 (cons 169 nil)))) (= (m_1 (cons 166 (cons 167 nil))) (m_2 (cons 166 (cons 167 nil)))) (= (m_1 (cons 166 (cons 169 nil))) (m_2 (cons 166 (cons 169 nil)))) (= (m_1 (cons 167 (cons 169 nil))) (m_2 (cons 167 (cons 169 nil)))) (= (m_1 (cons 169 nil)) (m_2 (cons 169 nil))) (= (m_1 (cons 165 (cons 165 nil))) (m_2 (cons 165 (cons 165 nil)))) (= (m_1 (cons 165 (cons 166 (cons 165 nil)))) (m_2 (cons 165 (cons 166 (cons 165 nil))))) (= (m_1 (cons 165 (cons 166 (cons 166 nil)))) (m_2 (cons 165 (cons 166 (cons 166 nil))))) (= (m_1 (cons 165 (cons 166 (cons 167 nil)))) (m_2 (cons 165 (cons 166 (cons 167 nil))))) (= (m_1 (cons 165 (cons 166 (cons 169 nil)))) (m_2 (cons 165 (cons 166 (cons 169 nil))))) (= (m_1 (cons 165 (cons 167 (cons 165 nil)))) (m_2 (cons 165 (cons 167 (cons 165 nil))))) (= (m_1 (cons 165 (cons 167 (cons 166 nil)))) (m_2 (cons 165 (cons 167 (cons 166 nil))))) (= (m_1 (cons 165 (cons 167 (cons 167 nil)))) (m_2 (cons 165 (cons 167 (cons 167 nil))))) (= (m_1 (cons 165 (cons 167 (cons 169 nil)))) (m_2 (cons 165 (cons 167 (cons 169 nil))))) (= (m_1 (cons 165 (cons 169 (cons 165 nil)))) (m_2 (cons 165 (cons 169 (cons 165 nil))))) (= (m_1 (cons 165 (cons 169 (cons 166 nil)))) (m_2 (cons 165 (cons 169 (cons 166 nil))))) (= (m_1 (cons 165 (cons 169 (cons 167 nil)))) (m_2 (cons 165 (cons 169 (cons 167 nil))))) (= (m_1 (cons 165 (cons 169 (cons 169 nil)))) (m_2 (cons 165 (cons 169 (cons 169 nil))))) (= (m_1 (cons 166 (cons 165 nil))) (m_2 (cons 166 (cons 165 nil)))) (= (m_1 (cons 166 (cons 166 nil))) (m_2 (cons 166 (cons 166 nil)))) (= (m_1 (cons 166 (cons 167 (cons 165 nil)))) (m_2 (cons 166 (cons 167 (cons 165 nil))))) (= (m_1 (cons 166 (cons 167 (cons 166 nil)))) (m_2 (cons 166 (cons 167 (cons 166 nil))))) (= (m_1 (cons 166 (cons 167 (cons 167 nil)))) (m_2 (cons 166 (cons 167 (cons 167 nil))))) (= (m_1 (cons 166 (cons 167 (cons 169 nil)))) (m_2 (cons 166 (cons 167 (cons 169 nil))))) (= (m_1 (cons 166 (cons 169 (cons 165 nil)))) (m_2 (cons 166 (cons 169 (cons 165 nil))))) (= (m_1 (cons 166 (cons 169 (cons 166 nil)))) (m_2 (cons 166 (cons 169 (cons 166 nil))))) (= (m_1 (cons 166 (cons 169 (cons 167 nil)))) (m_2 (cons 166 (cons 169 (cons 167 nil))))) (= (m_1 (cons 166 (cons 169 (cons 169 nil)))) (m_2 (cons 166 (cons 169 (cons 169 nil))))) (= (m_1 (cons 167 (cons 165 nil))) (m_2 (cons 167 (cons 165 nil)))))))
-(check-sat)
+; BOUNDARY: space
+; AUTO-GENERATED pipeline stage 1 (datalog-sn) — INSTANCE.
+; TRIVIAL-NO-OBLIGATION: SC.reduce is the IDENTITY on this program — no source law fires
+; (SC.reduceTraced recorded 0 steps) and the sides are alpha-equal; nothing to prove.  This
+; is a statement about the optimiser on this stone, not a certificate of anything it did.

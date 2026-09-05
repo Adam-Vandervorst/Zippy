@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import scala.collection.mutable
 
@@ -21,12 +23,10 @@ class ProgramStats extends FunSuite:
     case _: Path.Constant => "Constant"; case _: Path.Deref => "Deref"; case _: Path.Concat => "Concat"
     case _: Path.GroundedPP => "GroundedPP"; case _: Path.GroundedSP => "GroundedSP"
 
-  def nodes(s: Space): Int = 1 + (s match
-    case Space.Union(a, b) => nodes(a) + nodes(b); case Space.Intersection(a, b) => nodes(a) + nodes(b)
-    case Space.Subtraction(a, b) => nodes(a) + nodes(b); case Space.Restriction(a, b) => nodes(a) + nodes(b)
-    case Space.Composition(a, b) => nodes(a) + nodes(b); case Space.Wrap(a, _) => nodes(a); case Space.Unwrap(a, _) => nodes(a)
-    case Space.TailsUnion(a) => nodes(a); case Space.Range(a, _, _) => nodes(a)
-    case Space.Iteration(a, _, _, b) => nodes(a) + nodes(b); case _ => 0)
+  // ONE OWNER (SpatialPipeline.nodeCount, over the total SizeZ3.children).  The hand-written copy this
+  // replaces had no arm for Raffination / TailsIntersection / Fixpoint / Fold, so their whole subtrees
+  // counted as leaves and the `nodes >= 12` accept filter silently admitted smaller programs.
+  def nodes(s: Space): Int = SpatialPipeline.nodeCount(s)
 
   type Counts = mutable.HashMap[(String, String), mutable.HashMap[String, Long]]
   def add(c: Counts, y: String, pos: String, x: String): Unit =
@@ -47,16 +47,21 @@ class ProgramStats extends FunSuite:
       case Space.Restriction(a, b) => S("src", a); S("by", b)
       case Space.Wrap(a, p) => S("src", a); P("pre", p)
       case Space.Unwrap(a, p) => S("src", a); P("pre", p)
+      case Space.Raffination(a, b) => S("l", a); S("r", b)
       case Space.TailsUnion(a) => S("src", a)
+      case Space.TailsIntersection(a) => S("src", a)
       case Space.Range(a, _, _) => S("src", a)
       case Space.Iteration(a, _, _, b) => S("src", a); S("body", b)
+      case Space.Fixpoint(a, _, b) => S("init", a); S("body", b)
+      case Space.Fold(a, _, _, _, _, b, _) => S("src", a); S("body", b)
       case Space.Singleton(p) => P("path", p)
       case _ => ()   // leaves: Empty / Mention / Literal
 
   // a stable display order
   val typeOrder = Vector("Mention", "Literal", "Singleton", "Union", "Intersection", "Subtraction", "Restriction",
-    "Composition", "Wrap", "Unwrap", "TailsUnion", "Range", "Iteration", "Constant", "Deref", "Concat")
-  val posOrder = Vector("l", "r", "src", "by", "body", "pre", "pat", "tmpl", "path")
+    "Raffination", "Composition", "Wrap", "Unwrap", "TailsUnion", "TailsIntersection", "Range",
+    "Iteration", "Fold", "Fixpoint", "Constant", "Deref", "Concat")
+  val posOrder = Vector("l", "r", "src", "by", "body", "init", "pre", "pat", "tmpl", "path")
   def tIdx(t: String) = { val i = typeOrder.indexOf(t); if i < 0 then 999 else i }
   def pIdx(p: String) = { val i = posOrder.indexOf(p); if i < 0 then 999 else i }
 
@@ -78,14 +83,20 @@ class ProgramStats extends FunSuite:
     val rows = c.keys.toVector.sortBy((y, p) => (tIdx(y), pIdx(p), y, p))
     val cols = c.values.flatMap(_.keys).toSet.toVector.sortBy(x => (tIdx(x), x))
     val sb = new StringBuilder
+    sb.append(s"# prog_matrix.tsv — ${RunEnvironment.oneLine(Seq("programs" -> got.toString, "min-nodes" -> minNodes.toString,
+                                                 "seed" -> "2026"))}\n")
     sb.append("row\t").append(cols.mkString("\t")).append('\n')
     for (y, p) <- rows do
       val row = c((y, p))
       sb.append(s"$y.$p").append('\t').append(cols.map(x => row.getOrElse(x, 0L)).mkString("\t")).append('\n')
-    val f = new java.io.File("/tmp/prog_matrix.tsv")
-    val w = new java.io.FileWriter(f); try w.write(sb.toString) finally w.close()
+    // THE REPO ROOT, not /tmp: this artifact is committed, and writing it to /tmp meant every
+    // regeneration had to be copied over by hand — which is how the committed copy came to carry a
+    // `Transformation` column for a constructor the `Space` enum no longer has.
+    // as CorpusRuntimes: measured always, published only under a manifest
+    if BenchmarkArtifact.publishing then BenchmarkArtifact.write("prog_matrix.tsv", sb.toString)
+    else println(BenchmarkArtifact.skipNote("prog_matrix.tsv"))
     System.out.println(s"PROGSTATS: N=$got accepted of $draws draws (${(100.0*got/draws).round}% >= $minNodes nodes), " +
-      f"avg ${totalNodes.toDouble/got}%.1f nodes/program, ${secs}%.1fs; matrix ${rows.size}x${cols.size} -> ${f.getPath}")
+      f"avg ${totalNodes.toDouble/got}%.1f nodes/program, ${secs}%.1fs; matrix ${rows.size}x${cols.size} -> prog_matrix.tsv")
     System.out.println(sb.toString)
     assertEquals(got, N.toLong)
   }

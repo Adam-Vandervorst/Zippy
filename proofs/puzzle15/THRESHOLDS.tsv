@@ -1,0 +1,35 @@
+# USEFULNESS THRESHOLDS for the puzzle15 stress theorem — the committed claims Puzzle15Check
+# holds every certificate to.  A threshold is a claim about the WIDTH of a predicted interval,
+# `(hi + 1) / (lo + 1)`, per declaration, backend and component: `finite` claims only that the bound is finite,
+# a number claims the width is at most that.  Soundness (the counted run inside the interval) is gated
+# separately and unconditionally; failing a threshold is SOUND-BUT-NOT-USEFUL, not unsound.
+#
+# declarations:  value:1        the frontier declared BY VALUE as the single initial board
+#                value:level2   the frontier declared BY VALUE as the boards two moves from the initial one
+#                symbolic:1     the frontier declared as ONE path of length 16 (nothing about its items)
+#                symbolic:4     the frontier declared as at most FOUR paths of length 16
+# declaration	backend	component	threshold
+value:1	reference	work	1.05
+value:1	reference	alloc	1.01
+value:1	reference	rounds	1.01
+value:1	graph	work	1.01
+value:1	graph	alloc	1.01
+value:1	graph	rounds	1.01
+value:1	trie	work	finite
+value:1	trie	alloc	finite
+value:1	trie	touch	finite
+value:1	zipper	work	finite
+value:1	zipper	alloc	finite
+value:level2	reference	work	1.05
+value:level2	reference	alloc	1.01
+value:level2	graph	work	1.01
+value:level2	graph	alloc	1.01
+value:level2	trie	work	finite
+value:level2	zipper	work	finite
+symbolic:1	reference	work	finite
+symbolic:1	reference	alloc	finite
+symbolic:1	reference	rounds	finite
+symbolic:1	trie	work	finite
+symbolic:1	graph	work	finite
+symbolic:4	reference	work	finite
+symbolic:4	reference	rounds	finite

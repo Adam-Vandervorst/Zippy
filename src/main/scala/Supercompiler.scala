@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.mutable
 
 /** A positive supercompiler for the MORKL space/path algebra.
@@ -98,81 +100,16 @@ object Matching:
 
   // ---- substitution --------------------------------------------------------
 
-  /** Capture-avoiding simultaneous substitution of free mentions and refs.  A binder
-   *  (Iteration/Fold) shadows any substitution for the same name within its body; and if a
-   *  replacement term would otherwise be captured by a binder (i.e. the binder name occurs
-   *  free in the term being substituted in), the binder is alpha-renamed to a fresh name
-   *  (prefix `~`, checked against all names in scope) before descending.  This is true
-   *  hygiene, not merely shadow-awareness. */
+  /** Capture-avoiding simultaneous substitution — DELEGATED to [[Subst]], which is the single owner.
+   *
+   *  The implementation used to live here and was the only one of the tree's FOUR substitutions that
+   *  was actually capture-avoiding; `Subst.scala`'s header lists the other three and what each got
+   *  wrong.  It MOVED rather than being re-derived, because `SubstConformance` has been running a
+   *  randomized differential against exactly this code (three real bugs found, per its header) and
+   *  re-implementing it would discard that evidence.  This forwarder stays so the supercompiler's
+   *  call sites read unchanged. */
   def subst(s: Space, sm: Map[SpaceMention, Space] = Map.empty, pm: Map[PathRef, Path] = Map.empty): Space =
-    var fresh = 0
-    def freshName(avoid: Set[String], kind: String): String =
-      while avoid(s"~$kind$fresh") do fresh += 1
-      val r = s"~$kind$fresh"; fresh += 1; r
-    def rangeMentions(asm: Map[SpaceMention, Space], apm: Map[PathRef, Path]): Set[SpaceMention] =
-      asm.valuesIterator.flatMap(freeMentions).toSet ++ apm.valuesIterator.flatMap(p => freeMentions(Space.Singleton(p))).toSet
-    def rangeRefs(asm: Map[SpaceMention, Space], apm: Map[PathRef, Path]): Set[PathRef] =
-      apm.valuesIterator.flatMap(p => freeRefs(Space.Singleton(p))).toSet ++ asm.valuesIterator.flatMap(freeRefs).toSet
-    def recp(p: Path, sm: Map[SpaceMention, Space], pm: Map[PathRef, Path]): Path = p match
-      case Path.Deref(pr) => pm.getOrElse(pr, p)
-      case Path.Constant(_) => p
-      case Path.Concat(l, r) => Path.Concat(recp(l, sm, pm), recp(r, sm, pm))
-      case Path.GroundedPP(pp, f) => Path.GroundedPP(recp(pp, sm, pm), f)
-      case Path.GroundedSP(sp, f) => Path.GroundedSP(recs(sp, sm, pm), f)
-    def recs(x: Space, sm: Map[SpaceMention, Space], pm: Map[PathRef, Path]): Space = x match
-      case Space.Mention(v) => sm.getOrElse(v, x)
-      case Space.Empty | Space.Literal(_) => x
-      case Space.Singleton(p) => Space.Singleton(recp(p, sm, pm))
-      case Space.Call(r, refs, mentions) => Space.Call(r, refs.map(recp(_, sm, pm)), mentions.map(recs(_, sm, pm)))
-      case Space.Union(a, b) => Space.Union(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Intersection(a, b) => Space.Intersection(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Subtraction(a, b) => Space.Subtraction(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Restriction(a, b) => Space.Restriction(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Raffination(a, b) => Space.Raffination(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Composition(a, b) => Space.Composition(recs(a, sm, pm), recs(b, sm, pm))
-      case Space.Iteration(src, sym, rest, body) =>
-        val sm2 = sm - rest; val pm2 = pm - sym
-        val capM = rangeMentions(sm2, pm2).contains(rest)
-        val capP = rangeRefs(sm2, pm2).contains(sym)
-        if capM || capP then
-          val nr = if capM then SpaceMention(freshName(rangeMentions(sm2, pm2).map(_.s) ++ freeMentions(body).map(_.s), "m")) else rest
-          val ns = if capP then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ freeRefs(body).map(_.s), "p")) else sym
-          val body1 = recs(body, if capM then Map(rest -> Space.Mention(nr)) else Map.empty, if capP then Map(sym -> Path.Deref(ns)) else Map.empty)
-          Space.Iteration(recs(src, sm, pm), ns, nr, recs(body1, sm2, pm2))
-        else Space.Iteration(recs(src, sm, pm), sym, rest, recs(body, sm2, pm2))
-      case Space.Fixpoint(init, rec, body) =>
-        val sm2 = sm - rec   // rec (a mention) shadows mention substitution in body; refs unaffected
-        if rangeMentions(sm2, pm).contains(rec) then
-          val nr = SpaceMention(freshName(rangeMentions(sm2, pm).map(_.s) ++ freeMentions(body).map(_.s), "m"))
-          val body1 = recs(body, Map(rec -> Space.Mention(nr)), Map.empty)
-          Space.Fixpoint(recs(init, sm, pm), nr, recs(body1, sm2, pm))
-        else Space.Fixpoint(recs(init, sm, pm), rec, recs(body, sm2, pm))
-      case Space.Fold(src, init, acc2, sym, rest, body, upd) =>
-        val pm2 = pm - acc2 - sym; val sm2 = sm - rest
-        // alpha-rename any of the three binders that a replacement would capture
-        val capR = rangeMentions(sm2, pm2).contains(rest)
-        val capA = rangeRefs(sm2, pm2).contains(acc2)
-        val capS = rangeRefs(sm2, pm2).contains(sym)
-        if capR || capA || capS then
-          val bodyVars = freeMentions(body).map(_.s) ++ freeMentions(Space.Singleton(upd)).map(_.s)
-          val refVars = freeRefs(body).map(_.s) ++ freeRefs(Space.Singleton(upd)).map(_.s)
-          val nr = if capR then SpaceMention(freshName(rangeMentions(sm2, pm2).map(_.s) ++ bodyVars, "m")) else rest
-          val na = if capA then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ refVars, "p")) else acc2
-          val nsy = if capS then PathRef(freshName(rangeRefs(sm2, pm2).map(_.s) ++ refVars, "p")) else sym
-          val renS = if capR then Map(rest -> Space.Mention(nr)) else Map.empty[SpaceMention, Space]
-          val renP = (if capA then Map(acc2 -> Path.Deref(na)) else Map.empty[PathRef, Path]) ++ (if capS then Map(sym -> Path.Deref(nsy)) else Map.empty)
-          val body1 = recs(body, renS, renP)
-          val upd1 = recp(upd, renS, renP)
-          Space.Fold(recs(src, sm, pm), recp(init, sm, pm), na, nsy, nr, recs(body1, sm2, pm2), recp(upd1, sm2, pm2))
-        else Space.Fold(recs(src, sm, pm), recp(init, sm, pm), acc2, sym, rest, recs(body, sm2, pm2), recp(upd, sm2, pm2))
-      case Space.Wrap(src, p) => Space.Wrap(recs(src, sm, pm), recp(p, sm, pm))
-      case Space.Unwrap(src, p) => Space.Unwrap(recs(src, sm, pm), recp(p, sm, pm))
-      case Space.TailsUnion(src) => Space.TailsUnion(recs(src, sm, pm))
-      case Space.TailsIntersection(src) => Space.TailsIntersection(recs(src, sm, pm))
-      case Space.GroundedPS(p, f) => Space.GroundedPS(recp(p, sm, pm), f)
-      case Space.GroundedSS(sp, f) => Space.GroundedSS(recs(sp, sm, pm), f)
-      case Space.Range(a, lo, hi) => Space.Range(recs(a, sm, pm), lo, hi)
-    if sm.isEmpty && pm.isEmpty then s else recs(s, sm, pm)
+    Subst(s, sm, pm)
 
   // ---- bound-name canonicalization -----------------------------------------
 
@@ -191,15 +128,17 @@ object Matching:
     def recs(x: Space): Space = x match
       case Space.Iteration(src, sym, rest, body) =>
         val s2 = recs(src)
-        val p = freshP(); val r = freshS()
+        val p = freshP().known(1); val r = if rest.sizeHint >= 0 then freshS().known(rest.sizeHint) else freshS()
         Space.Iteration(s2, p, r, recs(subst(body, Map(rest -> Space.Mention(r)), Map(sym -> Path.Deref(p)))))
       case Space.Fold(src, init, acc2, sym, rest, body, upd) =>
         val s2 = recs(src); val i2 = recp(init)
-        val a = freshP(); val p = freshP(); val r = freshS()
+        val a = if acc2.lengthHint >= 0 then freshP().known(acc2.lengthHint) else freshP()
+        val p = freshP().known(1)
+        val r = if rest.sizeHint >= 0 then freshS().known(rest.sizeHint) else freshS()
         val pm = Map(acc2 -> Path.Deref(a), sym -> Path.Deref(p)); val smm = Map(rest -> Space.Mention(r))
         Space.Fold(s2, i2, a, p, r, recs(subst(body, smm, pm)), recp(subst2(upd, smm, pm)))
       case Space.Fixpoint(init, rec, body) =>
-        val i2 = recs(init); val r = freshS()
+        val i2 = recs(init); val r = if rec.sizeHint >= 0 then freshS().known(rec.sizeHint) else freshS()
         Space.Fixpoint(i2, r, recs(subst(body, Map(rec -> Space.Mention(r)), Map.empty)))
       case Space.Mention(_) | Space.Empty | Space.Literal(_) => x
       case Space.Singleton(p) => Space.Singleton(recp(p))
@@ -222,9 +161,13 @@ object Matching:
       case Path.GroundedPP(pp, f) => Path.GroundedPP(recp(pp), f)
       case Path.GroundedSP(sp, f) => Path.GroundedSP(recs(sp), f)
       case _ => p
-    // helper to substitute only inside an update Path before recursing
+    // substitution inside a bare Path — [[Subst.path]], which is where the `Singleton` routing and
+    // the reason for it (`Path.GroundedSP` carries a Space, so the space walker must see it) live.
+    // The old local copy silently returned `p` unchanged if the walker had not preserved the
+    // constructor; `Subst.path` raises instead, because a substitution that quietly did nothing is
+    // the failure mode this whole file is about.
     def subst2(p: Path, sm: Map[SpaceMention, Space], pm: Map[PathRef, Path]): Path =
-      subst(Space.Singleton(p), sm, pm) match { case Space.Singleton(q) => q; case _ => p }
+      Subst.path(p, sm, pm)
     recs(s)
 
   // ---- structural equality (after canon, plain ==) -------------------------
@@ -357,11 +300,133 @@ object Matching:
         case _ => p == t
     if ms(pattern, term) then Some((sm.toMap, pm.toMap)) else None
 
-  // ---- homeomorphic embedding (the whistle) ---------------------------------
+  // ---- THE LABEL ALPHABET OF THE WHISTLE  --------------------------------------
+  //
+  // Kruskal's tree theorem (proofs/lean/Zippy/Whistle.lean#Zippy.Whistle.kruskal) makes the
+  // homeomorphic embedding a well-quasi-order PROVIDED the relation on node LABELS is one.  Over a
+  // finite alphabet, equality is.  `coupledS`/`coupledP` below — the coupling test `msg` uses — compare
+  // four things by an equality over an UNBOUNDED set (canonical bound names, the full `RoutinePtr`,
+  // `Range` bounds, closure identity), and with them the embedding was NOT a well-quasi-order: the
+  // nested-`Iteration` family whose innermost `Mention` is `#s0`, `#s1`, `#s2`, … at successive depths
+  // is an infinite antichain, so the whistle could stay silent forever and termination rested on the
+  // caps alone. `labelOf` is the alphabet the WHISTLE couples over instead:
+  //
+  //   Mention / Deref    ONE label per sort, bound or free.  Two variables of a sort always couple.
+  //   Call               the ORIGINAL routine's name plus both arities.  A residual `f_sc7` is
+  //                      labelled by its base `f`, so driving never mints a new label.
+  //   Literal / Constant one atom each under `litAtoms = true` (the default; the theorem covers it);
+  //                      by value under `litAtoms = false`, where the alphabet is NOT finite.
+  //   Range              its bounds — finite per run only because no law manufactures new bounds,
+  //                      which `SC.State.alphabetEscapes` checks at run time.
+  //   Grounded*          the closure's identity, finite per run for the same reason.
+  //   everything else    the constructor, whose arity is fixed.
+  //
+  // `msg` KEEPS the fine coupling: a generalization has to be instantiable back to both inputs, and
+  // two different bound names or two different routines cannot share a skeleton leaf.  The whistle
+  // is therefore coarser than the generalizer, and `SC.State.whistleFallbacks` counts the runs where
+  // that gap showed (the whistle blew but `msg` found nothing to abstract).  `Whistle.lean`'s
+  // termination theorem covers a run exactly when that count is 0 and no label escaped.
+  enum Label:
+    /** a fixed-arity constructor, by name */
+    case Ctor(name: String)
+    case LitAtom
+    case LitVal(v: SpaceValue)
+    case ConstAtom
+    case ConstVal(v: PathValue)
+    case MentionVar
+    case DerefVar
+    case CallL(base: String, refs: Int, mentions: Int)
+    case RangeL(lo: Int, hi: Int)
+    /** `f` is compared by REFERENCE (a function object's `equals` is identity), as `coupled*` did */
+    case GroundedL(kind: String, f: AnyRef)
 
-  /** Homeomorphic embedding `a ⊴ b` on canonicalized configurations.  Free mentions/refs are
-   *  universal variables (a variable embeds any variable of the same kind).  The supercompiler's
-   *  whistle: if an ancestor embeds in a descendant, generalize to ensure termination.
+    /** the Lean rendering (`Zippy.Whistle.Label` constructors), for `WhistleTrace.lean` */
+    def lean: String = this match
+      case Ctor(n) => s"(.ctor \"$n\")"
+      case LitAtom => "(.litAtom)"
+      case LitVal(_) => "(.litVal)"        // the value is not reproducible across runs; atom-like
+      case ConstAtom => "(.constAtom)"
+      case ConstVal(_) => "(.constVal)"
+      case MentionVar => "(.mentionVar)"
+      case DerefVar => "(.derefVar)"
+      case CallL(b, r, m) => s"(.call \"$b\" $r $m)"
+      case RangeL(lo, hi) => s"(.range ($lo) ($hi))"
+      case GroundedL(k, _) => s"(.grounded \"$k\")"
+
+  private val ResidualSuffix = "_sc\\d+$".r
+  /** the ORIGINAL routine a (possibly residual, possibly residual-of-residual) name descends from:
+   *  `State.fresh` appends `_sc<n>` to the hint, which is the called routine's name. */
+  def baseRoutineName(r: RoutinePtr): String =
+    var n = r.s
+    var m = ResidualSuffix.findFirstIn(n)
+    while m.isDefined do
+      n = n.substring(0, n.length - m.get.length)
+      m = ResidualSuffix.findFirstIn(n)
+    n
+
+  /** the whistle's label of a node.  Total over both sorts, no catch-all: a new constructor is a
+   *  compile error here, which is the point. */
+  def labelOf(t: Space | Path, litAtoms: Boolean = true): Label = t match
+    case Space.Empty => Label.Ctor("Empty")
+    case Space.Literal(v) => if litAtoms then Label.LitAtom else Label.LitVal(v)
+    case Space.Singleton(_) => Label.Ctor("Singleton")
+    case Space.Call(r, refs, ms) => Label.CallL(baseRoutineName(r), refs.length, ms.length)
+    case Space.Union(_, _) => Label.Ctor("Union")
+    case Space.Intersection(_, _) => Label.Ctor("Intersection")
+    case Space.Subtraction(_, _) => Label.Ctor("Subtraction")
+    case Space.Restriction(_, _) => Label.Ctor("Restriction")
+    case Space.Raffination(_, _) => Label.Ctor("Raffination")
+    case Space.Composition(_, _) => Label.Ctor("Composition")
+    case Space.Iteration(_, _, _, _) => Label.Ctor("Iteration")
+    case Space.Fixpoint(_, _, _) => Label.Ctor("Fixpoint")
+    case Space.Fold(_, _, _, _, _, _, _) => Label.Ctor("Fold")
+    case Space.Wrap(_, _) => Label.Ctor("Wrap")
+    case Space.Unwrap(_, _) => Label.Ctor("Unwrap")
+    case Space.TailsUnion(_) => Label.Ctor("TailsUnion")
+    case Space.TailsIntersection(_) => Label.Ctor("TailsIntersection")
+    case Space.Range(_, lo, hi) => Label.RangeL(lo, hi)
+    case Space.GroundedSS(_, f) => Label.GroundedL("SS", f)
+    case Space.GroundedPS(_, f) => Label.GroundedL("PS", f)
+    case Space.Mention(_) => Label.MentionVar
+    case Path.Constant(v) => if litAtoms then Label.ConstAtom else Label.ConstVal(v)
+    case Path.Concat(_, _) => Label.Ctor("Concat")
+    case Path.Deref(_) => Label.DerefVar
+    case Path.GroundedPP(_, f) => Label.GroundedL("PP", f)
+    case Path.GroundedSP(_, f) => Label.GroundedL("SP", f)
+
+  /** every label occurring in a term — the alphabet a run draws on */
+  def labels(t: Space | Path, litAtoms: Boolean = true): Set[Label] =
+    val acc = mutable.Set.empty[Label]
+    def go(x: Space | Path): Unit =
+      acc += labelOf(x, litAtoms)
+      x match
+        case sp: Space => childrenS(sp).foreach(go)
+        case pt: Path => childrenP(pt).foreach(go)
+    go(t); acc.toSet
+
+  /** the label TREE of a term in Lean syntax — `Zippy.Whistle.Tree.node label kids` — which is what
+   *  `WhistleTrace.lean` re-checks the Scala `embeds` verdicts against.  `toLabel` is the connection
+   *  the plan names between the executable and the definition. */
+  def toLabel(t: Space | Path, litAtoms: Boolean = true): String =
+    val kids = t match
+      case sp: Space => childrenS(sp)
+      case pt: Path => childrenP(pt)
+    s"(.node ${labelOf(t, litAtoms).lean} [${kids.map(toLabel(_, litAtoms)).mkString(", ")}])"
+
+  // ---- homeomorphic embedding (the whistle) ---------------------------------
+  //
+  // obligation: terminating/REGISTRY.tsv O12a (drive steps are instances of the certified laws in
+  // proofs/laws/), O12b (fold soundness — OPEN, it depends on the inline/beta obligation O6a), O12c
+  // (msg correctness — a PROPERTY carried by SupercompilerTest) and O12d (this whistle is a
+  // well-quasi-order — ADMITTED with the Kruskal citation, NOT machine-checked).  The registry keeps
+  // those four rows visible precisely because two of them are not discharged.
+
+  /** Homeomorphic embedding `a ⊴ b` on canonicalized configurations, coupling over [[labelOf]]: any
+   *  two variables of a sort embed (bound or free), two calls couple by ORIGINAL routine and arities.
+   *  The supercompiler's whistle: if an ancestor embeds in a descendant, generalize to ensure
+   *  termination.  Proved a well-quasi-order in proofs/lean/Zippy/Whistle.lean (Kruskal from
+   *  Higman) over the finite alphabet of a run; `SC.State.alphabetEscapes` is the run-time check
+   *  that the alphabet stayed finite and `whistleFallbacks` that every blow was acted on.
    *
    *  `litAtoms` is a deliberate HEURISTIC, not "the" embedding.  With `litAtoms=true` (default)
    *  every literal/constant is one atom, so a configuration that grows a *static* literal
@@ -370,10 +435,46 @@ object Matching:
    *  with `litAtoms=false` the embedding is structural (literals couple only when equal), which
    *  fully evaluates static recursion but never generalizes it.  Both are sound; they trade
    *  residual *shape*.  (See `SCGeneralization` for tests of both modes.) */
-  def embeds(a0: Space, b0: Space, litAtoms: Boolean = true): Boolean = embedsS(canon(a0), canon(b0), litAtoms)
+  def embeds(a0: Space, b0: Space, litAtoms: Boolean = true): Boolean =
+    val (a, b) = (canon(a0), canon(b0))
+    val v = embedsS(a, b, litAtoms)
+    WhistleTrace.note(a, b, litAtoms, v)
+    v
 
-  private def isVarS(s: Space): Boolean = s match { case Space.Mention(v) => !isCanonical(v.s); case _ => false }
-  private def isVarP(p: Path): Boolean = p match { case Path.Deref(v) => !isCanonical(v.s); case _ => false }
+  /** THE WHISTLE CORRESPONDENCE TRACE (the `Matching.toLabel` connection).  Every pair
+   *  the whistle compared during a recorded run, with its verdict, rendered as label trees for
+   *  `proofs/lean/Zippy/WhistleTrace.lean` to re-decide with `Zippy.Whistle.embedsB` — the function
+   *  `embedsB_iff` proves equal to the relation `kruskal` is about.  A disagreement is a failing
+   *  `lake build` on a real pair.  Bounded and deduplicated like `Subst.Trace`, for the same reasons. */
+  object WhistleTrace:
+    final case class Entry(a: Space, b: Space, litAtoms: Boolean, verdict: Boolean):
+      /** grounded nodes carry closure identities that no Lean term reproduces; such pairs are recorded
+       *  for the count but not emitted (LeanRender does the same for substitution triples) */
+      def renderable: Boolean = !hasGrounded(a) && !hasGrounded(b)
+    private def hasGrounded(s: Space): Boolean =
+      Matching.labels(s).exists { case Label.GroundedL(_, _) => true; case _ => false }
+    @volatile private var on = false
+    private val seen = scala.collection.mutable.LinkedHashMap.empty[(Space, Space, Boolean), Entry]
+    private var cap = 0
+    private var dropped = 0
+    def record(limit: Int)(body: => Unit): Vector[Entry] =
+      synchronized { seen.clear(); cap = limit; dropped = 0; on = true }
+      try body finally synchronized { on = false }
+      synchronized { seen.values.toVector }
+    def droppedCount: Int = synchronized(dropped)
+    private[morkl] def note(a: Space, b: Space, litAtoms: Boolean, v: Boolean): Unit =
+      if on then synchronized {
+        val k = (a, b, litAtoms)
+        if seen.contains(k) then ()
+        else if seen.size >= cap then dropped += 1
+        else seen(k) = Entry(a, b, litAtoms, v)
+      }
+
+
+  /** the children the embedding walks (binders' names are NOT children — both sides are `canon`ed) */
+  def childrenOf(t: Space | Path): List[Space | Path] = t match
+    case sp: Space => childrenS(sp)
+    case pt: Path => childrenP(pt)
 
   private def childrenS(s: Space): List[Space | Path] = s match
     case Space.Singleton(p) => List(p)
@@ -446,19 +547,21 @@ object Matching:
     case (ap: Path, bp: Path) => embedsP(ap, bp, litAtoms)
     case _ => false
 
+  // THE WHISTLE COUPLES OVER `labelOf`, not over `coupled*` — see the alphabet section above.  A
+  // `Call` label carries both arities, and every other label fixes its constructor's arity, so
+  // `lazyZip(...).forall` runs over lists of EQUAL length whenever the labels are equal — which is
+  // the `harity` hypothesis of `Zippy.Whistle.kruskal`, and why its couple rule is `List.Forall₂`.
   private def embedsS(a: Space, b: Space, litAtoms: Boolean): Boolean =
-    if isVarS(a) && isVarS(b) then true
-    else
-      val dive = childrenS(b).exists(c => embed(a, c, litAtoms))
-      val couple = coupledS(a, b, litAtoms) && childrenS(a).lazyZip(childrenS(b)).forall(embed(_, _, litAtoms))
-      dive || couple
+    val dive = childrenS(b).exists(c => embed(a, c, litAtoms))
+    val couple = labelOf(a, litAtoms) == labelOf(b, litAtoms) &&
+      childrenS(a).lazyZip(childrenS(b)).forall(embed(_, _, litAtoms))
+    dive || couple
 
   private def embedsP(a: Path, b: Path, litAtoms: Boolean): Boolean =
-    if isVarP(a) && isVarP(b) then true
-    else
-      val dive = childrenP(b).exists(c => embed(a, c, litAtoms))
-      val couple = coupledP(a, b, litAtoms) && childrenP(a).lazyZip(childrenP(b)).forall(embed(_, _, litAtoms))
-      dive || couple
+    val dive = childrenP(b).exists(c => embed(a, c, litAtoms))
+    val couple = labelOf(a, litAtoms) == labelOf(b, litAtoms) &&
+      childrenP(a).lazyZip(childrenP(b)).forall(embed(_, _, litAtoms))
+    dive || couple
 
   // ---- most specific generalization (anti-unification) ----------------------
 
@@ -590,7 +693,14 @@ case class SCReport(before: SCStats, after: SCStats, residualRoutines: Int,
                     converged: Boolean, compileTimeEvaluated: Boolean,
                     backendCompiled: Boolean, backendUnsupported: Vector[String],
                     compileMillis: Double = 0.0, phaseMillis: Map[String, Double] = Map.empty,
-                    phaseImprovement: Map[String, Long] = Map.empty):
+                    phaseImprovement: Map[String, Long] = Map.empty,
+                    // ---- THE EXECUTABLE PREMISES of proofs/lean/Zippy/Supercompile.lean and Whistle.lean.
+                    // Each is a premise of a Lean theorem, checked on THIS run; the theorem covers the
+                    // run exactly when all four hold.  See `SC.State` for what each measures.
+                    residualPositive: Boolean = false, productive: Boolean = false,
+                    foldChecks: Int = 0, whistleFallbacks: Int = 0, alphabetEscapes: Int = 0):
+  /** the run is inside what the Lean fold and whistle theorems cover */
+  def leanCovered: Boolean = residualPositive && productive && whistleFallbacks == 0 && alphabetEscapes == 0
   /** The whole program reduced to its answer at compile time (no residual routines and the residual
    *  top is a constant) — nothing is left to run.  Reported explicitly. */
   def optimizedAway: Boolean = compileTimeEvaluated
@@ -602,7 +712,10 @@ case class SCReport(before: SCStats, after: SCStats, residualRoutines: Int,
                else "specialized / fused (no recursion)"
     val backend = if backendCompiled then "graph-lowered" else if backendUnsupported.nonEmpty then s"source-only (${backendUnsupported.distinct.mkString(",")})" else "source-only"
     s"$mode | ${before.total}->${after.total} nodes, $residualRoutines routines | " +
-      s"unfold=$unfoldings fold=$folds whistle=$whistles gen=$generalizations reduce=$reductions | $backend"
+      s"unfold=$unfoldings fold=$folds whistle=$whistles gen=$generalizations reduce=$reductions | $backend | " +
+      (if leanCovered then "lean-covered"
+       else s"NOT lean-covered (positive=$residualPositive productive=$productive " +
+            s"whistleFallbacks=$whistleFallbacks alphabetEscapes=$alphabetEscapes)")
   /** Per-pass compile-time accounting: time AND improvement (graph nodes removed) for each pass —
    *  supercompile, transpile, push_out, optimize_sharing.  Compile time is reported separately so it
    *  can be weighed against runtime (the supercompiler trades the former for the latter). */
@@ -635,21 +748,107 @@ object SC:
     "unwrap-concat-unwraps" -> Lower.UnwrapConcat_Unwraps, "singleton-composition-wrap" -> Lower.SingletonComposition_Wrap,
     "singleton-space-op-path-op" -> Lower.SingletonSpaceOp_PathOp, "restriction-singleton-unwrap" -> Lower.SingletonRestriction_Unwrap,
     "iter-tails" -> Lower.Iter_Tails, "tailsunion-singleton" -> Lower.TailsUnion_Singleton,
-    "range-singleton" -> Lower.Range_Singleton, "unwrap-wrap" -> Lower.Unwrap_Wrap)
+    "range-singleton" -> Lower.Range_Singleton, "unwrap-wrap" -> Lower.Unwrap_Wrap,
+    "iter-transpose-semijoin" -> Lower.IterWitness_TransposeSemiJoin,
+    "iter-witness-head-narrow" -> Lower.IterWitness_HeadNarrow,
+    "unwrap-push" -> Lower.UnwrapPush, "wrap-merge" -> Lower.WrapMerge,
+    "restriction-push" -> Lower.RestrictionPush, "comp-wrap-assoc" -> Lower.CompWrapAssoc,
+    "comp-assoc-right" -> Lower.CompAssocRight, "comp-lit-to-wraps" -> Lower.CompLitWraps,
+    "unwrap-fuse-const" -> Lower.Unwrap_Merge,
+    "singleton-constprefix-wrap" -> Lower.SingletonConstPrefix_Wrap,
+    "iter-comp-right-hoist" -> Lower.IterCompRight_Hoist,
+    "raffination-push" -> Lower.RaffinationPush,
+    "raff-restrict-algebra" -> Lower.RaffRestrictAlgebra,
+    "restrict-raff-wrap-both" -> Lower.RestrictRaffWrapBoth,
+    "iter-setop-merge" -> Lower.IterSetOpMerge)
   val simplifyRules: List[Space => Space] = sourceLaws.map(_._2)
+  /** THE GROUND LAWS: the two that EVALUATE a closed subterm (`Lower.ConstantOps` tries `eval` on every
+   *  node, `Lower.LiteralSpaceOps` evaluates literal-operand algebra).  proofs/laws/REGISTRY.tsv files
+   *  them as kind GROUND; `AlternativesCheck` holds this set to that table.  An exploration that must
+   *  be evaluation-free  drives with `sourceLaws` minus these. */
+  val groundLaws: Set[String] = Set("constant-ops", "literal-space-ops")
+  def lawsWithout(names: Set[String]): List[(String, Space => Space)] = sourceLaws.filterNot((n, _) => names(n))
 
   /** Bounded fixpoint reduction.  The step cap turns an oscillating/non-terminating rule into a
    *  clear error; the wall-clock `deadline` stops it GRACEFULLY (returns the current normal form,
    *  sound since the laws are meaning-preserving).  Convergence is structural `==`, not `show`. */
   def reduce(s: Space, cap: Int = 100000, deadline: Deadline = Deadline.never): Space =
+    reduceTraced(s, cap, deadline, record = false)._1
+
+  /** ONE STEP of the reduction trace: the named law that fired, and the term before
+   *  and after it.  A law is a whole-term congruence (`subs`), so ONE step may rewrite several
+   *  positions at once; the certificate that discharges the step is the law's ∀-certificate in
+   *  proofs/laws/REGISTRY.tsv, which covers every instance, and [[verifyTrace]] re-applies the law
+   *  to `before` to check that `after` is exactly what it produces. */
+  final case class Step(law: String, before: Space, after: Space)
+
+  /** [[reduce]] with the per-step trace.  `record = false` is `reduce` itself (no allocation per
+   *  step); the loop is ONE loop so the traced and untraced reductions cannot disagree. */
+  def reduceTraced(s: Space, cap: Int = 100000, deadline: Deadline = Deadline.never,
+                   record: Boolean = true, laws: List[(String, Space => Space)] = sourceLaws): (Space, Vector[Step]) =
+    val steps = if record then Vector.newBuilder[Step] else null
+    def round(x0: Space): Space =
+      var x = x0
+      for (name, f) <- laws do
+        val y = f(x)
+        if record && (y ne x) && y != x then steps += Step(name, x, y)
+        x = y
+      x
     var cur = s
-    var nxt = simplifyRules.foldLeft(cur)((x, f) => f(x))
+    var nxt = round(cur)
     var rounds = 0
     while nxt != cur && !deadline.expired do
       rounds += 1
       if rounds > cap then sys.error(s"SC reduce did not converge within $cap rounds")
-      cur = nxt; nxt = simplifyRules.foldLeft(cur)((x, f) => f(x))
-    nxt
+      cur = nxt; nxt = round(cur)
+    (nxt, if record then steps.result() else Vector.empty)
+
+  /** every step is a CHECKED LAW INSTANCE: its law is one of [[sourceLaws]] (hence has a registry
+   *  row, `scripts/check_laws.py`), re-applying that law to `before` gives `after`, and consecutive
+   *  steps compose (`after` of one is `before` of the next).  Returns the failures; empty is proof
+   *  that the trace is an honest derivation from `steps.head.before` to `steps.last.after`. */
+  def verifyTrace(steps: Vector[Step]): Vector[String] =
+    val byName = sourceLaws.toMap
+    val bad = Vector.newBuilder[String]
+    for (st, i) <- steps.zipWithIndex do
+      byName.get(st.law) match
+        case None => bad += s"step $i: `${st.law}` is not a source law"
+        case Some(f) => if f(st.before) != st.after then bad += s"step $i: re-applying `${st.law}` does not reproduce `after`"
+      if i > 0 && steps(i - 1).after != st.before then bad += s"step $i: does not compose with step ${i - 1}"
+    bad.result()
+
+  // ---- CALL-POSITIVITY: the executable twin of `Zippy.Space.callPosB` (Supercompile.lean) --------
+  //
+  // The Lean fold theorem needs the residual system to be monotone and omega-continuous in the
+  // valuation of the residual routines, and proves that from a syntactic discipline on where calls
+  // may sit: only in positive positions, with call-free arguments, call-free iteration sources and
+  // call-free fixpoints (Supercompile.lean's header says why each).  This is that discipline,
+  // constructor for constructor, so a residual that passes it is one the theorem is about.
+  def hasCall(t: Space | Path): Boolean = t match
+    case _: Space.Call => true
+    case sp: Space => Matching.childrenOf(sp).exists(hasCall)
+    case pt: Path => Matching.childrenOf(pt).exists(hasCall)
+
+  def callPositive(s: Space): Boolean = s match
+    case Space.Empty | Space.Literal(_) | Space.Mention(_) => true
+    case Space.Singleton(p) => !hasCall(p)
+    case Space.Union(a, b) => callPositive(a) && callPositive(b)
+    case Space.Intersection(a, b) => callPositive(a) && callPositive(b)
+    case Space.Restriction(a, b) => callPositive(a) && callPositive(b)
+    case Space.Composition(a, b) => callPositive(a) && callPositive(b)
+    case Space.Subtraction(a, b) => callPositive(a) && !hasCall(b)
+    case Space.Raffination(a, b) => callPositive(a) && !hasCall(b)
+    case Space.Wrap(src, p) => callPositive(src) && !hasCall(p)
+    case Space.Unwrap(src, p) => callPositive(src) && !hasCall(p)
+    case Space.TailsUnion(src) => callPositive(src)
+    case Space.TailsIntersection(src) => !hasCall(src)
+    case Space.Range(x, _, _) => !hasCall(x)
+    case Space.Call(_, refs, ms) => !refs.exists(hasCall) && !ms.exists(hasCall)
+    case Space.Iteration(src, _, _, body) => !hasCall(src) && callPositive(body)
+    case fx: Space.Fixpoint => !hasCall(fx)
+    case fd: Space.Fold => !hasCall(fd)
+    case Space.GroundedPS(p, _) => !hasCall(p)
+    case Space.GroundedSS(x, _) => !hasCall(x)
 
   /** Configuration knobs.  `literalsAreAtoms` selects the embedding heuristic (see
    *  [[Matching.embeds]]); the count caps (maxNodes/maxDepth/maxReduce) turn whistle/reduce bugs
@@ -661,7 +860,17 @@ object SC:
    *  (a supercompiler should always be time-bounded); raise it for very large specializations. */
   case class Config(maxNodes: Int = 2000, maxDepth: Int = 400, generalize: Boolean = true,
                     literalsAreAtoms: Boolean = true, maxReduce: Int = 100000,
-                    compileBudgetMs: Double = Config.DefaultBudgetMs)
+                    compileBudgetMs: Double = Config.DefaultBudgetMs,
+                    /** record the typed proof trace of the run: one DAG per residual node */
+                    trace: Boolean = false,
+                    /** THE LAW TABLE THIS RUN DRIVES WITH: a subset of [[sourceLaws]].  Two runs
+                     *  over two subsets reach two normal forms of the same program — two residual
+                     *  ALTERNATIVES, each with its own law trace — which is how fusion, hoisting and
+                     *  push choices are exposed instead of committed. */
+                    laws: List[(String, Space => Space)] = sourceLaws,
+                    /** UNROLL BEFORE FOLDING: the first `unroll` times a configuration would
+                     *  fold to a node, unfold it once more instead.  0 is the ordinary fold-first driver. */
+                    unroll: Int = 0)
   object Config:
     /** Default wall-clock compile budget (ms).  Finite by design — compilation must be bounded. */
     val DefaultBudgetMs: Double = 10000.0
@@ -681,11 +890,62 @@ object SC:
     var reductions, unfoldings, folds, whistles, generalizations = 0
     val deadline: Deadline = Deadline.inMillis(cfg.compileBudgetMs)
     var converged = true
+    // ---- THE EXECUTABLE PREMISES (Supercompile.lean / Whistle.lean correspondence tables) ----
+    /** folds whose instance substitution was re-applied ONCE and reproduced the folded call */
+    var foldChecks = 0
+    /** whistle blows `generalize` could not act on (msg found nothing to abstract, fell back to a
+     *  node the ancestor embeds).  The termination theorem covers a run only when this is 0. */
+    var whistleFallbacks = 0
+    /** residual names whose body consumed one unfold of their own configuration BEFORE driving */
+    val unfoldedNodes = mutable.Set.empty[RoutinePtr]
+    /** B1: how many times each node's would-be folds were unrolled instead (bounded by `cfg.unroll`) */
+    val unrolled = mutable.Map.empty[RoutinePtr, Int]
+    var unrolls = 0
+    /** the alphabet of the INPUTS — the finite label set Kruskal is applied to — and the labels the
+     *  drive produced outside it */
+    val alphabet0: Set[Matching.Label] = Set.empty // set by `run`
+    var alphabetBase: Set[Matching.Label] = Set.empty
+    val alphabetEscapes = mutable.Set.empty[Matching.Label]
+    def noteAlphabet(c: Space): Unit =
+      // only the UNBOUNDED kinds can escape: constructor tags, the two atoms and the two variable
+      // labels are a fixed finite set by definition of `Label`, so Kruskal's alphabet already
+      // contains them; what a drive could mint is a new routine base name, range bound, literal
+      // value or closure identity.
+      for l <- Matching.labels(c, cfg.literalsAreAtoms) if !alphabetBase(l) do l match
+        case Matching.Label.Ctor(_) | Matching.Label.LitAtom | Matching.Label.ConstAtom
+           | Matching.Label.MentionVar | Matching.Label.DerefVar => ()
+        case other => alphabetEscapes += other
+    /** every residual body (and the top) passes [[callPositive]] */
+    def residualPositive(top: Space): Boolean =
+      callPositive(top) && routines.values.forall(r => callPositive(r.body))
+    /** every residual routine consumed exactly one unfold of its configuration before folding */
+    def productive: Boolean = routines.keySet.forall(unfoldedNodes)
     // function nodes: (residual name, configuration at creation, ordered ref params, ordered mention params)
     val fnodes = mutable.ArrayBuffer.empty[(RoutinePtr, Space, Vector[PathRef], Vector[SpaceMention])]
     val routines = mutable.Map.empty[RoutinePtr, Routine]
+    // ---- THE TYPED PROOF TRACE: every unfold, law step, fold and generalization ----
+    val traceBuilder = new ProofTrace.Builder
+    /** per residual node: the trace from one unfold of its configuration to its body */
+    val traces = mutable.LinkedHashMap.empty[RoutinePtr, Int]
+    /** the top-level drive's trace id (configuration → residual top) */
+    var topTrace: Int = -1
+    def nodeTable: ProofTrace.NodeTable = fnodes.iterator.map((g, c, refs, ments) => g -> (c, refs, ments)).toMap
+    def traceOf(g: RoutinePtr): Option[ProofTrace.Dag] = traces.get(g).map(traceBuilder.dag)
+    def topTraceDag: Option[ProofTrace.Dag] = if topTrace >= 0 then Some(traceBuilder.dag(topTrace)) else None
 
     def fresh(hint: String): RoutinePtr = { counter += 1; RoutinePtr(s"${hint}_sc$counter") }
+    /** A COLLISION-SAFE CANONICAL IDENTITY for a residual node: the name carries a digest
+     *  of the ALPHA-NORMALISED configuration and its parameter arity, so two nodes with the same
+     *  configuration up to renaming have the same identity and two different configurations never
+     *  share one — an integer counter alone is neither.  The counter is kept as a readable prefix
+     *  (and as the tie-breaker no canonical digest should ever need). */
+    def canonicalName(hint: String, c: Space): RoutinePtr =
+      counter += 1
+      val (refs, ments) = paramsOf(c)
+      val canon = Matching.canon(c).toString + s"|${refs.length}/${ments.length}"
+      val md = java.security.MessageDigest.getInstance("SHA-256").digest(canon.getBytes("UTF-8"))
+      val digest = md.take(6).map(b => f"${b & 0xff}%02x").mkString
+      RoutinePtr(s"${hint}_sc${counter}_$digest")
     def hintOf(c: Space): String = c match { case Space.Call(r, _, _) => r.s; case _ => "node" }
     def paramsOf(c: Space): (Vector[PathRef], Vector[SpaceMention]) = (Matching.freeRefsV(c), Matching.freeMentionsV(c))
 
@@ -705,11 +965,36 @@ object SC:
     /** Drive: reduce, then supercompile every routine-call subterm bottom-up.  The compile deadline
      *  is checked at every driver step (here) and inside `reduce`/`scCall`, so the WHOLE driver is
      *  time-bounded; on expiry `scCall` raises CompileBudgetExceeded and `run` falls back. */
-    def drive(s: Space, path: List[(Space, RoutinePtr)], depth: Int): Space =
+    def drive(s: Space, path: List[(Space, RoutinePtr)], depth: Int): Space = driveT(s, path, depth)._1
+
+    /** `drive` with its trace: the law steps of the reduction, then every call replaced at its
+     *  position (a fold, a new node or a generalization), as one composed step `s → result` */
+    def driveT(s: Space, path: List[(Space, RoutinePtr)], depth: Int): (Space, Int) =
       if deadline.expired then throw CompileBudgetExceeded
       reductions += 1
-      val r = reduce(s, cfg.maxReduce, deadline)
-      subs(r)(spost = { case c: Space.Call if callable(c) => scCall(c, path, depth) })
+      val (r, steps) = reduceTraced(s, cfg.maxReduce, deadline, record = cfg.trace, laws = cfg.laws)
+      val ids = mutable.ArrayBuffer.empty[Int]
+      if cfg.trace then for st <- steps do ids += traceBuilder.add(ProofTrace.lawNode(st.law, st.before, st.after))
+      if !cfg.trace then
+        (subs(r)(spost = { case c: Space.Call if callable(c) => scCall(c, path, depth)._1 }), -1)
+      else
+        // the calls, bottom-up and positionally, so every replacement is a recorded step of the whole term
+        var cur = r
+        def go(x: Space, pos: Vector[Int]): Space =
+          val kids = ProofTrace.children(x)
+          val rebuilt = if kids.isEmpty then x else ProofTrace.rebuild(x, kids.indices.toVector.map(i => go(kids(i), pos :+ i)))
+          rebuilt match
+            case c: Space.Call if callable(c) =>
+              val whole = ProofTrace.replaceAt(cur, pos, c).getOrElse(cur)
+              val (res, by) = scCall(c, path, depth)
+              val next = ProofTrace.replaceAt(whole, pos, res).getOrElse(whole)
+              if by >= 0 then ids += traceBuilder.add(ProofTrace.Node.Positional(whole, pos, next, by))
+              cur = next
+              res
+            case other => other
+        val out = go(r, Vector.empty)
+        val tid = if ids.isEmpty then traceBuilder.add(ProofTrace.Node.AlphaEquivalence(s, out)) else traceBuilder.compose(ids.toVector, s, out)
+        (out, tid)
 
     /** Supercompile one Call configuration: fold -> whistle/generalize -> new node.
      *
@@ -720,15 +1005,42 @@ object SC:
      *  argument substitution regardless of context.  Global memoization only ever increases
      *  sharing.  The whistle still uses the ancestor PATH (innermost first via `collectFirst`,
      *  so generalization is deterministic w.r.t. the most-recent embedding ancestor). */
-    def scCall(c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): Space =
+    def scCall(c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): (Space, Int) =
       if deadline.expired then throw CompileBudgetExceeded
       if depth > cfg.maxDepth then sys.error(s"SC depth cap ${cfg.maxDepth} exceeded at ${c.show}")
       if fnodes.length > cfg.maxNodes then sys.error(s"SC node cap ${cfg.maxNodes} exceeded")
+      noteAlphabet(c)
       val folded = fnodes.iterator.flatMap { case (g, gc, refs, ments) =>
-        Matching.instanceOf(gc, c).map((g, refs, ments, _))
+        Matching.instanceOf(gc, c).map((g, refs, ments, gc, _))
       }.nextOption()
       folded match
-        case Some((g, refs, ments, (sm, pm))) => folds += 1; callOf(g, refs, ments, sm, pm)
+        case Some((g, _, _, _, _)) if cfg.unroll > 0 && unrolled.getOrElse(g, 0) < cfg.unroll && callable(c) =>
+          // B1: UNROLL INSTEAD OF FOLDING — one more unfold of this configuration, driven; the fold the
+          // ordinary driver would have emitted happens one level deeper (the same node, now at its cap).
+          // Semantically a definitional step (Drive.lean `unfold_step`), recorded as such.
+          unrolled(g) = unrolled.getOrElse(g, 0) + 1
+          unrolls += 1
+          val u = unfold(c)
+          val (body, bodyTrace) = driveT(u, path, depth + 1)
+          val by = if cfg.trace then
+            val d = defs(c.r)
+            val un = traceBuilder.add(ProofTrace.Node.Unfold(c.r, c, d.body, d.mentions.zip(c.mentions).map((m, t) => m.s -> t), d.refs.zip(c.refs).map((p, t) => p.s -> t), u))
+            traceBuilder.compose(Vector(un, bodyTrace), c, body)
+          else -1
+          (body, by)
+        case Some((g, refs, ments, gc, (sm, pm))) =>
+          // THE FOLD-SITE PREMISE, CHECKED: the instance substitution applied ONCE to the node's
+          // configuration is the folded configuration.  `instanceOf`'s docstring argues this; the
+          // Lean fold theorem's `fix` premise depends on it; so it is asserted per fold, not argued.
+          val back = Matching.subst(gc, sm, pm)
+          if !Matching.alphaEqual(back, c) then
+            sys.error(s"SC fold premise violated: ${gc.show} under the instance substitution is " +
+                      s"${back.show}, not the folded configuration ${c.show}")
+          foldChecks += 1
+          folds += 1
+          val call = callOf(g, refs, ments, sm, pm)
+          val by = if cfg.trace then traceBuilder.add(ProofTrace.Node.Fold(g, gc, sm.toVector.map((m, t) => m.s -> t).sortBy(_._1), pm.toVector.map((p, t) => p.s -> t).sortBy(_._1), c, call)) else -1
+          (call, by)
         case None =>
           val whistler =
             if !cfg.generalize then None
@@ -737,27 +1049,47 @@ object SC:
             case Some(pc) => whistles += 1; generalize(pc, c, path, depth)
             case None => makeNode(c, path, depth)
 
-    def makeNode(c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): Space =
+    def makeNode(c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): (Space, Int) =
       val (refs, ments) = paramsOf(c)
-      val g = fresh(hintOf(c))
+      val g = canonicalName(hintOf(c), c)
       fnodes += ((g, c, refs, ments))
-      val body = drive(unfold(c), (c, g) :: path, depth + 1)
+      // ONE UNFOLD PER NODE, recorded before the body is driven: the productivity premise
+      val unfolded = unfold(c)
+      unfoldedNodes += g
+      val (body, bodyTrace) = driveT(unfolded, (c, g) :: path, depth + 1)
       routines(g) = Routine(g, refs, ments, body)
-      Space.Call(g, refs.map(Path.Deref(_)), ments.map(Space.Mention(_)))
+      val call = Space.Call(g, refs.map(Path.Deref(_)), ments.map(Space.Mention(_)))
+      if cfg.trace then
+        val d = defs(c.r)
+        val u = ProofTrace.Node.Unfold(c.r, c, d.body, d.mentions.zip(c.mentions).map((m, t) => m.s -> t), d.refs.zip(c.refs).map((p, t) => p.s -> t), unfolded)
+        traces(g) = traceBuilder.compose(Vector(traceBuilder.add(u), bodyTrace), c, body)
+        // the new node's call denotes its configuration: a fold with the identity instance
+        val by = traceBuilder.add(ProofTrace.Node.Fold(g, c, Vector.empty, Vector.empty, c, call))
+        (call, by)
+      else (call, -1)
 
     /** Whistle response: most-specific-generalize the embedded ancestor against the current
      *  call (downward generalization), supercompile the more-general skeleton, then plug the
      *  driven hole-values back in.  The generalized skeleton, being strictly more general, is
      *  driven once and its recursive descendants fold to it. */
-    def generalize(pc: Space, c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): Space =
+    def generalize(pc: Space, c: Space.Call, path: List[(Space, RoutinePtr)], depth: Int): (Space, Int) =
       val gen = Matching.msg(pc, c, cfg.literalsAreAtoms)
       gen.skeleton match
         case sk: Space.Call if !Matching.alphaEqual(sk, c) =>
           generalizations += 1
-          val residGen = scCall(sk, path, depth + 1)
-          val sm = gen.rsm.view.mapValues(v => drive(v, path, depth + 1)).toMap
-          Matching.subst(residGen, sm, gen.rpm)
-        case _ => makeNode(c, path, depth)
+          val (residGen, skTrace) = scCall(sk, path, depth + 1)
+          val driven = gen.rsm.toVector.sortBy(_._1.s).map((m, v) => { val (d, t) = driveT(v, path, depth + 1); (m, v, d, t) })
+          val sm = driven.map((m, _, d, _) => m -> d).toMap
+          val result = Matching.subst(residGen, sm, gen.rpm)
+          val by = if cfg.trace then traceBuilder.add(ProofTrace.Node.Generalization(sk, gen.rsm.toVector.map((m, t) => m.s -> t).sortBy(_._1),
+                     gen.rpm.toVector.map((p, t) => p.s -> t).sortBy(_._1), c, residGen, skTrace, driven.map((m, o, d, t) => (m.s, o, d, t)), result)) else -1
+          (result, by)
+        case _ =>
+          // the whistle blew (coarse, label-based) but the generalizer (fine coupling) found nothing
+          // to abstract: the path is extended by a node an ancestor embeds.  Counted, because the
+          // termination theorem is about whistle-FREE paths and does not cover this run.
+          whistleFallbacks += 1
+          makeNode(c, path, depth)
 
   // ---- entry points ---------------------------------------------------------
 
@@ -776,8 +1108,15 @@ object SC:
   def run(conf: Space, defs: PartialFunction[RoutinePtr, Routine], cfg: Config = Config()): (Residual, State, Space) =
     validate(conf)
     val st = new State(defs, cfg)
+    // the finite alphabet of THIS run: every label of the configuration and of every routine body
+    // reachable from it (Kruskal is applied to it; `alphabetEscapes` is the run-time check)
+    st.alphabetBase = Matching.labels(conf, cfg.literalsAreAtoms) ++
+      materialize(conf, defs).values.flatMap(r => Matching.labels(r.body, cfg.literalsAreAtoms))
     val residual =
-      try Residual(st.drive(conf, Nil, 0), st.routines.toMap)
+      try
+        val (top, tid) = st.driveT(conf, Nil, 0)
+        st.topTrace = tid
+        Residual(top, st.routines.toMap)
       catch
         case CompileBudgetExceeded =>
           st.converged = false
@@ -850,6 +1189,9 @@ object Supercompiler:
     val rep = SCReport(SCStats.of(conf), SCStats.of(residual.top) , residual.routines.size,
       st.reductions, st.unfoldings, st.folds, st.whistles, st.generalizations,
       converged = st.converged, compileTimeEvaluated = cte, backendCompiled = backendCompiled,
+      residualPositive = st.residualPositive(residual.top), productive = st.productive,
+      foldChecks = st.foldChecks, whistleFallbacks = st.whistleFallbacks,
+      alphabetEscapes = st.alphabetEscapes.size,
       backendUnsupported = unsupported.distinct, compileMillis = prof.totalMillis, phaseMillis = prof.millis,
       phaseImprovement = prof.counts)
     (rep, graphs)

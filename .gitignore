@@ -14,3 +14,43 @@
 /scbuild/
 
 .claude
+
+/.tools/
+
+# Python bytecode caches (scripts/ is imported as a package by the generators)
+__pycache__/
+*.py[cod]
+
+# REVIEW INPUTS, not artifacts.  An acceptance review handed to this tree is an input to the work.
+# Keeping the input out of the tree also keeps
+# scripts/check_references.py honest: it scans every TRACKED file, and a review document quotes
+# paths and file names from the state it reviewed, several of which no longer exist by design.
+/review.md
+
+# run.sh's transient vacuity probe (it removes it; this stops a mid-run `git add -A` catching it)
+proofs/unbounded/.probe.p
+
+# The status-table staging files (0.1).  Every status harness now accumulates rows in
+# `STATUS.tsv.tmp` beside its target and publishes with ONE rename(), so a killed run cannot
+# truncate a committed corpus.  SIGTERM/SIGINT/SIGHUP are trapped and remove the staging file;
+# SIGKILL cannot be, so a hard-killed run leaves one behind and it must not show up as an untracked
+# file in the Phase-0 tree-clean gate (`git status --porcelain proofs/ terminating/`).  The next run
+# truncates it, so a stale one is inert.
+STATUS.tsv.tmp
+
+# THE LEAN BUILD DIRECTORY (0.5).  `proofs/lean/.lake` holds three things, none of which belongs in
+# the tree: lake's build outputs (`.olean`/`.ilean`/`.c`), the generated `*.setup.json` files (which
+# embed ABSOLUTE paths — `scripts/check_references.py` flagged 40-odd of them on the first run), and
+# `packages/`, the Mathlib checkout, which is several gigabytes.
+#
+# WHAT IS TRACKED IS THE PIN, and only the pin: `proofs/lean/lean-toolchain` (the Lean version),
+# `proofs/lean/lakefile.toml` (Mathlib's `rev`) and `proofs/lean/lake-manifest.json` (the resolved
+# commit).  A reader who checks out this tree runs `lake update && lake exe cache get` and gets the
+# same Mathlib; `scripts/check_lean.sh` refuses to build against a toolchain the pin does not name.
+proofs/lean/.lake/
+# `scripts/check_lean.sh`'s transient `#print axioms` probe (it removes it; this stops a
+# SIGKILLed run, or a mid-run `git add -A`, from catching it).
+proofs/lean/.axioms_probe.lean
+
+# A6: the transfer checker's inputs, written by `sbt "testOnly morkl.SpatialTransferDump"` (see proofs/spatial/README.md)
+proofs/spatial/out/

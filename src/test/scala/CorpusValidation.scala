@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 
 /** Differential validation: every executor must agree on every (program, input) pair.  Loads the saved
@@ -19,16 +21,7 @@ class CorpusValidation extends FunSuite:
     val M = sys.props.get("valid.m").map(_.toInt).getOrElse(1000)            // # input environments
     val progLimit = sys.props.get("valid.progs").map(_.toInt).getOrElse(Int.MaxValue)
     // load the saved corpus
-    val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser")
-    assert(f.exists, s"corpus not found at ${f.getPath} — run the corpus test first")
-    val recs0 = locally {
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]]
-      catch case e: java.io.InvalidClassException =>
-        throw new AssertionError("corpus_1000.ser is STALE (serialized classes changed) — rerun morkl.ProgramExpressivity to regenerate it", e)
-      finally ois.close()
-    }
-    val recs = recs0.take(progLimit)
+    val recs = Corpus.load(progLimit)
 
     // precompute M input environments in every representation (independent of the program)
     val rng = new java.util.Random(424242)

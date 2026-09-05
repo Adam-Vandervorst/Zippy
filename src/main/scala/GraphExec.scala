@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.mutable.Stack
 
 /** Trie-native executor for the RecursiveOpGraph — the `exec` analog that operates directly on
@@ -13,15 +15,21 @@ def execT(rog: RecursiveOpGraph, stack: Stack[Array[Any | Null]],
   extension (p: (Int, Int)) inline def sget: ITrie = stack(stack.length - 1 - p._1)(p._2).asInstanceOf[ITrie]
   extension (p: (Int, Int)) inline def pget: List[Int] = stack(stack.length - 1 - p._1)(p._2).asInstanceOf[List[Int]]
   while c < rog.nodes.length do
+    effort(EffortEvent.GraphNodeDispatch)                 // one executed operation-graph slot
     rog.nodes(c) match
       case Left(Node(op, constant, kind, inputs)) => kind match
         case "path" => s(c) = (op match
           case "ExtractPathRef" => pos.pget
           case "Constant" => internConstStr(constant)
           case "Concat" => inputs(0).pget ++ inputs(1).pget)
-        case "space" => s(c) = (op match
+        // one entry into the ITrie algebra per space slot.  The descent INSIDE the ITrie/Patricia
+        // operation is NOT counted (IntTrie.scala / IntTrieOps.scala carry no hooks) — see the
+        // "WHAT IS NOT COUNTED" note in SpatialEvents.scala.
+        case "space" => effort(EffortEvent.TrieOpEntry); s(c) = (op match
           case "Empty" => ITrie.empty
           case "Call" =>
+            effort(EffortEvent.CallEntry)
+            effort(EffortEvent.GraphFrameAllocation)
             val code = index(constant)
             val cstack = Stack(new Array[Any | Null](code.nodes.length))
             for (arg, i) <- inputs.zipWithIndex do cstack.top(i) = stack(stack.length - 1 - arg._1)(arg._2)
@@ -50,11 +58,13 @@ def execT(rog: RecursiveOpGraph, stack: Stack[Array[Any | Null]],
             // body frame across children: execT overwrites every slot it reads, so no per-child
             // Array allocation / Stack churn is needed (hot in deep nested iterations, e.g. n-queens).
             val src = sg.root.inputs(0).sget
+            effort(EffortEvent.GraphFrameAllocation)       // ONE frame, reused across every child
             val frame = new Array[Any | Null](sg.nodes.length)
             val last = sg.nodes.length - 1
             stack.push(frame)
             var acc = ITrie.empty
             src.children.foreach { case (k, sub) =>
+              effort(EffortEvent.LoopBodyEntry)
               frame(0) = k :: Nil; frame(1) = sub
               execT(sg, stack, index)
               acc = ITrie.union(acc, frame(last).asInstanceOf[ITrie])
@@ -66,19 +76,22 @@ def execT(rog: RecursiveOpGraph, stack: Stack[Array[Any | Null]],
             // which unions `m` over every iterate m_0, next(m_0), next²(m_0), … and stops when the
             // argument stabilises (next(m)==m).  Accumulating the union (rather than returning the
             // final iterate) is correct for ANY `next`, not only extensive (monotone-growing) ones.
+            effort(EffortEvent.GraphFrameAllocation)
             val frame = new Array[Any | Null](sg.nodes.length)
             val last = sg.nodes.length - 1
             stack.push(frame)
             var cur = sg.root.inputs(0).sget
-            var acc = cur
             var done = false
             while !done do
+              effort(EffortEvent.FixpointRound)            // counts the terminating round too
               frame(0) = cur
               execT(sg, stack, index)
-              val nxt = frame(last).asInstanceOf[ITrie]
-              if nxt == cur then done = true else { cur = nxt; acc = ITrie.union(acc, nxt) }
+              // `X |-> X u F(X)`, not `F` — MORKL.scala's `eval` Fixpoint arm and
+              // terminating/fixpoint_is_lfp.smt2 (O1) carry the argument.
+              val nxt = ITrie.union(cur, frame(last).asInstanceOf[ITrie])
+              if ITrie.equalT(nxt, cur) then done = true else cur = nxt
             stack.pop()
-            s(c) = acc
+            s(c) = cur
           case other => throw IllegalStateException(s"execT: unsupported subgraph root $other")
     c += 1
   end while
@@ -88,6 +101,7 @@ def execT(rog: RecursiveOpGraph, stack: Stack[Array[Any | Null]],
  *  from `refs`/`mentions`.  `index` resolves any Call'd routines.  Returns the result [[ITrie]]. */
 def runGraphT(g: RecursiveOpGraph, refs: Map[String, List[Int]] = Map.empty, mentions: Map[String, ITrie] = Map.empty,
               index: PartialFunction[String, RecursiveOpGraph] = PartialFunction.empty): ITrie =
+  effort(EffortEvent.GraphFrameAllocation)                 // the top-level frame
   val frame = new Array[Any | Null](g.nodes.length)
   for (nl, i) <- g.nodes.iterator.zipWithIndex do nl match
     case Left(Node("ExtractPathRef", name, _, _)) => refs.get(name).foreach(frame(i) = _)

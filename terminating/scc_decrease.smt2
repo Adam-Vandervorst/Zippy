@@ -15,12 +15,18 @@
   (= (mem x (setminus a b)) (and (mem x a) (not (mem x b))))))
 (assert (forall ((a NSet) (b NSet))
   (= (subset a b) (forall ((x Node)) (=> (mem x a) (mem x b))))))
+; ASSUMED: T7
 (assert (forall ((a NSet)) (>= (card a) 0)))
+; ASSUMED: T7
 (assert (forall ((a NSet) (b NSet) (w Node))
   (=> (and (subset a b) (mem w b) (not (mem w a))) (< (card a) (card b)))))
+; DEFINITION
 (assert (forall ((v NSet) (p Node)) (mem p (pred v p))))
+; DEFINITION
 (assert (forall ((v NSet) (p Node)) (mem p (desc v p))))
+; DEFINITION
 (assert (forall ((v NSet) (p Node)) (=> (mem p v) (subset (pred v p) v))))
+; DEFINITION
 (assert (forall ((v NSet) (p Node)) (=> (mem p v) (subset (desc v p) v))))
 ; ---- stepping stones, proved from the axioms above ----
 (push)

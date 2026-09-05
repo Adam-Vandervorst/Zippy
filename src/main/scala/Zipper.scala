@@ -1,27 +1,59 @@
+package morkl
+
 import scala.collection.immutable.IntMap
 
 /** SpaceZipper-based evaluation (a third paradigm beside the interpreters and the op-graph).
  *
  *  A [[SpaceZipper]] is a CURSOR at a focus in a — possibly purely VIRTUAL — interned-int trie.  The three
- *  fundamental movements are all CONSTANT TIME IN THE SPACE SIZE (they touch only the current node's
- *  branching, never re-descending a branch):
+ *  fundamental movements are:
  *    - `terminal`   : is the focus path a complete member?
- *    - `children`   : the child sub-zippers keyed by interned item (UNFORCED — cheap wrappers)
- *    - `descend(k)` : the sub-zipper one item down (O(1) per zipper layer; never materializes)
+ *    - `children`   : the child sub-zippers keyed by interned item (the sub-zippers are UNFORCED)
+ *    - `descend(k)` : the sub-zipper one item down (never materializes)
+ *
+ *  WHAT THEY COST.  The previous version of this comment claimed all three are "CONSTANT TIME IN THE
+ *  SPACE SIZE ... they touch only the current node's branching".  The second half is the true claim and
+ *  the first half does not follow from it — a node's branching is not a constant:
+ *
+ *   - `descend(k)` IS cheap: one Patricia probe per zipper layer, and it allocates one virtual cursor
+ *     per layer.  O(layers) probes, independent of the space below the focus.
+ *   - `terminal` IS cheap: one boolean per layer.  `Prefix.terminal` short-circuits on
+ *     `remaining.isEmpty` and never reaches its source; `RestrictionNode.terminal` is a literal `false`
+ *     that reads neither operand.
+ *   - `children` IS NOT constant time.  `Lit.children` runs `IntMap.transform` over the ENTIRE child
+ *     map of the focus node and allocates one wrapper per entry; `Union`/`Intersection`/`Subtraction`/
+ *     `Composition`/`RestrictionNode` run a whole `IntMap` `unionWith`/`intersectionWith`/`transform`
+ *     over their operands' child maps, which can transform or merge an entire `IntMap`.  The cost is
+ *     Θ(child-map entries at the focus) PER LAYER — bounded by the focus node's branching, never by the
+ *     space size below it.  That last part is the property worth having, and it is what the comment
+ *     should have said.  One [[EffortEvent.ZipperCursorRead]] is counted for a whole map operation, so
+ *     SpatialDemand.scala carries the per-ENTRY oracle ([[ZipperDemandEvent]]).
  *
  *  Each space operation has a VIRTUAL zipper that composes its operands' cursors lazily, following the
  *  abstract trie spec — e.g. a Union's child-map is the IntMap union of its operands' child-maps, an
  *  Intersection's is their IntMap intersection.  So an entire routine's set algebra fuses into ONE
- *  zipper tree and ONE traversal: `materialize` is a single DFS that visits each node of the logical
- *  result exactly once, with no intermediate tries (deforestation).  You always lift a concrete trie
- *  into a zipper by `traversal` and drop a zipper back into a trie by `materialize`.
+ *  zipper tree and ONE traversal, with no intermediate tries (deforestation).  You always lift a
+ *  concrete trie into a zipper by `traversal` and drop a zipper back into a trie by `materialize`.
  *
- *  Asymptotics: a `materialize` of a fused expression costs O(sum of operand trie nodes visited) — the
- *  same as the corresponding ITrie ops — but performed in a single fused pass instead of building (and
- *  re-walking) an intermediate trie per operator.  Control-flow / positional ops (Iteration, Fold,
- *  Fixpoint, Range, residuals, Call, grounded) are NOT local trie ops; they are handled by a routine
- *  "call" that materializes via [[evalI]] and is re-lifted by `traversal` (what is materialized vs.
- *  fused can be chosen later; caching can be added later). */
+ *  ASYMPTOTICS.  The old claim — "`materialize` visits each node of the logical result exactly once"
+ *  and "costs O(sum of operand trie nodes visited)" — is also false, and it is false in the direction
+ *  that matters: it is a LINEAR bound on an algorithm that is frequently O(depth) or O(1).  A `Lit`
+ *  result is returned BY POINTER and NONE of its nodes are visited.  The real parameter is the number
+ *  of FORCED NON-`Lit` CURSOR NODES, and it is decided TOP-DOWN by the outer consumer, not bottom-up by
+ *  the operands: a union of two deep tries with disjoint root branches forces ONE node and reuses both
+ *  child tries; `Prefix(p, X)` forces `|p| + 1` and reuses `X`'s children; a restriction by a length-`d`
+ *  prefix forces `d` and returns the selected subtree wholesale; a composition at a terminal leaf grafts
+ *  the existing right cursor.  SpatialDemand.scala computes that number from a demanded-prefix profile
+ *  and a layer count, and `ZipperCost` (SpatialCost.scala) now CONSUMES it — but only partly, and the
+ *  split is measured (`SpatialScaleCheck`, LIM-1/LIM-2): the demand region reaches `Touch`, whose
+ *  prediction is correctly `[0,0]` against a counted 0 on every fused family, and it does NOT reach
+ *  `Work`/`Alloc`, which are still the per-operator sum charged in proportion to each operand's
+ *  `Meas.nodes` — so `(A ∪ B) ∩ C` with a fixed `C` is still priced as the full inner union (predicted
+ *  slope 0.96-1.00 against a measured 0.00, worst error 2053x).  The review is closed for one
+ *  component and open for two.
+ *
+ *  Control-flow / positional ops (Iteration, Fold, Fixpoint, Range, residuals, Call, grounded) are NOT
+ *  local trie ops; they are handled by a routine "call" that materializes via [[evalI]] and is re-lifted
+ *  by `traversal` (what is materialized vs. fused can be chosen later; caching can be added later). */
 sealed trait SpaceZipper:
   def terminal: Boolean
   def children: IntMap[SpaceZipper]
@@ -34,19 +66,61 @@ object SpaceZipper:
   /** Lift a concrete trie into a zipper by traversal — O(1): the trie itself is the cursor. */
   def traversal(t: ITrie): SpaceZipper = Lit(t)
 
-  /** Drop a zipper into a concrete trie by materialization — one DFS, each logical node visited once. */
+  /** Drop a zipper into a concrete trie by materialization.
+   *
+   *  THE COST PARAMETER IS THE NUMBER OF FORCED NON-`Lit` CURSOR NODES, and this DFS is where that set
+   *  is generated: a `Lit` cursor is returned BY POINTER — an arbitrarily large trie handed back without
+   *  visiting one node of it — so the recursion stops wherever the fused algebra has collapsed to a
+   *  concrete cursor.  It is NOT true that every logical result node is visited once.
+   *
+   *  What the counted events mean here: one [[EffortEvent.ZipperMaterializeNode]] and one
+   *  [[EffortEvent.FreshNode]] per FORCED node (never per result node), one
+   *  [[ZipperDemandEvent.AcceptedLitSubtrie]] per whole subtrie taken by pointer, and one
+   *  [[ZipperDemandEvent.MaterializeEntry]] per child-map entry this loop iterates and rebuilds — the
+   *  iteration and the `IntMap.updated` chain that the review says nothing counted. */
   def materialize(z: SpaceZipper): ITrie = z match
-    case Lit(t) => t                                         // already concrete: no re-traversal
+    case Lit(t) =>
+      zdemand(ZipperDemandEvent.AcceptedLitSubtrie)           // whole subtrie by pointer, unvisited
+      t                                                      // already concrete: no re-traversal
     case _ =>
+      effort(EffortEvent.ZipperMaterializeNode)
+      effort(EffortEvent.FreshNode)                          // exactly one fresh ITrie per FORCED node
       var ch = IntMap.empty[ITrie]
-      z.children.foreach { (k, cz) => val c = materialize(cz); if c.nonEmpty then ch = ch.updated(k, c) }
+      z.children.foreach { (k, cz) =>
+        zdemand(ZipperDemandEvent.MaterializeEntry)
+        val c = materialize(cz); if c.nonEmpty then ch = ch.updated(k, c) }
       ITrie(z.terminal, ch)
 
   // ---- concrete: a cursor over a materialized trie -------------------------------------------------
+  /** `terminal` and `descend` are per-layer constant work.  `children` is NOT: it rebuilds the focus
+   *  node's ENTIRE child map (`IntMap.transform`) and allocates one wrapper per entry, which is why it
+   *  emits one [[ZipperDemandEvent.LitTransformEntry]] per entry on top of the single
+   *  [[EffortEvent.ZipperCursorRead]] the whole operation has always counted. */
+  /** AN OPAQUE SOURCE: a space the transpiler knows only by NAME.  It cannot be
+   *  materialised — every cursor operation throws — and that is the point: it exists so that
+   *  `transpileZ` can run DATA-AGNOSTICALLY, producing the zipper PROGRAM (the shell of virtual nodes
+   *  over named sources) that `EquivPipelineTest` reads back with `spaceOfZipper` and checks against the
+   *  universal refinement theorem (proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement, whose `lit` is
+   *  exactly "a source known by its set", opaque or not).  Before this existed the only way to run
+   *  `transpileZ` was on a fully bound context, so every stage-2 obligation compared MATERIALISED
+   *  tries — the executor's own output — and the agnostic zipper leg was TRIVIAL on all seven stones
+   *  (EquivPipelineTest, stage-2 comment, 2026-08).  An unbound mention used to become ∅ SILENTLY
+   *  (`ic.getOrElse(m, ITrie.empty)`); it is now this node, so a missing binding is a loud failure at
+   *  the first cursor read rather than a wrong answer. */
+  final case class Opaque(m: SpaceMention) extends SpaceZipper:
+    private def cannot: Nothing =
+      throw IllegalStateException(s"opaque zipper source `${m.s}` cannot be materialised: it is a name, " +
+        "not a trie.  Bind it in the transpile context, or read the program back with spaceOfZipper.")
+    def terminal = cannot
+    def children = cannot
+    def descend(k: Int) = cannot
+
   final case class Lit(t: ITrie) extends SpaceZipper:
-    def terminal = t.terminal
-    def children = t.children.transform((_, c) => Lit(c))
-    def descend(k: Int) = t.children.get(k) match { case Some(c) => Lit(c); case None => empty }
+    def terminal = { effort(EffortEvent.ZipperCursorRead); t.terminal }
+    def children =
+      effort(EffortEvent.ZipperCursorRead)
+      t.children.transform((_, c) => { zdemand(ZipperDemandEvent.LitTransformEntry); Lit(c) })
+    def descend(k: Int) = { effort(EffortEvent.ZipperCursorRead); t.children.get(k) match { case Some(c) => Lit(c); case None => empty } }
 
   // ---- referential-identity short-circuit (O(1)): two cursors are the SAME space when they are the
   // same object, or both are concrete cursors over the same (reference-equal) trie.  This is a pure
@@ -54,74 +128,158 @@ object SpaceZipper:
   private def sameSpace(a: SpaceZipper, b: SpaceZipper): Boolean =
     (a eq b) || ((a, b) match { case (Lit(s), Lit(t)) => s eq t; case _ => false })
   /** Union smart constructor: x ∪ x = x — instant accept, no traversal of the shared branch. */
-  def union(a: SpaceZipper, b: SpaceZipper): SpaceZipper = if sameSpace(a, b) then a else Union(a, b)
+  def union(a: SpaceZipper, b: SpaceZipper): SpaceZipper =
+    if sameSpace(a, b) then { effort(EffortEvent.ReusedSpace); a } else Union(a, b)
   /** Intersection smart constructor: x ∩ x = x — instant accept. */
-  def intersection(a: SpaceZipper, b: SpaceZipper): SpaceZipper = if sameSpace(a, b) then a else Intersection(a, b)
+  def intersection(a: SpaceZipper, b: SpaceZipper): SpaceZipper =
+    if sameSpace(a, b) then { effort(EffortEvent.ReusedSpace); a } else Intersection(a, b)
   /** Subtraction smart constructor: x \ x = ∅ — instant prune of the whole shared branch. */
-  def subtraction(a: SpaceZipper, b: SpaceZipper): SpaceZipper = if sameSpace(a, b) then empty else Subtraction(a, b)
+  def subtraction(a: SpaceZipper, b: SpaceZipper): SpaceZipper =
+    if sameSpace(a, b) then { effort(EffortEvent.ReusedSpace); empty } else Subtraction(a, b)
 
   // ---- virtual zippers: one per local space operation, composing child cursors per the trie spec ----
   /** Union: value if EITHER has one; children = IntMap union, recursing into shared keys.  Shared (eq)
    *  sub-branches short-circuit through `union`, so a re-occurring branch is accepted, not re-descended. */
+  // Every cursor query below counts ONE ZipperCursorRead.  A fused expression therefore counts one
+  // read PER LAYER per visited node, which is exactly the work `ZipperCost` has to predict — and the
+  // reason a Zipper cost cannot be the same formula as `execT`'s.
+  //
+  // THAT ONE READ IS NOT THE WHOLE COST OF A `children` CALL: the `IntMap` merge
+  // below walks the entries of BOTH operand child maps, and a key present in only one side is handed
+  // through UNCHANGED — so the fused layer survives only on the PAIRED keys and an unshared branch of a
+  // concrete operand is accepted by pointer.  The per-entry counts are in ZipperDemandEvent.
   final case class Union(a: SpaceZipper, b: SpaceZipper) extends SpaceZipper:
-    def terminal = a.terminal || b.terminal
-    def children = a.children.unionWith(b.children, (_, x, y) => union(x, y))
-    def descend(k: Int) = union(a.descend(k), b.descend(k))
+    def terminal = { effort(EffortEvent.ZipperCursorRead); a.terminal || b.terminal }
+    def children =
+      effort(EffortEvent.ZipperCursorRead)
+      val ac = a.children; val bc = b.children
+      zdemandMerge(ZipperDemandEvent.UnionMergeEntry, ac, bc)
+      ac.unionWith(bc, (_, x, y) => { zdemand(ZipperDemandEvent.VirtualCursorAlloc); union(x, y) })
+    def descend(k: Int) = { effort(EffortEvent.ZipperCursorRead); union(a.descend(k), b.descend(k)) }
 
-  /** Intersection: value if BOTH have one; children = IntMap intersection (only items common to both). */
+  /** Intersection: value if BOTH have one; children = IntMap intersection (only items common to both).
+   *  An unshared key is REJECTED WHOLE — neither side's branch is ever descended, which is what keeps an
+   *  outer intersection proportional to its selective operand while the inner expression grows. */
   final case class Intersection(a: SpaceZipper, b: SpaceZipper) extends SpaceZipper:
-    def terminal = a.terminal && b.terminal
-    def children = a.children.intersectionWith(b.children, (_, x, y) => intersection(x, y))
-    def descend(k: Int) = intersection(a.descend(k), b.descend(k))
+    def terminal = { effort(EffortEvent.ZipperCursorRead); a.terminal && b.terminal }
+    def children =
+      effort(EffortEvent.ZipperCursorRead)
+      val ac = a.children; val bc = b.children
+      zdemandMerge(ZipperDemandEvent.InterMergeEntry, ac, bc)
+      ac.intersectionWith(bc, (_, x, y) => { zdemand(ZipperDemandEvent.VirtualCursorAlloc); intersection(x, y) })
+    def descend(k: Int) = { effort(EffortEvent.ZipperCursorRead); intersection(a.descend(k), b.descend(k)) }
 
   /** Subtraction: a path is kept iff in `a` and not in `b`.  Keep a's items; subtract b where present.
-   *  A shared (eq) sub-branch is instantly pruned to ∅ via `subtraction`, never re-descended. */
+   *  A shared (eq) sub-branch is instantly pruned to ∅ via `subtraction`, never re-descended.
+   *
+   *  A left key MISSING from the right keeps the LEFT CHILD CURSOR UNCHANGED (`case None => x`), so a
+   *  left branch the right operand does not mention is accepted whole — by pointer when it is a `Lit`.
+   *  The `transform` walks every left entry and probes the right map for it: two child-map entries of
+   *  work per left entry, counted as [[ZipperDemandEvent.DiffScanEntry]]. */
   final case class Subtraction(a: SpaceZipper, b: SpaceZipper) extends SpaceZipper:
-    def terminal = a.terminal && !b.terminal
+    def terminal = { effort(EffortEvent.ZipperCursorRead); a.terminal && !b.terminal }
     def children =
+      effort(EffortEvent.ZipperCursorRead)
       val bc = b.children
-      a.children.transform((k, x) => bc.get(k) match { case Some(y) => subtraction(x, y); case None => x })
-    def descend(k: Int) = subtraction(a.descend(k), b.descend(k))
+      val ac = a.children
+      zdemandN(ZipperDemandEvent.DiffScanEntry, 2L * ac.size.toLong)   // transform + one probe per entry
+      ac.transform { (k, x) =>
+        bc.get(k) match
+          case Some(y) => { zdemand(ZipperDemandEvent.VirtualCursorAlloc); subtraction(x, y) }
+          case None => x
+      }
+    def descend(k: Int) = { effort(EffortEvent.ZipperCursorRead); subtraction(a.descend(k), b.descend(k)) }
 
-  /** Composition (concatenation): a's children each composed with b; if a ends here, splice all of b. */
+  /** Composition (concatenation): a's children each composed with b; if a ends here, splice all of b.
+   *
+   *  THE GRAFT IS BY POINTER.  At a terminal focus the child map is merged with `b.children` — `b`'s OWN
+   *  child cursors — so the right operand is attached, never copied per terminal.  A single deep left
+   *  path therefore forces its own spine plus one focus node, and a LEFT EPSILON forces exactly one node
+   *  and accepts all of `b`: not `N(a) · N(b)`, which is what `ZipperCost.compose` charges. */
   final case class Composition(a: SpaceZipper, b: SpaceZipper) extends SpaceZipper:
-    def terminal = a.terminal && b.terminal
+    def terminal = { effort(EffortEvent.ZipperCursorRead); a.terminal && b.terminal }
     def children =
-      val mapped = a.children.transform((_, x) => Composition(x, b))
-      if a.terminal then mapped.unionWith(b.children, (_, x, y) => union(x, y)) else mapped
+      effort(EffortEvent.ZipperCursorRead)
+      val ac = a.children
+      zdemandN(ZipperDemandEvent.CompMapEntry, ac.size.toLong)
+      val mapped = ac.transform((_, x) => { zdemand(ZipperDemandEvent.VirtualCursorAlloc); Composition(x, b) })
+      if a.terminal then
+        val bc = b.children
+        zdemandMerge(ZipperDemandEvent.CompGraftEntry, mapped, bc)
+        mapped.unionWith(bc, (_, x, y) => { zdemand(ZipperDemandEvent.VirtualCursorAlloc); union(x, y) })
+      else mapped
     def descend(k: Int) =
+      effort(EffortEvent.ZipperCursorRead)
       val viaA = Composition(a.descend(k), b)
       if a.terminal then union(viaA, b.descend(k)) else viaA
 
   /** Wrap: prepend a (constant) prefix to a source.  While in the prefix, the only child is the next
-   *  prefix item; once consumed, delegate to the source. */
+   *  prefix item; once consumed, delegate to the source.
+   *
+   *  THE LAYER VANISHES AT THE FOCUS.  `case Nil => src.children` means the focus node's children ARE
+   *  the source's own child cursors, so a `Prefix(p, X)` forces the `|p|`-node spine plus ONE focus node
+   *  whose child map is copied, and then reuses every one of `X`'s children — not `|p| + 1 + N(X)`
+   *  nodes, which is what `ZipperCost.wrap` charges. */
   final case class Prefix(remaining: List[Int], src: SpaceZipper) extends SpaceZipper:
-    def terminal = remaining.isEmpty && src.terminal
-    def children = remaining match
-      case Nil => src.children
-      case h :: t => IntMap.singleton(h, Prefix(t, src))
-    def descend(k: Int) = remaining match
-      case Nil => src.descend(k)
-      case h :: t => if k == h then Prefix(t, src) else empty
+    def terminal = { effort(EffortEvent.ZipperCursorRead); remaining.isEmpty && src.terminal }
+    def children =
+      effort(EffortEvent.ZipperCursorRead)
+      remaining match
+        case Nil => src.children
+        case h :: t =>
+          zdemand(ZipperDemandEvent.PrefixSpineEntry)
+          zdemand(ZipperDemandEvent.VirtualCursorAlloc)
+          IntMap.singleton(h, Prefix(t, src))
+    def descend(k: Int) =
+      effort(EffortEvent.ZipperCursorRead)
+      remaining match
+        case Nil => src.descend(k)
+        case h :: t => if k == h then Prefix(t, src) else empty
 
   /** Restriction: keep x-paths that have some `prefixes`-path as a prefix.  Once `prefixes` ends (a
-   *  prefix matched) the whole x-subtree is kept; before that, descend only items common to both. */
+   *  prefix matched) the whole x-subtree is kept; before that, descend only items common to both.
+   *
+   *  `restriction` RETURNS `x` ITSELF at a terminal prefix, so restriction by a length-`d` prefix forces
+   *  the `d`-node matching frontier and hands the selected subtree back wholesale — by pointer when `x`
+   *  is a `Lit` — and restriction by `{ε}` is one `terminal` read with no result node at all.  Note that
+   *  `RestrictionNode.terminal` is a literal `false`: it reads neither operand and counts nothing. */
   def restriction(x: SpaceZipper, prefixes: SpaceZipper): SpaceZipper =
-    if prefixes.terminal then x else RestrictionNode(x, prefixes)
+    // over an OPAQUE prefix cursor `terminal` cannot be asked, and the node below is correct in both
+    // cases (its `terminal` is `x.terminal && prefixes.terminal`), so the shell keeps the node
+    if containsOpaque(prefixes) then RestrictionNode(x, prefixes)
+    else if prefixes.terminal then x else RestrictionNode(x, prefixes)
   final case class RestrictionNode(x: SpaceZipper, prefixes: SpaceZipper) extends SpaceZipper:
-    def terminal = false                                     // no prefix matched yet ⇒ x-value here is not kept
-    def children = x.children.intersectionWith(prefixes.children, (_, xc, pc) => restriction(xc, pc))
-    def descend(k: Int) = restriction(x.descend(k), prefixes.descend(k))
+    // `[] ∈ x <| p  ⇔  [] ∈ x ∧ [] ∈ p`.  Was a literal `false`, which is right only because the smart
+    // constructor never built this node with a terminal prefix cursor; the conjunction is right
+    // unconditionally, which the symbolic shell (2A.4) needs and proofs/lean/Zippy/Zipper.lean states.
+    def terminal = x.terminal && prefixes.terminal
+    def children =
+      effort(EffortEvent.ZipperCursorRead)
+      val xc = x.children; val pc = prefixes.children
+      zdemandMerge(ZipperDemandEvent.RestrictMergeEntry, xc, pc)
+      xc.intersectionWith(pc, (_, xk, pk) => { zdemand(ZipperDemandEvent.VirtualCursorAlloc); restriction(xk, pk) })
+    def descend(k: Int) = { effort(EffortEvent.ZipperCursorRead); restriction(x.descend(k), prefixes.descend(k)) }
 
   /** Raffination: x \ restriction(x, y). */
   def raffination(x: SpaceZipper, y: SpaceZipper): SpaceZipper = Subtraction(x, restriction(x, y))
 
-  /** TailsUnion: drop the first item of each path and union the tails = the union of all child cursors. */
+  /** TailsUnion: drop the first item of each path and union the tails = the union of all child cursors.
+   *  `merged` is a lazy val, so the source's child map is read ONCE; the reduce then builds a chain of
+   *  `heads - 1` fused `Union` layers, and every later query cascades through the whole chain. */
   final case class TailsUnion(src: SpaceZipper) extends SpaceZipper:
-    private lazy val merged: SpaceZipper = { val cs = src.children; if cs.isEmpty then empty else cs.valuesIterator.reduce(Union(_, _)) }
-    def terminal = merged.terminal
-    def children = merged.children
-    def descend(k: Int) = merged.descend(k)
+    private lazy val merged: SpaceZipper =
+      val cs = src.children
+      zdemandN(ZipperDemandEvent.TailsChainEntry, cs.size.toLong)
+      zdemandN(ZipperDemandEvent.VirtualCursorAlloc, math.max(cs.size.toLong - 1L, 0L))
+      // IN ITEM ORDER, not interned-id order: the chain's shape decides which operand `terminal` reaches
+      // first and short-circuits on, so a reduce over `IntMap` order made the cursor-read count depend on the
+      // process-wide interning history (the E1 adversarial family measured 16 reads in one JVM and 17 in
+      // another for the same program and input).  The cost model orders children by item, and now so does
+      // the executor.
+      if cs.isEmpty then empty else cs.toVector.sortBy((k, _) => Interner.unintern(k)).map(_._2).reduce(Union(_, _))
+    def terminal = { effort(EffortEvent.ZipperCursorRead); merged.terminal }
+    def children = { effort(EffortEvent.ZipperCursorRead); merged.children }
+    def descend(k: Int) = { effort(EffortEvent.ZipperCursorRead); merged.descend(k) }
 
   /** TailsIntersection: group by head, intersect tails = the intersection of all PRESENT-head cursors.
    *  Unlike TailsUnion, an *empty* head poisons the intersection, so we must intersect only over heads
@@ -129,24 +287,52 @@ object SpaceZipper:
    *  source here (it inherently needs the present-head set) and reuse the trie-level meet-all. */
   final case class TailsIntersection(src: SpaceZipper) extends SpaceZipper:
     private lazy val merged: SpaceZipper = traversal(ITrie.tailsIntersection(materialize(src)))
-    def terminal = merged.terminal
-    def children = merged.children
-    def descend(k: Int) = merged.descend(k)
+    def terminal = { effort(EffortEvent.ZipperCursorRead); merged.terminal }
+    def children = { effort(EffortEvent.ZipperCursorRead); merged.children }
+    def descend(k: Int) = { effort(EffortEvent.ZipperCursorRead); merged.descend(k) }
 
   /** Unwrap: strip a (constant) prefix — pure navigation, O(|p|) descents; the resulting cursor IS the
    *  unwrap (no re-traversal, no materialization). */
-  def unwrap(src: SpaceZipper, p: List[Int]): SpaceZipper = p.foldLeft(src)((z, k) => z.descend(k))
+  def unwrap(src: SpaceZipper, p: List[Int]): SpaceZipper =
+    if p.isEmpty then src
+    else if containsOpaque(src) then Descend(src, p)        // cannot descend a name: keep the descent as a node
+    else p.foldLeft(src)((z, k) => z.descend(k))
+
+  /** A DEFERRED DESCENT (2A.4): `Unwrap` over a source that contains an opaque name.  Semantically it
+   *  IS `src.descend(k₁)…descend(kₙ)`, and that is what it does the moment it is read; it exists so the
+   *  symbolic shell can hold an `Unwrap` without materialising its source. */
+  final case class Descend(src: SpaceZipper, remaining: List[Int]) extends SpaceZipper:
+    private lazy val target: SpaceZipper = remaining.foldLeft(src)((z, k) => z.descend(k))
+    def terminal = target.terminal
+    def children = target.children
+    def descend(k: Int) = target.descend(k)
+
+  /** does the cursor tree reach an [[Opaque]] source?  Structural, never reads a cursor. */
+  def containsOpaque(z: SpaceZipper): Boolean = z match
+    case Opaque(_) => true
+    case Lit(_) => false
+    case Union(a, b) => containsOpaque(a) || containsOpaque(b)
+    case Intersection(a, b) => containsOpaque(a) || containsOpaque(b)
+    case Subtraction(a, b) => containsOpaque(a) || containsOpaque(b)
+    case Composition(a, b) => containsOpaque(a) || containsOpaque(b)
+    case Prefix(_, src) => containsOpaque(src)
+    case RestrictionNode(x, p) => containsOpaque(x) || containsOpaque(p)
+    case TailsUnion(src) => containsOpaque(src)
+    case TailsIntersection(src) => containsOpaque(src)
+    case Descend(src, _) => containsOpaque(src)
 
 /** Lift a Space into a fused [[SpaceZipper]] tree.  The LOCAL set-algebra operators become virtual zippers
  *  (one fused traversal); control-flow / positional operators materialize via [[evalI]] (the "call"
  *  mechanism) and are re-lifted with `traversal`. */
 def transpileZ(s: Space)(using pc: PathContext, ic: Map[SpaceMention, ITrie], rc: PartialFunction[RoutinePtr, Routine]): SpaceZipper =
   import SpaceZipper.*
+  effort(EffortEvent.ZipperBuild)                            // one Space node lifted into a cursor
   s match
     case Space.Empty => SpaceZipper.empty
     case Space.Singleton(p) => traversal(ITrie.singleton(pathItemsI(p)))
     case Space.Literal(sv) => traversal(iLiteral(sv))
-    case Space.Mention(m) => traversal(ic.getOrElse(m, ITrie.empty))
+    // an UNBOUND mention is an opaque source, never a silent ∅ (see `SpaceZipper.Opaque`)
+    case Space.Mention(m) => ic.get(m) match { case Some(t) => traversal(t); case None => SpaceZipper.Opaque(m) }
     case Space.Union(x, y) => union(transpileZ(x), transpileZ(y))
     case Space.Intersection(x, y) => intersection(transpileZ(x), transpileZ(y))
     case Space.Subtraction(x, y) => subtraction(transpileZ(x), transpileZ(y))
@@ -159,7 +345,7 @@ def transpileZ(s: Space)(using pc: PathContext, ic: Map[SpaceMention, ITrie], rc
     case Space.TailsIntersection(src) => TailsIntersection(transpileZ(src))
     // Range: fuse the source as a zipper, then take the native ordered trie-slice (no path round-trip,
     // no evalI re-evaluation of the source).  The slice is inherently count-based, so it materializes.
-    case Space.Range(x, lo, hi) => traversal(ITrie.range(materialize(transpileZ(x)), lo, hi))
+    case Space.Range(x, lo, hi) => effort(EffortEvent.TrieOpEntry); traversal(ITrie.range(materialize(transpileZ(x)), lo, hi))
     // Iteration stays on the evalI "call".  Two native forms were tried — a binary `Union` tree of the
     // per-head fused bodies, and a STREAMING n-ary `unionN` (joinAll shape) — and BOTH regress wide
     // sources ~33-40x (royal92 aunt, 3008 heads: ~82 ms vs evalI 2.5 ms).  The combiner is not the cost:
@@ -168,7 +354,12 @@ def transpileZ(s: Space)(using pc: PathContext, ic: Map[SpaceMention, ITrie], rc
     // prune the bodies, fusion cannot win, so evalI is strictly better here.  (A future win needs either
     // the byte/bit-trie under the symbols, or an outer-pruned Iteration — not a different union combiner.)
     // control-flow / positional / opaque: not local trie ops — a routine "call" materializes via evalI.
-    case other => traversal(evalI(other))
+    // COUNTED: this is the boundary at which execZ stops being a fused zipper and becomes evalI, so a
+    // Zipper cost report that does not expose it is mixing two different executables.
+    // obligation: terminating/REGISTRY.tsv O8 (PROPERTY) — the fallback is sound because it
+    // materialises through `evalI`, whose agreement with `eval` is the corpus differential, not an
+    // SMT theorem; the registry row names the test that carries it.
+    case other => effort(EffortEvent.ZipperFallbackToEvalI); traversal(evalI(other))
 
 /** SpaceZipper executor: materialize the fused zipper version of the program. */
 def execZ(s: Space)(using pc: PathContext = PathContextMap(Map.empty),

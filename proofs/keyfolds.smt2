@@ -22,9 +22,11 @@
   (match ks ((knil false) ((kcons j r) (or (Zm j p) (inFoldU r p))))))
 ; goal: ∀ks p. inFoldU ks p ⟺ ∃h. inK h ks ∧ Zm h p    — induction on ks
 (define-fun PF ((ks KList)) Bool (forall ((p Path)) (= (inFoldU ks p) (exists ((h Int)) (and (inK h ks) (Zm h p))))))
+; ASSUMED: T1
 (assert (=> (and (PF knil) (forall ((j Int) (r KList)) (=> (PF r) (PF (kcons j r))))) (forall ((ks KList)) (PF ks))))
 ; completeness of exact keys closes the gap to "∃h (any h). p ∈ Sub h z":
 (declare-fun KS () KList)
+; DEFINITION
 (assert (forall ((h Int)) (=> (exists ((p Path)) (Zm h p)) (inK h KS))))   ; complete
 (assert (not (and
   (forall ((ks KList)) (PF ks))

@@ -1,24 +1,16 @@
-; AUTO-GENERATED — pipeline stage 2 (temperature): zipper vs space (instance observations, folded)
-; Both sides compiled to their denotational membership formulas over the same inputs;
-; the goal (negated): the programs produce the SAME OUTPUT — equal membership at every path.
-(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
-(declare-fun append (Path Path) Path)
-(assert (forall ((q Path)) (= (append nil q) q)))
-(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
-(declare-fun isPrefix (Path Path) Bool)
-(assert (forall ((p Path)) (isPrefix nil p)))
-(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
-(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
-  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
-; certified lemmas (proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2 — both PROVED)
-(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
-  (= (= (cons k2 p) (append q r))
-     (or (and (= q nil) (= r (cons k2 p)))
-         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
-(assert (forall ((q Path)) (= (append q nil) q)))
+; TRUSTS: law:zipper-refinement
 
-(define-fun m_1 ((p Path)) Bool (or (= p (cons 165 (cons 165 (cons 165 (cons 165 (cons 233 nil)))))) (= p (cons 165 (cons 165 (cons 165 (cons 166 (cons 228 nil)))))) (= p (cons 165 (cons 165 (cons 166 (cons 165 (cons 233 nil)))))) (= p (cons 165 (cons 165 (cons 166 (cons 166 (cons 229 nil)))))) (= p (cons 165 (cons 166 (cons 165 (cons 165 (cons 232 nil)))))) (= p (cons 166 (cons 166 (cons 165 (cons 165 (cons 233 nil)))))) (= p (cons 166 (cons 166 (cons 165 (cons 166 (cons 228 nil)))))) (= p (cons 166 (cons 166 (cons 166 (cons 165 (cons 234 nil)))))) (= p (cons 166 (cons 166 (cons 166 (cons 166 (cons 232 nil))))))))
-(define-fun m_2 ((p Path)) Bool (or (= p (cons 165 (cons 165 (cons 165 (cons 165 (cons 233 nil)))))) (= p (cons 165 (cons 165 (cons 165 (cons 166 (cons 228 nil)))))) (= p (cons 165 (cons 165 (cons 166 (cons 165 (cons 233 nil)))))) (= p (cons 165 (cons 165 (cons 166 (cons 166 (cons 229 nil)))))) (= p (cons 165 (cons 166 (cons 165 (cons 165 (cons 232 nil)))))) (= p (cons 166 (cons 166 (cons 165 (cons 165 (cons 233 nil)))))) (= p (cons 166 (cons 166 (cons 165 (cons 166 (cons 228 nil)))))) (= p (cons 166 (cons 166 (cons 166 (cons 165 (cons 234 nil)))))) (= p (cons 166 (cons 166 (cons 166 (cons 166 (cons 232 nil))))))))
-
-(assert (not (and (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 233 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 233 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 166 (cons 228 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 166 (cons 228 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 166 (cons 165 (cons 233 nil)))))) (m_2 (cons 165 (cons 165 (cons 166 (cons 165 (cons 233 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 166 (cons 166 (cons 229 nil)))))) (m_2 (cons 165 (cons 165 (cons 166 (cons 166 (cons 229 nil))))))) (= (m_1 (cons 165 (cons 166 (cons 165 (cons 165 (cons 232 nil)))))) (m_2 (cons 165 (cons 166 (cons 165 (cons 165 (cons 232 nil))))))) (= (m_1 (cons 166 (cons 166 (cons 165 (cons 165 (cons 233 nil)))))) (m_2 (cons 166 (cons 166 (cons 165 (cons 165 (cons 233 nil))))))) (= (m_1 (cons 166 (cons 166 (cons 165 (cons 166 (cons 228 nil)))))) (m_2 (cons 166 (cons 166 (cons 165 (cons 166 (cons 228 nil))))))) (= (m_1 (cons 166 (cons 166 (cons 166 (cons 165 (cons 234 nil)))))) (m_2 (cons 166 (cons 166 (cons 166 (cons 165 (cons 234 nil))))))) (= (m_1 (cons 166 (cons 166 (cons 166 (cons 166 (cons 232 nil)))))) (m_2 (cons 166 (cons 166 (cons 166 (cons 166 (cons 232 nil))))))) (= (m_1 (cons 228 nil)) (m_2 (cons 228 nil))) (= (m_1 (cons 229 nil)) (m_2 (cons 229 nil))) (= (m_1 (cons 232 nil)) (m_2 (cons 232 nil))) (= (m_1 (cons 233 nil)) (m_2 (cons 233 nil))) (= (m_1 (cons 234 nil)) (m_2 (cons 234 nil))) (= (m_1 (cons 165 (cons 228 nil))) (m_2 (cons 165 (cons 228 nil)))) (= (m_1 (cons 165 (cons 229 nil))) (m_2 (cons 165 (cons 229 nil)))) (= (m_1 (cons 165 (cons 232 nil))) (m_2 (cons 165 (cons 232 nil)))) (= (m_1 (cons 165 (cons 233 nil))) (m_2 (cons 165 (cons 233 nil)))) (= (m_1 (cons 165 (cons 234 nil))) (m_2 (cons 165 (cons 234 nil)))) (= (m_1 (cons 165 (cons 165 (cons 228 nil)))) (m_2 (cons 165 (cons 165 (cons 228 nil))))) (= (m_1 (cons 165 (cons 165 (cons 229 nil)))) (m_2 (cons 165 (cons 165 (cons 229 nil))))) (= (m_1 (cons 165 (cons 165 (cons 232 nil)))) (m_2 (cons 165 (cons 165 (cons 232 nil))))) (= (m_1 (cons 165 (cons 165 (cons 233 nil)))) (m_2 (cons 165 (cons 165 (cons 233 nil))))) (= (m_1 (cons 165 (cons 165 (cons 234 nil)))) (m_2 (cons 165 (cons 165 (cons 234 nil))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 228 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 228 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 229 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 229 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 232 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 232 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 233 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 233 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 234 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 234 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 165 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 165 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 166 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 166 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 228 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 228 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 229 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 229 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 232 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 232 nil))))))))))
-(check-sat)
+; BOUNDARY: zipper
+; AUTO-GENERATED pipeline stage 2 (temperature) — INSTANCE: transpileZ(program) vs the program.
+; LAW-JUSTIFIED-NO-RESIDUAL: an INSTANCE of the universal zipper refinement theorem —
+;   proofs/zipper_refinement.smt2 (first-order, over the key-free local algebra; PROVED) and
+;   proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement (every constructor, boundaries named).
+; SHELL: 7 node(s) transpiled with EVERY source opaque (SpaceZipper.Opaque); read back
+; SHELL CONSTRUCTORS: Union, Restriction, Mention, Literal
+; PROGRAM CONSTRUCTORS: Union, Restriction, Mention, Literal
+; BINDERS: 
+; CALLS: 
+; through spaceOfZipper it is alpha-EQUAL to the shell.
+; HOLES (materialised by transpileZ and evaluated by the executor on BOTH sides — the theorem's
+; `lit` boundaries): 0
+; INSTANCE-DIFFERENTIAL: SpaceZipper.materialize(transpileZ(program)) == eval(program) on this input (Scala assertEquals).

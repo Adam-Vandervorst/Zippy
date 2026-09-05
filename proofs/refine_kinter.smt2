@@ -22,6 +22,7 @@
   (=> (= k1 k2) (= (inter (kcons k1 r1) (kcons k2 r2)) (kcons k1 (inter r1 r2))))))
 ; the lower-bound lemma needed for guard completeness: lbnd lo l ⇒ ¬inK(lo', l) for lo' ≤ lo
 (define-fun PL ((l KList)) Bool (forall ((lo Int) (h Int)) (=> (and (lbnd lo l) (<= h lo)) (not (inK h l)))))
+; ASSUMED: T1
 (assert (=> (and (PL knil) (forall ((j Int) (r KList)) (=> (PL r) (PL (kcons j r))))) (forall ((l KList)) (PL l))))
 (define-fun Q ((a KList) (b KList)) Bool
   (=> (and (srt a) (srt b))
@@ -32,6 +33,7 @@
            (Q (kcons k1 r1) knil)
            (forall ((k2 Int) (r2 KList)) (=> (and (Q (kcons k1 r1) r2) (Q r1 (kcons k2 r2)) (Q r1 r2)) (Q (kcons k1 r1) (kcons k2 r2)))))
       (P (kcons k1 r1)))))
+; ASSUMED: T1
 (assert (=> (and (P knil) (forall ((k1 Int) (r1 KList)) (=> (P r1) (P (kcons k1 r1)))))
             (forall ((a KList)) (P a))))
 (assert (not (forall ((a KList) (b KList)) (Q a b))))

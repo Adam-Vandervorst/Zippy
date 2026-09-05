@@ -1,0 +1,10 @@
+# RESOURCES — one row per cornerstone: the residual alternatives explored, the alloc-minimising
+# certified choice, its predicted and counted alloc, its certification and trace closure, its certificate.
+# cornerstone	alternatives	selected	predicted-alloc	counted-alloc	certified	closure	certificate
+aunt	1	f585ddb6282aaeb2/graph	[34, 36]	34	CERTIFIED	CLOSED	proofs/pipeline/resources/aunt-alloc.tsv
+datalog-sn	1	e58f9e837d51eb62/reference	[54, 54]	54	CERTIFIED	CLOSED	proofs/pipeline/resources/datalog-sn-alloc.tsv
+gol	2	036d7cfee3861fa4/graph	[1222, 1226]	1226	CERTIFIED	CLOSED	proofs/pipeline/resources/gol-alloc.tsv
+nqueens	1	f9ac6fc119ebd3dc/graph	[1082, 1104]	1100	CERTIFIED	CLOSED	proofs/pipeline/resources/nqueens-alloc.tsv
+puzzle15	4	6787aad8ed56d55c/graph	[13175, 13175]	13175	CERTIFIED	CLOSED	proofs/pipeline/resources/puzzle15-alloc.tsv
+puzzle3-full	4	0a425a388be8adf1/graph	[36027, 36054]	36042	CERTIFIED	CLOSED	proofs/pipeline/resources/puzzle3-full-alloc.tsv
+temperature	1	41b05c988fdaddbf/reference	[0, 0]	0	CERTIFIED	CLOSED	proofs/pipeline/resources/temperature-alloc.tsv

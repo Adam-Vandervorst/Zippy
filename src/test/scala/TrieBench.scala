@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -5,7 +7,7 @@ import scala.language.implicitConversions
 /** Benchmarks: reference Set evaluator `eval` vs trie evaluator `evalT`, with and without the
  *  supercompiler pass, scaled up across all six domains.  Each scenario asserts the two
  *  evaluators agree, then reports wall-clock (best-of-N after warmup).  Results are appended to
- *  BENCHMARKS.md.  Tagged Slow; run with `bin/test 'morkl.TrieBench'`. */
+ *  docs/BENCHMARKS.md.  Tagged Slow; run with `sbt 'testOnly morkl.TrieBench'`. */
 class TrieBench extends FunSuite:
   import Space.*
 
@@ -48,14 +50,14 @@ class TrieBench extends FunSuite:
 
   // ---- data generators ------------------------------------------------------
   def chainEdges(n: Int): SpaceValue =
-    SpaceValue((0 until n).map(i => PathValue(List(PathItem.Symbol(i.toString), PathItem.Symbol((i + 1).toString)))).toSet)
+    SpaceValue((0 until n).map(i => PathValue(List(i.toString, (i + 1).toString))).toSet)
   def randEdges(nodes: Int, edges: Int, seed: Int): SpaceValue =
     val r = new scala.util.Random(seed)
-    SpaceValue((0 until edges).map(_ => PathValue(List(PathItem.Symbol(r.nextInt(nodes).toString), PathItem.Symbol(r.nextInt(nodes).toString)))).toSet)
+    SpaceValue((0 until edges).map(_ => PathValue(List(r.nextInt(nodes).toString, r.nextInt(nodes).toString))).toSet)
   def genFamily(n: Int, seed: Int): (SpaceValue, SpaceValue) =
     val r = new scala.util.Random(seed)
     val ps = scala.collection.mutable.Set.empty[PathValue]
-    def sym(xs: String*) = PathValue(xs.map(PathItem.Symbol(_)).toList)
+    def sym(xs: String*) = PathValue(xs.toList)
     for i <- 1 until n do
       val par = r.nextInt(i)
       ps += sym("parent", par.toString, i.toString); ps += sym("child", i.toString, par.toString)
@@ -66,7 +68,13 @@ class TrieBench extends FunSuite:
     (for x <- 0 until w; y <- 0 until w if r.nextInt(100) < density yield (x, y)).toSet
 
   test("BENCHMARKS: eval (Set) vs evalT (TreeMap trie) vs evalI (interned IntMap trie)".tag(SlowTag.Slow)) {
-    emit("\n## Benchmark run (" + java.time.LocalDate.now + ")\n")
+    // the heading and the provenance block are written by `BenchmarkReport`; `out` carries the BODY
+    val reportSlug = "executor-scaling"
+    val reportTitle = "Executor scaling: eval vs evalT vs evalI"
+    val reportExtras = Seq(
+      "timing" -> "best-of-N wall clock after warmup (see the per-row `warm`/`reps` in the source)",
+      "interner" -> "WARM — `Interner` and the literal memo carry every id from earlier rows of the same run",
+      "seed" -> "fixed per benchmark; the workloads are deterministic")
     emit("| domain | scale | eval ms | evalT ms | evalI ms | evalI/eval | evalI/evalT | note |")
     emit("|---|---|---:|---:|---:|---:|---:|---|")
 
@@ -100,7 +108,7 @@ class TrieBench extends FunSuite:
     for bits <- Seq(10, 12, 14) do
       val r = new scala.util.Random(bits)
       val cells = (for i <- 0 until (1 << bits) yield
-        PathValue(NOAA.bits(i, bits) :+ PathItem.Symbol(Vector("VC", "C", "N", "W", "VW")(r.nextInt(5))))).toSet
+        PathValue(NOAA.bits(i, bits) :+ (Vector("VC", "C", "N", "W", "VW")(r.nextInt(5))))).toSet
       val world = Mention(SpaceMention("world"))
       val tc = Map(SpaceMention("world") -> Trie.fromSpaceValue(SpaceValue(cells)))
       val q = Union(Restriction(world, Literal(NOAA.interval(0, (1 << bits) / 8, bits))), Restriction(world, ss"VW"))
@@ -126,16 +134,16 @@ class TrieBench extends FunSuite:
     for (k, m) <- Seq((200, 200), (800, 300)) do
       val r = new scala.util.Random(k)
       val branches = (0 until k).map(b => ITrie.fromPaths((0 until m).map(i =>
-        PathValue(List(PathItem.Symbol(b.toString), PathItem.Symbol(r.nextInt(m).toString)))))).toVector
+        PathValue(List(b.toString, r.nextInt(m).toString))))).toVector
       assertEquals(ITrie.joinAll(branches), branches.reduce(ITrie.union))
       rows += Row("join-all", s"k=$k m=$m", bench(2, 5)(branches.reduce(ITrie.union)), -1.0, bench(2, 5)(ITrie.joinAll(branches)),
         "reduce(union) vs joinAll"); emit(rows.last.line)
     for (k, big) <- Seq((40, 400), (120, 600)) do
       val r = new scala.util.Random(k * 31)
-      val core = ITrie.fromPaths((0 until big).map(i => PathValue(List(PathItem.Symbol("c"), PathItem.Symbol(i.toString)))))
+      val core = ITrie.fromPaths((0 until big).map(i => PathValue(List("c", i.toString))))
       val larges = (0 until k - 1).map(_ => ITrie.union(core,
-        ITrie.fromPaths((0 until 20).map(_ => PathValue(List(PathItem.Symbol("n"), PathItem.Symbol(r.nextInt(big).toString))))))).toVector
-      val tiny = ITrie.fromPaths(Vector(PathValue(List(PathItem.Symbol("c"), PathItem.Symbol("0")))))
+        ITrie.fromPaths((0 until 20).map(_ => PathValue(List("n", r.nextInt(big).toString)))))).toVector
+      val tiny = ITrie.fromPaths(Vector(PathValue(List("c", "0"))))
       val mb = larges :+ tiny // tiny LAST: worst case for left-to-right reduce
       assertEquals(ITrie.meetAll(mb), mb.reduce(ITrie.intersection))
       rows += Row("meet-all", s"k=$k core=$big +tiny", bench(2, 5)(mb.reduce(ITrie.intersection)), -1.0, bench(2, 5)(ITrie.meetAll(mb)),
@@ -147,11 +155,12 @@ class TrieBench extends FunSuite:
     emit(f"\nGeometric-mean evalI speedup over the six example domains: ${geomean(ex.map(_.suEval))}%.1fx vs the")
     emit(f"reference Set, and ${geomean(ex.map(_.suTrie))}%.1fx vs the TreeMap trie (evalT). All six")
     emit("domains are pure algebra; PathItems are interned to Ints before evaluation (no PathItem")
-    emit("is created during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.\n")
+    emit("is touched during evaluation), and the ring ops use IntMap's unionWith/intersectionWith.\n")
     val avgSpeedup = geomean(ex.map(_.suEval))
-    val f = new java.io.File(Loaders.repoRoot, "BENCHMARKS.md")
-    val header = if f.exists then "" else "# MORKL trie vs reference benchmarks\n\n`eval` = reference Set[List[PathItem]] evaluator; `evalT` = TreeMap[PathItem] trie; `evalI` = interned IntMap trie (PathItems interned to Ints before evaluation).\nevalI/eval and evalI/evalT are speedups (higher = evalI faster).\n"
-    val w = new java.io.FileWriter(f, true); try { w.write(header); w.write(out.toString) } finally w.close()
+    // REPLACE this section, never append one — see the note in GraphBench.  `BenchmarkReport` writes
+    // the heading and the provenance block; `out` carries the body.
+    BenchmarkReport.write(new java.io.File(Loaders.repoRoot, "docs/BENCHMARKS.md"),
+                          reportSlug, reportTitle, out.toString, reportExtras)
     assert(avgSpeedup > 1.0, f"expected trie to be faster on average, got ${avgSpeedup}%.2fx")
   }
 end TrieBench

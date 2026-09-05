@@ -48,11 +48,11 @@
 ; relation inversion, demonstrating head capture; ConstBody = the invariant-body Iter, ported from
 ; formal.egg together with the IterUnion hoisting soundness counterexamples).
 ;
-; COST CONTRACT (checked, not asserted: see zipper-egg-tests/locality-schedule.egg and the linter):
+; COST CONTRACT (checked, not asserted: see scripts/check_locality.sh and scripts/lint_zipper_egg.py):
 ;   * one movement/observation step rewrites ONLY the top constructor — cost O(size of the op
 ;     expression at the focus), with ZERO dependence on trie size or subtree contents;
-;   * a chain of d descents is d such steps (mechanized by per-layer saturation in the schedule
-;     file: the checks pass after exactly d+c micro-phases and provably not before);
+;   * a chain of d descents is d such steps (mechanized in scripts/check_locality.sh: for d = 1..8
+;     the saturated ChildOf table has exactly d entries, over an OPAQUE Src);
 ;   * state growth: O(1) frames per move per Composition/Restriction node (each descent through ·
 ;     adds one Guard/Union frame) — "local in the op expression", NOT constant-size;
 ;   * no observation rule constructs concrete trie nodes (linted: no Node/CC on any obs RHS).
@@ -102,8 +102,11 @@
      (HFold KL)                                ; Head fold
      (IFold KL Z Body)                         ; Iter fold
      (App Body i64 Z)                          ; defunctionalized body application
+     (Fix Z Body)                              ; LEAST post-fixpoint of F above init — FIRST-CLASS
+     (FApp Body Z)                             ; fixpoint step application, F(x)
      (FocusOf C))                              ; the space at a cursor's focus
-  (Body (ConstBody Z)                          ; invariant body (formal.egg's Iter)
+  (Body (SelfBody)                             ; fixpoint step F(X) = X
+        (ConstBody Z)                          ; invariant body (formal.egg's Iter)
         (JoinBody Z)                           ; datalog join body: h,t ↦ h·⋃(s <| t)
         (InvBody) (InvBody2 i64)               ; relation inversion (head capture across levels)
         (BodyK i64 IL ZL))                     ; program-defined bodies: index + captured items/spaces
@@ -258,6 +261,44 @@
 (rewrite (App (JoinBody s) h t) (Wrap1 h (TailsUnion (Restriction s t))))   ; the datalog join   ; proof: proofs/join_spec.smt2 (THE datalog join specification)
 (rewrite (App (InvBody) b as) (Iter as (InvBody2 b)))                  ; invert: outer head captured…   ; definitional (body definitions; programs add their own)
 (rewrite (App (InvBody2 b) a t) (Wrap1 a (Wrap1 b (Eps))))             ; …and swapped below   ; definitional (body definitions; programs add their own)
+
+; ================================================================================================
+; FIXPOINT — FIRST-CLASS, NEVER UNROLLED.  (Fix i b) IS the LEAST post-fixpoint of F = FApp b
+; above i.  Three semantic rules and NO unrolling rule: a rewrite (Fix i b) → (Union i (FApp b
+; (Fix i b))) would build a strictly larger term every round and the run would not terminate;
+; these three only MERGE e-classes, so `egglog zipper-spec.egg` still converges (measured below).
+;
+; PARK IS DEMAND-DRIVEN.  Stated as a bare three-premise rule, leastness NEVER FIRES: a premise
+; `(= (Union i c) c)` can only match when the TERM `(Union i c)` already exists, and nothing builds
+; it (measured in formal.egg: the identity-step check failed outright).  Materialising it for every
+; (f, c) pair is quadratic, so the candidate post-fixpoint is DECLARED with `(FixCand f c)` — the
+; other side of the obligation — one demand rule builds the two premise terms, and Park fires only
+; if the e-graph actually reduces both to c.
+;
+; MONOTONICITY IS A SIDE CONDITION.  These rules DEFINE Fix; they do not prove that a program's
+; `Space.Fixpoint` denotes it.  THAT NEEDS TWO PREMISES — monotone F *and* init ⊆ F(init)
+; (terminating/fixpoint_is_lfp.smt2, O1); monotonicity alone is refuted there at lines 47-50.  The
+; second premise holds BY CONSTRUCTION because no executor in the tree iterates F: they all iterate
+; `cur := cur ∪ F(cur)` to stationarity, an inflationary operator whose limit is the least X ⊇ init
+; with F(X) ⊆ X — the three rules below.  Monotonicity is then the one remaining side condition and
+; it is what buys LEASTNESS; it is false when the recursion variable sits under the right operand of
+; Subtraction/Raffination or under TailsIntersection, so the emitter checks it syntactically
+; (AgnosticPipeline.monotoneInMention) and refuses to write a Fix otherwise.
+; Regression: src/test/scala/FixpointSemantics.scala.
+(ruleset park)
+(relation FixCand (Z Z))                       ; "check Fix ⊑ c" — the declared candidate post-fixpoint
+; Park needs union ACI to recognise its own premises (`(Union i c) = c` etc.), and this file's
+; default rule set deliberately has NO union comm/assoc (it would blow up the movement search).
+; They live HERE, so they cost nothing outside a park run.  Both are certified formal.egg laws.
+(rewrite (Union x y) (Union y x) :ruleset park)   ; proof: proofs/laws/law_union_comm.smt2
+(rewrite (Union (Union x y) z) (Union x (Union y z)) :ruleset park)   ; proof: proofs/laws/law_union_assoc.smt2
+(rewrite (FApp (SelfBody) x) x)   ; definitional (the identity step)
+(rewrite (FApp (ConstBody v) x) v)   ; definitional (the loop-invariant step)
+(rule ((= f (Fix i b))) ((union (Union i f) f)) :ruleset park)   ; definitional (Fix ⊒ init — half of the post-fixpoint definition)
+(rule ((= f (Fix i b))) ((union (Union (FApp b f) f) f)) :ruleset park)   ; definitional (Fix ⊒ F(Fix) — the other half)
+(rule ((FixCand f c) (= f (Fix i b))) ((Union i c) (Union (FApp b c) c)) :ruleset park)   ; demand-materialisation (builds the two Park premise terms for a declared candidate; asserts nothing)
+(rule ((FixCand f c) (= f (Fix i b)) (= (Union i c) c) (= (Union (FApp b c) c) c))   ; definitional (PARK INDUCTION: leastness — the two premises are obligations the e-graph must discharge, not assumptions)
+      ((union (Union f c) c)) :ruleset park)
 
 ; ================================================================================================
 ; algebraic laws (the implemented smart-constructor short-circuits + ring identities)

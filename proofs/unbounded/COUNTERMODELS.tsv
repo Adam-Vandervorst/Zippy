@@ -1,0 +1,18 @@
+# Negative controls REFUTED BY EXECUTION against the reference executor.
+# proofs/unbounded/run.sh can only report `NOT-PROVED (expected)` for these: the
+# statements are false, but their countermodels are infinite path sets and vampire
+# returns a TIMEOUT, which is the absence of a proof and not a semantic separation.
+# This table is the separation.  Written by src/test/scala/TierThreeConformance.scala.
+#
+# file	false claim	countermodel
+negative/not_wrap_nest_reversed	wrap(wrap(A,U),V) = wrap(A, U++V)	A={x}, U=u, V=v: lhs={v.u.x} rhs={u.v.x}
+negative/not_unwrap_nest_reversed	unwrap(unwrap(A,U),V) = unwrap(A, V++U)	A={u.v.x}, U=u, V=v: lhs={x} rhs={}
+negative/not_ti_eq_tu	ti(A) = tu(A) unconditionally	A={p.1,q.2} (two heads): ti={} tu={1;2}
+negative/not_ti_monotone	A ⊆ B => ti(A) ⊆ ti(B)	A={p.1} ⊆ B={p.1,q.2}: ti(A)={1} ⊄ ti(B)={}
+negative/not_iter_split	iteration splits over an ARBITRARY union	A={p.1} B={p.2.3} (shared head p): iter(A∪B)={} vs iter(A)∪iter(B)={;3}
+negative/not_card_additive	|A ∪ B| = |A| + |B| unconditionally	A=B={x}: |A∪B|=1 but |A|+|B|=2
+negative/not_tu_cap_equality	tu(A ∩ B) = tu(A) ∩ tu(B)	A={p.1} B={q.1}: tu(A∩B)={} vs tu(A)∩tu(B)={1}
+negative/not_restr_identity	restr(X,Y) = X	X={p.1} Y={q} (no prefix): restr={} vs X={p.1}
+negative/not_fold_eq_iter	fold = iter unconditionally	src={a.1,b.1}, update=acc·h: fold={z;z.a} vs iter-at-seed={z}
+negative/not_range_identity	rng(A,Lo,Hi) = A — a window is the identity	A={a,m}: rng(A,0,1)={a} != A={a;m}
+negative/not_grounded_monotone	a grounded function is monotone	f = {x,y} \ ·, A={x} ⊆ B={x,y}: f(A)={y} ⊄ f(B)={}

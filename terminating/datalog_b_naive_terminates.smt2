@@ -35,6 +35,7 @@
 (assert (forall ((x Node) (y Node) (a NSet))
   (= (mem2 x y (inv a)) (mem2 y x a))))
 (assert (forall ((x Node) (y Node)) (mem2 x y top)))
+; ASSUMED: T7
 (assert (forall ((a NSet)) (>= (card a) 0)))
 (assert (forall ((r NSet)) (= (gtc r) (cup e (comp r e)))))
 (assert (forall ((r NSet)) (= (gpt r) (cup addressof (comp assign r)))))
@@ -74,6 +75,7 @@
   (=> (subset a b) (subset (inv a) (inv b)))))
 (assert (forall ((a NSet) (b NSet) (c NSet))
   (=> (subset a b) (subset (cup c a) (cup c b)))))
+; ASSUMED: T7
 (assert (forall ((r NSet) (s NSet) (u NSet))
   (=> (and (subset r s) (subset s u) (distinct s r))
       (< (card (setminus u s)) (card (setminus u r))))))

@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import scala.collection.mutable
 
@@ -44,12 +46,7 @@ class SCDegeneracies extends FunSuite:
 
   test("SC degeneracies: reducible patterns surviving in residuals".tag(SlowTag.Slow)) {
     val recs = locally {
-      val f = new java.io.File(Loaders.repoRoot, "corpus_1000.ser"); assert(f.exists)
-      val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(f))
-      try ois.readObject().asInstanceOf[Vector[FuzzRec]]
-      catch case e: java.io.InvalidClassException =>
-        throw new AssertionError("corpus_1000.ser is STALE (serialized classes changed) — rerun morkl.ProgramExpressivity to regenerate it", e)
-      finally ois.close()
+      Corpus.load()
     }
     val noRc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
     val totals = mutable.LinkedHashMap.from(detectors.map(_._1 -> 0L))

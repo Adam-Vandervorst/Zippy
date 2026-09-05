@@ -1,0 +1,10 @@
+# RESIDUAL ALTERNATIVES — one row per alternative on the frontier; every column is
+# derived from the residual, its trace and its certificate (no timings, no counters, no hashes of closures).
+# budget	32
+# id	provenance	scope	size	routines	driver	certified	laws	intervals
+A	036d7cfee3861fa4	Fold[fold-first driver, every law]	UNCONDITIONAL (no input annotation restricts the input)	151	3	folds=4 unfold=3 unroll=0 gen=0	CERTIFIED	concat-singleton-iter,singleton-composition-wrap,wrap-iter,wrap-merge	reference:work=[8003, 8045],alloc=[1388, 1388],rounds=[70, 70],touch=[0, 0] trie:work=[3365, 3821],alloc=[1322, 1684],rounds=[70, 70],touch=[3764, 6556] graph:work=[4978, 4978],alloc=[1222, 1226],rounds=[70, 70],touch=[3745, 6372] zipper:work=[3366, 3822],alloc=[1322, 1684],rounds=[70, 70],touch=[3764, 6556]
+A	4a8cfbeced6cfe26	Fusion[disabled iter-setop-merge,unwrap-fuse-const,unwrap-merge,wrap-merge]	UNCONDITIONAL (no input annotation restricts the input)	155	3	folds=4 unfold=3 unroll=0 gen=0	CERTIFIED	concat-singleton-iter,singleton-composition-wrap	reference:work=[8131, 8173],alloc=[1420, 1420],rounds=[70, 70],touch=[0, 0] trie:work=[3429, 3885],alloc=[1322, 1684],rounds=[70, 70],touch=[3796, 6588] graph:work=[5042, 5042],alloc=[1222, 1226],rounds=[70, 70],touch=[3745, 6372] zipper:work=[3430, 3886],alloc=[1322, 1684],rounds=[70, 70],touch=[3796, 6588]
+P	036d7cfee3861fa4	Sharing[disabled iter-comp-right-hoist,iter-union-indep]	MERGED into 036d7cfee3861fa4: alpha-equivalent canonical residual under equal semantic and resource assumptions
+P	036d7cfee3861fa4	PrefixRestriction[disabled raff-restrict-algebra,raffination-push,restrict-raff-wrap-both,restriction-push,unwrap-push]	MERGED into 036d7cfee3861fa4: alpha-equivalent canonical residual under equal semantic and resource assumptions
+P	036d7cfee3861fa4	RangeReduction[disabled range-singleton]	MERGED into 036d7cfee3861fa4: alpha-equivalent canonical residual under equal semantic and resource assumptions
+P	036d7cfee3861fa4	Materialization[disabled comp-lit-to-wraps]	MERGED into 036d7cfee3861fa4: alpha-equivalent canonical residual under equal semantic and resource assumptions

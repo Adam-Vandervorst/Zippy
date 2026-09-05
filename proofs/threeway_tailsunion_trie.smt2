@@ -29,8 +29,10 @@
 (assert (forall ((j Int) (r KList)) (= (tf (kcons j r)) (u (child Z j) (tf r)))))
 (define-fun PF ((ks KList)) Bool (forall ((p Path))
   (= (mem (tf ks) p) (exists ((h Int)) (and (inK h ks) (mem (child Z h) p))))))
+; ASSUMED: T1
 (assert (=> (and (PF knil) (forall ((j Int) (r KList)) (=> (PF r) (PF (kcons j r))))) (forall ((ks KList)) (PF ks))))
 (declare-fun KS () KList)
+; DEFINITION
 (assert (forall ((h Int)) (=> (exists ((p Path)) (mem (child Z h) p)) (inK h KS))))
 (assert (not (and (forall ((ks KList)) (PF ks))
                   (forall ((p Path)) (= (mem (tf KS) p) (exists ((h Int)) (mem (child Z h) p)))))))

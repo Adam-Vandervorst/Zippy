@@ -18,11 +18,14 @@
   (= (foldI (kcons h (kcons j r)) p) (and (Z (cons h p)) (foldI (kcons j r) p)))))
 ; the key list KS: sound and complete
 (declare-fun KS () KList)
+; DEFINITION
 (assert (forall ((h Int)) (=> (inK h KS) (present h))))            ; SOUND
+; DEFINITION
 (assert (forall ((h Int)) (=> (present h) (inK h KS))))            ; COMPLETE
 ; induction over ks: fold(ks,p) ⟺ ks=[] ? false : ∀h∈ks. Z(h·p)   (for SOUND lists)
 (define-fun PF ((ks KList)) Bool (forall ((p Path))
   (= (foldI ks p) (and (not (= ks knil)) (forall ((h Int)) (=> (inK h ks) (Z (cons h p))))))))
+; ASSUMED: T1
 (assert (=> (and (PF knil) (forall ((j Int) (r KList)) (=> (PF r) (PF (kcons j r))))) (forall ((ks KList)) (PF ks))))
 (assert (not
   (forall ((p Path)) (= (foldI KS p)

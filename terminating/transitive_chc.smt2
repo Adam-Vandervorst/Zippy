@@ -54,6 +54,7 @@
   (=> (and (path2 x z) (path2 z y)) (path2 x y))))
 
 ; --- Goal 1: path(x,y) => path2(x,y)  (doubling misses nothing one-hop finds)
+; GOAL: a kept negative result — `sat` by design, excluded from run.sh
 (assert (forall ((x Node) (y Node))
   (=> (and (path x y) (not (path2 x y))) false)))
 

@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 
 /** Metamorphic algebraic-law properties (design_plan §6.6).  Unlike the differential tests (which
@@ -16,7 +18,7 @@ class AlgebraicLaws extends FunSuite:
   private val syms = Vector("p", "q", "r")
   private val eps = Path.Constant(PathValue(Nil))
 
-  private def pathItem(rng: scala.util.Random): PathItem = PathItem.Symbol(syms(rng.nextInt(syms.length)))
+  private def pathItem(rng: scala.util.Random): PathItem = syms(rng.nextInt(syms.length))
   private def randPath(rng: scala.util.Random): PathValue = PathValue(List.fill(1 + rng.nextInt(2))(pathItem(rng)))
   private def oneItemPath(rng: scala.util.Random): PathValue = PathValue(List(pathItem(rng)))
   private def randLiteral(rng: scala.util.Random): SpaceValue =

@@ -1,0 +1,18 @@
+# SELECTION CERTIFICATE — a pure function of the C rows and the objective; replay:
+# scripts/check_selection.py (independent), morkl.Pareto.replay (in-process).
+# objective	work-on-reference
+# priority	work,alloc,rounds,touch
+# dominance	work,alloc,rounds,touch
+# constraints	-
+# backends	reference
+# tie-rule	lexicographic (hi, lo) over the priority components, then alternative id, then backend order reference,trie,graph,zipper
+# reference-touch	modelled, no counted oracle: taken as [0, inf]; not compared between two reference candidates
+# columns	C	alt	backend	work.lo	work.hi	alloc.lo	alloc.hi	rounds.lo	rounds.hi	touch.lo	touch.hi	certified	closure
+C	6787aad8ed56d55c	reference	74502	76230	32985	32985	2952	2952	0	inf	CERTIFIED	CLOSED
+C	77a42e7d141891ad	reference	74598	76326	33273	33273	2968	2968	0	inf	CERTIFIED	CLOSED
+C	a584d74eadacba81	reference	72806	74534	32361	32361	2952	2952	0	inf	CERTIFIED	CLOSED
+C	cc11f57f2e56ba52	reference	74502	76230	32985	32985	2952	2952	0	inf	CERTIFIED	CLOSED
+X	77a42e7d141891ad	reference	DOMINATED	by a584d74eadacba81/reference: work 74534<=74598 alloc 32361<=33273 rounds 2952<=2968
+S	a584d74eadacba81	reference	ranked first by the tie rule among 3 incomparable survivors
+K	6787aad8ed56d55c	reference	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	cc11f57f2e56ba52	reference	INCOMPARABLE with the selected: overlaps on work,rounds,touch

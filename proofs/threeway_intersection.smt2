@@ -28,6 +28,7 @@
 (define-fun PP ((p Path)) Bool (forall ((a Trie) (b Trie))
   (and (= (zipobs a b p) (and (mem a p) (mem b p)))          ; zipper = set of paths
        (= (mem (f a b) p) (and (mem a p) (mem b p))))))      ; eager trie = set of paths
+; ASSUMED: T1
 (assert (=> (and (PP nil) (forall ((k Int) (q Path)) (=> (PP q) (PP (cons k q))))) (forall ((p Path)) (PP p))))
 (assert (not (forall ((p Path)) (PP p))))
 (check-sat)

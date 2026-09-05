@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import scala.collection.mutable
 
@@ -22,11 +24,10 @@ class ProgramExpressivity extends FunSuite:
 
   def randPath(rng: java.util.Random): PathValue = PathValue(List.fill(1 + rng.nextInt(3))(A(rng.nextInt(A.length))))
   def smallTrie(rng: java.util.Random): SpaceValue = SpaceValue((0 until (1 + rng.nextInt(8))).map(_ => randPath(rng)).toSet)
-  def nodes(s: Space): Int = 1 + (s match
-    case Space.Union(a, b) => nodes(a) + nodes(b); case Space.Intersection(a, b) => nodes(a) + nodes(b)
-    case Space.Subtraction(a, b) => nodes(a) + nodes(b); case Space.Restriction(a, b) => nodes(a) + nodes(b)
-    case Space.Composition(a, b) => nodes(a) + nodes(b); case Space.Wrap(a, _) => nodes(a); case Space.Unwrap(a, _) => nodes(a)
-    case Space.Iteration(a, _, _, b) => nodes(a) + nodes(b); case _ => 0)
+  // ONE OWNER (SpatialPipeline.nodeCount).  The copy this replaces had no arm for TailsUnion, Range,
+  // Raffination, TailsIntersection or Fixpoint, so those subtrees counted as leaves — and this counter
+  // IS the corpus accept filter (`nodes >= 12`), so the miscount decided the corpus population.
+  def nodes(s: Space): Int = SpatialPipeline.nodeCount(s)
 
   test("expressivity: variable args + responsiveness over 100 inputs".tag(SlowTag.Slow)) {
     val N = sys.props.get("expr.n").map(_.toInt).getOrElse(100000)
@@ -39,7 +40,9 @@ class ProgramExpressivity extends FunSuite:
     val pathBank: Array[Array[PathValue]] = Array.fill(maxP)(Array.fill(K)(randPath(brng)))
 
     val rng = new java.util.Random(7)
-    val sb = new StringBuilder; sb.append("uniqueOut,entropy,nEmpty,nSpace,nPath,respSpace,respPath,respFrac,avgSize,nodes\n")
+    val sb = new StringBuilder
+    sb.append(s"# expressivity.csv — ${RunEnvironment.oneLine(Seq("target" -> N.toString, "bank" -> K.toString, "seed" -> "bank=99 programs=7"))}\n")
+    sb.append("uniqueOut,entropy,nEmpty,nSpace,nPath,respSpace,respPath,respFrac,avgSize,nodes\n")
     val t0 = System.nanoTime(); var got = 0; var draws = 0
     while got < N do
       draws += 1
@@ -68,9 +71,13 @@ class ProgramExpressivity extends FunSuite:
           got += 1
           sb.append(f"$uniqueOut,$entropy%.4f,$nEmpty,$ns,$np,$respSpace,$respPath,${respArgs.toDouble / (ns + np)}%.4f,${totSize.toDouble / K}%.3f,${nodes(prog)}\n")
     val secs = (System.nanoTime() - t0) / 1e9
-    val f = new java.io.File("/tmp/expressivity.csv"); val w = new java.io.FileWriter(f)
-    try w.write(sb.toString) finally w.close()
-    System.out.println(f"EXPR2: N=$got of $draws draws (respMin=$respMin), bank=$K, args space 1..$maxS path 0..$maxP, ${secs}%.1fs -> ${f.getPath}")
+    // the repo root, not /tmp — see the note in ProgramStats
+    // as CorpusRuntimes: measured always, published only under a manifest
+    val dest =
+      if BenchmarkArtifact.publishing then
+        BenchmarkArtifact.write("expressivity.csv", sb.toString); "expressivity.csv"
+      else { println(BenchmarkArtifact.skipNote("expressivity.csv")); "(not written)" }
+    System.out.println(f"EXPR2: N=$got of $draws draws (respMin=$respMin), bank=$K, args space 1..$maxS path 0..$maxP, ${secs}%.1fs -> $dest")
     assertEquals(got, N)
   }
 
@@ -111,12 +118,24 @@ class ProgramExpressivity extends FunSuite:
     txt.append("# free args: s0,s1,.. = space (trie) inputs;  p0,p1,.. = path inputs.  bound iteration vars are h.../t...\n")
     txt.append("# columns: idx <TAB> nSpace <TAB> nPath <TAB> uniqueOut(of 100) <TAB> program(.show)\n")
     for (r, i) <- kept.zipWithIndex do txt.append(s"$i\t${r.nSpace}\t${r.nPath}\t${r.uniqueOut}\t${show1(r.prog)}\n")
-    val tf = new java.io.File(Loaders.repoRoot, "corpus_1000.txt")
-    locally { val w = new java.io.FileWriter(tf); try w.write(txt.toString) finally w.close() }
-    // reloadable binary + round-trip verification
-    val bf = new java.io.File(Loaders.repoRoot, "corpus_1000.ser"); var serOk = false
+    // 0.3 — THROUGH THE SINK.  These two are TRACKED files that this suite rewrote unconditionally
+    // on every run.  The generator is seeded (`Random(12345)`), so the content is stable and the
+    // tree did not usually change — which is exactly why nobody noticed that ANY drift in
+    // `SpaceFuzzer` would have been committed on the next `git add` with nothing comparing it to
+    // what the corpus-consuming suites had been validated against.  They are not benchmark outputs
+    // (those go through `BenchmarkArtifact`/`PublishManifest`, and `expressivity.csv` still does);
+    // they are derived data, so they belong to `ArtifactSink` and to `ZIPPY_REGENERATE=1`.
+    val tf = ArtifactSink.write(new java.io.File(Loaders.repoRoot, "corpus_1000.txt"), txt.toString)
+    // reloadable binary + round-trip verification.  The round trip reads back the file the sink
+    // actually wrote, so in VERIFY mode it verifies the bytes that were compared against the tree.
+    var serOk = false
     try
-      locally { val oos = new java.io.ObjectOutputStream(new java.io.FileOutputStream(bf)); try oos.writeObject(kept.toVector) finally oos.close() }
+      val bytes =
+        val bos = new java.io.ByteArrayOutputStream()
+        val oos = new java.io.ObjectOutputStream(bos)
+        try oos.writeObject(kept.toVector) finally oos.close()
+        bos.toByteArray
+      val bf = ArtifactSink.writeBytes(new java.io.File(Loaders.repoRoot, "corpus_1000.ser"), bytes)
       val back = locally { val ois = new java.io.ObjectInputStream(new java.io.FileInputStream(bf)); try ois.readObject().asInstanceOf[Vector[FuzzRec]] finally ois.close() }
       val i = rng.nextInt(kept.size)
       val ok = back.size == kept.size && (0 until K).forall(k =>
@@ -124,7 +143,47 @@ class ProgramExpressivity extends FunSuite:
       assert(ok, "deserialized program did not re-evaluate identically"); serOk = true
     catch case e: Throwable => System.out.println(s"CORPUS: binary serialization unavailable (${e.getClass.getSimpleName}); text corpus written")
     System.out.println(f"CORPUS: kept=${kept.size} of $draws draws (${100.0 * kept.size / draws}%.1f%% accepted), ${secs}%.1fs")
-    System.out.println(s"CORPUS: text=${tf.getPath}  binary=${if serOk then bf.getPath + " (round-trip verified)" else "n/a"}")
+    System.out.println(s"CORPUS: text=${tf.getPath}  binary=${if serOk then "written (round-trip verified)" else "n/a"}")
+    ArtifactSink.assertClean("morkl.ProgramExpressivity")
+
+    // ============================================================================================
+    // THE CONSTRUCTOR CENSUS — the gate that keeps the corpus HONEST about its coverage.
+    //
+    // `FuzzRec` carries `@SerialVersionUID(1L)` and its shape does not change when the GENERATOR
+    // changes, so the STALE guards in CorpusValidation / CorpusLawValidation / CorpusRuntimes (which
+    // catch an `InvalidClassException`) do NOT fire when a new operator is added to `SpaceFuzzer`:
+    // the old, coverage-poor corpus keeps loading silently and the new operator is never exercised.
+    // That is exactly how `Raffination` and `TailsIntersection` — two CORE operators, supported by
+    // every one of the seven executors — reached zero occurrences in a 1000-program corpus.
+    //
+    // This census makes it a TEST FAILURE instead: every constructor the generator can emit must
+    // actually occur in the kept corpus.
+    // ============================================================================================
+    def census(s: Space): Map[String, Int] =
+      val m = mutable.HashMap.empty[String, Int]
+      def go(x: Space): Unit =
+        val k = x.getClass.getSimpleName.stripSuffix("$")
+        m.update(k, m.getOrElse(k, 0) + 1)
+        SizeZ3.children(x).foreach(go)
+      go(s); m.toMap
+    val counts = mutable.HashMap.empty[String, Int]
+    for r <- kept; (k, v) <- census(r.prog) do counts.update(k, counts.getOrElse(k, 0) + v)
+    System.out.println("CORPUS census: " + counts.toVector.sortBy(-_._2).map((k, v) => s"$k=$v").mkString("  "))
+    val required = Vector("Union", "Intersection", "Subtraction", "Raffination", "Restriction",
+                          "Composition", "Wrap", "Unwrap", "TailsUnion", "TailsIntersection",
+                          "Range", "Iteration", "Mention", "Literal", "Singleton")
+    val absent = required.filter(k => counts.getOrElse(k, 0) == 0)
+    assertEquals(absent, Vector.empty[String],
+      s"the generator can emit these constructors and the corpus contains NONE of them — the corpus " +
+      s"is stale, or a generator arm is unreachable: ${absent.mkString(", ")}")
+    // AND THE IDENTITY WINDOW: `Range(x, lo, 0)` normalises to the whole space, so it is the arm that
+    // exercises every backend's `rangeIsIdentity` fast path.  The old generator could never draw it.
+    def fullWindows(s: Space): Int =
+      (s match { case Space.Range(_, lo, hi) if (lo == 0 || lo == 1) && hi == 0 => 1; case _ => 0 }) +
+        SizeZ3.children(s).map(fullWindows).sum
+    val idWindows = kept.map(r => fullWindows(r.prog)).sum
+    System.out.println(s"CORPUS census: full-window (identity) Range occurrences = $idWindows")
+    assert(idWindows > 0, "no full-window Range in the corpus: every backend's identity fast path is unexercised")
 
     // show 3 randomly chosen programs
     val pick = scala.util.Random(2026).shuffle((0 until kept.size).toList).take(3)

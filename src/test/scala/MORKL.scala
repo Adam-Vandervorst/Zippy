@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.collection.mutable.SortedMultiSet
@@ -506,7 +508,7 @@ class Routines extends FunSuite:
     val transpose = graph("edge").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(P"y" x P"x")))
     val nodes = graph("edge").iter(P"fwd", S"_1", sP"fwd") \/ transpose.iter(P"bwd", S"_2", sP"bwd")
     val e = R"scc"("42", graph("edge"), transpose, nodes)
-    assert(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine), sc = scc_context) == SpaceValue("w.s", "w.t", "w.u", "w.v", "z.x", "z.y"))
+    assertEquals(eval(e)(using rc = Map(RoutinePtr("reachable") -> reachable_routine, RoutinePtr("scc") -> scc_routine), sc = scc_context).show, SpaceValue("t.s", "t.u", "t.v", "t.w", "y.x", "y.z").show)
   }
 
   test("naive-oeis") {
@@ -646,13 +648,6 @@ class Unification extends FunSuite:
   import Space.*
 
   import Unification.*
-
-  test("renameFrom") {
-    assert(("$x.$y.$x" renameFrom "$a.$b.$a") == Syntax.parse("$a.$b.$a"))
-    assert(("$x.c.$x" renameFrom "$a.c.$b") == Syntax.parse("$a.c.$a"))
-    assert(("s.$x.$y" renameFrom "s.$a.$a") == Syntax.parse("s.$a.$y"))
-    assert(("$x.p.$y.$x" renameFrom "$a.q.$a.$b") == Syntax.parse("$a.p.$y.$a"))
-  }
 
 //  enum Spec:
 //    case Constant(s: String)
@@ -1037,13 +1032,12 @@ class Unification extends FunSuite:
     extension (p: Path) def + (s: Space): Space = ("+" x p x s).arithmetic
     extension (p: Path) def `+₂` (s: Space): Space = ("+₂" x p x s).arithmetic
     extension (s: Space) def arithmetic: Space = Space.GroundedSS(s, s => SpaceValue(
-      (for case PathValue(PathItem.Symbol("+")::PathItem.Symbol(x)::PathItem.Symbol(y)::Nil) <- s.paths yield
-        PathValue(PathItem.Symbol((x.toInt + y.toInt).toString)::Nil)) union
-      (for case PathValue(PathItem.Symbol("+₂")::PathItem.Symbol(x0)::PathItem.Symbol(x1)::
-                                                 PathItem.Symbol(y0)::PathItem.Symbol(y1)::Nil) <- s.paths yield
-        PathValue(PathItem.Symbol((x0.toInt + y0.toInt).toString)::PathItem.Symbol((x1.toInt + y1.toInt).toString)::Nil))
+      (for case PathValue("+"::x::y::Nil) <- s.paths yield
+        PathValue((x.toInt + y.toInt).toString::Nil)) union
+      (for case PathValue("+₂"::x0::x1::y0::y1::Nil) <- s.paths yield
+        PathValue((x0.toInt + y0.toInt).toString::(x1.toInt + y1.toInt).toString::Nil))
     ))
-    def card(space: Space): Path = Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol(sv.paths.size.toString))))
+    def card(space: Space): Path = Path.GroundedSP(space, sv => PathValue(List(sv.paths.size.toString)))
     given PartialFunction[RoutinePtr, Routine] = {
       case RoutinePtr("neigh") => R"neigh"(P"coord") := {
         val offsets = s("-1", "0", "1")
@@ -1131,28 +1125,29 @@ object Unification:
       "edge.s.t", "edge.t.u", "edge.u.v", "edge.v.w",
     )))
 
+  // Query-pattern items are plain strings; a leading "$" marks a variable to bind ("$x"), anything
+  // else is matched literally.
+  private def varName(item: String): Option[String] = if item.startsWith("$") then Some(item.tail) else None
+
   def U(src: Space, p: PathValue, c: (Space, Map[String, PathRef]) => Space, bound: Map[String, PathRef] = Map.empty): Space = p.items match
-    case h :: tail => h match
-      case PathItem.Symbol(s) => U(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), c, bound)
-      case PathItem.Arity(a) => U(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), c, bound)
-      case PathItem.Variable(n) =>
+    case h :: tail => varName(h) match
+      case None => U(Unwrap(src, Path.Constant(PathValue(h :: Nil))), PathValue(tail), c, bound)
+      case Some(n) =>
         if bound.contains(n) then U(Unwrap(src, Path.Deref(bound(n))), PathValue(tail), c, bound)
         else Space.Iteration(src, PathRef(n), SpaceMention(n + "_"),
           U(Space.Mention(SpaceMention(n + "_")), PathValue(tail), c, bound + (n -> PathRef(n))))
     case Nil => c(src, bound)
 
   def C(t: PathValue, bound: Map[String, PathRef] = Map.empty): Path =
-    t.items.map {
-      case h@PathItem.Symbol(n) => Path.Constant(PathValue(h :: Nil))
-      case h@PathItem.Arity(k) => Path.Constant(PathValue(h :: Nil))
-      case PathItem.Variable(n) => Path.Deref(bound(n))
+    t.items.map { h => varName(h) match
+      case None => Path.Constant(PathValue(h :: Nil))
+      case Some(n) => Path.Deref(bound(n))
     }.reduceRight(_ x _)
 
   def W(src: Space, t: PathValue, bound: Map[String, PathRef] = Map.empty): Space =
-    t.items.foldRight(src)((h, r) => h match
-      case PathItem.Symbol(n) => Path.Constant(PathValue(h :: Nil)) x r
-      case PathItem.Arity(k) => Path.Constant(PathValue(h :: Nil)) x r
-      case PathItem.Variable(n) => Path.Deref(bound(n)) x r)
+    t.items.foldRight(src)((h, r) => varName(h) match
+      case None => Path.Constant(PathValue(h :: Nil)) x r
+      case Some(n) => Path.Deref(bound(n)) x r)
 
   def Q(src: Space, p: PathValue): Space =
     U(src, p, W(_, p, _))
@@ -1187,8 +1182,8 @@ end Unification
 class Lowering extends FunSuite:
   test("TailsUnion iter subs") {
     val code = Lower.TailsUnion_Iteration(Routines.aunt_query_routine.body)
-    assert(code.show == ("Aunt" x S"people".iter(P"person", S"_",
-      (P"person" x (((S"family"("parent") <| (S"family"("child") <| S"family"("child" x P"person")).iter(P"_", S"s90ea6c6d", S"s90ea6c6d")).iter(P"_", S"sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
+    assertEquals(code.show, ("Aunt" x S"people".iter(P"person", S"_",
+      (P"person" x (((S"family"("parent") <| (S"family"("child") <| S"family"("child" x P"person")).iter(P"_", S"s9867665b", S"s9867665b")).iter(P"_", S"s30bc18d3", S"s30bc18d3") \ S"family"("child" x P"person")) /\ S"family"("female")))
     )).show)
   }
 
@@ -1200,9 +1195,10 @@ class Lowering extends FunSuite:
 //    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Xeya"))) \ S"family"("child" x "Xeya")) /\ S"family"("female")))
 //           \/ ("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child" x "Jim"))) \ S"family"("child" x "Jim")) /\ S"family"("female"))))
     val folded_people = Lower.Concat_Path(unrolled_people)
-//    "Aunt" x (("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female")))
-//           \/ ("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female"))))
-    assert(folded_people.show == ("Aunt" x (("Xeya" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))) \/ ("Jim" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))))).show)
+//    the unroll emits one branch per DISTINCT head, in sorted head order ("Jim" < "Xeya"):
+//    "Aunt" x (("Jim" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Jim"))) \ S"family"("child.Jim")) /\ S"family"("female")))
+//           \/ ("Xeya" x ((TailsUnion(S"family"("parent") <| TailsUnion(S"family"("child") <| S"family"("child.Xeya"))) \ S"family"("child.Xeya")) /\ S"family"("female"))))
+    assert(folded_people.show == ("Aunt" x (("Jim" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Jim"))))) \ S"family"("child.Jim")) /\ S"family"("female"))) \/ ("Xeya" x ((\/((S"family"("parent") <| \/((S"family"("child") <| S"family"("child.Xeya"))))) \ S"family"("child.Xeya")) /\ S"family"("female"))))).show)
   }
 end Lowering
 
@@ -1224,8 +1220,8 @@ class SpacialType extends FunSuite:
 
     ("Aunt" x S"people".iter(P"person", S"_",
       (P"person" x (((S"family"("parent") <|
-        (S"family"("child") <| S"family"("child" x P"person")).iter(P"_", S"s90ea6c6d", S"s90ea6c6d")
-        ).iter(P"_", S"sd4835f8c", S"sd4835f8c") \ S"family"("child" x P"person")) /\ S"family"("female")))
+        (S"family"("child") <| S"family"("child" x P"person")).iter(P"_", S"s9867665b", S"s9867665b")
+        ).iter(P"_", S"s30bc18d3", S"s30bc18d3") \ S"family"("child" x P"person")) /\ S"family"("female")))
     ))
   }
 
@@ -1258,24 +1254,24 @@ class Grounded extends FunSuite:
     SpaceMention("people") -> SpaceValue("Tom", "Bob", "Jim", "Pam", "Liz", "Pat", "Ann")))
 
   def hash(path: Path): Path =
-    Path.GroundedPP(path, pv => PathValue(List(PathItem.Symbol("R" + pv.hashCode().toHexString))))
+    Path.GroundedPP(path, pv => PathValue(List("R" + pv.hashCode().toHexString)))
 
   def hash(space: Space): Path =
-    Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol("R" + sv.hashCode().toHexString))))
+    Path.GroundedSP(space, sv => PathValue(List("R" + sv.hashCode().toHexString)))
 
   def trace(path: Path)(using ab: collection.mutable.ArrayBuffer[PathValue]): Path =
     Path.GroundedPP(path, pv => { ab.addOne(pv); pv })
 
   def spacesize(space: Space): Path =
-    Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol(sv.paths.size.toString))))
+    Path.GroundedSP(space, sv => PathValue(List(sv.paths.size.toString)))
 
   def spaceout(space: Space)(using ab: collection.mutable.ArrayBuffer[SpaceValue]): Path =
-    Path.GroundedSP(space, sv => { ab.addOne(sv); PathValue(List(PathItem.Symbol("unit")))  })
+    Path.GroundedSP(space, sv => { ab.addOne(sv); PathValue(List("unit"))  })
 
   def range(path: Path): Space =
-    Space.GroundedPS(path, x => x.items.map{ case PathItem.Symbol(s) => s.toIntOption } match
-      case Seq(Some(stop)) => SpaceValue(Set.from((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString))))))
-      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue(Set.from((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))))))
+    Space.GroundedPS(path, x => x.items.map(_.toIntOption) match
+      case Seq(Some(stop)) => SpaceValue(Set.from((0 until stop).map(i => PathValue(List(i.toString)))))
+      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue(Set.from((start until stop by step).map(i => PathValue(List(i.toString))))))
 
   def transitive(space: Space): Space =
     Space.GroundedSS(space, sv => {
@@ -1292,7 +1288,7 @@ class Grounded extends FunSuite:
     given SpaceContext = context
     val e = S"family"("parent").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(hash(P"x" x P"y"))))
 
-    assert(eval(e) == SpaceValue("R2606dfba", "R86aea026", "Rc50d6b68", "Re4c8532", "Re59e471", "Re7a6b6e1"))
+    assertEquals(eval(e).show, SpaceValue("R313c850c", "R37784ac2", "R3d66c415", "R64738133", "Ref45c6a7", "Rf02a902e").show)
   }
 
   test("PP trace") {
@@ -1303,7 +1299,7 @@ class Grounded extends FunSuite:
     val e = S"family"("parent").iter(P"x", S"r", S"r".iter(P"y", S"_", Singleton(trace(P"x" x P"y"))))
 
     eval(e)
-    assert(ps.map(_.show).mkString("; ") == "Tom.Liz; Tom.Bob; Pat.Jim; Bob.Ann; Bob.Pat; Pam.Bob")
+    assertEquals(ps.map(_.show).mkString("; "), "Pat.Jim; Tom.Liz; Tom.Bob; Pam.Bob; Bob.Pat; Bob.Ann")
   }
 
   test("SP spacesize") {
@@ -1323,7 +1319,7 @@ class Grounded extends FunSuite:
     val e = S"family"("parent").iter(P"x", S"r", Singleton(spaceout(S"r")))
 
     assert(eval(e) == SpaceValue("unit"))
-    assert(ps.toList == List(SpaceValue("Bob", "Liz"), SpaceValue("Jim"), SpaceValue("Ann", "Pat"), SpaceValue("Bob")))
+    assertEquals(ps.toList.map(_.show), List(SpaceValue("Jim"), SpaceValue("Bob", "Liz"), SpaceValue("Bob"), SpaceValue("Ann", "Pat")).map(_.show))
   }
 
   test("PS range") {
@@ -1518,8 +1514,8 @@ class Permutations extends FunSuite:
     def place_routine(k: Int, n: Int): Space =
       if k == 0 then Space.Empty
       else
-        val kp = Path.Constant(PathValue(PathItem.Symbol(k.toString)::Nil))
-        val np = Path.Constant(PathValue(PathItem.Symbol(n.toString)::Nil))
+        val kp = Path.Constant(PathValue(k.toString::Nil))
+        val np = Path.Constant(PathValue(n.toString::Nil))
         place_routine(k-1, n).iterk(k-1, S"taken", qs =>
           (upto(np) \ S"taken"(kp)).iterh(P"q",
             P"q" x (qs x (R"aoe"(P"q", kp, np) \/ S"taken"))
@@ -1580,36 +1576,36 @@ class IV extends FunSuite:
   import Space.*
 
   def highest(s: Space, backup: PathValue): Path =
-    Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).maxByOption(_.show).fold(backup)(x => PathValue(List(x))))
+    Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).maxOption.fold(backup)(x => PathValue(List(x))))
 
   def lowest(s: Space, backup: PathValue): Path =
-    Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).minByOption(_.show).fold(backup)(x => PathValue(List(x))))
+    Path.GroundedSP(s, sv => sv.paths.flatMap(_.items.headOption).minOption.fold(backup)(x => PathValue(List(x))))
 
   def or_else(e: Space, todo: Space): Space = // or
     e \/ (ss"tobeempty" \ ("tobeempty" x e).iter(P"H", S"E", SP"H")).iter(P"T", S"N", todo)
 
   def add(path: Path): Path =
-    Path.GroundedPP(path, x => x.items.map { case PathItem.Symbol(s) => s.toIntOption } match
-      case Seq(Some(x), Some(y)) => PathValue(List(PathItem.Symbol((x + y).toString))))
+    Path.GroundedPP(path, x => x.items.map(_.toIntOption) match
+      case Seq(Some(x), Some(y)) => PathValue(List((x + y).toString)))
 
   def sub(path: Path): Path =
-    Path.GroundedPP(path, x => x.items.map { case PathItem.Symbol(s) => s.toIntOption } match
-      case Seq(Some(x), Some(y)) => PathValue(List(PathItem.Symbol((x - y).toString))))
+    Path.GroundedPP(path, x => x.items.map(_.toIntOption) match
+      case Seq(Some(x), Some(y)) => PathValue(List((x - y).toString)))
 
   def spacesize(space: Space): Path =
-    Path.GroundedSP(space, sv => PathValue(List(PathItem.Symbol(sv.paths.size.toString))))
+    Path.GroundedSP(space, sv => PathValue(List(sv.paths.size.toString)))
 
   def maxsymbol(space: Space): Space =
     Space.GroundedSS(space, sv =>
-      sv.paths.flatMap(_.items.headOption).maxByOption(_.show) match
+      sv.paths.flatMap(_.items.headOption).maxOption match
         case Some(v) => SpaceValue(PathValue(List(v)))
         case None => SpaceValue()
     )
 
   def range(path: Path): Space =
-    Space.GroundedPS(path, x => x.items.map { case PathItem.Symbol(s) => s.toIntOption } match
-      case Seq(Some(stop)) => SpaceValue((0 until stop).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet)
-      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(PathItem.Symbol(i.toString)))).toSet))
+    Space.GroundedPS(path, x => x.items.map(_.toIntOption) match
+      case Seq(Some(stop)) => SpaceValue((0 until stop).map(i => PathValue(List(i.toString))).toSet)
+      case Seq(Some(start), Some(stop), Some(step)) => SpaceValue((start until stop by step).map(i => PathValue(List(i.toString))).toSet))
 
   def map(v: Space, f: Space => Space): Space =
     v.iter(P"i", S"v", P"i" x f(S"v"))

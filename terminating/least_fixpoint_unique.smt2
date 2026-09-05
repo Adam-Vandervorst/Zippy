@@ -13,7 +13,9 @@
 (assert (forall ((x L) (y L)) (= (leq x y) (= (cup x y) y))))
 (assert (= l1 (cup a (f l1))))
 (assert (= l2 (cup a (f l2))))
+; PREMISE: l1 is a least solution
 (assert (forall ((z L)) (=> (= z (cup a (f z))) (leq l1 z))))
+; PREMISE: l2 is a least solution
 (assert (forall ((z L)) (=> (= z (cup a (f z))) (leq l2 z))))
 (assert (not (= l1 l2)))
 (check-sat)

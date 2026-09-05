@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -37,7 +39,7 @@ class ZipperScaleBench extends FunSuite:
    *  sharing and branching, so subtree pruning is observable). */
   def distinctDeep(rng: java.util.Random, n: Int, depth: Int, K: Int): IndexedSeq[PathValue] =
     val s = scala.collection.mutable.LinkedHashSet.empty[PathValue]
-    while s.size < n do s += PathValue(List.tabulate(depth)(_ => PathItem.Symbol(rng.nextInt(K).toString)))
+    while s.size < n do s += PathValue(List.tabulate(depth)(_ => rng.nextInt(K).toString))
     s.toIndexedSeq
   /** Two path-sets of size `nEach` sharing exactly `share` of their paths (rest disjoint). */
   def sharedPair(rng: java.util.Random, nEach: Int, depth: Int, K: Int, share: Double): (Set[PathValue], Set[PathValue]) =
@@ -85,7 +87,7 @@ class ZipperScaleBench extends FunSuite:
       val (sa, sb) = sharedPair(rng, nEach, depth, K, 0.30)
       val iA = ITrie.fromSpaceValue(SpaceValue(sa)); val iB = ITrie.fromSpaceValue(SpaceValue(sb))
       // C: up to 400 of A's paths under the localized prefix 0.0 (so C ⊆ A∪B, result = C, |out| fixed).
-      val cPaths = sa.iterator.filter(p => p.items.take(2) == List(PathItem.Symbol("0"), PathItem.Symbol("0"))).take(400).toSet
+      val cPaths = sa.iterator.filter(p => p.items.take(2) == List("0", "0")).take(400).toSet
       val iC = ITrie.fromSpaceValue(SpaceValue(cPaths))
       given ic: Map[SpaceMention, ITrie] = Map(a -> iA, b -> iB, c -> iC)
       val expr = Intersection(Union(Mention(a), Mention(b)), Mention(c))
@@ -109,7 +111,7 @@ class ZipperScaleBench extends FunSuite:
     for share <- Seq(0.01, 0.50, 0.90) do
       val (sa, sb) = sharedPair(rng, nEach, depth, K, share)
       val iA = ITrie.fromSpaceValue(SpaceValue(sa)); val iB = ITrie.fromSpaceValue(SpaceValue(sb))
-      val cPaths = sa.iterator.filter(_.items.take(2) == List(PathItem.Symbol("0"), PathItem.Symbol("0"))).take(400).toSet
+      val cPaths = sa.iterator.filter(_.items.take(2) == List("0", "0")).take(400).toSet
       val iC = ITrie.fromSpaceValue(SpaceValue(cPaths)); val iSmall = ITrie.fromSpaceValue(small)
       given ic: Map[SpaceMention, ITrie] = Map(a -> iA, b -> iB, c -> iC, SpaceMention("d") -> iSmall)
       val d = Mention(SpaceMention("d"))
@@ -136,7 +138,7 @@ class ZipperScaleBench extends FunSuite:
     System.out.println("\n=== DATALOG transitive closure (chain of N) — execZ routes through the evalI \"call\" ===")
     System.out.println(f"${"N"}%5s ${"|edges|"}%8s ${"|TC|"}%8s | ${"eval"}%9s ${"evalI"}%9s ${"execZ"}%9s")
     for n <- Seq(32, 64, 96) do
-      val edges = SpaceValue((0 until n - 1).map(i => PathValue(List(PathItem.Symbol(i.toString), PathItem.Symbol((i + 1).toString)))).toSet)
+      val edges = SpaceValue((0 until n - 1).map(i => PathValue(List(i.toString, (i + 1).toString))).toSet)
       val ei = ITrie.fromSpaceValue(edges)
       val rEval = eval(ttop)(using sc = SpaceContextMap(Map(SpaceMention("edges") -> edges)))
       val rI = evalI(ttop)(using ic = Map(SpaceMention("edges") -> ei)).toSpaceValue
@@ -153,7 +155,7 @@ class ZipperScaleBench extends FunSuite:
   // (D) AUNT query at scale over a large synthetic family (control-flow + set-algebra).
   // ===============================================================================================
   test("aunt query at scale on a large synthetic family: execZ == evalI == eval".tag(SlowTag.Slow)) {
-    val sym = (x: Int) => PathItem.Symbol("p" + x)
+    val sym = (x: Int) => "p" + x
     /** Synthesize a family of N people: two parents from the previous generation, ~40% female. */
     def family(rng: java.util.Random, N: Int, genSize: Int): (SpaceValue, SpaceValue) =
       val paths = scala.collection.mutable.Set.empty[PathValue]
@@ -161,9 +163,9 @@ class ZipperScaleBench extends FunSuite:
         val g = child / genSize
         val p1 = (g - 1) * genSize + rng.nextInt(genSize); val p2 = (g - 1) * genSize + rng.nextInt(genSize)
         for par <- Set(p1, p2) do
-          paths += PathValue(List(PathItem.Symbol("parent"), sym(child), sym(par)))   // child -> parent
-          paths += PathValue(List(PathItem.Symbol("child"), sym(par), sym(child)))    // parent -> child
-      for person <- 0 until N if rng.nextInt(5) < 2 do paths += PathValue(List(PathItem.Symbol("female"), sym(person)))
+          paths += PathValue(List("parent", sym(child), sym(par)))   // child -> parent
+          paths += PathValue(List("child", sym(par), sym(child)))    // parent -> child
+      for person <- 0 until N if rng.nextInt(5) < 2 do paths += PathValue(List("female", sym(person)))
       (SpaceValue(paths.toSet), SpaceValue((0 until N).map(p => PathValue(List(sym(p)))).toSet))
     val defs = Syntax.mod(Routines.aunt_query_routine)
     val reps = 3
@@ -190,7 +192,8 @@ class ZipperScaleBench extends FunSuite:
   // ===============================================================================================
   test("aunt query on the REAL royal92 genealogy: execZ vs eval / evalI / execT(opt)".tag(SlowTag.Slow)) {
     val candidates = Seq(sys.props.getOrElse("royal92.metta", "royal92_simple.metta"),
-                         "royal92_simple.metta", "/Users/michaelpolyntsov/Zippy/royal92_simple.metta")
+                         "royal92_simple.metta",
+                         sys.env.getOrElse("ZIPPY_DATA", "data") + "/royal92_simple.metta")
     Loaders.resolve(candidates*).flatMap(f => Loaders.mettaFamily(f.getPath)) match
       case None => System.out.println("\n(royal92_simple.metta not found — aunt(royal92) execZ benchmark skipped)\n")
       case Some(r92) =>
@@ -261,15 +264,15 @@ class ZipperScaleBench extends FunSuite:
   //     Sparse high-alphabet tries so divergence (and thus pruning) kicks in near the root.
   // ===============================================================================================
   test("three-way A∩B∩C: fused execZ beats eager pairwise as the A∩B intermediate grows".tag(SlowTag.Slow)) {
-    val depth = 8; val K = 64; val reps = 5; val nS = 300; val nCOnly = 200; val pre = List(PathItem.Symbol("0"), PathItem.Symbol("0"))
+    val depth = 8; val K = 64; val reps = 5; val nS = 300; val nCOnly = 200; val pre = List("0", "0")
     def distinctUnder(rng: java.util.Random, n: Int): IndexedSeq[PathValue] =     // localized under `pre`
       val s = scala.collection.mutable.LinkedHashSet.empty[PathValue]
-      while s.size < n do s += PathValue(pre ++ List.tabulate(depth - pre.size)(_ => PathItem.Symbol(rng.nextInt(K).toString)))
+      while s.size < n do s += PathValue(pre ++ List.tabulate(depth - pre.size)(_ => rng.nextInt(K).toString))
       s.toIndexedSeq
     def distinctOff(rng: java.util.Random, n: Int): IndexedSeq[PathValue] =       // anywhere NOT under `pre`
       val s = scala.collection.mutable.LinkedHashSet.empty[PathValue]
       while s.size < n do
-        val p = PathValue(List.tabulate(depth)(_ => PathItem.Symbol(rng.nextInt(K).toString)))
+        val p = PathValue(List.tabulate(depth)(_ => rng.nextInt(K).toString))
         if p.items.take(2) != pre then s += p
       s.toIndexedSeq
     /** S (triple-common) and cOnly are LOCALIZED under `pre` and fixed-small; c12 (the A∩B-only mass,

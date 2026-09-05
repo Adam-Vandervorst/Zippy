@@ -1,0 +1,10 @@
+# PROOF TRACE — a typed DAG; every node carries its endpoint terms by digest, every
+# dependency is an earlier id, every leaf is a law instance, a definitional step or a backend obligation.
+# Replay: morkl.ProofTrace.Checker (Scala, re-runs each step); scripts/check_traces.py (structural, independent).
+# root	2
+# id	kind	before	after	fields	deps
+0	AlphaEquivalence	ab9487db8d6c	ab9487db8d6c	-	-
+1	GraphOptimizerNoOp	ab9487db8d6c	ab9487db8d6c	routine=datalog-sn_ag;refs=;mentions=edges,residual_sn_tc_2_9f0b74628b239f201af8802f05d519c467df58a68bc4b7169dae4b4375ec9222;body=ab9487db8d6c	-
+2	Compose	ab9487db8d6c	ab9487db8d6c	steps=0,1	0,1
+# terms
+T	ab9487db8d6c	Union(Mention("edges"),Union(Union(Mention("edges"),Subtraction(Iteration(Mention("edges"),"#p0","#s1",Wrap(TailsUnion(Restriction(Mention("edges"),Mention("#s1"))),Deref("#p0"))),Mention("edges"))),Union(Union(Union(Mention("edges"),Subtraction(Iteration(Mention("edges"),"#p2","#s3",Wrap(TailsUnion(Restriction(Mention("edges"),Mention("#s3"))),Deref("#p2"))),Mention("edges"))),Subtraction(Iteration(Subtraction(Iteration(Mention("edges"),"#p4","#s5",Wrap(TailsUnion(Restriction(Mention("edges"),Mention("#s5"))),Deref("#p4"))),Mention("edges")),"#p6","#s7",Wrap(TailsUnion(Restriction(Mention("edges"),Mention("#s7"))),Deref("#p6"))),Union(Mention("edges"),Subtraction(Iteration(Mention("edges"),"#p8","#s9",Wrap(TailsUnion(Restriction(Mention("edges"),Mention("#s9"))),Deref("#p8"))),Mention("edges"))))),Mention("residual_sn_tc_2_9f0b74628b239f201af8802f05d519c467df58a68bc4b7169dae4b4375ec9222"))))

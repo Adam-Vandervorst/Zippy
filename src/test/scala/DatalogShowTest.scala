@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
@@ -44,7 +46,7 @@ class DatalogShowTest extends FunSuite:
     S"all" \/ callN("pt_sn", S"addressOf", S"assign", S"all" \/ (join(S"assign", S"delta") \ S"all"), join(S"assign", S"delta") \ S"all") }
 
   // ---- fact sets (carac fixtures for tc/rsg; a small sensible instance for andersen) ----
-  def pair(a: String, b: String): PathValue = PathValue(List(PathItem.Symbol(a), PathItem.Symbol(b)))
+  def pair(a: String, b: String): PathValue = PathValue(List(a, b))
   def rel(ps: (String, String)*): SpaceValue = SpaceValue(ps.map(pair.tupled).toSet)
   val edges = rel("a" -> "b", "b" -> "c", "c" -> "d", "z" -> "z")                    // carac tc/base
   val up    = rel("a"->"e","a"->"f","f"->"m","g"->"n","h"->"n","i"->"o","j"->"o")     // carac rsg
@@ -57,7 +59,7 @@ class DatalogShowTest extends FunSuite:
   def closure(step: Set[(String, String)] => Set[(String, String)], seed: Set[(String, String)]): Set[(String, String)] =
     var s = seed; var g = true
     while g do { val ns = s ++ step(s); g = ns != s; s = ns }; s
-  def tuples(es: SpaceValue): Set[(String, String)] = es.paths.map { case PathValue(List(PathItem.Symbol(a), PathItem.Symbol(b))) => (a, b) }
+  def tuples(es: SpaceValue): Set[(String, String)] = es.paths.map { case PathValue(List(a, b)) => (a, b) }
   val refTC  = closure(s => for ((a, b) <- s; (c, d) <- s if b == c) yield (a, d), tuples(edges))
   val refRSG = closure(r => tuples(flat) ++ (for ((x, a) <- tuples(up); (b, a2) <- r if a2 == a; (b2, y) <- tuples(down) if b2 == b) yield (x, y)), tuples(flat))
   val refPT  = closure(pt => tuples(addressOf) ++ (for ((y, z) <- tuples(assign); (z2, x) <- pt if z2 == z) yield (y, x)), tuples(addressOf))
@@ -93,34 +95,36 @@ class DatalogShowTest extends FunSuite:
     show("REVERSE SAME-GENERATION — SEMI-NAIVE", rsgSemi, rsgEntryS)
     show("ANDERSEN POINTS-TO — NAIVE", andNaive, ptEntry)
     show("ANDERSEN POINTS-TO — SEMI-NAIVE", andSemi, ptEntryS)
+    // THROUGH THE SINK (0.3): a VERIFY run writes the twin under target/artifact-scratch and
+    // compares it against the committed `datalog-morkl.txt`, so a drifted renderer FAILS instead of
+    // silently rewriting the tracked file.  `ZIPPY_REGENERATE=1` is the only way it changes.
     val out = new java.io.File(Loaders.repoRoot, "datalog-morkl.txt")
-    val w = new java.io.FileWriter(out); try w.write(sb.toString) finally w.close()
+    ArtifactSink.write(out, sb.toString)
     System.out.println(sb.toString)
+    ArtifactSink.assertClean("morkl.DatalogShowTest")
   }
 end DatalogShowTest
 
 /** Render a [[Space]] / [[Routine]] as explicit, runnable Scala `Space.*` / `Path.*` constructor source. */
 object Expand:
   import Space.*
-  def item(pi: PathItem): String = pi match
-    case PathItem.Symbol(n)   => s"""PathItem.Symbol("$n")"""
-    case PathItem.Variable(n) => s"""PathItem.Variable("$n")"""
-    case PathItem.Arity(k)    => s"PathItem.Arity($k)"
+  def item(pi: PathItem): String = s""""$pi""""
   def pv(p: PathValue): String = s"PathValue(List(${p.items.map(item).mkString(", ")}))"
   def ref(pr: PathRef): String = if pr.lengthHint < 0 then s"""PathRef("${pr.s}")""" else s"""PathRef("${pr.s}").known(${pr.lengthHint})"""
+  def men(m: SpaceMention): String = if m.sizeHint < 0 then s"""SpaceMention("${m.s}")""" else s"""SpaceMention("${m.s}").known(${m.sizeHint})"""
   def path(p: Path): String = p match
     case Path.Deref(pr)    => s"Path.Deref(${ref(pr)})"
     case Path.Constant(x)  => s"Path.Constant(${pv(x)})"
     case Path.Concat(l, r) => s"Path.Concat(${path(l)}, ${path(r)})"
     case other             => other.toString
   def sv(s: SpaceValue): String =
-    s"SpaceValue(Set(${s.paths.toList.sortBy(_.items.map(_.show).mkString(".")).map(pv).mkString(", ")}))"
+    s"SpaceValue(Set(${s.paths.toList.sortBy(_.show).map(pv).mkString(", ")}))"
   def space(s: Space, ind: Int): String =
     val p = "  " * ind; val q = "  " * (ind + 1)
     def bin(name: String, x: Space, y: Space) = s"Space.$name(\n$q${space(x, ind + 1)},\n$q${space(y, ind + 1)})"
     s match
       case Empty            => "Space.Empty"
-      case Mention(m)       => s"""Space.Mention(SpaceMention("${m.s}"))"""
+      case Mention(m)       => s"Space.Mention(${men(m)})"
       case Singleton(pt)    => s"Space.Singleton(${path(pt)})"
       case Literal(v)       => s"Space.Literal(${sv(v)})"
       case Union(x, y)         => bin("Union", x, y)
@@ -133,7 +137,7 @@ object Expand:
       case TailsUnion(src)  => s"Space.TailsUnion(\n$q${space(src, ind + 1)})"
       case TailsIntersection(src) => s"Space.TailsIntersection(\n$q${space(src, ind + 1)})"
       case Iteration(src, sym, rest, tmpl) =>
-        s"""Space.Iteration(\n$q${space(src, ind + 1)},\n$q${ref(sym)}, SpaceMention("${rest.s}"),\n$q${space(tmpl, ind + 1)})"""
+        s"""Space.Iteration(\n$q${space(src, ind + 1)},\n$q${ref(sym)}, ${men(rest)},\n$q${space(tmpl, ind + 1)})"""
       case Call(rp, refs, ms) =>
         val r = if refs.isEmpty then "Vector()" else s"Vector(${refs.map(path).mkString(", ")})"
         val m = if ms.isEmpty then "Vector()" else s"Vector(\n$q${ms.map(space(_, ind + 1)).mkString(s",\n$q")})"
@@ -141,5 +145,5 @@ object Expand:
       case other            => other.toString
   def routine(r: Routine): String =
     val refs = r.refs.map(pr => s"""PathRef("${pr.s}")""").mkString(", ")
-    val ms   = r.mentions.map(m => s"""SpaceMention("${m.s}")""").mkString(", ")
+    val ms   = r.mentions.map(men).mkString(", ")
     s"""Routine(RoutinePtr("${r.name.s}"), Vector($refs), Vector($ms),\n  ${space(r.body, 1)})"""

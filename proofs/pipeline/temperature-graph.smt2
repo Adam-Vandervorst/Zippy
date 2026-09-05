@@ -1,24 +1,9 @@
-; AUTO-GENERATED — pipeline stage 3 (temperature): graph vs space (instance observations, folded)
-; Both sides compiled to their denotational membership formulas over the same inputs;
-; the goal (negated): the programs produce the SAME OUTPUT — equal membership at every path.
-(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
-(declare-fun append (Path Path) Path)
-(assert (forall ((q Path)) (= (append nil q) q)))
-(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
-(declare-fun isPrefix (Path Path) Bool)
-(assert (forall ((p Path)) (isPrefix nil p)))
-(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
-(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
-  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
-; certified lemmas (proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2 — both PROVED)
-(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
-  (= (= (cons k2 p) (append q r))
-     (or (and (= q nil) (= r (cons k2 p)))
-         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
-(assert (forall ((q Path)) (= (append q nil) q)))
+; TRUSTS: -
+; INSTANCE-DIFFERENTIAL: GraphExec.runGraphT(optimize(transpile(program))) == eval(program) on this input
+; (Scala assertEquals); the obligation below is the instance (data-agnostic obligation + differential) one, which covers this input.
 
-(define-fun m_1 ((p Path)) Bool (or (= p (cons 165 (cons 165 (cons 165 (cons 165 (cons 233 nil)))))) (= p (cons 165 (cons 165 (cons 165 (cons 166 (cons 228 nil)))))) (= p (cons 165 (cons 165 (cons 166 (cons 165 (cons 233 nil)))))) (= p (cons 165 (cons 165 (cons 166 (cons 166 (cons 229 nil)))))) (= p (cons 165 (cons 166 (cons 165 (cons 165 (cons 232 nil)))))) (= p (cons 166 (cons 166 (cons 165 (cons 165 (cons 233 nil)))))) (= p (cons 166 (cons 166 (cons 165 (cons 166 (cons 228 nil)))))) (= p (cons 166 (cons 166 (cons 166 (cons 165 (cons 234 nil)))))) (= p (cons 166 (cons 166 (cons 166 (cons 166 (cons 232 nil))))))))
-(define-fun m_2 ((p Path)) Bool (or (= p (cons 165 (cons 165 (cons 165 (cons 165 (cons 233 nil)))))) (= p (cons 165 (cons 165 (cons 165 (cons 166 (cons 228 nil)))))) (= p (cons 165 (cons 165 (cons 166 (cons 165 (cons 233 nil)))))) (= p (cons 165 (cons 165 (cons 166 (cons 166 (cons 229 nil)))))) (= p (cons 165 (cons 166 (cons 165 (cons 165 (cons 232 nil)))))) (= p (cons 166 (cons 166 (cons 165 (cons 165 (cons 233 nil)))))) (= p (cons 166 (cons 166 (cons 165 (cons 166 (cons 228 nil)))))) (= p (cons 166 (cons 166 (cons 166 (cons 165 (cons 234 nil)))))) (= p (cons 166 (cons 166 (cons 166 (cons 166 (cons 232 nil))))))))
-
-(assert (not (and (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 233 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 233 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 166 (cons 228 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 166 (cons 228 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 166 (cons 165 (cons 233 nil)))))) (m_2 (cons 165 (cons 165 (cons 166 (cons 165 (cons 233 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 166 (cons 166 (cons 229 nil)))))) (m_2 (cons 165 (cons 165 (cons 166 (cons 166 (cons 229 nil))))))) (= (m_1 (cons 165 (cons 166 (cons 165 (cons 165 (cons 232 nil)))))) (m_2 (cons 165 (cons 166 (cons 165 (cons 165 (cons 232 nil))))))) (= (m_1 (cons 166 (cons 166 (cons 165 (cons 165 (cons 233 nil)))))) (m_2 (cons 166 (cons 166 (cons 165 (cons 165 (cons 233 nil))))))) (= (m_1 (cons 166 (cons 166 (cons 165 (cons 166 (cons 228 nil)))))) (m_2 (cons 166 (cons 166 (cons 165 (cons 166 (cons 228 nil))))))) (= (m_1 (cons 166 (cons 166 (cons 166 (cons 165 (cons 234 nil)))))) (m_2 (cons 166 (cons 166 (cons 166 (cons 165 (cons 234 nil))))))) (= (m_1 (cons 166 (cons 166 (cons 166 (cons 166 (cons 232 nil)))))) (m_2 (cons 166 (cons 166 (cons 166 (cons 166 (cons 232 nil))))))) (= (m_1 (cons 228 nil)) (m_2 (cons 228 nil))) (= (m_1 (cons 229 nil)) (m_2 (cons 229 nil))) (= (m_1 (cons 232 nil)) (m_2 (cons 232 nil))) (= (m_1 (cons 233 nil)) (m_2 (cons 233 nil))) (= (m_1 (cons 234 nil)) (m_2 (cons 234 nil))) (= (m_1 (cons 165 (cons 228 nil))) (m_2 (cons 165 (cons 228 nil)))) (= (m_1 (cons 165 (cons 229 nil))) (m_2 (cons 165 (cons 229 nil)))) (= (m_1 (cons 165 (cons 232 nil))) (m_2 (cons 165 (cons 232 nil)))) (= (m_1 (cons 165 (cons 233 nil))) (m_2 (cons 165 (cons 233 nil)))) (= (m_1 (cons 165 (cons 234 nil))) (m_2 (cons 165 (cons 234 nil)))) (= (m_1 (cons 165 (cons 165 (cons 228 nil)))) (m_2 (cons 165 (cons 165 (cons 228 nil))))) (= (m_1 (cons 165 (cons 165 (cons 229 nil)))) (m_2 (cons 165 (cons 165 (cons 229 nil))))) (= (m_1 (cons 165 (cons 165 (cons 232 nil)))) (m_2 (cons 165 (cons 165 (cons 232 nil))))) (= (m_1 (cons 165 (cons 165 (cons 233 nil)))) (m_2 (cons 165 (cons 165 (cons 233 nil))))) (= (m_1 (cons 165 (cons 165 (cons 234 nil)))) (m_2 (cons 165 (cons 165 (cons 234 nil))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 228 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 228 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 229 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 229 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 232 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 232 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 233 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 233 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 234 nil))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 234 nil)))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 165 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 165 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 166 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 166 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 228 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 228 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 229 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 229 nil))))))) (= (m_1 (cons 165 (cons 165 (cons 165 (cons 165 (cons 232 nil)))))) (m_2 (cons 165 (cons 165 (cons 165 (cons 165 (cons 232 nil))))))))))
-(check-sat)
+; BOUNDARY: graph
+; AUTO-GENERATED — pipeline graph (temperature), instance (data-agnostic obligation + differential)
+; TRIVIAL-NO-OBLIGATION: the two sides are syntactically identical after alpha-normalisation
+; (0 candidate pair(s), 0 reflexive after freeing binders).  Recorded as a
+; no-obligation marker; the runner counts these and invokes no prover on them.

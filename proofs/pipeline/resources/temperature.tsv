@@ -1,0 +1,92 @@
+# RESOURCE CERTIFICATE — temperature priced by the compositional resource analysis over its actual inputs, per backend,
+# with the counted run of the executor beside every interval; the derivation follows (D rows).
+# inputs	world=SpaceValue("0.0.0.0.C", "0.0.0.1.N", "0.0.1.0.C", "0.0.1.1.W", "0.1.0.0.VW", "0.1.0.1.C", "0.1.1.0.VC", "0.1.1.1.VC", "1.0.0.0.C", "1.0.0.1.C", "1.0.1.0.W", "1.0.1.1.N", "1.1.0.0.C", "1.1.0.1.N", "1.1.1.0.VC", "1.1.1.1.VW")
+# B	backend	work	alloc	rounds	touch	counted-work	counted-alloc	counted-rounds	counted-touch	certified	dependencies	summaries(reused,computed)
+B	reference	[75, 85]	[0, 0]	[0, 0]	[0, 0]	77	0	0	0	CERTIFIED	A6-BACKENDS,A6-EVENTS,A6-EXACT-RESTRICT,A6-EXACT-UNION,A6-EXACT-UNION-SAME,A6-IVL,A6-IVL-IMPL,A6-MUSTMAY,A6-ORDER,A6-PATRICIA	0,0
+D	reference	Union/eval [reference]
+D	reference	  ⇒ Work=[75, 85] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	reference	  Restriction/eval [reference]
+D	reference	    · comparisons [44, 54]
+D	reference	    ⇒ Work=[47, 57] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	reference	    Mention world [reference]
+D	reference	      · value {0·{0·{0·{0·{C·ε{}},1·{N·ε{}}},1·{0·{C·ε{}},1·{W·ε{}}}},1·{0·{0·{VW·ε{}},1·{C·ε{
+D	reference	      ⇒ Work=[1, 1] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	reference	    Literal [reference]
+D	reference	      · |v|=2
+D	reference	      · phase Warm
+D	reference	      ⇒ Work=[1, 1] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	reference	  Restriction/eval [reference]
+D	reference	    · comparisons [24, 24]
+D	reference	    ⇒ Work=[27, 27] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	reference	    Mention world [reference]
+D	reference	      · value {0·{0·{0·{0·{C·ε{}},1·{N·ε{}}},1·{0·{C·ε{}},1·{W·ε{}}}},1·{0·{0·{VW·ε{}},1·{C·ε{
+D	reference	      ⇒ Work=[1, 1] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	reference	    Literal [reference]
+D	reference	      · |v|=1
+D	reference	      · phase Warm
+D	reference	      ⇒ Work=[1, 1] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+B	trie	[7, 7]	[7, 7]	[0, 0]	[17, 38]	7	7	0	19	CERTIFIED	A6-BACKENDS,A6-EVENTS,A6-EXACT-RESTRICT,A6-EXACT-UNION,A6-EXACT-UNION-SAME,A6-IVL,A6-IVL-IMPL,A6-MUSTMAY,A6-ORDER,A6-PATRICIA	0,0
+D	trie	Union [trie]
+D	trie	  · exact operands: the algebra's own recursion, sharing ∈ [maximal, proven]; Patricia by the 2k-1 envelope
+D	trie	  · must-alias false
+D	trie	  ⇒ Work=[7, 7] Alloc=[7, 7] Rounds=[0, 0] Touch=[17, 38]
+D	trie	  Restriction [trie]
+D	trie	    · exact operands: the algebra's own recursion, sharing ∈ [maximal, proven]; Patricia by the 2k-1 envelope
+D	trie	    · must-alias false
+D	trie	    ⇒ Work=[3, 3] Alloc=[4, 4] Rounds=[0, 0] Touch=[10, 24]
+D	trie	    Mention world [trie]
+D	trie	      · value {0·{0·{0·{0·{C·ε{}},1·{N·ε{}}},1·{0·{C·ε{}},1·{W·ε{}}}},1·{0·{0·{VW·ε{}},1·{C·ε{
+D	trie	      ⇒ Work=[1, 1] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	trie	    Literal [trie]
+D	trie	      · |v|=2
+D	trie	      · phase Warm
+D	trie	      ⇒ Work=[1, 1] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	trie	  Restriction [trie]
+D	trie	    · exact operands: the algebra's own recursion, sharing ∈ [maximal, proven]; Patricia by the 2k-1 envelope
+D	trie	    · must-alias false
+D	trie	    ⇒ Work=[3, 3] Alloc=[2, 2] Rounds=[0, 0] Touch=[5, 11]
+D	trie	    Mention world [trie]
+D	trie	      · value {0·{0·{0·{0·{C·ε{}},1·{N·ε{}}},1·{0·{C·ε{}},1·{W·ε{}}}},1·{0·{0·{VW·ε{}},1·{C·ε{
+D	trie	      ⇒ Work=[1, 1] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	trie	    Literal [trie]
+D	trie	      · |v|=1
+D	trie	      · phase Warm
+D	trie	      ⇒ Work=[1, 1] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+B	graph	[12, 12]	[8, 8]	[0, 0]	[17, 38]	12	8	0	19	CERTIFIED	A6-BACKENDS,A6-EVENTS,A6-EXACT-RESTRICT,A6-EXACT-UNION,A6-EXACT-UNION-SAME,A6-IVL,A6-IVL-IMPL,A6-MUSTMAY,A6-ORDER,A6-PATRICIA	0,0
+D	graph	execT graph [graph]
+D	graph	  · 6 slots
+D	graph	  ⇒ Work=[12, 12] Alloc=[8, 8] Rounds=[0, 0] Touch=[17, 38]
+D	graph	  Restriction [graph]
+D	graph	    · exact operands: the algebra's own recursion, sharing ∈ [maximal, proven]; Patricia by the 2k-1 envelope
+D	graph	    · must-alias false
+D	graph	    ⇒ Work=[6, 6] Alloc=[4, 4] Rounds=[0, 0] Touch=[10, 24]
+D	graph	    Mention #l [graph]
+D	graph	      · value {0·{0·{0·{0·{C·ε{}},1·{N·ε{}}},1·{0·{C·ε{}},1·{W·ε{}}}},1·{0·{0·{VW·ε{}},1·{C·ε{
+D	graph	      ⇒ Work=[2, 2] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	graph	    Mention #r [graph]
+D	graph	      · value {0·{0·ε{},1·{0·{0·ε{}}}}}[fresh]
+D	graph	      ⇒ Work=[2, 2] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	graph	  Restriction [graph]
+D	graph	    · exact operands: the algebra's own recursion, sharing ∈ [maximal, proven]; Patricia by the 2k-1 envelope
+D	graph	    · must-alias false
+D	graph	    ⇒ Work=[6, 6] Alloc=[2, 2] Rounds=[0, 0] Touch=[5, 11]
+D	graph	    Mention #l [graph]
+D	graph	      · value {0·{0·{0·{0·{C·ε{}},1·{N·ε{}}},1·{0·{C·ε{}},1·{W·ε{}}}},1·{0·{0·{VW·ε{}},1·{C·ε{
+D	graph	      ⇒ Work=[2, 2] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	graph	    Mention #r [graph]
+D	graph	      · value {1·{1·ε{}}}[fresh]
+D	graph	      ⇒ Work=[2, 2] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	graph	  Union [graph]
+D	graph	    · exact operands: the algebra's own recursion, sharing ∈ [maximal, proven]; Patricia by the 2k-1 envelope
+D	graph	    · must-alias false
+D	graph	    ⇒ Work=[6, 6] Alloc=[1, 1] Rounds=[0, 0] Touch=[2, 3]
+D	graph	    Mention #l [graph]
+D	graph	      · value {0·{0·{0·{0·{C·ε{}},1·{N·ε{}}},1·{0·{C·ε{}},1·{W·ε{}}}},1·{0·{0·{VW·ε{}}}}}}[fre
+D	graph	      ⇒ Work=[2, 2] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+D	graph	    Mention #r [graph]
+D	graph	      · value {1·{1·{0·{0·{C·ε{}},1·{N·ε{}}},1·{0·{VC·ε{}},1·{VW·ε{}}}}}}[fresh]
+D	graph	      ⇒ Work=[2, 2] Alloc=[0, 0] Rounds=[0, 0] Touch=[0, 0]
+B	zipper	[47, 47]	[5, 5]	[0, 0]	[0, 0]	47	5	0	0	CERTIFIED	A6-BACKENDS,A6-EVENTS,A6-IVL,A6-IVL-IMPL,A6-MUSTMAY,A6-ORDER	0,0
+D	zipper	execZ [zipper]
+D	zipper	  · exact shell: the cursor algebra read for read, sharing ∈ [maximal, proven]
+D	zipper	  ⇒ Work=[47, 47] Alloc=[5, 5] Rounds=[0, 0] Touch=[0, 0]

@@ -1,0 +1,26 @@
+# SELECTION CERTIFICATE — a pure function of the C rows and the objective; replay:
+# scripts/check_selection.py (independent), morkl.Pareto.replay (in-process).
+# objective	alloc
+# priority	alloc,work,rounds,touch
+# dominance	work,alloc,rounds,touch
+# constraints	-
+# backends	reference,trie,graph,zipper
+# tie-rule	lexicographic (hi, lo) over the priority components, then alternative id, then backend order reference,trie,graph,zipper
+# reference-touch	modelled, no counted oracle: taken as [0, inf]; not compared between two reference candidates
+# columns	C	alt	backend	work.lo	work.hi	alloc.lo	alloc.hi	rounds.lo	rounds.hi	touch.lo	touch.hi	certified	closure
+C	0c55c0741bee8469	reference	256	256	88	88	1	1	0	inf	CERTIFIED	CLOSED
+C	0c55c0741bee8469	trie	62	278	43	209	1	1	42	194	CERTIFIED	CLOSED
+C	0c55c0741bee8469	graph	90	306	45	211	1	1	42	194	CERTIFIED	CLOSED
+C	0c55c0741bee8469	zipper	63	279	43	209	1	1	42	194	CERTIFIED	CLOSED
+C	d5cb8ea7383deebb	reference	212	227	44	44	1	1	0	inf	CERTIFIED	CLOSED
+C	d5cb8ea7383deebb	trie	28	136	27	110	1	1	22	144	CERTIFIED	CLOSED
+C	d5cb8ea7383deebb	graph	41	149	29	112	1	1	22	144	CERTIFIED	CLOSED
+C	d5cb8ea7383deebb	zipper	29	137	27	110	1	1	22	144	CERTIFIED	CLOSED
+X	0c55c0741bee8469	reference	DOMINATED	by d5cb8ea7383deebb/reference: work 227<=256 alloc 44<=88 rounds 1<=1
+S	d5cb8ea7383deebb	reference	ranked first by the tie rule among 7 incomparable survivors
+K	0c55c0741bee8469	trie	INCOMPARABLE with the selected: overlaps on work,alloc,rounds,touch
+K	0c55c0741bee8469	graph	INCOMPARABLE with the selected: overlaps on work,rounds,touch
+K	0c55c0741bee8469	zipper	INCOMPARABLE with the selected: overlaps on work,alloc,rounds,touch
+K	d5cb8ea7383deebb	trie	INCOMPARABLE with the selected: overlaps on alloc,rounds,touch
+K	d5cb8ea7383deebb	graph	INCOMPARABLE with the selected: overlaps on alloc,rounds,touch
+K	d5cb8ea7383deebb	zipper	INCOMPARABLE with the selected: overlaps on alloc,rounds,touch

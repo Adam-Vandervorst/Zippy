@@ -1,4 +1,8 @@
-// Fully expanded MORKL Datalog programs derived from ~/carac graph fixtures.
+// Fully expanded MORKL Datalog programs derived from the `carac` Datalog benchmark's graph
+// fixtures (https://github.com/OlivierBlanvillain/carac, `src/test/scala/test/graphs/`).
+// The fixtures are cited by their REPO-RELATIVE path below; carac is an external project and is
+// not vendored here, so nothing in this tree resolves those paths (scripts/check_references.py
+// knows them as external-dataset tokens).
 // The ASTs below use Scala constructors directly: no MORKL string interpolators, no /\, no \/, no x DSL.
 // Each pair computes the same transitive closure over edge(x, y) as bare path x.y results.
 
@@ -7,13 +11,13 @@ import morkl.*
 object CaracDatalogMorklPrints:
 
   // === 1/6: carac test.graphs.SingleCycle naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/SingleCycle.scala
+  // Source: carac:src/test/scala/test/graphs/SingleCycle.scala
   object SingleCycleNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
-        PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-        PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-        PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d")))
+        PathValue(List("edge", "a", "b")),
+        PathValue(List("edge", "b", "c")),
+        PathValue(List("edge", "c", "d"))
       )))
 
     val routine: Routine =
@@ -33,7 +37,7 @@ object CaracDatalogMorklPrints:
                   Space.Iteration(
                     Space.Unwrap(
                       Space.Mention(SpaceMention("last")),
-                      Path.Constant(PathValue(List(PathItem("edge"))))
+                      Path.Constant(PathValue(List("edge")))
                     ),
                     PathRef("x"),
                     SpaceMention("x_"),
@@ -49,14 +53,14 @@ object CaracDatalogMorklPrints:
                           ),
                           Path.Deref(PathRef("x"))
                         ),
-                        Path.Constant(PathValue(List(PathItem("path"))))
+                        Path.Constant(PathValue(List("path")))
                       )
                     )
                   ),
                   Space.Iteration(
                     Space.Unwrap(
                       Space.Mention(SpaceMention("last")),
-                      Path.Constant(PathValue(List(PathItem("path"))))
+                      Path.Constant(PathValue(List("path")))
                     ),
                     PathRef("x"),
                     SpaceMention("x_"),
@@ -68,7 +72,7 @@ object CaracDatalogMorklPrints:
                         Space.Unwrap(
                           Space.Unwrap(
                             Space.Mention(SpaceMention("last")),
-                            Path.Constant(PathValue(List(PathItem("path"))))
+                            Path.Constant(PathValue(List("path")))
                           ),
                           Path.Deref(PathRef("y"))
                         ),
@@ -82,7 +86,7 @@ object CaracDatalogMorklPrints:
                             ),
                             Path.Deref(PathRef("x"))
                           ),
-                          Path.Constant(PathValue(List(PathItem("path"))))
+                          Path.Constant(PathValue(List("path")))
                         )
                       )
                     )
@@ -101,13 +105,13 @@ object CaracDatalogMorklPrints:
           Vector.empty[Path],
           Vector(
             Space.Literal(SpaceValue(Set(
-              PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-              PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-              PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d")))
+              PathValue(List("edge", "a", "b")),
+              PathValue(List("edge", "b", "c")),
+              PathValue(List("edge", "c", "d"))
             )))
           )
         ),
-        Path.Constant(PathValue(List(PathItem("path"))))
+        Path.Constant(PathValue(List("path")))
       )
 
     val routines: PartialFunction[RoutinePtr, Routine] =
@@ -116,13 +120,13 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 2/6: carac test.graphs.SingleCycle semi-naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/SingleCycle.scala
+  // Source: carac:src/test/scala/test/graphs/SingleCycle.scala
   object SingleCycleSemiNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
-        PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-        PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-        PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d")))
+        PathValue(List("edge", "a", "b")),
+        PathValue(List("edge", "b", "c")),
+        PathValue(List("edge", "c", "d"))
       )))
 
     val routine: Routine =
@@ -143,14 +147,14 @@ object CaracDatalogMorklPrints:
                     Space.Union(
                       Space.Unwrap(
                         Space.Mention(SpaceMention("last")),
-                        Path.Constant(PathValue(List(PathItem("complete"))))
+                        Path.Constant(PathValue(List("complete")))
                       ),
                       Space.Unwrap(
                         Space.Mention(SpaceMention("last")),
-                        Path.Constant(PathValue(List(PathItem("delta"))))
+                        Path.Constant(PathValue(List("delta")))
                       )
                     ),
-                    Path.Constant(PathValue(List(PathItem("complete"))))
+                    Path.Constant(PathValue(List("complete")))
                   ),
                   Space.Wrap(
                     Space.Subtraction(
@@ -160,9 +164,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("complete"))))
+                                Path.Constant(PathValue(List("complete")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("edge"))))
+                              Path.Constant(PathValue(List("edge")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -183,9 +187,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("complete"))))
+                                Path.Constant(PathValue(List("complete")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -198,9 +202,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("delta"))))
+                                      Path.Constant(PathValue(List("delta")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -222,9 +226,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("delta"))))
+                                Path.Constant(PathValue(List("delta")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -237,9 +241,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("complete"))))
+                                      Path.Constant(PathValue(List("complete")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -259,9 +263,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("delta"))))
+                                Path.Constant(PathValue(List("delta")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -274,9 +278,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("delta"))))
+                                      Path.Constant(PathValue(List("delta")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -297,15 +301,15 @@ object CaracDatalogMorklPrints:
                       Space.Union(
                         Space.Unwrap(
                           Space.Mention(SpaceMention("last")),
-                          Path.Constant(PathValue(List(PathItem("complete"), PathItem("path"))))
+                          Path.Constant(PathValue(List("complete", "path")))
                         ),
                         Space.Unwrap(
                           Space.Mention(SpaceMention("last")),
-                          Path.Constant(PathValue(List(PathItem("delta"), PathItem("path"))))
+                          Path.Constant(PathValue(List("delta", "path")))
                         )
                       )
                     ),
-                    Path.Constant(PathValue(List(PathItem("delta"), PathItem("path"))))
+                    Path.Constant(PathValue(List("delta", "path")))
                   )
                 )
               )
@@ -325,11 +329,11 @@ object CaracDatalogMorklPrints:
                 Space.Iteration(
                   Space.Unwrap(
                     Space.Literal(SpaceValue(Set(
-                      PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-                      PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-                      PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d")))
+                      PathValue(List("edge", "a", "b")),
+                      PathValue(List("edge", "b", "c")),
+                      PathValue(List("edge", "c", "d"))
                     ))),
-                    Path.Constant(PathValue(List(PathItem("edge"))))
+                    Path.Constant(PathValue(List("edge")))
                   ),
                   PathRef("x"),
                   SpaceMention("x_"),
@@ -345,24 +349,24 @@ object CaracDatalogMorklPrints:
                         ),
                         Path.Deref(PathRef("x"))
                       ),
-                      Path.Constant(PathValue(List(PathItem("path"))))
+                      Path.Constant(PathValue(List("path")))
                     )
                   )
                 ),
-                Path.Constant(PathValue(List(PathItem("delta"))))
+                Path.Constant(PathValue(List("delta")))
               ),
               Space.Wrap(
                 Space.Literal(SpaceValue(Set(
-                  PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-                  PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-                  PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d")))
+                  PathValue(List("edge", "a", "b")),
+                  PathValue(List("edge", "b", "c")),
+                  PathValue(List("edge", "c", "d"))
                 ))),
-                Path.Constant(PathValue(List(PathItem("complete"))))
+                Path.Constant(PathValue(List("complete")))
               )
             )
           )
         ),
-        Path.Constant(PathValue(List(PathItem("complete"), PathItem("path"))))
+        Path.Constant(PathValue(List("complete", "path")))
       )
 
     val routines: PartialFunction[RoutinePtr, Routine] =
@@ -371,16 +375,16 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 3/6: carac test.graphs.MultiIsolatedCycle naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/MultiIsolatedCycle.scala
+  // Source: carac:src/test/scala/test/graphs/MultiIsolatedCycle.scala
   object MultiIsolatedCycleNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
-        PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-        PathValue(List(PathItem("edge"), PathItem("a1"), PathItem("b1"))),
-        PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-        PathValue(List(PathItem("edge"), PathItem("b1"), PathItem("c1"))),
-        PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d"))),
-        PathValue(List(PathItem("edge"), PathItem("c1"), PathItem("d1")))
+        PathValue(List("edge", "a", "b")),
+        PathValue(List("edge", "a1", "b1")),
+        PathValue(List("edge", "b", "c")),
+        PathValue(List("edge", "b1", "c1")),
+        PathValue(List("edge", "c", "d")),
+        PathValue(List("edge", "c1", "d1"))
       )))
 
     val routine: Routine =
@@ -400,7 +404,7 @@ object CaracDatalogMorklPrints:
                   Space.Iteration(
                     Space.Unwrap(
                       Space.Mention(SpaceMention("last")),
-                      Path.Constant(PathValue(List(PathItem("edge"))))
+                      Path.Constant(PathValue(List("edge")))
                     ),
                     PathRef("x"),
                     SpaceMention("x_"),
@@ -416,14 +420,14 @@ object CaracDatalogMorklPrints:
                           ),
                           Path.Deref(PathRef("x"))
                         ),
-                        Path.Constant(PathValue(List(PathItem("path"))))
+                        Path.Constant(PathValue(List("path")))
                       )
                     )
                   ),
                   Space.Iteration(
                     Space.Unwrap(
                       Space.Mention(SpaceMention("last")),
-                      Path.Constant(PathValue(List(PathItem("path"))))
+                      Path.Constant(PathValue(List("path")))
                     ),
                     PathRef("x"),
                     SpaceMention("x_"),
@@ -435,7 +439,7 @@ object CaracDatalogMorklPrints:
                         Space.Unwrap(
                           Space.Unwrap(
                             Space.Mention(SpaceMention("last")),
-                            Path.Constant(PathValue(List(PathItem("path"))))
+                            Path.Constant(PathValue(List("path")))
                           ),
                           Path.Deref(PathRef("y"))
                         ),
@@ -449,7 +453,7 @@ object CaracDatalogMorklPrints:
                             ),
                             Path.Deref(PathRef("x"))
                           ),
-                          Path.Constant(PathValue(List(PathItem("path"))))
+                          Path.Constant(PathValue(List("path")))
                         )
                       )
                     )
@@ -468,16 +472,16 @@ object CaracDatalogMorklPrints:
           Vector.empty[Path],
           Vector(
             Space.Literal(SpaceValue(Set(
-              PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-              PathValue(List(PathItem("edge"), PathItem("a1"), PathItem("b1"))),
-              PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-              PathValue(List(PathItem("edge"), PathItem("b1"), PathItem("c1"))),
-              PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d"))),
-              PathValue(List(PathItem("edge"), PathItem("c1"), PathItem("d1")))
+              PathValue(List("edge", "a", "b")),
+              PathValue(List("edge", "a1", "b1")),
+              PathValue(List("edge", "b", "c")),
+              PathValue(List("edge", "b1", "c1")),
+              PathValue(List("edge", "c", "d")),
+              PathValue(List("edge", "c1", "d1"))
             )))
           )
         ),
-        Path.Constant(PathValue(List(PathItem("path"))))
+        Path.Constant(PathValue(List("path")))
       )
 
     val routines: PartialFunction[RoutinePtr, Routine] =
@@ -486,16 +490,16 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 4/6: carac test.graphs.MultiIsolatedCycle semi-naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/MultiIsolatedCycle.scala
+  // Source: carac:src/test/scala/test/graphs/MultiIsolatedCycle.scala
   object MultiIsolatedCycleSemiNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
-        PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-        PathValue(List(PathItem("edge"), PathItem("a1"), PathItem("b1"))),
-        PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-        PathValue(List(PathItem("edge"), PathItem("b1"), PathItem("c1"))),
-        PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d"))),
-        PathValue(List(PathItem("edge"), PathItem("c1"), PathItem("d1")))
+        PathValue(List("edge", "a", "b")),
+        PathValue(List("edge", "a1", "b1")),
+        PathValue(List("edge", "b", "c")),
+        PathValue(List("edge", "b1", "c1")),
+        PathValue(List("edge", "c", "d")),
+        PathValue(List("edge", "c1", "d1"))
       )))
 
     val routine: Routine =
@@ -516,14 +520,14 @@ object CaracDatalogMorklPrints:
                     Space.Union(
                       Space.Unwrap(
                         Space.Mention(SpaceMention("last")),
-                        Path.Constant(PathValue(List(PathItem("complete"))))
+                        Path.Constant(PathValue(List("complete")))
                       ),
                       Space.Unwrap(
                         Space.Mention(SpaceMention("last")),
-                        Path.Constant(PathValue(List(PathItem("delta"))))
+                        Path.Constant(PathValue(List("delta")))
                       )
                     ),
-                    Path.Constant(PathValue(List(PathItem("complete"))))
+                    Path.Constant(PathValue(List("complete")))
                   ),
                   Space.Wrap(
                     Space.Subtraction(
@@ -533,9 +537,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("complete"))))
+                                Path.Constant(PathValue(List("complete")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("edge"))))
+                              Path.Constant(PathValue(List("edge")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -556,9 +560,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("complete"))))
+                                Path.Constant(PathValue(List("complete")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -571,9 +575,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("delta"))))
+                                      Path.Constant(PathValue(List("delta")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -595,9 +599,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("delta"))))
+                                Path.Constant(PathValue(List("delta")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -610,9 +614,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("complete"))))
+                                      Path.Constant(PathValue(List("complete")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -632,9 +636,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("delta"))))
+                                Path.Constant(PathValue(List("delta")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -647,9 +651,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("delta"))))
+                                      Path.Constant(PathValue(List("delta")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -670,15 +674,15 @@ object CaracDatalogMorklPrints:
                       Space.Union(
                         Space.Unwrap(
                           Space.Mention(SpaceMention("last")),
-                          Path.Constant(PathValue(List(PathItem("complete"), PathItem("path"))))
+                          Path.Constant(PathValue(List("complete", "path")))
                         ),
                         Space.Unwrap(
                           Space.Mention(SpaceMention("last")),
-                          Path.Constant(PathValue(List(PathItem("delta"), PathItem("path"))))
+                          Path.Constant(PathValue(List("delta", "path")))
                         )
                       )
                     ),
-                    Path.Constant(PathValue(List(PathItem("delta"), PathItem("path"))))
+                    Path.Constant(PathValue(List("delta", "path")))
                   )
                 )
               )
@@ -698,14 +702,14 @@ object CaracDatalogMorklPrints:
                 Space.Iteration(
                   Space.Unwrap(
                     Space.Literal(SpaceValue(Set(
-                      PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-                      PathValue(List(PathItem("edge"), PathItem("a1"), PathItem("b1"))),
-                      PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-                      PathValue(List(PathItem("edge"), PathItem("b1"), PathItem("c1"))),
-                      PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d"))),
-                      PathValue(List(PathItem("edge"), PathItem("c1"), PathItem("d1")))
+                      PathValue(List("edge", "a", "b")),
+                      PathValue(List("edge", "a1", "b1")),
+                      PathValue(List("edge", "b", "c")),
+                      PathValue(List("edge", "b1", "c1")),
+                      PathValue(List("edge", "c", "d")),
+                      PathValue(List("edge", "c1", "d1"))
                     ))),
-                    Path.Constant(PathValue(List(PathItem("edge"))))
+                    Path.Constant(PathValue(List("edge")))
                   ),
                   PathRef("x"),
                   SpaceMention("x_"),
@@ -721,27 +725,27 @@ object CaracDatalogMorklPrints:
                         ),
                         Path.Deref(PathRef("x"))
                       ),
-                      Path.Constant(PathValue(List(PathItem("path"))))
+                      Path.Constant(PathValue(List("path")))
                     )
                   )
                 ),
-                Path.Constant(PathValue(List(PathItem("delta"))))
+                Path.Constant(PathValue(List("delta")))
               ),
               Space.Wrap(
                 Space.Literal(SpaceValue(Set(
-                  PathValue(List(PathItem("edge"), PathItem("a"), PathItem("b"))),
-                  PathValue(List(PathItem("edge"), PathItem("a1"), PathItem("b1"))),
-                  PathValue(List(PathItem("edge"), PathItem("b"), PathItem("c"))),
-                  PathValue(List(PathItem("edge"), PathItem("b1"), PathItem("c1"))),
-                  PathValue(List(PathItem("edge"), PathItem("c"), PathItem("d"))),
-                  PathValue(List(PathItem("edge"), PathItem("c1"), PathItem("d1")))
+                  PathValue(List("edge", "a", "b")),
+                  PathValue(List("edge", "a1", "b1")),
+                  PathValue(List("edge", "b", "c")),
+                  PathValue(List("edge", "b1", "c1")),
+                  PathValue(List("edge", "c", "d")),
+                  PathValue(List("edge", "c1", "d1"))
                 ))),
-                Path.Constant(PathValue(List(PathItem("complete"))))
+                Path.Constant(PathValue(List("complete")))
               )
             )
           )
         ),
-        Path.Constant(PathValue(List(PathItem("complete"), PathItem("path"))))
+        Path.Constant(PathValue(List("complete", "path")))
       )
 
     val routines: PartialFunction[RoutinePtr, Routine] =
@@ -750,27 +754,27 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 5/6: carac test.graphs.TopSort naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/TopSort.scala
+  // Source: carac:src/test/scala/test/graphs/TopSort.scala
   object TopSortNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
-        PathValue(List(PathItem("edge"), PathItem("A"), PathItem("B"))),
-        PathValue(List(PathItem("edge"), PathItem("A"), PathItem("D"))),
-        PathValue(List(PathItem("edge"), PathItem("A"), PathItem("E"))),
-        PathValue(List(PathItem("edge"), PathItem("B"), PathItem("C"))),
-        PathValue(List(PathItem("edge"), PathItem("C"), PathItem("D"))),
-        PathValue(List(PathItem("edge"), PathItem("C"), PathItem("E"))),
-        PathValue(List(PathItem("edge"), PathItem("D"), PathItem("E"))),
-        PathValue(List(PathItem("edge"), PathItem("E"), PathItem("F"))),
-        PathValue(List(PathItem("edge"), PathItem("F"), PathItem("G"))),
-        PathValue(List(PathItem("edge"), PathItem("F"), PathItem("H"))),
-        PathValue(List(PathItem("edge"), PathItem("F"), PathItem("I"))),
-        PathValue(List(PathItem("edge"), PathItem("G"), PathItem("J"))),
-        PathValue(List(PathItem("edge"), PathItem("H"), PathItem("K"))),
-        PathValue(List(PathItem("edge"), PathItem("I"), PathItem("L"))),
-        PathValue(List(PathItem("edge"), PathItem("J"), PathItem("M"))),
-        PathValue(List(PathItem("edge"), PathItem("K"), PathItem("M"))),
-        PathValue(List(PathItem("edge"), PathItem("L"), PathItem("M")))
+        PathValue(List("edge", "A", "B")),
+        PathValue(List("edge", "A", "D")),
+        PathValue(List("edge", "A", "E")),
+        PathValue(List("edge", "B", "C")),
+        PathValue(List("edge", "C", "D")),
+        PathValue(List("edge", "C", "E")),
+        PathValue(List("edge", "D", "E")),
+        PathValue(List("edge", "E", "F")),
+        PathValue(List("edge", "F", "G")),
+        PathValue(List("edge", "F", "H")),
+        PathValue(List("edge", "F", "I")),
+        PathValue(List("edge", "G", "J")),
+        PathValue(List("edge", "H", "K")),
+        PathValue(List("edge", "I", "L")),
+        PathValue(List("edge", "J", "M")),
+        PathValue(List("edge", "K", "M")),
+        PathValue(List("edge", "L", "M"))
       )))
 
     val routine: Routine =
@@ -790,7 +794,7 @@ object CaracDatalogMorklPrints:
                   Space.Iteration(
                     Space.Unwrap(
                       Space.Mention(SpaceMention("last")),
-                      Path.Constant(PathValue(List(PathItem("edge"))))
+                      Path.Constant(PathValue(List("edge")))
                     ),
                     PathRef("x"),
                     SpaceMention("x_"),
@@ -806,14 +810,14 @@ object CaracDatalogMorklPrints:
                           ),
                           Path.Deref(PathRef("x"))
                         ),
-                        Path.Constant(PathValue(List(PathItem("path"))))
+                        Path.Constant(PathValue(List("path")))
                       )
                     )
                   ),
                   Space.Iteration(
                     Space.Unwrap(
                       Space.Mention(SpaceMention("last")),
-                      Path.Constant(PathValue(List(PathItem("path"))))
+                      Path.Constant(PathValue(List("path")))
                     ),
                     PathRef("x"),
                     SpaceMention("x_"),
@@ -825,7 +829,7 @@ object CaracDatalogMorklPrints:
                         Space.Unwrap(
                           Space.Unwrap(
                             Space.Mention(SpaceMention("last")),
-                            Path.Constant(PathValue(List(PathItem("path"))))
+                            Path.Constant(PathValue(List("path")))
                           ),
                           Path.Deref(PathRef("y"))
                         ),
@@ -839,7 +843,7 @@ object CaracDatalogMorklPrints:
                             ),
                             Path.Deref(PathRef("x"))
                           ),
-                          Path.Constant(PathValue(List(PathItem("path"))))
+                          Path.Constant(PathValue(List("path")))
                         )
                       )
                     )
@@ -858,27 +862,27 @@ object CaracDatalogMorklPrints:
           Vector.empty[Path],
           Vector(
             Space.Literal(SpaceValue(Set(
-              PathValue(List(PathItem("edge"), PathItem("A"), PathItem("B"))),
-              PathValue(List(PathItem("edge"), PathItem("A"), PathItem("D"))),
-              PathValue(List(PathItem("edge"), PathItem("A"), PathItem("E"))),
-              PathValue(List(PathItem("edge"), PathItem("B"), PathItem("C"))),
-              PathValue(List(PathItem("edge"), PathItem("C"), PathItem("D"))),
-              PathValue(List(PathItem("edge"), PathItem("C"), PathItem("E"))),
-              PathValue(List(PathItem("edge"), PathItem("D"), PathItem("E"))),
-              PathValue(List(PathItem("edge"), PathItem("E"), PathItem("F"))),
-              PathValue(List(PathItem("edge"), PathItem("F"), PathItem("G"))),
-              PathValue(List(PathItem("edge"), PathItem("F"), PathItem("H"))),
-              PathValue(List(PathItem("edge"), PathItem("F"), PathItem("I"))),
-              PathValue(List(PathItem("edge"), PathItem("G"), PathItem("J"))),
-              PathValue(List(PathItem("edge"), PathItem("H"), PathItem("K"))),
-              PathValue(List(PathItem("edge"), PathItem("I"), PathItem("L"))),
-              PathValue(List(PathItem("edge"), PathItem("J"), PathItem("M"))),
-              PathValue(List(PathItem("edge"), PathItem("K"), PathItem("M"))),
-              PathValue(List(PathItem("edge"), PathItem("L"), PathItem("M")))
+              PathValue(List("edge", "A", "B")),
+              PathValue(List("edge", "A", "D")),
+              PathValue(List("edge", "A", "E")),
+              PathValue(List("edge", "B", "C")),
+              PathValue(List("edge", "C", "D")),
+              PathValue(List("edge", "C", "E")),
+              PathValue(List("edge", "D", "E")),
+              PathValue(List("edge", "E", "F")),
+              PathValue(List("edge", "F", "G")),
+              PathValue(List("edge", "F", "H")),
+              PathValue(List("edge", "F", "I")),
+              PathValue(List("edge", "G", "J")),
+              PathValue(List("edge", "H", "K")),
+              PathValue(List("edge", "I", "L")),
+              PathValue(List("edge", "J", "M")),
+              PathValue(List("edge", "K", "M")),
+              PathValue(List("edge", "L", "M"))
             )))
           )
         ),
-        Path.Constant(PathValue(List(PathItem("path"))))
+        Path.Constant(PathValue(List("path")))
       )
 
     val routines: PartialFunction[RoutinePtr, Routine] =
@@ -887,27 +891,27 @@ object CaracDatalogMorklPrints:
     def result: SpaceValue = eval(program)(using rc = routines)
 
   // === 6/6: carac test.graphs.TopSort semi-naive transitive Datalog ===
-  // Source: /Users/michaelpolyntsov/carac/src/test/scala/test/graphs/TopSort.scala
+  // Source: carac:src/test/scala/test/graphs/TopSort.scala
   object TopSortSemiNaive:
     val edges: Space =
       Space.Literal(SpaceValue(Set(
-        PathValue(List(PathItem("edge"), PathItem("A"), PathItem("B"))),
-        PathValue(List(PathItem("edge"), PathItem("A"), PathItem("D"))),
-        PathValue(List(PathItem("edge"), PathItem("A"), PathItem("E"))),
-        PathValue(List(PathItem("edge"), PathItem("B"), PathItem("C"))),
-        PathValue(List(PathItem("edge"), PathItem("C"), PathItem("D"))),
-        PathValue(List(PathItem("edge"), PathItem("C"), PathItem("E"))),
-        PathValue(List(PathItem("edge"), PathItem("D"), PathItem("E"))),
-        PathValue(List(PathItem("edge"), PathItem("E"), PathItem("F"))),
-        PathValue(List(PathItem("edge"), PathItem("F"), PathItem("G"))),
-        PathValue(List(PathItem("edge"), PathItem("F"), PathItem("H"))),
-        PathValue(List(PathItem("edge"), PathItem("F"), PathItem("I"))),
-        PathValue(List(PathItem("edge"), PathItem("G"), PathItem("J"))),
-        PathValue(List(PathItem("edge"), PathItem("H"), PathItem("K"))),
-        PathValue(List(PathItem("edge"), PathItem("I"), PathItem("L"))),
-        PathValue(List(PathItem("edge"), PathItem("J"), PathItem("M"))),
-        PathValue(List(PathItem("edge"), PathItem("K"), PathItem("M"))),
-        PathValue(List(PathItem("edge"), PathItem("L"), PathItem("M")))
+        PathValue(List("edge", "A", "B")),
+        PathValue(List("edge", "A", "D")),
+        PathValue(List("edge", "A", "E")),
+        PathValue(List("edge", "B", "C")),
+        PathValue(List("edge", "C", "D")),
+        PathValue(List("edge", "C", "E")),
+        PathValue(List("edge", "D", "E")),
+        PathValue(List("edge", "E", "F")),
+        PathValue(List("edge", "F", "G")),
+        PathValue(List("edge", "F", "H")),
+        PathValue(List("edge", "F", "I")),
+        PathValue(List("edge", "G", "J")),
+        PathValue(List("edge", "H", "K")),
+        PathValue(List("edge", "I", "L")),
+        PathValue(List("edge", "J", "M")),
+        PathValue(List("edge", "K", "M")),
+        PathValue(List("edge", "L", "M"))
       )))
 
     val routine: Routine =
@@ -928,14 +932,14 @@ object CaracDatalogMorklPrints:
                     Space.Union(
                       Space.Unwrap(
                         Space.Mention(SpaceMention("last")),
-                        Path.Constant(PathValue(List(PathItem("complete"))))
+                        Path.Constant(PathValue(List("complete")))
                       ),
                       Space.Unwrap(
                         Space.Mention(SpaceMention("last")),
-                        Path.Constant(PathValue(List(PathItem("delta"))))
+                        Path.Constant(PathValue(List("delta")))
                       )
                     ),
-                    Path.Constant(PathValue(List(PathItem("complete"))))
+                    Path.Constant(PathValue(List("complete")))
                   ),
                   Space.Wrap(
                     Space.Subtraction(
@@ -945,9 +949,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("complete"))))
+                                Path.Constant(PathValue(List("complete")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("edge"))))
+                              Path.Constant(PathValue(List("edge")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -968,9 +972,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("complete"))))
+                                Path.Constant(PathValue(List("complete")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -983,9 +987,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("delta"))))
+                                      Path.Constant(PathValue(List("delta")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -1007,9 +1011,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("delta"))))
+                                Path.Constant(PathValue(List("delta")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -1022,9 +1026,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("complete"))))
+                                      Path.Constant(PathValue(List("complete")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -1044,9 +1048,9 @@ object CaracDatalogMorklPrints:
                             Space.Unwrap(
                               Space.Unwrap(
                                 Space.Mention(SpaceMention("last")),
-                                Path.Constant(PathValue(List(PathItem("delta"))))
+                                Path.Constant(PathValue(List("delta")))
                               ),
-                              Path.Constant(PathValue(List(PathItem("path"))))
+                              Path.Constant(PathValue(List("path")))
                             ),
                             PathRef("x"),
                             SpaceMention("x_"),
@@ -1059,9 +1063,9 @@ object CaracDatalogMorklPrints:
                                   Space.Unwrap(
                                     Space.Unwrap(
                                       Space.Mention(SpaceMention("last")),
-                                      Path.Constant(PathValue(List(PathItem("delta"))))
+                                      Path.Constant(PathValue(List("delta")))
                                     ),
-                                    Path.Constant(PathValue(List(PathItem("path"))))
+                                    Path.Constant(PathValue(List("path")))
                                   ),
                                   Path.Deref(PathRef("y"))
                                 ),
@@ -1082,15 +1086,15 @@ object CaracDatalogMorklPrints:
                       Space.Union(
                         Space.Unwrap(
                           Space.Mention(SpaceMention("last")),
-                          Path.Constant(PathValue(List(PathItem("complete"), PathItem("path"))))
+                          Path.Constant(PathValue(List("complete", "path")))
                         ),
                         Space.Unwrap(
                           Space.Mention(SpaceMention("last")),
-                          Path.Constant(PathValue(List(PathItem("delta"), PathItem("path"))))
+                          Path.Constant(PathValue(List("delta", "path")))
                         )
                       )
                     ),
-                    Path.Constant(PathValue(List(PathItem("delta"), PathItem("path"))))
+                    Path.Constant(PathValue(List("delta", "path")))
                   )
                 )
               )
@@ -1110,25 +1114,25 @@ object CaracDatalogMorklPrints:
                 Space.Iteration(
                   Space.Unwrap(
                     Space.Literal(SpaceValue(Set(
-                      PathValue(List(PathItem("edge"), PathItem("A"), PathItem("B"))),
-                      PathValue(List(PathItem("edge"), PathItem("A"), PathItem("D"))),
-                      PathValue(List(PathItem("edge"), PathItem("A"), PathItem("E"))),
-                      PathValue(List(PathItem("edge"), PathItem("B"), PathItem("C"))),
-                      PathValue(List(PathItem("edge"), PathItem("C"), PathItem("D"))),
-                      PathValue(List(PathItem("edge"), PathItem("C"), PathItem("E"))),
-                      PathValue(List(PathItem("edge"), PathItem("D"), PathItem("E"))),
-                      PathValue(List(PathItem("edge"), PathItem("E"), PathItem("F"))),
-                      PathValue(List(PathItem("edge"), PathItem("F"), PathItem("G"))),
-                      PathValue(List(PathItem("edge"), PathItem("F"), PathItem("H"))),
-                      PathValue(List(PathItem("edge"), PathItem("F"), PathItem("I"))),
-                      PathValue(List(PathItem("edge"), PathItem("G"), PathItem("J"))),
-                      PathValue(List(PathItem("edge"), PathItem("H"), PathItem("K"))),
-                      PathValue(List(PathItem("edge"), PathItem("I"), PathItem("L"))),
-                      PathValue(List(PathItem("edge"), PathItem("J"), PathItem("M"))),
-                      PathValue(List(PathItem("edge"), PathItem("K"), PathItem("M"))),
-                      PathValue(List(PathItem("edge"), PathItem("L"), PathItem("M")))
+                      PathValue(List("edge", "A", "B")),
+                      PathValue(List("edge", "A", "D")),
+                      PathValue(List("edge", "A", "E")),
+                      PathValue(List("edge", "B", "C")),
+                      PathValue(List("edge", "C", "D")),
+                      PathValue(List("edge", "C", "E")),
+                      PathValue(List("edge", "D", "E")),
+                      PathValue(List("edge", "E", "F")),
+                      PathValue(List("edge", "F", "G")),
+                      PathValue(List("edge", "F", "H")),
+                      PathValue(List("edge", "F", "I")),
+                      PathValue(List("edge", "G", "J")),
+                      PathValue(List("edge", "H", "K")),
+                      PathValue(List("edge", "I", "L")),
+                      PathValue(List("edge", "J", "M")),
+                      PathValue(List("edge", "K", "M")),
+                      PathValue(List("edge", "L", "M"))
                     ))),
-                    Path.Constant(PathValue(List(PathItem("edge"))))
+                    Path.Constant(PathValue(List("edge")))
                   ),
                   PathRef("x"),
                   SpaceMention("x_"),
@@ -1144,38 +1148,38 @@ object CaracDatalogMorklPrints:
                         ),
                         Path.Deref(PathRef("x"))
                       ),
-                      Path.Constant(PathValue(List(PathItem("path"))))
+                      Path.Constant(PathValue(List("path")))
                     )
                   )
                 ),
-                Path.Constant(PathValue(List(PathItem("delta"))))
+                Path.Constant(PathValue(List("delta")))
               ),
               Space.Wrap(
                 Space.Literal(SpaceValue(Set(
-                  PathValue(List(PathItem("edge"), PathItem("A"), PathItem("B"))),
-                  PathValue(List(PathItem("edge"), PathItem("A"), PathItem("D"))),
-                  PathValue(List(PathItem("edge"), PathItem("A"), PathItem("E"))),
-                  PathValue(List(PathItem("edge"), PathItem("B"), PathItem("C"))),
-                  PathValue(List(PathItem("edge"), PathItem("C"), PathItem("D"))),
-                  PathValue(List(PathItem("edge"), PathItem("C"), PathItem("E"))),
-                  PathValue(List(PathItem("edge"), PathItem("D"), PathItem("E"))),
-                  PathValue(List(PathItem("edge"), PathItem("E"), PathItem("F"))),
-                  PathValue(List(PathItem("edge"), PathItem("F"), PathItem("G"))),
-                  PathValue(List(PathItem("edge"), PathItem("F"), PathItem("H"))),
-                  PathValue(List(PathItem("edge"), PathItem("F"), PathItem("I"))),
-                  PathValue(List(PathItem("edge"), PathItem("G"), PathItem("J"))),
-                  PathValue(List(PathItem("edge"), PathItem("H"), PathItem("K"))),
-                  PathValue(List(PathItem("edge"), PathItem("I"), PathItem("L"))),
-                  PathValue(List(PathItem("edge"), PathItem("J"), PathItem("M"))),
-                  PathValue(List(PathItem("edge"), PathItem("K"), PathItem("M"))),
-                  PathValue(List(PathItem("edge"), PathItem("L"), PathItem("M")))
+                  PathValue(List("edge", "A", "B")),
+                  PathValue(List("edge", "A", "D")),
+                  PathValue(List("edge", "A", "E")),
+                  PathValue(List("edge", "B", "C")),
+                  PathValue(List("edge", "C", "D")),
+                  PathValue(List("edge", "C", "E")),
+                  PathValue(List("edge", "D", "E")),
+                  PathValue(List("edge", "E", "F")),
+                  PathValue(List("edge", "F", "G")),
+                  PathValue(List("edge", "F", "H")),
+                  PathValue(List("edge", "F", "I")),
+                  PathValue(List("edge", "G", "J")),
+                  PathValue(List("edge", "H", "K")),
+                  PathValue(List("edge", "I", "L")),
+                  PathValue(List("edge", "J", "M")),
+                  PathValue(List("edge", "K", "M")),
+                  PathValue(List("edge", "L", "M"))
                 ))),
-                Path.Constant(PathValue(List(PathItem("complete"))))
+                Path.Constant(PathValue(List("complete")))
               )
             )
           )
         ),
-        Path.Constant(PathValue(List(PathItem("complete"), PathItem("path"))))
+        Path.Constant(PathValue(List("complete", "path")))
       )
 
     val routines: PartialFunction[RoutinePtr, Routine] =

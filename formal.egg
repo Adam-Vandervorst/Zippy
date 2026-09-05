@@ -22,6 +22,21 @@
   (Item i64)
   (Concat Path Path))
 
+; FIXPOINT BODIES, defunctionalized (the e-graph has no binders, so the step function is a TAG and
+; the program supplies its own `(rewrite (FApp (FBodyK i) x) …)` — the same discipline zipper-spec's
+; `Body`/`App` already uses for iteration bodies).  Declared before `Space` so no `datatype*` is
+; needed: an FBody mentions no Space.
+(datatype FBody
+  (FSelf)                   ; F(X) = X
+  (FBodyK i64))             ; program-defined step, indexed; one FApp rule per index
+
+; ITERATION BODIES, defunctionalized the same way.  A HEAD-DEPENDENT body sees `(head, tails-of-that
+; -head)`, so its application takes both: `(App b h grp)`.  Like `FBodyK`, the body itself is a TAG
+; and the program supplies `(rewrite (App (BodyK i) h t) …)` — one rule per index.  Mentions no
+; Space, so it needs no `datatype*` either.
+(datatype Body
+  (BodyK i64))              ; program-defined head-dependent body, indexed; one App rule per index
+
 (datatype Space
   (Empty)
   (Singleton Path)
@@ -36,7 +51,12 @@
   (TailsUnion Space)
   (TailsIntersection Space)
   (Raffination Space Space)
-  (IterC Space Space))      ; Iter src b: union of a loop-INVARIANT body b over the heads of src
+  (IterC Space Space)       ; Iter src b: union of a loop-INVARIANT body b over the heads of src
+  (Iter Space Body)         ; HEAD-DEPENDENT iteration: the body sees each head and its tail set
+  (IterH Space Space Body)  ; …as a fold over a HEAD SET (arg 1) with the SOURCE held fixed (arg 2)
+  (App Body i64 Space)      ; head-dependent body application: b at head h over group grp
+  (Fix Space FBody)         ; LEAST post-fixpoint of F above init — FIRST-CLASS, never unrolled
+  (FApp FBody Space))       ; step application, F(x)
 
 (relation drop-prefix (Path Path Space))
 (relation tails-intersection (Space Space Space))
@@ -189,6 +209,88 @@
 ; the singleton case is split on head shape: a {ε} source has NO heads, so iterating over it is
 ; EMPTY — stating laws/law_iterc_set.smt2 exposed the unguarded (Singleton p) → b as false at p=ε.
 
+; --- HEAD-DEPENDENT Iter: the four rules that let an `Space.Iteration` BINDER reach this vocabulary
+; instead of being executed away first.  `EquivPipeline.expand` used to evaluate every `Iteration`
+; into a union of concrete group bodies before anything was rendered, so both sides of an instance
+; obligation came out as the same literal and the cell certified nothing.
+;
+;   L1  (Iter src b)                  = (IterH (Head src) src b)
+;   L2  (IterH (Union a c) src b)     = (Union (IterH a src b) (IterH c src b))
+;   L3  (IterH (Singleton (Item h)) src b) = (App b h (Unwrap src (Item h)))
+;   L4  (IterH (Empty) src b)         = (Empty)
+;
+; L2 IS THE LOAD-BEARING RULE, AND THE DISTINCTION IT RESTS ON IS SUBTLE ENOUGH TO STATE.  An
+; `Iteration` does NOT distribute over a union of its SOURCE: a head shared between the two operands
+; merges their groups, and the body — which can see a group — observes the merge.  That split is
+; machine-REFUTED, as proofs/unbounded/negative/not_iter_split.p (N05), with an executed
+; countermodel in proofs/unbounded/COUNTERMODELS.tsv.  What distributes here is the HEAD-SET
+; argument, with `src` — the term the groups are computed from — held FIXED in every branch.  The
+; invariant-body rules above never had to make the distinction, because an invariant body cannot
+; observe a group at all.
+;
+; L1 IS WHERE THE HEADEDNESS GUARD LIVES.  `IterH` deliberately does not re-check that its head is
+; present in `src`; it is `Head src` that contains exactly the one-item paths of src's heads.  So
+; NOTHING BUT L1 MAY INTRODUCE AN `IterH`: one built any other way would apply the body at a head
+; whose group is empty.
+;
+; L3's group is `(Unwrap src (Item h))`, which is this vocabulary's own tails-under-a-prefix — so
+; the group the body is handed is the same set `eval` hands it, by the Unwrap rules below rather
+; than by assumption.
+(rewrite (Iter src b) (IterH (Head src) src b))   ; proof: proofs/laws/law_iter_set.smt2
+(rewrite (IterH (Empty) src b) (Empty))   ; proof: proofs/laws/law_iter_set.smt2
+(rewrite (IterH (Union a c) src b) (Union (IterH a src b) (IterH c src b)))   ; proof: proofs/laws/law_iter_set.smt2
+(rewrite (IterH (Singleton (Item h)) src b) (App b h (Unwrap src (Item h))))   ; proof: proofs/laws/law_iter_set.smt2
+
+; --- Fix model: (Fix i b) IS the LEAST post-fixpoint of F = FApp b above i.  Three rules and NO
+; UNROLLING rule — an unrolling rewrite (Fix i b) → (Union i (FApp b (Fix i b))) would generate a
+; fresh larger term every round and saturation would never terminate; these three only ever MERGE
+; e-classes (each firing adds at most two nodes and then unions them away), so the run converges.
+;
+; MONOTONICITY IS A SIDE CONDITION, NOT A THEOREM HERE.  `Fix` is INTRODUCED by this file and the
+; three rules ARE its definition (post-fixpoint above init + leastness), so they are definitional.
+; What they do NOT establish is that a given program's `Space.Fixpoint` denotes this least post-
+; fixpoint.  Two premises are needed for that, and BOTH are now discharged — this is the point the
+; earlier text got wrong by naming only the first:
+;
+;   MONOTONE F  and  init ⊆ F(init)  ⟹  the Kleene chain ascends, the accumulator is redundant,
+;   and the stationary value IS lfp_{⊇init} F      (terminating/fixpoint_is_lfp.smt2, O1, parts i-iii)
+;
+; Monotonicity ALONE is insufficient, and fixpoint_is_lfp.smt2:47-50 carries the machine-checked
+; counterexample: F(X) = {b if a∈X} ∪ {c if a∈X and b∈X} with init = {a} is monotone, and the
+; accumulator ⋃_{j≤2} C_j = {a,b} while the least post-fixpoint is {a,b,c}.
+;
+; THE SECOND PREMISE IS SATISFIED BY CONSTRUCTION, because the executor does not iterate F.  Every
+; executor in the tree (MORKL.scala `eval`/`exec`, GraphExec.scala `execT`, Trie.scala `evalT`,
+; IntTrie.scala `evalI`) iterates the INFLATIONARY operator
+;
+;   cur := cur ∪ F(cur)      until it stops changing
+;
+; whose chain ascends whatever F is, and whose limit is the least X ⊇ init with F(X) ⊆ X — exactly
+; the three rules below.  Monotonicity of F is then the ONE remaining side condition and it is what
+; buys LEASTNESS: it is FALSE when the recursion variable occurs under the right operand of
+; Subtraction/Raffination or under TailsIntersection, so the emitter checks it syntactically before
+; it may write a `Fix` (AgnosticPipeline.monotoneInMention, src/main/scala/EquivPipeline.scala) and
+; falls back to an honest marker otherwise.  src/test/scala/FixpointSemantics.scala regression-tests
+; the counterexample above against all five executors and against this encoding.  Park's premises
+; are proof OBLIGATIONS the e-graph must discharge, so the rule cannot make an obligation vacuous.
+;
+; PARK IS DEMAND-DRIVEN.  A first attempt stated leastness as
+;   (rule ((= f (Fix i b)) (= (Union i c) c) (= (Union (FApp b c) c) c)) ((union (Union f c) c)))
+; and it NEVER FIRED — measured on the tour: `(check (= $fix_self (Singleton (Item 12))))` failed,
+; because a premise `(= (Union i c) c)` can only match if the TERM `(Union i c)` already exists in
+; the e-graph, and nothing builds it.  Materialising it for every (f, c) pair is quadratic and
+; explosive, so the candidate is DECLARED: a program asserts `(FixCand f c)` for the c it wants
+; leastness against (the other side of the obligation), one demand rule builds the two premise
+; terms, and Park then fires only if the e-graph actually reduces both to c.
+(ruleset park)
+(relation FixCand (Space Space))                 ; "check Fix ⊑ c" — the candidate post-fixpoint
+(rewrite (FApp (FSelf) x) x)   ; definitional (the identity step)
+(rule ((= f (Fix i b))) ((union (Union i f) f)) :ruleset park)   ; definitional (Fix ⊒ init — half of the post-fixpoint definition)
+(rule ((= f (Fix i b))) ((union (Union (FApp b f) f) f)) :ruleset park)   ; definitional (Fix ⊒ F(Fix) — the other half)
+(rule ((FixCand f c) (= f (Fix i b))) ((Union i c) (Union (FApp b c) c)) :ruleset park)   ; demand-materialisation (builds the two Park premise terms for a declared candidate; asserts nothing)
+(rule ((FixCand f c) (= f (Fix i b)) (= (Union i c) c) (= (Union (FApp b c) c) c))   ; definitional (PARK INDUCTION: leastness — the two premises are obligations the e-graph must discharge, not assumptions)
+      ((union (Union f c) c)) :ruleset park)
+
 ; ================================================================================================
 ; THE TOUR — example spaces (wrap/unwrap, composition, tails, restriction, head, iteration);
 ; every (check) below must pass under the standard schedule.
@@ -275,7 +377,29 @@
 
 (let wi_hoist_empty (Wrap (Item 25) (IterC (Empty) (Singleton (Item 28)))))
 
-(run-schedule (repeat 8 (run) (run acu) (saturate paths) (run neg)))
+; --- Fix: a program-defined union-saturating step, F(X) = X ∪ {b}, started from {a,b}.  This is
+; the shape every `Space.Fixpoint` cornerstone has (puzzle3-full: reach ↦ reach ∪ expandStep(reach)):
+; extensive, hence monotone, hence the least post-fixpoint above init is exactly ⋃ₙ Fⁿ(init).
+; BOTH directions have to be derived for the check to pass — {a,b} ⊑ Fix comes from init-absorbed,
+; Fix ⊑ {a,b} from PARK at c = {a,b} (whose two premises the e-graph must itself discharge:
+; init ⊑ c by idempotence, F(c) ⊑ c because F(c) right-rotates to c) — so a `Fix` axiomatised as a
+; mere post-fixpoint (no leastness) would fail `$fix_ab = $fix_want`, and an over-strong `Fix`
+; (leastness with no premises) would wrongly pass `$fix_too_small` below.
+; id 900 is RESERVED for this tour: scripts/extract_formal_preludes.py copies every rule into
+; formal-prelude.egg / formal-elem-prelude.egg, so a program-specific FApp rule must use an id no
+; emitter will ever mint (emitted ids come from RenderCtx.nextId, which counts up from 0).
+(rewrite (FApp (FBodyK 900) x) (Union x (Singleton (Item 11))))   ; definitional (the tour program's own step rule, as each program supplies)
+(let $fix_ab (Fix (Union (Singleton (Item 10)) (Singleton (Item 11))) (FBodyK 900)))
+(let $fix_want (Union (Singleton (Item 10)) (Singleton (Item 11))))
+; a NON-post-fixpoint candidate: {a} is neither above init nor F-closed, so Park must NOT fire at it
+(let $fix_too_small (Singleton (Item 10)))
+; the identity step: Fix(i, λX.X) = i, derived the same two ways (init-absorbed + Park at c = i)
+(let $fix_self (Fix (Singleton (Item 12)) (FSelf)))
+(FixCand $fix_ab $fix_want)                                 ; ask for leastness against {a,b} …
+(FixCand $fix_ab $fix_too_small)                            ; … and against {a} (must NOT succeed)
+(FixCand $fix_self (Singleton (Item 12)))
+
+(run-schedule (repeat 8 (run) (run acu) (saturate paths) (run neg) (run park)))
 
 (check (= expr2 expr3))
 (check (= expr1 expr4))
@@ -306,3 +430,7 @@
 (check (= iu_orig_empty (Empty)))
 (check (= iu_orig_empty iu_distr_empty))            ; distribute preserves semantics on an EMPTY source
 (fail (check (= iu_orig_empty iu_hoist_empty)))     ; bare hoist does NOT (it leaks {l})
+; --- Fix (first-class fixpoint): least post-fixpoint above init, both containments derived.
+(check (= $fix_ab $fix_want))                       ; init ⊑ Fix (absorbed) and Fix ⊑ init (Park)
+(fail (check (= $fix_ab $fix_too_small)))           ; Park must NOT fire at a non-post-fixpoint
+(check (= $fix_self (Singleton (Item 12))))         ; Fix(i, λX.X) = i

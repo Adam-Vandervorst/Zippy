@@ -21,6 +21,7 @@
 (assert (forall ((a Trie) (b Trie) (k Int))
   (= (child (tc a b) k) (u (tc (child a k) b) (g (term a) (child b k))))))
 (define-fun PP ((p Path)) Bool (forall ((a Trie) (b Trie)) (= (mem (tc a b) p) (zc a b p))))
+; ASSUMED: T1
 (assert (=> (and (PP nil) (forall ((k Int) (q Path)) (=> (PP q) (PP (cons k q))))) (forall ((p Path)) (PP p))))
 (assert (not (forall ((p Path)) (PP p))))
 (check-sat)

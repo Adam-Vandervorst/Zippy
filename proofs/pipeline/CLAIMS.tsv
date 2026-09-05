@@ -1,0 +1,124 @@
+# THE DECLARED CLAIMS OF THE PIPELINE — one row per cornerstone x boundary, WRITTEN BEFORE THE
+# ARTIFACT IS BUILT.
+#
+# ==WHY A SECOND TABLE, WHEN `DECLARED.tsv` ALREADY EXISTS==
+# `DECLARED.tsv` records WHAT AN ARTIFACT IS (`REAL`/`IDENT`/`TRIVIAL`/`LAW-JUSTIFIED`/
+# `SINGLE-SIDE`/`BUDGET`) and is REGENERATED FROM THE OBSERVED STATE (`--declare`), which makes it a
+# regression guard: it catches a cell whose kind changed.  It cannot catch a cell that was never
+# meant to be `TRIVIAL` in the first place, because it learns the expectation from the emission.
+#
+# 's independent-construction requirement is the reason that matters: the honest baseline was ~8 REAL cells,
+# not 19.  Eleven of the twelve REAL `.egg` cells compare one program against
+# `Reflect(tnodeOf(resT))` -- the executor's own output."  A table derived from what was emitted
+# cannot report that, because the emission is exactly what is in question.  So THIS table is the
+# CLAIM, written first, by hand, and 2A.1 is the task that fills it in; the audit then measures the
+# artifacts against it (`scripts/audit_pipeline_markers.py`) and a cell that came out weaker than
+# its declaration is a failure rather than a new declaration.
+#
+# ==THE SCHEMA==
+# The column list is `Certified.ClaimsColumns` (src/main/scala/Certified.scala), declared in code so
+# the emitter and the two readers cannot disagree about the order.  Tab-separated, `#` comments.
+#
+#   cornerstone    aunt | datalog-sn | gol | puzzle15 | temperature | nqueens | puzzle3-full
+#                  (CornerstoneTypes.scala is the authoritative list -- seven, not six)
+#   boundary       space | zipper | graph, i.e. which of the three stages this cell crosses:
+#                    space   SPACE/TERM vs its optimisation (`SC.reduce`)
+#                    zipper  the Scala `transpileZ` observation vs SPACE/TERM
+#                    graph   `optimize(transpile(...))` vs SPACE
+#   form           instance | agnostic.  `instance` is one ground input; `agnostic` quantifies the
+#                  inputs and is the strictly stronger claim.  BOTH are declared per cell, because
+#                  "the agnostic leg is TRIVIAL" is a fact about the emitter that a reader needs.
+#   claim          one line, in words, of the equivalence this cell asserts.  It is prose on purpose:
+#                  the machine-readable part is the other columns, and this is the part a reader
+#                  checks the other columns AGAINST.
+#   trusts         the `; TRUSTS:` list this cell is PERMITTED to carry, in `Certified.Trust`'s
+#                  vocabulary: `T<n>` (docs/TRUSTED.md), `O<n><letter?>` (a registry's OPEN row),
+#                  `law:<name>` (proofs/laws/REGISTRY.tsv), `outside:<construct>`, or `-` for
+#                  nothing.  The emitted artifact's own `; TRUSTS:` header must be a SUBSET of this;
+#                  a cell that trusts something its declaration does not permit is a failure.
+#   artifact       repo-relative path of the emitted obligation.
+#   expected-kind  REAL | LAW-JUSTIFIED | IDENT | TRIVIAL -- the `DECLARED.tsv` vocabulary.
+#                  `SINGLE-SIDE` and `BUDGET` are deliberately ABSENT from what may be DECLARED:
+#                  2A.2 deletes the single-side emission at its source and 2A.5 requires a BUDGET
+#                  cell to be closed by decomposition rather than by budget, so declaring either
+#                  would be declaring an outcome the plan forbids.  An artifact that comes out as one
+#                  of them therefore fails against every possible declaration, which is the intent.
+#
+# ==THE DECLARED MATRIX (2A.1), written 2026-09-04 BEFORE the emitter of 2A.2–2A.6 was built==
+# Seven cornerstones × three boundaries × two forms = 42 cells, one artifact each.  The kinds and the
+# permitted trusts below are what the emitter is REQUIRED to reach; `scripts/audit_pipeline_markers.py
+# --accept` fails a cell that comes out weaker (BUDGET, SINGLE-SIDE, BOUNDED-UNROLLING are never
+# acceptable), that trusts something not listed here, or that has no row here.  A stronger outcome
+# than declared (a REAL prover run where LAW-JUSTIFIED was declared, or sides identical where a law
+# chain was declared) is accepted and reported.
+#
+#   space    the program vs `SC.reduce(program)`, discharged by THE TRACE (`SC.reduceTraced`, 2A.3):
+#            every step a checked instance of a certified optimiser law, composed end to end.  The
+#            instance form (`.smt2`) records the chain and the per-step executor differential on this
+#            input; the agnostic form (`.egg`) re-derives each step in egglog under formal.egg's rules,
+#            falling back to the step's ∀-certificate where the ladder does not converge.  Three stones
+#            are TRIVIAL: `SC.reduce` leaves them syntactically unchanged, and that is stated, not
+#            proved.  `law:*` permits any law of proofs/laws/REGISTRY.tsv; the artifact names the ones
+#            actually used.
+#   zipper   `transpileZ(program)` vs the program, an INSTANCE of the universal refinement theorem
+#            (proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement, registry law `zipper-refinement`):
+#            the emitter abstracts every materialising subterm (Iteration, Fixpoint, Call, Fold,
+#            Range, TailsIntersection, grounded) to an opaque hole, transpiles the remaining SHELL with
+#            every source opaque, and checks that the shell read back from the cursor is alpha-equal
+#            to the shell it came from.  The theorem does the semantics; the cell records the shell
+#            size, the boundary constructors, and (instance form) the executor differential.  `O6a` is
+#            permitted where the program has a `Call` hole, `T5` where it has a `Range`.
+#   graph    `untranspile(optimize(transpile(P)))` vs `P`, the pre-existing data-agnostic leg: the
+#            differing pairs are law-justified (`SmtDiff.partition`) and any residual pair is a small
+#            prover obligation on the pair, never on the whole program.  Both forms use the SYMBOLIC
+#            program (binders kept), so no cell compares materialised literals; the instance form adds
+#            the executor differential `runGraphT == eval` on this input.
+#
+# Kinds declared from the 2026-09-04 baseline measurement (`SC.reduce` is the identity on datalog-sn,
+# gol and temperature; `optimize` changes only puzzle15 and puzzle3-full), so a declaration below that
+# the emitter contradicts is either a measurement error to be re-derived here — with the change
+# recorded in build.log — or an emitter defect.  RE-DERIVED 2026-09-04: gol's graph cells trust T5 —
+# the game-of-life rules contain a `Range`, which the first declaration missed (build.log).
+# cornerstone	boundary	form	claim	trusts	artifact	expected-kind
+aunt	space	instance	aunt: the program and SC.reduce(program) denote the same space on this input, by the law trace (every step a certified law) plus the per-step executor differential	law:*	proofs/pipeline/aunt-space.smt2	LAW-JUSTIFIED
+aunt	space	agnostic	aunt: the program and SC.reduce(program) denote the same space for ALL inputs, each trace step re-derived in egglog or carried by its ∀-certificate	law:*	zipper-egg-tests/pipeline/aunt-space-agnostic.egg	LAW-JUSTIFIED
+aunt	zipper	instance	aunt: transpileZ(program) observes the same space as the program on this input — the refinement theorem at the shell, holes evaluated by the executor, plus the materialize differential	law:zipper-refinement	proofs/pipeline/aunt-zipper.smt2	LAW-JUSTIFIED
+aunt	zipper	agnostic	aunt: transpileZ(program) observes the same space as the program for ALL inputs — the refinement theorem instantiated at the shell with every source opaque	law:zipper-refinement	proofs/pipeline/aunt-zipper-agnostic.smt2	LAW-JUSTIFIED
+aunt	graph	instance	aunt: the optimised op-graph and the program denote the same space on this input — the agnostic pairs law-justified plus the runGraphT differential	-	proofs/pipeline/aunt-graph.smt2	TRIVIAL
+aunt	graph	agnostic	aunt: untranspile(optimize(transpile(P))) and P denote the same space for ALL inputs — differing pairs law-justified, residual pairs proved	-	proofs/pipeline/aunt-graph-agnostic.smt2	TRIVIAL
+datalog-sn	space	instance	datalog-sn: the program and SC.reduce(program) denote the same space on this input, by the law trace (every step a certified law) plus the per-step executor differential	-	proofs/pipeline/datalog-sn-space.smt2	TRIVIAL
+datalog-sn	space	agnostic	datalog-sn: the program and SC.reduce(program) denote the same space for ALL inputs, each trace step re-derived in egglog or carried by its ∀-certificate	-	zipper-egg-tests/pipeline/datalog-sn-space-agnostic.egg	TRIVIAL
+datalog-sn	zipper	instance	datalog-sn: transpileZ(program) observes the same space as the program on this input — the refinement theorem at the shell, holes evaluated by the executor, plus the materialize differential	law:zipper-refinement, O6a	proofs/pipeline/datalog-sn-zipper.smt2	LAW-JUSTIFIED
+datalog-sn	zipper	agnostic	datalog-sn: transpileZ(program) observes the same space as the program for ALL inputs — the refinement theorem instantiated at the shell with every source opaque	law:zipper-refinement, O6a	proofs/pipeline/datalog-sn-zipper-agnostic.smt2	LAW-JUSTIFIED
+datalog-sn	graph	instance	datalog-sn: the optimised op-graph and the program denote the same space on this input — the agnostic pairs law-justified plus the runGraphT differential	O6a	proofs/pipeline/datalog-sn-graph.smt2	TRIVIAL
+datalog-sn	graph	agnostic	datalog-sn: untranspile(optimize(transpile(P))) and P denote the same space for ALL inputs — differing pairs law-justified, residual pairs proved	O6a	proofs/pipeline/datalog-sn-graph-agnostic.smt2	TRIVIAL
+gol	space	instance	gol: the program and SC.reduce(program) denote the same space on this input, by the law trace (every step a certified law) plus the per-step executor differential	-	proofs/pipeline/gol-space.smt2	TRIVIAL
+gol	space	agnostic	gol: the program and SC.reduce(program) denote the same space for ALL inputs, each trace step re-derived in egglog or carried by its ∀-certificate	-	zipper-egg-tests/pipeline/gol-space-agnostic.egg	TRIVIAL
+gol	zipper	instance	gol: transpileZ(program) observes the same space as the program on this input — the refinement theorem at the shell, holes evaluated by the executor, plus the materialize differential	law:zipper-refinement, O6a	proofs/pipeline/gol-zipper.smt2	LAW-JUSTIFIED
+gol	zipper	agnostic	gol: transpileZ(program) observes the same space as the program for ALL inputs — the refinement theorem instantiated at the shell with every source opaque	law:zipper-refinement, O6a	proofs/pipeline/gol-zipper-agnostic.smt2	LAW-JUSTIFIED
+gol	graph	instance	gol: the optimised op-graph and the program denote the same space on this input — the agnostic pairs law-justified plus the runGraphT differential	O6a, T5	proofs/pipeline/gol-graph.smt2	TRIVIAL
+gol	graph	agnostic	gol: untranspile(optimize(transpile(P))) and P denote the same space for ALL inputs — differing pairs law-justified, residual pairs proved	O6a, T5	proofs/pipeline/gol-graph-agnostic.smt2	TRIVIAL
+nqueens	space	instance	nqueens: the program and SC.reduce(program) denote the same space on this input, by the law trace (every step a certified law) plus the per-step executor differential	law:*	proofs/pipeline/nqueens-space.smt2	LAW-JUSTIFIED
+nqueens	space	agnostic	nqueens: the program and SC.reduce(program) denote the same space for ALL inputs, each trace step re-derived in egglog or carried by its ∀-certificate	law:*	zipper-egg-tests/pipeline/nqueens-space-agnostic.egg	LAW-JUSTIFIED
+nqueens	zipper	instance	nqueens: transpileZ(program) observes the same space as the program on this input — the refinement theorem at the shell, holes evaluated by the executor, plus the materialize differential	law:zipper-refinement, O6a	proofs/pipeline/nqueens-zipper.smt2	LAW-JUSTIFIED
+nqueens	zipper	agnostic	nqueens: transpileZ(program) observes the same space as the program for ALL inputs — the refinement theorem instantiated at the shell with every source opaque	law:zipper-refinement, O6a	proofs/pipeline/nqueens-zipper-agnostic.smt2	LAW-JUSTIFIED
+nqueens	graph	instance	nqueens: the optimised op-graph and the program denote the same space on this input — the agnostic pairs law-justified plus the runGraphT differential	O6a	proofs/pipeline/nqueens-graph.smt2	TRIVIAL
+nqueens	graph	agnostic	nqueens: untranspile(optimize(transpile(P))) and P denote the same space for ALL inputs — differing pairs law-justified, residual pairs proved	O6a	proofs/pipeline/nqueens-graph-agnostic.smt2	TRIVIAL
+puzzle15	space	instance	puzzle15: the program and SC.reduce(program) denote the same space on this input, by the law trace (every step a certified law) plus the per-step executor differential	law:*	proofs/pipeline/puzzle15-space.smt2	LAW-JUSTIFIED
+puzzle15	space	agnostic	puzzle15: the program and SC.reduce(program) denote the same space for ALL inputs, each trace step re-derived in egglog or carried by its ∀-certificate	law:*	zipper-egg-tests/pipeline/puzzle15-space-agnostic.egg	LAW-JUSTIFIED
+puzzle15	zipper	instance	puzzle15: transpileZ(program) observes the same space as the program on this input — the refinement theorem at the shell, holes evaluated by the executor, plus the materialize differential	law:zipper-refinement, O6a	proofs/pipeline/puzzle15-zipper.smt2	LAW-JUSTIFIED
+puzzle15	zipper	agnostic	puzzle15: transpileZ(program) observes the same space as the program for ALL inputs — the refinement theorem instantiated at the shell with every source opaque	law:zipper-refinement, O6a	proofs/pipeline/puzzle15-zipper-agnostic.smt2	LAW-JUSTIFIED
+puzzle15	graph	instance	puzzle15: the optimised op-graph and the program denote the same space on this input — the agnostic pairs law-justified plus the runGraphT differential	law:*, O6a	proofs/pipeline/puzzle15-graph.smt2	LAW-JUSTIFIED
+puzzle15	graph	agnostic	puzzle15: untranspile(optimize(transpile(P))) and P denote the same space for ALL inputs — differing pairs law-justified, residual pairs proved	law:*, O6a	proofs/pipeline/puzzle15-graph-agnostic.smt2	LAW-JUSTIFIED
+puzzle3-full	space	instance	puzzle3-full: the program and SC.reduce(program) denote the same space on this input, by the law trace (every step a certified law) plus the per-step executor differential	law:*	proofs/pipeline/puzzle3-full-space.smt2	LAW-JUSTIFIED
+puzzle3-full	space	agnostic	puzzle3-full: the program and SC.reduce(program) denote the same space for ALL inputs, each trace step re-derived in egglog or carried by its ∀-certificate	law:*	zipper-egg-tests/pipeline/puzzle3-full-space-agnostic.egg	LAW-JUSTIFIED
+puzzle3-full	zipper	instance	puzzle3-full: transpileZ(program) observes the same space as the program on this input — the refinement theorem at the shell, holes evaluated by the executor, plus the materialize differential	law:zipper-refinement, O6a	proofs/pipeline/puzzle3-full-zipper.smt2	LAW-JUSTIFIED
+puzzle3-full	zipper	agnostic	puzzle3-full: transpileZ(program) observes the same space as the program for ALL inputs — the refinement theorem instantiated at the shell with every source opaque	law:zipper-refinement, O6a	proofs/pipeline/puzzle3-full-zipper-agnostic.smt2	LAW-JUSTIFIED
+puzzle3-full	graph	instance	puzzle3-full: the optimised op-graph and the program denote the same space on this input — the agnostic pairs law-justified plus the runGraphT differential	law:*, O6a	proofs/pipeline/puzzle3-full-graph.smt2	LAW-JUSTIFIED
+puzzle3-full	graph	agnostic	puzzle3-full: untranspile(optimize(transpile(P))) and P denote the same space for ALL inputs — differing pairs law-justified, residual pairs proved	law:*, O6a	proofs/pipeline/puzzle3-full-graph-agnostic.smt2	LAW-JUSTIFIED
+temperature	space	instance	temperature: the program and SC.reduce(program) denote the same space on this input, by the law trace (every step a certified law) plus the per-step executor differential	-	proofs/pipeline/temperature-space.smt2	TRIVIAL
+temperature	space	agnostic	temperature: the program and SC.reduce(program) denote the same space for ALL inputs, each trace step re-derived in egglog or carried by its ∀-certificate	-	zipper-egg-tests/pipeline/temperature-space-agnostic.egg	TRIVIAL
+temperature	zipper	instance	temperature: transpileZ(program) observes the same space as the program on this input — the refinement theorem at the shell, holes evaluated by the executor, plus the materialize differential	law:zipper-refinement, T5	proofs/pipeline/temperature-zipper.smt2	LAW-JUSTIFIED
+temperature	zipper	agnostic	temperature: transpileZ(program) observes the same space as the program for ALL inputs — the refinement theorem instantiated at the shell with every source opaque	law:zipper-refinement, T5	proofs/pipeline/temperature-zipper-agnostic.smt2	LAW-JUSTIFIED
+temperature	graph	instance	temperature: the optimised op-graph and the program denote the same space on this input — the agnostic pairs law-justified plus the runGraphT differential	-	proofs/pipeline/temperature-graph.smt2	TRIVIAL
+temperature	graph	agnostic	temperature: untranspile(optimize(transpile(P))) and P denote the same space for ALL inputs — differing pairs law-justified, residual pairs proved	-	proofs/pipeline/temperature-graph-agnostic.smt2	TRIVIAL

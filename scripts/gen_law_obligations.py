@@ -98,6 +98,46 @@ def mem_iterc(s, b, p):
     return f"(and (exists ((hh Int) (tt Path)) {s('(cons hh tt)')}) {b(p)})"
 
 
+# ---- HEAD-DEPENDENT iteration (Space.Iteration), and the head-set fold it lowers to ------------
+# The body of a head-dependent iteration sees `(head, tails-of-that-head-in-src)`.  The tail set is
+# DETERMINED by the head and by `src`, and `src` is the same term on both sides of every law below,
+# so the body's result at head `h` is a function of `h` alone: the predicate `Bd h p`.  That is the
+# whole reason these laws are statable in first-order logic at all — quantifying over the body as a
+# function of a SET would need second order.
+#
+#   Iter(src)      = { p : EXISTS h. h is a head of src   AND Bd h p }
+#   IterH(hs, src) = { p : EXISTS h. (cons h nil) in hs   AND Bd h p }
+#
+# `IterH` deliberately does NOT re-check headedness: that guard is discharged once, by `Iter`'s own
+# rule supplying `Head src` — which contains exactly the one-item paths of src's heads — and law L1
+# below is where it is discharged.  An `IterH` whose head-set argument came from anywhere else would
+# apply the body at a head with an EMPTY group, so nothing but the `Iter` rule may introduce one.
+# NOTE THE BINDER NAMES.  `mem_head` binds `hh` internally, so `mem_iterh` must NOT — nesting them
+# under a shared name SHADOWS the outer quantifier and silently drops the link between the head the
+# body is applied at and the head that is present in `src`.  Measured on the first draft of L1: the
+# generated form contained `(= (cons hh nil) (cons hh nil))`, trivially true, and the law it stated
+# was `Iter(A) = { p : EXISTS h. (EXISTS h'. headed h' A) AND Bd h p }` — false, and it is z3
+# answering `sat` that says so rather than anything in this file.
+def mem_iter(s, p):
+    return (f"(exists ((gh Int)) (and (exists ((tt Path)) {s('(cons gh tt)')}) "
+            f"(Bd gh {p})))")
+
+
+def mem_iterh(hs, p):
+    return f"(exists ((gh Int)) (and {hs('(cons gh nil)')} (Bd gh {p})))"
+
+
+def ITER(s):
+    return lambda p: mem_iter(s, p)
+
+
+def ITERH(hs):
+    return lambda p: mem_iterh(hs, p)
+
+
+BODYK = "(declare-fun Bd (Int Path) Bool)\n"
+
+
 A = lambda p: f"(A {p})"
 B = lambda p: f"(B {p})"
 C = lambda p: f"(C {p})"
@@ -150,18 +190,21 @@ law("law_append_assoc", "path append is associative",
     "(forall ((a Path) (b Path) (c Path)) (= (append (append a b) c) (append a (append b c))))",
     decls="", assume="""; explicit structural-induction schema instance (valid for the Path datatype)
 (define-fun P ((a Path)) Bool (forall ((b Path) (c Path)) (= (append (append a b) c) (append a (append b c)))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((a Path)) (P a))))
 """)
 law("law_append_inj", "append is left-cancellative (injective in its second argument)",
     "(forall ((w Path) (p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q)))",
     decls="", assume="""; explicit structural-induction schema instance (valid for the Path datatype)
 (define-fun P ((w Path)) Bool (forall ((p Path) (q Path)) (=> (= (append w p) (append w q)) (= p q))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((w Path)) (P w))))
 """)
 law("law_isprefix_append", "isPrefix w p  <=>  exists q. p = append w q",
     "(forall ((w Path) (p Path)) (= (isPrefix w p) (exists ((q Path)) (= p (append w q)))))",
     decls="", assume="""; explicit structural-induction schema instance (valid for the Path datatype)
 (define-fun P ((w Path)) Bool (forall ((p Path)) (= (isPrefix w p) (exists ((q Path)) (= p (append w q))))))
+; ASSUMED: T1
 (assert (=> (and (P nil) (forall ((h Int) (t Path)) (=> (P t) (P (cons h t))))) (forall ((w Path)) (P w))))
 """)
 
@@ -193,7 +236,7 @@ law("law_absorption", "A ∪ (A ∩ B) = A  and  A ∩ (A ∪ B) = A",
 law("law_singleton_disq", "p ≠ q  ⇒  {p} \\ {q} = {p}  and  {p} ∩ {q} = ∅",
     conj(eq(SUB(SING("w"), SING("u")), SING("w")),
          eq(INTER(SING("w"), SING("u")), EMPTY)),
-    decls=SETS + CONSTS + "(assert (distinct w u))\n")
+    decls=SETS + CONSTS + "; PREMISE: the two singletons are distinct paths (the law's hypothesis p ≠ q)\n(assert (distinct w u))\n")
 
 # ---- wrap / unwrap ----
 law("law_wrap_set", "wrap: ∅-absorption, ε-unit, singleton fusion, ∪-distribution",
@@ -305,15 +348,182 @@ law("law_iterc_set", "IterC (invariant body over heads): ∅ source, ε-singleto
          "(forall ((h Int) (t Path)) " + eq(ITERC(SING("(cons h t)"), B), B) + ")",
          eq(ITERC(UNION(A, C), B), UNION(ITERC(A, B), ITERC(C, B)))),
     decls=SETS)
+# ---- HEAD-DEPENDENT iteration: the four rules that let formal.egg carry an `Iteration` BINDER
+# instead of the executor's pre-computed union of group bodies.
+#
+#   L1  Iter(src)                  = IterH(Head src)            the headedness guard, discharged
+#   L2  IterH(Union hs1 hs2)       = Union(IterH hs1, IterH hs2) the HEAD SET distributes...
+#   L3  IterH(Singleton (Item h))  = Bd h                        ...down to one head at a time
+#   L4  IterH(Empty)               = Empty
+#
+# L2 IS THE LOAD-BEARING ONE, AND IT IS WHY THIS WORKS.  `Iteration` itself does NOT distribute over
+# a union of its SOURCE — a head shared between the two operands merges their groups, and the
+# machine-checked witness that the split is false is proofs/unbounded/negative/not_iter_split.p
+# (N05), with an executed countermodel in proofs/unbounded/COUNTERMODELS.tsv.  What distributes here
+# is the HEAD-SET argument, with `src` — the term the groups are computed from — held fixed.  That
+# is the distinction the invariant-body `IterC` rules did not have to make, because an invariant
+# body cannot observe a group at all.
+law("law_iter_set", "head-dependent Iteration as a fold over Head(src): the headedness guard (Iter = IterH∘Head), head-set ∪-distribution with src HELD FIXED (the source-union split is FALSE — N05), single-head unfolding, ∅ head set",
+    conj(eq(ITER(A), ITERH(HEAD(A))),
+         eq(ITERH(UNION(B, C)), UNION(ITERH(B), ITERH(C))),
+         "(forall ((h0 Int)) " + eq(ITERH(SING("(cons h0 nil)")), lambda p: f"(Bd h0 {p})") + ")",
+         eq(ITERH(EMPTY), EMPTY)),
+    decls=SETS + BODYK)
 law("law_guard_hoist", "hoisting an invariant wrap / composition factor / body-union out of IterC",
     conj(eq(ITERC(A, WRAP("w", B)), WRAP("w", ITERC(A, B))),
          eq(ITERC(A, UNION(B, C)), UNION(ITERC(A, B), ITERC(A, C))),
          eq(ITERC(A, COMP(C, B)), COMP(C, ITERC(A, B)))),
     decls=SETS + CONSTS)
+# ---- the positional boundary: `range-singleton`  ------------------------------------
+#
+# `Lower.Range_Singleton` rewrites `Range(Singleton(p), start, end)` to `Singleton(p)` or `Empty` by
+# computing `RangeBounds.normalize(1, start, end)` and testing `lo < hi`.  The law was registered
+# GROUND — "trusted positional boundary; executor-evaluated" — which meant the ONE arithmetic step it
+# rests on was checked by running the executor on instances and by nothing else.  It is a claim about
+# integers and it is certifiable, so it is certified.
+#
+# `normalize` is transcribed EXACTLY, at `size = 1`:
+#     lower(b) = 0 if b = 0;  b - 1 if b > 0;  size + b otherwise
+#     upper(b) = size if b = 0;  b if start = 0 and b > 0;  b - 1 if b > 0;  size + b otherwise
+#     lo = clamp(lower(start), 0, size);  hi = clamp(upper(end), 0, size)
+#     the result is (0,0) when hi <= lo, else (lo,hi)
+#
+# TWO CONJUNCTS, and the second is the one the rewrite actually needs:
+#   (1) the CLAMP INVARIANT: `0 <= lo <= size` and `0 <= hi <= size`.  Without it the third conjunct
+#       would be about indices outside the set.
+#   (2) THE BOUNDARY ITSELF: at size 1, `lo < hi` implies `lo = 0 and hi = 1`.  That is what licenses
+#       "keep the element iff `lo < hi`": the slice `[lo, hi)` of a one-element ordered set contains
+#       index 0 exactly when `lo = 0 < 1 <= hi`, so a non-empty window is necessarily the WHOLE set
+#       and `Singleton(p)` is the right answer rather than merely a non-empty one.
+#   (3) and the converse direction, `hi <= lo` => the window is empty => `Empty`, which is immediate
+#       from `normalize`'s own `(0,0)` and is stated so the case split is exhaustive on the face of it.
+law("law_range_singleton", "the positional boundary of Range over a one-element set",
+    conj("(forall ((s Int) (e Int)) (and (<= 0 (rlo s e)) (<= (rlo s e) 1)))",
+         "(forall ((s Int) (e Int)) (and (<= 0 (rhi s e)) (<= (rhi s e) 1)))",
+         "(forall ((s Int) (e Int)) (=> (< (rlo s e) (rhi s e)) (and (= (rlo s e) 0) (= (rhi s e) 1))))",
+         "(forall ((s Int) (e Int)) (=> (<= (rhi s e) (rlo s e)) (= (rwin s e) 0)))",
+         "(forall ((s Int) (e Int)) (= (= (rwin s e) 1) (< (rlo s e) (rhi s e))))"),
+    decls="", assume="""; `RangeBounds.normalize(size, start, end)` (MORKL.scala) transcribed at size = 1.
+(define-fun clamp1 ((x Int)) Int (ite (< x 0) 0 (ite (> x 1) 1 x)))
+(define-fun lower ((b Int)) Int (ite (= b 0) 0 (ite (> b 0) (- b 1) (+ 1 b))))
+(define-fun upper ((st Int) (b Int)) Int
+  (ite (= b 0) 1 (ite (and (= st 0) (> b 0)) b (ite (> b 0) (- b 1) (+ 1 b)))))
+(define-fun rlo ((st Int) (e Int)) Int (clamp1 (lower st)))
+(define-fun rhi ((st Int) (e Int)) Int (clamp1 (upper st e)))
+; the number of elements the slice keeps out of the one available: index 0 is in [rlo, rhi) or not
+(define-fun rwin ((st Int) (e Int)) Int (ite (< (rlo st e) (rhi st e)) 1 0))
+""")
 law("law_iter_fusion", "nested invariant iterations fuse and commute",
     conj(eq(ITERC(A, ITERC(A, B)), ITERC(A, B)),
          eq(ITERC(A, ITERC(C, B)), ITERC(C, ITERC(A, B)))),
     decls=SETS)
+
+# ---- inverse-index semijoin (Lower.IterWitness_TransposeSemiJoin), k=l=1 instances ----
+law("law_transpose_spec", "the (1,1)-transpose index: TR = { w·u | u·w prefixes an E-path }",
+    conj("(forall ((u Int) (w Int)) (= (TR (cons w (cons u nil))) "
+         "(exists ((t Path)) (E (cons u (cons w t))))))",
+         "(forall ((p Path)) (=> (TR p) (exists ((u Int) (w Int)) (= p (cons w (cons u nil))))))"),
+    decls="(declare-fun E (Path) Bool)\n(declare-fun TR (Path) Bool)\n" +
+          "(assert (forall ((p Path)) (= (TR p) (exists ((u Int) (w Int) (t Path)) "
+          "(and (= p (cons w (cons u nil))) (E (cons u (cons w t))))))))\n")
+law("law_iter_transpose_semijoin",
+    "narrowing a head-dependent iteration to the transpose-index candidates drops only groups whose witness is empty (body strict in the witness)",
+    "(forall ((p Path)) (= "
+    "(exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) "
+    "(exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) "
+    "(exists ((u Int)) (and (P u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))",
+    decls="(declare-fun S (Path) Bool)\n(declare-fun E (Path) Bool)\n(declare-const c0 Int)\n"
+          "(declare-fun Bd (Int Path) Bool)\n(declare-fun P (Int) Bool)\n"
+          "; P = the transpose-index candidates Unwrap(TR, c0): u with a witness u·c0·… in E\n"
+          "(assert (forall ((u Int)) (= (P u) (exists ((q Path)) (E (cons u (cons c0 q)))))))\n"
+          "; STRICTNESS: the iteration body denotes nothing when the witness unwrap is empty\n"
+          "; PREMISE: the body is STRICT in its witness (the law's side condition, checked by the optimiser before it fires)\n"
+          "(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h (cons c0 q))))) (not (Bd h p)))))\n")
+law("law_iter_head_narrow",
+    "narrowing a head-dependent iteration to the heads of the witness base E drops only groups whose witness is empty (body strict in the witness)",
+    "(forall ((p Path)) (= "
+    "(exists ((h Int)) (and (exists ((t Path)) (S (cons h t))) (Bd h p))) "
+    "(exists ((h Int)) (and (exists ((t Path)) (and (S (cons h t)) "
+    "(exists ((u Int)) (and (PH u) (isPrefix (cons u nil) (cons h t)))))) (Bd h p)))))",
+    decls="(declare-fun S (Path) Bool)\n(declare-fun E (Path) Bool)\n"
+          "(declare-fun Bd (Int Path) Bool)\n(declare-fun PH (Int) Bool)\n"
+          "; PH = Head(E): the 1-item children of E\n"
+          "(assert (forall ((u Int)) (= (PH u) (exists ((q Path)) (E (cons u q))))))\n"
+          "; STRICTNESS: the iteration body denotes nothing when the witness unwrap at h is empty\n"
+          "; PREMISE: the body is STRICT in its witness (the law's side condition, checked by the optimiser before it fires)\n"
+          "(assert (forall ((h Int) (p Path)) (=> (forall ((q Path)) (not (E (cons h q)))) (not (Bd h p)))))\n")
+# ---- mined composition laws (scripts/mine_laws.py; 18 PROVED / 4 machine-refuted) ----
+law("law_unwrap_push", "unwrap distributes through ∪/∩/\\ (pointwise membership at w·p)",
+    conj(eq(UNWRAP(UNION(A, B), "w"), UNION(UNWRAP(A, "w"), UNWRAP(B, "w"))),
+         eq(UNWRAP(INTER(A, B), "w"), INTER(UNWRAP(A, "w"), UNWRAP(B, "w"))),
+         eq(UNWRAP(SUB(A, B), "w"), SUB(UNWRAP(A, "w"), UNWRAP(B, "w")))),
+    decls=SETS + CONSTS)
+law("law_wrap_merge", "set operations over equal-prefix wraps merge under the wrap",
+    conj(eq(UNION(WRAP("w", A), WRAP("w", B)), WRAP("w", UNION(A, B))),
+         eq(INTER(WRAP("w", A), WRAP("w", B)), WRAP("w", INTER(A, B))),
+         eq(SUB(WRAP("w", A), WRAP("w", B)), WRAP("w", SUB(A, B)))),
+    decls=SETS + CONSTS, assume=APPEND_INJ)
+law("law_wrap_disjoint", "constant prefixes with DIFFERENT HEAD ITEMS give disjoint cylinders",
+    "(forall ((k Int) (j Int) (w2 Path) (u2 Path)) (=> (distinct k j) (and " +
+    eq(INTER(WRAP("(cons k w2)", A), WRAP("(cons j u2)", B)), EMPTY) + " " +
+    eq(SUB(WRAP("(cons k w2)", A), WRAP("(cons j u2)", B)), WRAP("(cons k w2)", A)) + ")))",
+    decls=SETS)
+law("law_restrict_push", "restriction pushes through the subject's ∪/∩/\\ and splits over prefix unions",
+    conj(eq(RESTRICT(UNION(A, B), C), UNION(RESTRICT(A, C), RESTRICT(B, C))),
+         eq(RESTRICT(INTER(A, B), C), INTER(RESTRICT(A, C), B)),
+         eq(RESTRICT(SUB(A, B), C), SUB(RESTRICT(A, C), B)),
+         eq(RESTRICT(A, UNION(B, C)), UNION(RESTRICT(A, B), RESTRICT(A, C)))))
+law("law_comp_wrap_assoc", "a left wrap slides out of a composition: Wrap(w,a)·b = Wrap(w, a·b)",
+    eq(COMP(WRAP("w", A), B), WRAP("w", COMP(A, B))),
+    decls=SETS + CONSTS, assume=APPEND_ASSOC)
+law("law_restrict_wrap_both", "restriction under a common wrap prefix descends",
+    "(forall ((p Path)) (= "
+    "(and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (exists ((q2 Path)) (and (exists ((pq Path)) (and (= q2 (append w pq)) (B pq))) (isPrefix q2 p)))) "
+    "(exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (exists ((q3 Path)) (and (B q3) (isPrefix q3 qq))))))))",
+    decls=SETS + CONSTS, assume=APPEND_ASSOC + APPEND_INJ + ISPREFIX_APPEND)
+law("law_iter_comp_right_hoist", "an invariant right composition factor hoists out of an iteration",
+    eq(ITERC(A, COMP(B, C)), COMP(ITERC(A, B), C)),
+    decls=SETS)
+law("law_union_chain_tailsu", "n-ary union as TailsUnion over distinct synthetic tags (3-ary instance; the executor then merges balanced with empties filtered)",
+    eq(TAILSU(UNION(UNION(WRAP("(cons 1001 nil)", A), WRAP("(cons 1002 nil)", B)), WRAP("(cons 1003 nil)", C))),
+       UNION(UNION(A, B), C)),
+    decls=SETS)
+law("law_iter_merge", "same-source iteration merges: ∪ free; ∩/\\ under the KEYED guard (bodies output their group key first — groups disjoint across keys; the unguarded ∩ is refuted)",
+    conj("(forall ((p Path)) (= (or (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (or (Bd1 hh p) (Bd2 hh p))))))",
+         "(forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (exists ((hh Int)) (and (G hh) (Bd2 hh p)))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (Bd2 hh p))))))",
+         "(forall ((p Path)) (= (and (exists ((hh Int)) (and (G hh) (Bd1 hh p))) (not (exists ((hh Int)) (and (G hh) (Bd2 hh p))))) (exists ((hh Int)) (and (G hh) (and (Bd1 hh p) (not (Bd2 hh p)))))))"),
+    decls="(declare-fun G (Int) Bool)\n(declare-fun Bd1 (Int Path) Bool)\n(declare-fun Bd2 (Int Path) Bool)\n",
+    assume="""; KEYED guard (the ∩/\\ conjuncts need it; countermodel exists without it)
+; PREMISE: both bodies are KEYED — every output path starts with the group key (the law's guard, checked by the optimiser before it fires)
+(assert (forall ((hh Int) (p Path)) (=> (Bd1 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
+; PREMISE: both bodies are KEYED — every output path starts with the group key (the law's guard, checked by the optimiser before it fires)
+(assert (forall ((hh Int) (p Path)) (=> (Bd2 hh p) (exists ((tt Path)) (= p (cons hh tt))))))
+""")
+law("law_raff_push", "raffination pushes through the subject's ∪/∩/\\ and splits over prefix unions",
+    conj(eq(RAFF(UNION(A, B), C), UNION(RAFF(A, C), RAFF(B, C))),
+         eq(RAFF(INTER(A, B), C), INTER(RAFF(A, C), B)),
+         eq(RAFF(SUB(A, B), C), SUB(RAFF(A, C), B)),
+         eq(RAFF(A, UNION(B, C)), RAFF(RAFF(A, B), C))))
+law("law_raff_restrict_algebra", "the raffination/restriction partition: annihilation, idempotence, recovery, commute",
+    conj(eq(RESTRICT(RAFF(A, B), B), EMPTY),
+         eq(RAFF(RESTRICT(A, B), B), EMPTY),
+         eq(RAFF(RAFF(A, B), B), RAFF(A, B)),
+         eq(RESTRICT(RESTRICT(A, B), B), RESTRICT(A, B)),
+         eq(UNION(RAFF(A, B), RESTRICT(A, B)), A),
+         eq(RAFF(RESTRICT(A, B), C), RESTRICT(RAFF(A, C), B))))
+law("law_raff_wrap_both", "raffination under a common wrap prefix descends",
+    "(forall ((p Path)) (= "
+    "(and (exists ((qq Path)) (and (= p (append w qq)) (A qq))) (not (exists ((q2 Path)) (and (exists ((pq Path)) (and (= q2 (append w pq)) (B pq))) (isPrefix q2 p))))) "
+    "(exists ((qq Path)) (and (= p (append w qq)) (and (A qq) (not (exists ((q3 Path)) (and (B q3) (isPrefix q3 qq)))))))))",
+    decls=SETS + CONSTS, assume=APPEND_ASSOC + APPEND_INJ + ISPREFIX_APPEND)
+law("law_comp_lit_wraps", "a 2-path literal on the left of a composition is a union of wraps",
+    eq(COMP(UNION(SING("w"), SING("u")), B), UNION(WRAP("w", B), WRAP("u", B))),
+    decls=SETS + CONSTS)
+law("law_tailsu_push", "tails-union distributes over ∪ and cancels a single-item wrap",
+    conj(eq(TAILSU(UNION(A, B)), UNION(TAILSU(A), TAILSU(B))),
+         "(forall ((h Int)) " + eq(TAILSU(WRAP("(cons h nil)", A)), A) + ")"),
+    decls=SETS)
+
 
 MINIMAL = "\n".join(PRELUDE.splitlines()[:9]) + "\n"   # axioms only — the certified-lemma
 # assumptions blow up the default saturation strategy on the pure-induction schema files.
@@ -349,7 +559,8 @@ REG = [
     ("restriction-singleton-unwrap", "FILE", "laws/law_restrict_set.smt2", "restriction by a singleton = wrap of unwrap"),
     ("iter-tails", "FILE", "laws/law_tailsu_set.smt2,keyfolds.smt2", "iteration realizing tails-union"),
     ("tailsunion-singleton", "FILE", "laws/law_tailsu_set.smt2", "tails of singleton sources"),
-    ("range-singleton", "GROUND", "-", "trusted positional boundary (fallbacks.md); executor-evaluated"),
+    ("range-singleton", "FILE", "laws/law_range_singleton.smt2",
+     "the positional boundary at size 1, certified; was GROUND/executor-evaluated"),
     ("unwrap-wrap", "FILE", "laws/law_unwrap_set.smt2", "unwrap of a wrap (all comparability cases)"),
     # formal.egg set-algebra family
     ("union-idem", "FILE", "laws/law_union_idem.smt2", "formal.egg"),
@@ -365,6 +576,11 @@ REG = [
     ("inter-distrib", "FILE", "laws/law_inter_distrib.smt2", "formal.egg"),
     ("sub-distrib", "FILE", "laws/law_sub_distrib.smt2", "formal.egg"),
     ("demorgan-sub", "FILE", "laws/law_demorgan_sub.smt2", "formal.egg + the De Morgan family"),
+    # THE ZIPPER BACKEND'S REFINEMENT LAW: not an optimiser rewrite but the ∀-certificate the
+    # stage-2 pipeline cells cite -- transpileZ observes the set semantics for every term of the local algebra.
+    # The .smt2 is the first-order shadow over the key-free fragment; proofs/lean/Zippy/Zipper.lean#Zippy.Zip.refinement
+    # is the full theorem (every constructor, boundaries named), and the .smt2 carries the MECHANIZED-IN marker to it.
+    ("zipper-refinement", "FILE", "zipper_refinement.smt2", "transpileZ ≡ eval over the syntax; Lean: Zippy.Zip.refinement (all constructors)"),
     ("singleton-disq", "FILE", "laws/law_singleton_disq.smt2", "formal.egg (neg ruleset)"),
     ("append-assoc", "FILE", "laws/law_append_assoc.smt2", "path monoid (schema instance)"),
     ("append-inj", "FILE", "laws/law_append_inj.smt2", "lemma: left cancellation (schema instance)"),
@@ -379,6 +595,8 @@ REG = [
     ("restrict-self", "FILE", "laws/law_restrict_self.smt2", "formal.egg"),
     ("unwrap-merge-set", "FILE", "laws/law_unwrap_merge.smt2", "formal.egg"),
     ("iterc-set", "FILE", "laws/law_iterc_set.smt2", "formal.egg IterC rules (incl. the ε-singleton fix)"),
+    ("iter-set", "FILE", "laws/law_iter_set.smt2",
+     "formal.egg HEAD-DEPENDENT Iter/IterH rules — what lets an `Iteration` BINDER survive into the instance tier instead of being executed by EquivPipeline.expand; the head-SET distributes with src held fixed, whereas the source-union split is FALSE (negative control N05)"),
     # the extended algebra (previously-missing laws, enumerated)
     ("comp-assoc", "FILE", "laws/law_comp_assoc.smt2", "composition associativity"),
     ("comp-rdistrib", "FILE", "laws/law_comp_rdistrib.smt2", "composition right (and left) distributivity over ∪"),
@@ -389,6 +607,28 @@ REG = [
     ("head-tails-cover", "FILE", "laws/law_head_tails_cover.smt2", "head(x)·tails∪(x) ⊇ x on ε-free x (subset as ∀-implication)"),
     ("guard-hoist", "FILE", "laws/law_guard_hoist.smt2", "invariant guard/wrap/composition hoisting"),
     ("iter-fusion", "FILE", "laws/law_iter_fusion.smt2", "nested invariant iterations fuse/commute"),
+    ("iter-transpose-semijoin", "FILE", "laws/law_iter_transpose_semijoin.smt2,laws/law_transpose_spec.smt2",
+     "inverse-index semijoin: k=l=1 certified; k,l<=3 = the same argument level-wise (SCHEMATIC, matched syntactically); body-strictness analysis in Lower"),
+    ("transpose-spec", "FILE", "laws/law_transpose_spec.smt2", "the (1,1)-transpose index spec (emitted nest = spec is the iteration-semantics schema, cf. keyfold_iter)"),
+    ("iter-witness-head-narrow", "FILE", "laws/law_iter_head_narrow.smt2",
+     "level-wise Head semijoin: source narrowed to Restriction(src, Head(E)); exact at the deepest level of suffix-witness joins; body-strictness analysis shared with the transpose law"),
+    ("unwrap-push", "FILE", "laws/law_unwrap_push.smt2", "mined; unwrap through set ops"),
+    ("wrap-merge", "FILE", "laws/law_wrap_merge.smt2", "mined; set ops merge under equal wraps"),
+    ("wrap-disjoint", "FILE", "laws/law_wrap_disjoint.smt2", "mined; incomparable cylinders (part of wrap-merge in Lower)"),
+    ("restriction-push", "FILE", "laws/law_restrict_push.smt2", "mined; restriction through subject ops + prefix unions"),
+    ("comp-wrap-assoc", "FILE", "laws/law_comp_wrap_assoc.smt2", "mined; left wrap slides out of composition"),
+    ("comp-assoc-right", "FILE", "laws/law_comp_assoc.smt2", "census; right-assoc canonicalization"),
+    ("comp-lit-to-wraps", "FILE", "laws/law_comp_lit_wraps.smt2", "census; compositions traded for unions of wraps (n<=4 schematic via comp-over-union-left + wrap-as-comp)"),
+    ("unwrap-fuse-const", "FILE", "laws/law_unwrap_merge.smt2", "census; constant unwrap chains fuse (same items descended, fewer nodes)"),
+    ("singleton-constprefix-wrap", "FILE", "laws/law_wrap_set.smt2", "profile; hoistable constant-prefix wrap split from singletons (merge direction gated to fully-constant)"),
+    ("iter-comp-right-hoist", "FILE", "laws/law_iter_comp_right_hoist.smt2", "profile; invariant right comp factor out of iterations"),
+    ("raffination-push", "FILE", "laws/law_raff_push.smt2", "profile; raffination through subject ops + prefix unions (pointwise)"),
+    ("raff-restrict-algebra", "FILE", "laws/law_raff_restrict_algebra.smt2", "profile; partition annihilation/idempotence/recovery/commute"),
+    ("restrict-raff-wrap-both", "FILE", "laws/law_restrict_wrap_both.smt2,laws/law_raff_wrap_both.smt2", "profile; descend below a common wrap prefix"),
+    ("iter-setop-merge", "FILE", "laws/law_iter_merge.smt2", "triple census; GUARDED: keyed bodies make groups independent — ∩/\\ move through same-source iterations; ∪ free (gated off invariant bodies vs IterUnion_Indep)"),
+    ("union-chain-tailsu", "FILE", "laws/law_union_chain_tailsu.smt2", "comm-assoc reordering natively: ≥4-ary ∪ chains as TailsUnion over synthetic tags; CERTIFIED but NOT DEFAULT (measured regression on small branches); ∩ analogue (sentinel) documented OPEN — no ≥3-ary ∩ occurs in the applications"),
+    ("restrict-wrap-both", "FILE", "laws/law_restrict_wrap_both.smt2", "mined (certificate only; not in Lower)"),
+    ("tailsu-push", "FILE", "laws/law_tailsu_push.smt2", "mined (certificate only; TailsUnion lowers to iteration)"),
 ]
 with open(outdir / "REGISTRY.tsv", "w") as f:
     f.write("# law\tkind\tcertificates\tnote\n")

@@ -13,6 +13,7 @@
 (define-fun presentA ((h Int)) Bool (exists ((q Path)) (A (cons h q))))
 (define-fun presentB ((h Int)) Bool (exists ((q Path)) (B (cons h q))))
 (declare-fun cand (Int) Bool)
+; PREMISE: every present head is a candidate (the exact-key filter's side condition)
 (assert (forall ((h Int)) (=> (presentA h) (cand h))))            ; completeness hypothesis
 (define-fun kept ((h Int)) Bool (and (cand h) (exists ((q Path)) (A (cons h q)))))
 (assert (not (forall ((h Int)) (= (kept h) (presentA h)))))

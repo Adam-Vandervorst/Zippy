@@ -16,8 +16,10 @@
 (assert (forall ((a NSet) (b NSet))
   (= (subset a b) (forall ((x Node)) (=> (mem x a) (mem x b))))))
 (assert (forall ((x Node)) (mem x top)))
+; ASSUMED: T7
 (assert (forall ((a NSet)) (>= (card a) 0)))
 ; proved in bounded_growth_decrease.smt2 (and .p), imported as a premise
+; ASSUMED: T7
 (assert (forall ((r NSet) (s NSet) (u NSet))
   (=> (and (subset r s) (subset s u) (distinct s r))
       (< (card (setminus u s)) (card (setminus u r))))))

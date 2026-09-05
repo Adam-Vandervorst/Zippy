@@ -1,24 +1,13 @@
-; AUTO-GENERATED — pipeline stage 1 (aunt): original vs optimised (instance observations, folded)
-; Both sides compiled to their denotational membership formulas over the same inputs;
-; the goal (negated): the programs produce the SAME OUTPUT — equal membership at every path.
-(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
-(declare-fun append (Path Path) Path)
-(assert (forall ((q Path)) (= (append nil q) q)))
-(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
-(declare-fun isPrefix (Path Path) Bool)
-(assert (forall ((p Path)) (isPrefix nil p)))
-(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
-(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
-  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
-; certified lemmas (proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2 — both PROVED)
-(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
-  (= (= (cons k2 p) (append q r))
-     (or (and (= q nil) (= r (cons k2 p)))
-         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
-(assert (forall ((q Path)) (= (append q nil) q)))
+; TRUSTS: law:unwrap-concat-unwraps
 
-(define-fun m_1 ((p Path)) Bool (or (= p (cons 227 (cons 216 (cons 223 nil)))) (= p (cons 227 (cons 217 (cons 226 nil)))) (= p (cons 227 (cons 226 (cons 223 nil))))))
-(define-fun m_2 ((p Path)) Bool (or (= p (cons 227 (cons 216 (cons 223 nil)))) (= p (cons 227 (cons 217 (cons 226 nil)))) (= p (cons 227 (cons 226 (cons 223 nil))))))
-
-(assert (not (and (= (m_1 (cons 227 (cons 216 (cons 223 nil)))) (m_2 (cons 227 (cons 216 (cons 223 nil))))) (= (m_1 (cons 227 (cons 217 (cons 226 nil)))) (m_2 (cons 227 (cons 217 (cons 226 nil))))) (= (m_1 (cons 227 (cons 226 (cons 223 nil)))) (m_2 (cons 227 (cons 226 (cons 223 nil))))) (= (m_1 (cons 215 nil)) (m_2 (cons 215 nil))) (= (m_1 (cons 216 nil)) (m_2 (cons 216 nil))) (= (m_1 (cons 217 nil)) (m_2 (cons 217 nil))) (= (m_1 (cons 218 nil)) (m_2 (cons 218 nil))) (= (m_1 (cons 219 nil)) (m_2 (cons 219 nil))) (= (m_1 (cons 220 nil)) (m_2 (cons 220 nil))) (= (m_1 (cons 221 nil)) (m_2 (cons 221 nil))) (= (m_1 (cons 222 nil)) (m_2 (cons 222 nil))) (= (m_1 (cons 223 nil)) (m_2 (cons 223 nil))) (= (m_1 (cons 224 nil)) (m_2 (cons 224 nil))) (= (m_1 (cons 225 nil)) (m_2 (cons 225 nil))) (= (m_1 (cons 226 nil)) (m_2 (cons 226 nil))) (= (m_1 (cons 227 (cons 215 nil))) (m_2 (cons 227 (cons 215 nil)))) (= (m_1 (cons 227 (cons 218 nil))) (m_2 (cons 227 (cons 218 nil)))) (= (m_1 (cons 227 (cons 219 nil))) (m_2 (cons 227 (cons 219 nil)))) (= (m_1 (cons 227 (cons 220 nil))) (m_2 (cons 227 (cons 220 nil)))) (= (m_1 (cons 227 (cons 221 nil))) (m_2 (cons 227 (cons 221 nil)))) (= (m_1 (cons 227 (cons 222 nil))) (m_2 (cons 227 (cons 222 nil)))) (= (m_1 (cons 227 (cons 223 nil))) (m_2 (cons 227 (cons 223 nil)))) (= (m_1 (cons 227 (cons 224 nil))) (m_2 (cons 227 (cons 224 nil)))) (= (m_1 (cons 227 (cons 225 nil))) (m_2 (cons 227 (cons 225 nil)))) (= (m_1 (cons 227 (cons 227 nil))) (m_2 (cons 227 (cons 227 nil)))) (= (m_1 (cons 227 (cons 216 (cons 215 nil)))) (m_2 (cons 227 (cons 216 (cons 215 nil))))) (= (m_1 (cons 227 (cons 216 (cons 216 nil)))) (m_2 (cons 227 (cons 216 (cons 216 nil))))) (= (m_1 (cons 227 (cons 216 (cons 217 nil)))) (m_2 (cons 227 (cons 216 (cons 217 nil))))))))
-(check-sat)
+; BOUNDARY: space
+; AUTO-GENERATED pipeline stage 1 (aunt) — INSTANCE: the program vs SC.reduce(program).
+; LAW-JUSTIFIED-NO-RESIDUAL: the two sides are joined by 1 TRACE STEP(S), each a
+; re-applied instance of a certified optimiser law (SC.verifyTrace: 0 failure(s); the laws'
+; ∀-certificates are in proofs/laws/REGISTRY.tsv), composed end to end: the `after` of every
+; step is the `before` of the next.  A step is a whole-term congruence (one law may rewrite
+; several positions at once); the ∀-certificate covers every instance.
+; INSTANCE-DIFFERENTIAL: 1 of 1 step results evaluate to the reference on this input.
+; laws used: unwrap-concat-unwraps
+; STEP   0  unwrap-concat-unwraps         6fdc8f8b5ec9 -> 88999f83b9ec   certificate(s): unwrap-concat-unwraps ⟶ proofs/laws/law_unwrap_merge.smt2
+; endpoints: 6fdc8f8b5ec9 (program) -> 88999f83b9ec (SC.reduce)

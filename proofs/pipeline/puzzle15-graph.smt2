@@ -1,24 +1,17 @@
-; AUTO-GENERATED — pipeline stage 3 (puzzle15): graph vs space (instance observations, folded)
-; Both sides compiled to their denotational membership formulas over the same inputs;
-; the goal (negated): the programs produce the SAME OUTPUT — equal membership at every path.
-(declare-datatypes ((Path 0)) (((nil) (cons (hd Int) (tl Path)))))
-(declare-fun append (Path Path) Path)
-(assert (forall ((q Path)) (= (append nil q) q)))
-(assert (forall ((h Int) (t Path) (q Path)) (= (append (cons h t) q) (cons h (append t q)))))
-(declare-fun isPrefix (Path Path) Bool)
-(assert (forall ((p Path)) (isPrefix nil p)))
-(assert (forall ((h Int) (t Path)) (not (isPrefix (cons h t) nil))))
-(assert (forall ((h Int) (t Path) (h2 Int) (t2 Path))
-  (= (isPrefix (cons h t) (cons h2 t2)) (and (= h h2) (isPrefix t t2)))))
-; certified lemmas (proofs/lemma_append_cons.smt2, proofs/lemma_append_nil.smt2 — both PROVED)
-(assert (forall ((k2 Int) (p Path) (q Path) (r Path))
-  (= (= (cons k2 p) (append q r))
-     (or (and (= q nil) (= r (cons k2 p)))
-         (exists ((q2 Path)) (and (= q (cons k2 q2)) (= p (append q2 r))))))))
-(assert (forall ((q Path)) (= (append q nil) q)))
+; TRUSTS: O6a, law:algebraic-identities, law:constant-ops, law:iter-comp-right-hoist, law:iter-union-indep
+; INSTANCE-DIFFERENTIAL: GraphExec.runGraphT(optimize(transpile(program))) == eval(program) on this input
+; (Scala assertEquals); the obligation below is the instance (data-agnostic obligation + differential) one, which covers this input.
 
-(define-fun m_1 ((p Path)) Bool (or (= p (cons 263 (cons 166 (cons 167 (cons 169 (cons 168 (cons 163 (cons 164 (cons 170 (cons 178 (cons 173 (cons 174 (cons 171 (cons 172 (cons 175 (cons 176 (cons 177 nil))))))))))))))))) (= p (cons 266 (cons 168 (cons 166 (cons 167 (cons 169 (cons 163 (cons 164 (cons 170 (cons 178 (cons 173 (cons 174 (cons 171 (cons 172 (cons 175 (cons 176 (cons 177 nil)))))))))))))))))))
-(define-fun m_2 ((p Path)) Bool (or (= p (cons 263 (cons 166 (cons 167 (cons 169 (cons 168 (cons 163 (cons 164 (cons 170 (cons 178 (cons 173 (cons 174 (cons 171 (cons 172 (cons 175 (cons 176 (cons 177 nil))))))))))))))))) (= p (cons 266 (cons 168 (cons 166 (cons 167 (cons 169 (cons 163 (cons 164 (cons 170 (cons 178 (cons 173 (cons 174 (cons 171 (cons 172 (cons 175 (cons 176 (cons 177 nil)))))))))))))))))))
-
-(assert (not (and (= (m_1 (cons 263 (cons 166 (cons 167 (cons 169 (cons 168 (cons 163 (cons 164 (cons 170 (cons 178 (cons 173 (cons 174 (cons 171 (cons 172 (cons 175 (cons 176 (cons 177 nil))))))))))))))))) (m_2 (cons 263 (cons 166 (cons 167 (cons 169 (cons 168 (cons 163 (cons 164 (cons 170 (cons 178 (cons 173 (cons 174 (cons 171 (cons 172 (cons 175 (cons 176 (cons 177 nil)))))))))))))))))) (= (m_1 (cons 266 (cons 168 (cons 166 (cons 167 (cons 169 (cons 163 (cons 164 (cons 170 (cons 178 (cons 173 (cons 174 (cons 171 (cons 172 (cons 175 (cons 176 (cons 177 nil))))))))))))))))) (m_2 (cons 266 (cons 168 (cons 166 (cons 167 (cons 169 (cons 163 (cons 164 (cons 170 (cons 178 (cons 173 (cons 174 (cons 171 (cons 172 (cons 175 (cons 176 (cons 177 nil)))))))))))))))))) (= (m_1 (cons 163 nil)) (m_2 (cons 163 nil))) (= (m_1 (cons 164 nil)) (m_2 (cons 164 nil))) (= (m_1 (cons 166 nil)) (m_2 (cons 166 nil))) (= (m_1 (cons 167 nil)) (m_2 (cons 167 nil))) (= (m_1 (cons 168 nil)) (m_2 (cons 168 nil))) (= (m_1 (cons 169 nil)) (m_2 (cons 169 nil))) (= (m_1 (cons 170 nil)) (m_2 (cons 170 nil))) (= (m_1 (cons 171 nil)) (m_2 (cons 171 nil))) (= (m_1 (cons 172 nil)) (m_2 (cons 172 nil))) (= (m_1 (cons 173 nil)) (m_2 (cons 173 nil))) (= (m_1 (cons 174 nil)) (m_2 (cons 174 nil))) (= (m_1 (cons 175 nil)) (m_2 (cons 175 nil))) (= (m_1 (cons 176 nil)) (m_2 (cons 176 nil))) (= (m_1 (cons 177 nil)) (m_2 (cons 177 nil))) (= (m_1 (cons 178 nil)) (m_2 (cons 178 nil))) (= (m_1 (cons 261 nil)) (m_2 (cons 261 nil))) (= (m_1 (cons 262 nil)) (m_2 (cons 262 nil))) (= (m_1 (cons 264 nil)) (m_2 (cons 264 nil))) (= (m_1 (cons 265 nil)) (m_2 (cons 265 nil))) (= (m_1 (cons 267 nil)) (m_2 (cons 267 nil))) (= (m_1 (cons 268 nil)) (m_2 (cons 268 nil))) (= (m_1 (cons 269 nil)) (m_2 (cons 269 nil))) (= (m_1 (cons 270 nil)) (m_2 (cons 270 nil))) (= (m_1 (cons 5454 nil)) (m_2 (cons 5454 nil))) (= (m_1 (cons 5455 nil)) (m_2 (cons 5455 nil))))))
-(check-sat)
+; BOUNDARY: graph
+; AUTO-GENERATED — pipeline graph (puzzle15), instance (data-agnostic obligation + differential)
+; LAW-JUSTIFIED-NO-RESIDUAL: all 3 differing pair(s) (of 3 candidates,
+; 0 reflexive-after-freeing) are verified instances of the optimiser's ∀-certified law
+; set — each right side is reproduced EXACTLY by replaying the named laws on the left side
+; (proof-carrying transformation).  No per-program prover obligation remains; the universal
+; certificates are the proofs/ files named per pair below.
+; LAW-JUSTIFIED pair 0: join: algebraic-identities + iter-union-indep
+;   certificate(s): algebraic-identities ⟶ proofs/laws/law_{union_unit,inter_empty,sub_empty,union_idem,inter_idem,sub_self}.smt2; iter-union-indep ⟶ proofs/laws/law_guard_hoist.smt2 (+ the bare-hoist fail-check in formal.egg)
+; LAW-JUSTIFIED pair 1: join: algebraic-identities + iter-comp-right-hoist
+;   certificate(s): algebraic-identities ⟶ proofs/laws/law_{union_unit,inter_empty,sub_empty,union_idem,inter_idem,sub_self}.smt2; iter-comp-right-hoist ⟶ proofs/laws/law_iter_comp_right_hoist.smt2
+; LAW-JUSTIFIED pair 2: constant-ops
+;   certificate(s): constant-ops ⟶ GROUND — per-op threeway_*/impl_* characterizations, eval-gated (registry: constant-ops)

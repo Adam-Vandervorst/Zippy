@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 
@@ -33,17 +35,9 @@ class FuzzerDemo extends FunSuite:
     assertEquals(examples.size, 10)
   }
 
-  /** rough size of a program expression (number of Space/Path constructors) */
-  def nodes(s: Space): Int =
-    import Space.*
-    1 + (s match
-      case Union(a, b) => nodes(a) + nodes(b); case Intersection(a, b) => nodes(a) + nodes(b)
-      case Subtraction(a, b) => nodes(a) + nodes(b); case Restriction(a, b) => nodes(a) + nodes(b)
-      case Raffination(a, b) => nodes(a) + nodes(b); case Composition(a, b) => nodes(a) + nodes(b)
-      case Wrap(a, _) => nodes(a); case Unwrap(a, _) => nodes(a)
-      case TailsUnion(a) => nodes(a); case TailsIntersection(a) => nodes(a); case Range(a, _, _) => nodes(a)
-      case Iteration(a, _, _, b) => nodes(a) + nodes(b)
-      case _ => 0)
+  /** rough size of a program expression — ONE OWNER (SpatialPipeline.nodeCount, over the total
+   *  SizeZ3.children), shared with ProgramStats / ProgramExpressivity / CorpusRuntimes. */
+  def nodes(s: Space): Int = SpatialPipeline.nodeCount(s)
 
   test("space fuzzer: 200 random triples are sound across all evaluators".tag(SlowTag.Slow)) {
     val rng = new java.util.Random(1L)

@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.Searching
 import morkl.Syntax.{*, given}
 
@@ -168,8 +170,8 @@ object Loc:
           .flatMap(i => rightf(PathValue(segment.items.take(i))).branches(PathValue(segment.items.drop(i)))).toSet
 
   def uop(src: Loc, pf: PathValue => PathValue) = Dep(src, p => Const(pf(p)))
-  def int_to_int(f: Int => Int) = uop(Full((0 to 9).map(k => PathItem.Symbol(k.toString)).toSet),
-    p => PathValue(f(p.items.map(_.show).mkString.toInt).toString.map(c => PathItem.Symbol(c.toString)).toList))
+  def int_to_int(f: Int => Int) = uop(Full((0 to 9).map(k => k.toString).toSet),
+    p => PathValue(f(p.items.mkString.toInt).toString.map(c => c.toString).toList))
   def sqrt = int_to_int(i => Math.sqrt(i.toDouble).toInt)
 end Loc
 
@@ -185,7 +187,7 @@ object SpaceFuzzer:
   import Space.*
   import java.util.Random
 
-  val alphabet: Vector[PathItem] = Vector("a", "b", "c", "d").map(PathItem.Symbol(_))
+  val alphabet: Vector[PathItem] = Vector("a", "b", "c", "d")
   val argM: SpaceMention = SpaceMention("x")
   val X: Space = Space.Mention(argM)
 
@@ -202,6 +204,9 @@ object SpaceFuzzer:
     Pair(randTrie(8, 3), randTrie(8, 3), (a, b) => Loc.Union(Set(a, b))) -> 2,
     Pair(randTrie(10, 3), randTrie(5, 2), (a, b) => Loc.Subtraction(a, b)) -> 1,
     Pair(randRepeat, randTrie(6, 2), (a, b) => Loc.Compose(a, b)) -> 1,
+    // the ARGUMENT side of the same gap: `Loc.Raffination` was written and never drawn.  The unaccepted
+    // operand is length-1 paths, so it prunes real branches instead of being an identity.
+    Pair(randTrie(10, 3), randTrie(4, 1), (a, b) => Loc.Raffination(a, b)) -> 1,
   )).flatMap(identity)
   def argDist: Dist[SpaceValue] = argLoc.map(_.instantiate()).filter(sv => sv.paths.nonEmpty && sv.paths.size <= 28)
 
@@ -209,20 +214,65 @@ object SpaceFuzzer:
   /** `sargs`/`pargs` are the program's free SPACE and PATH arguments (any number); leaves reference a
    *  random one.  Defaults to the single space input `x` and no path input (the original behaviour). */
   def genProg(arg: SpaceValue, maxDepth: Int,
-              sargs: Vector[SpaceMention] = Vector(argM), pargs: Vector[PathRef] = Vector.empty): Dist[Space] = new Dist[Space]:
+              sargs: Vector[SpaceMention] = Vector(argM), pargs: Vector[PathRef] = Vector.empty,
+              poolShare: Int = 3): Dist[Space] = new Dist[Space]:
     private val paths = arg.paths.toVector
     private val firstItems = paths.flatMap(_.items.headOption).distinct
     private type Scope = Vector[(PathRef, SpaceMention)]   // enclosing iteration binders (head var, tail-set var)
-    def sample(using rng: Random): Space = rec(maxDepth, Vector.empty)
+    def sample(using rng: Random): Space = { pool.clear(); rec(maxDepth, Vector.empty) }
+
+    // ---- the subterm POOL: operands are drawn from what was already built (scope-compatibly)
+    // rather than always generated independently, so programs actually SHARE subterms — the
+    // correlated shapes (x ∪ (x∩y), containment chains, partitions) a relational analysis or a
+    // sharing-aware optimizer feeds on almost never arise from independent draws.  An entry
+    // built under binder scope `sc` may be reused wherever `sc` is still a prefix of the current
+    // scope (all its binders remain bound; its own inner binders travel with it as the identical
+    // subtree).  `poolShare`/10 of operand positions try the pool first. ----
+    private val pool = collection.mutable.ArrayBuffer.empty[(Space, Scope)]
+    private def built(node: Space, scope: Scope): Space = { pool += ((node, scope)); node }
+    private def fromPool(scope: Scope)(using rng: Random): Option[Space] =
+      val ok = pool.filter((_, sc) => scope.startsWith(sc))
+      if ok.isEmpty then None else Some(pick(ok.toVector)._1)
+    private def operand(d: Int, scope: Scope)(using rng: Random): Space =
+      if rng.nextInt(10) < poolShare then fromPool(scope).getOrElse(rec(d, scope)) else rec(d, scope)
 
     private def pick[T](v: Vector[T])(using rng: Random): T = v(rng.nextInt(v.length))
     private def someArg(using rng: Random): SpaceValue =                       // a non-empty subset of the argument
       val chosen = paths.filter(_ => rng.nextBoolean()); SpaceValue((if chosen.isEmpty then Vector(pick(paths)) else chosen).toSet)
     private def constP(p: PathValue): Path = Path.Constant(p)
-    private def freshTag(using rng: Random): PathValue = PathValue(List(PathItem.Symbol("w" + rng.nextInt(4))))
+    private def freshTag(using rng: Random): PathValue = PathValue(List(("w" + rng.nextInt(4))))
     private def somePrefixLit(using rng: Random): Space =                       // 1-item prefixes drawn from the argument's heads
       val its = firstItems.filter(_ => rng.nextBoolean()); val use = if its.isEmpty then Vector(pick(firstItems)) else its
       Space.Literal(SpaceValue(use.map(it => PathValue(List(it))).toSet))
+
+    /** RAFFINATION'S SUBTRAHEND must remove SOMETHING without removing EVERYTHING.  `x \| y` keeps the
+     *  `x`-paths that do NOT extend a `y`-prefix, so an independently drawn `y` removes nothing (the
+     *  node is an identity) while `somePrefixLit`'s "all of the argument's heads" draw removes
+     *  everything (the node is ∅).  Both extremes are degenerate — the operator would appear in the
+     *  corpus and never be OBSERVED.  This keeps a PROPER non-empty subset of the heads whenever there
+     *  is more than one, so the node is a real partition of `x`. */
+    private def someHeadLit(using rng: Random): Space =
+      val its = firstItems.filter(_ => rng.nextBoolean())
+      val use =
+        if its.isEmpty then Vector(pick(firstItems))
+        else if its.length == firstItems.length && its.length > 1 then its.tail
+        else its
+      Space.Literal(SpaceValue(use.map(it => PathValue(List(it))).toSet))
+
+    /** TAILS-INTERSECTION'S SOURCE.  `TailsIntersection(s)` is the MEET of `s`'s per-head tail sets, so
+     *  on an arbitrary source over a 4-letter alphabet it is ∅ almost always.  Draw a source with a
+     *  SHARED tail structure instead: `heads · body` gives every head the identical tail set, so the
+     *  meet is exactly `body`, and a union of two such factors meets to the intersection of their
+     *  bodies.  One draw in four is still an arbitrary source, so the empty case stays in the corpus.
+     *
+     *  `Composition` is multiplicative, but the left factor here is at most `|firstItems| ≤ 4`
+     *  one-item paths and `SpaceFuzzer.example`'s `maxResult` filter still applies. */
+    private def sharedTailSrc(d: Int, scope: Scope)(using rng: Random): Space =
+      if rng.nextInt(4) == 0 then operand(d - 1, scope)
+      else
+        val shared = Space.Composition(someHeadLit, operand(d - 1, scope))
+        if rng.nextBoolean() then shared
+        else Space.Union(shared, Space.Composition(someHeadLit, operand(d - 1, scope)))
 
     // a leaf MAY reference any enclosing iteration binder — `Singleton(Path.Deref(v))` is a VARIABLE
     // path (`sP"v"`), a core building block; `Mention(t)` is the bound tail-set; `v ++ const` mixes them.
@@ -250,38 +300,52 @@ object SpaceFuzzer:
       val body: Space = Space.Singleton((0 until tlen).map(_ => (Path.Deref(hs(rng.nextInt(k))): Path)).reduceLeft(Path.Concat(_, _)))
       var node = body; var i = k - 1
       while i >= 0 do
-        node = Space.Iteration(if i == 0 then rec(d - 1, scope) else Space.Mention(ts(i - 1)), hs(i), ts(i), node); i -= 1
+        node = Space.Iteration(if i == 0 then operand(d - 1, scope) else Space.Mention(ts(i - 1)), hs(i), ts(i), node); i -= 1
       node
 
     // a binary op's SECOND operand: usually a full sub-program (so every term type can occur here too),
     // sometimes a dependency-anchored leaf that keeps the result overlapping the argument.  Not
     // homogeneous, but no longer pinned to a single type.
     private def side(d: Int, scope: Scope, anchor: => Space)(using rng: Random): Space =
-      if rng.nextInt(5) < 3 then rec(d - 1, scope) else anchor
+      if rng.nextInt(5) < 3 then operand(d - 1, scope) else anchor
     // composition's right operand: same idea, but DEPTH-BOUNDED — composition is multiplicative in
     // size, so an unbounded right side would blow up evaluation.
     private def compRhs(d: Int, scope: Scope)(using rng: Random): Space =
-      if rng.nextInt(5) < 3 then rec(math.min(d - 1, 2), scope) else Space.Singleton(constP(pick(paths)))
+      if rng.nextInt(5) < 3 then operand(math.min(d - 1, 2), scope) else Space.Singleton(constP(pick(paths)))
 
     private def rec(d: Int, scope: Scope)(using rng: Random): Space =
-      if d <= 0 then leaf(scope)
-      else Categorical.ratios(Seq(
-        "leaf" -> 2, "union" -> 2, "inter" -> 2, "sub" -> 2, "wrap" -> 2, "unwrap" -> 2, "comp" -> 1,
-        "restr" -> 2, "iter" -> 3, "tails" -> 1, "range" -> 1, "reorder" -> 1)).sample match
+      if d <= 0 then built(leaf(scope), scope)
+      // THE TABLE IS THE COVERAGE CLAIM.  `raff` mirrors `restr`'s weight (they are the complementary
+      // halves of one partition, and `RaffinationPush`/`RaffRestrictAlgebra` are only exercised through
+      // it) and `tailsi` mirrors `tails`.  `ProgramExpressivity`'s corpus census asserts that every key
+      // here actually survives into `corpus_1000.ser`, so a constructor cannot silently drop out again.
+      else built(Categorical.ratios(Seq(
+        "leaf" -> 2, "union" -> 2, "inter" -> 2, "sub" -> 2, "raff" -> 2, "wrap" -> 2, "unwrap" -> 2,
+        "comp" -> 1, "restr" -> 2, "iter" -> 3, "tails" -> 1, "tailsi" -> 1, "range" -> 1,
+        "reorder" -> 1)).sample match
         case "leaf"  => leaf(scope)
-        case "union" => Space.Union(rec(d - 1, scope), rec(d - 1, scope))
-        case "inter" => Space.Intersection(rec(d - 1, scope), side(d, scope, Space.Literal(someArg)))            // overlaps the argument
-        case "sub"   => Space.Subtraction(rec(d - 1, scope), side(d, scope, Space.Singleton(constP(pick(paths)))))
-        case "wrap"  => Space.Wrap(rec(d - 1, scope), constP(freshTag))                         // tag every path
-        case "unwrap"=> Space.Unwrap(rec(d - 1, scope), constP(PathValue(List(pick(firstItems)))))  // strip a real head
-        case "comp"  => Space.Composition(rec(d - 1, scope), compRhs(d, scope))
-        case "restr" => Space.Restriction(rec(d - 1, scope), side(d, scope, somePrefixLit))
-        case "tails" => Space.TailsUnion(rec(d - 1, scope))
-        case "range" => val lo = rng.nextInt(3); Space.Range(rec(d - 1, scope), lo, lo + 1 + rng.nextInt(3))
+        case "union" => Space.Union(operand(d - 1, scope), operand(d - 1, scope))
+        case "inter" => Space.Intersection(operand(d - 1, scope), side(d, scope, Space.Literal(someArg)))        // overlaps the argument
+        case "sub"   => Space.Subtraction(operand(d - 1, scope), side(d, scope, Space.Singleton(constP(pick(paths)))))
+        case "wrap"  => Space.Wrap(operand(d - 1, scope), constP(freshTag))                     // tag every path
+        case "unwrap"=> Space.Unwrap(operand(d - 1, scope), constP(PathValue(List(pick(firstItems)))))  // strip a real head
+        case "comp"  => Space.Composition(operand(d - 1, scope), compRhs(d, scope))
+        case "restr" => Space.Restriction(operand(d - 1, scope), side(d, scope, somePrefixLit))
+        case "raff"  => Space.Raffination(operand(d - 1, scope), side(d, scope, someHeadLit))
+        case "tails" => Space.TailsUnion(operand(d - 1, scope))
+        case "tailsi"=> Space.TailsIntersection(sharedTailSrc(d, scope))
+        // ONE DRAW IN SIX IS THE IDENTITY WINDOW (`hi == 0`, so `RangeBounds.normalize` returns the whole
+        // space and `sliceRange`/`ITrie.range` return their input).  The old draw could never produce it
+        // — `hi` was always ≥ 1 — so the corpus contained zero full-window ranges and the identity arm of
+        // every Range cost model went unexercised.
+        case "range" =>
+          if rng.nextInt(6) == 0 then Space.Range(operand(d - 1, scope), rng.nextInt(2), 0)
+          else { val lo = rng.nextInt(3); Space.Range(operand(d - 1, scope), lo, lo + 1 + rng.nextInt(3)) }
         case "reorder" => reorder(d, scope)
         case _ =>                                                                              // iteration: binds a fresh var, visible in the body
           val hpr = PathRef("h" + rng.nextInt(1000000)).known(1); val tv = SpaceMention("t" + rng.nextInt(1000000))
-          Space.Iteration(rec(d - 1, scope), hpr, tv, rec(d - 1, scope :+ (hpr -> tv)))
+          Space.Iteration(operand(d - 1, scope), hpr, tv, operand(d - 1, scope :+ (hpr -> tv)))
+      , scope)
 
   private def evalEx(p: Space, arg: SpaceValue): Example =
     Example(p, arg, eval(p)(using PathContextMap(Map.empty), SpaceContextMap(Map(argM -> arg)), PartialFunction.empty))
