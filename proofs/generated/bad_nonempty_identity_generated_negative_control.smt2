@@ -5,6 +5,6 @@
 (set-option :produce-models true)
 (set-logic ALL)
 (declare-const X (_ BitVec 15))
-(assert (let ((__pa_0 (bvand X (bvnot (_ bv1 15))))) (not (= __pa_0 X))))
+(assert (let ((__pa_0 (bvand X (bvnot (bvshl (_ bv1 15) (_ bv0 15)))))) (not (= __pa_0 X))))
 (check-sat)
 (get-model)

@@ -1,3 +1,5 @@
+package morkl
+
 object ZipperEggStaticPrograms:
   def contextMovementProgram: String = ZipperEggContextMovementProgram.program
 

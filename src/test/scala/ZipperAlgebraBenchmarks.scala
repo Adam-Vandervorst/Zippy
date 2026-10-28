@@ -1,3 +1,5 @@
+package morkl
+
 import morkl.Syntax.{*, given}
 
 import java.nio.file.{Files, Paths}
@@ -11,6 +13,9 @@ object ZipperAlgebraBenchmarks:
   private val SubtreePaths = 16
   private val BorderRange = 512
   private val EqualityPathLimit = 250_000
+  private val TimingSamples = 7
+  private val TimingTargetBatchNanos = 10_000_000L
+  private val TimingMaximumBatchRuns = 4096
 
   private case class Scenario(label: String,
                               targetSharedPct: Int,
@@ -168,15 +173,38 @@ object ZipperAlgebraBenchmarks:
       BenchCase("combination", "range of union", Space.Range(S"a" \/ S"b", 0, BorderRange), note = "border slice over a virtual union")
     )
 
-  private def timed[A](runs: Int)(f: => A): (A, Double) =
-    var last: A = f
-    val actualRuns = runs.max(1)
-    val start = System.nanoTime()
-    var i = 0
-    while i < actualRuns do
-      last = f
-      i += 1
-    last -> ((System.nanoTime() - start).toDouble / 1_000_000.0 / actualRuns.toDouble)
+  /** Warm, adaptively batch, and report the median per-invocation time.  The
+    * calibration target keeps timer/scheduler noise from dominating cheap
+    * virtual operations, while the hard batch cap and seven samples bound the
+    * cost of the full checked matrix.
+    */
+  private def adaptiveMedianTimed[A](minimumBatchRuns: Int)(f: => A): (A, Double) =
+    require(TimingSamples > 0 && TimingSamples % 2 == 1)
+
+    def batch(runs: Int): (A, Long) =
+      val start = System.nanoTime()
+      var last: A = f
+      var index = 1
+      while index < runs do
+        last = f
+        index += 1
+      last -> (System.nanoTime() - start)
+
+    var last: A = f // untimed warmup after the independent correctness check
+    var batchRuns = minimumBatchRuns.max(1).min(TimingMaximumBatchRuns)
+    var calibration = batch(batchRuns)
+    last = calibration._1
+    while calibration._2 < TimingTargetBatchNanos && batchRuns < TimingMaximumBatchRuns do
+      batchRuns = (batchRuns * 2).min(TimingMaximumBatchRuns)
+      calibration = batch(batchRuns)
+      last = calibration._1
+
+    val samples = Vector.tabulate(TimingSamples) { _ =>
+      val measured = batch(batchRuns)
+      last = measured._1
+      measured._2.toDouble / 1_000_000.0 / batchRuns.toDouble
+    }.sorted
+    last -> samples(TimingSamples / 2)
 
   private def sampleEquivalent(trie: TrieSpace, zipper: TrieSpace, name: String): Unit =
     assert(trie.pathCount == zipper.pathCount, s"$name path count mismatch: ${trie.pathCount} vs ${zipper.pathCount}")
@@ -199,8 +227,10 @@ object ZipperAlgebraBenchmarks:
     val zipperCheck = evalZ(c.expr)(using summon[PathContext], zc, PartialFunction.empty)
     sampleEquivalent(trieCheck, zipperCheck, s"${s.label} ${c.group}/${c.name}")
 
-    val (_, trieMs) = timed(c.runs)(evalTrie(c.expr)(using summon[PathContext], tc, PartialFunction.empty).pathCount)
-    val (zipperResultPaths, zipperMs) = timed(c.runs)(evalZ(c.expr)(using summon[PathContext], zc, PartialFunction.empty).pathCount)
+    val (_, trieMs) = adaptiveMedianTimed(c.runs)(
+      evalTrie(c.expr)(using summon[PathContext], tc, PartialFunction.empty).pathCount)
+    val (zipperResultPaths, zipperMs) = adaptiveMedianTimed(c.runs)(
+      evalZ(c.expr)(using summon[PathContext], zc, PartialFunction.empty).pathCount)
     assert(zipperResultPaths == trieCheck.pathCount)
 
     Row(
@@ -237,7 +267,7 @@ object ZipperAlgebraBenchmarks:
       "",
       "This report isolates direct zipper evaluation over physically large tries. Each scenario builds two full operands `a` and `b` with the same top-level keys, plus a sparse third operand `cOverlap` containing only the buckets that are physically shared by all three. For the requested sharing level, the corresponding child subtries are the same JVM objects in all overlapping operands; the rest of `a` and `b` have the same outer shape but distinct unique leaves. Each child subtrie also has a small common tail vocabulary so `tailsIntersection` and ordinary intersections have non-empty work to do outside the physically shared portion.",
       "",
-      s"Each operand has $BucketCount top-level buckets and $SubtreePaths paths per bucket. Timings compare `evalTrie(expr).pathCount` to `evalZ(expr).pathCount` after a correctness check. Very large results are checked by path count plus border membership samples instead of decoding every path.",
+      s"Each operand has $BucketCount top-level buckets and $SubtreePaths paths per bucket. Timings compare `evalTrie(expr).pathCount` to `evalZ(expr).pathCount` after an untimed correctness check and warmup. Each backend is adaptively batched by doubling from one invocation until a batch reaches 10 ms or 4,096 invocations, then the table reports the median per-invocation time from seven batches. This bounds total measurement work while preventing one noisy invocation from defining a row. Very large results are checked by path count plus border membership samples instead of decoding every path.",
       "",
       scenarioSummary(scenarios),
       "",
@@ -291,6 +321,20 @@ object ZipperAlgebraBenchmarks:
       )
       .pathCount
 
+  /** Retain the historical mean protocol for the separate old-vs-new
+    * RangeTail microbenchmark. The checked algebra matrix above is the scope
+    * of the adaptive median methodology.
+    */
+  private def microTimed[A](runs: Int)(f: => A): (A, Double) =
+    var last: A = f
+    val actualRuns = runs.max(1)
+    val start = System.nanoTime()
+    var index = 0
+    while index < actualRuns do
+      last = f
+      index += 1
+    last -> ((System.nanoTime() - start).toDouble / 1_000_000.0 / actualRuns.toDouble)
+
   private def iterRangeTailMicroRow(heads: Int, tailFanout: Int): IterRangeTailMicroRow =
     Console.err.println(s"[iter-range-tail-micro] heads=$heads tailFanout=$tailFanout")
     val src = SpaceZipper.traversal(iterRangeTailTrie(heads, tailFanout))
@@ -299,8 +343,8 @@ object ZipperAlgebraBenchmarks:
     assert(oldRangeTailPathCount(src, 0, -1) == expectedPaths)
 
     val runs = if heads >= 150 then 2 else 4
-    val (_, oldMs) = timed(runs)(oldRangeTailPathCount(src, 0, -1))
-    val (_, newMs) = timed(runs)(newRangeTailPathCount(src, 0, -1))
+    val (_, oldMs) = microTimed(runs)(oldRangeTailPathCount(src, 0, -1))
+    val (_, newMs) = microTimed(runs)(newRangeTailPathCount(src, 0, -1))
     IterRangeTailMicroRow(heads, tailFanout, expectedPaths, oldMs, newMs)
 
   def iterRangeTailMicroMarkdown(): String =
@@ -325,10 +369,10 @@ object ZipperAlgebraBenchmarks:
 
 @main def zipperAlgebraBenchmarkReport(): Unit =
   val report = ZipperAlgebraBenchmarks.markdown()
-  Files.writeString(Paths.get("ZIPPER_ALGEBRA_BENCHMARKS.md"), report + "\n")
+  Files.writeString(Paths.get("docs/ZIPPER_ALGEBRA_BENCHMARKS.md"), report + "\n")
   println(report)
 
 @main def zipperIterRangeTailMicroReport(): Unit =
   val report = ZipperAlgebraBenchmarks.iterRangeTailMicroMarkdown()
-  Files.writeString(Paths.get("ZIPPER_ITER_RANGE_MICRO.md"), report + "\n")
+  Files.writeString(Paths.get("docs/ZIPPER_ITER_RANGE_MICRO.md"), report + "\n")
   println(report)

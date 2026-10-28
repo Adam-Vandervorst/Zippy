@@ -1,3 +1,5 @@
+package morkl
+
 import morkl.Syntax.{*, given}
 import scala.language.implicitConversions
 import java.util.Locale
@@ -275,8 +277,11 @@ object TrieBenchmarks:
       else if visited(name) then false
       else callGraph.getOrElse(name, Set.empty).exists(cyclic(_, visiting + name, visited + name))
     val recursive = compiled.keysIterator.filter(cyclic(_, Set.empty, Set.empty)).toVector.sorted
-    if recursive.nonEmpty then
-      throw RuntimeException(s"recursive Call not lowered: ${recursive.mkString(", ")}")
+    val unsafe = recursive.filterNot(name =>
+      Supercompiler.wellFoundedPartitionRecursion(byName(name), defs.lift.unlift)
+    )
+    if unsafe.nonEmpty then
+      throw RuntimeException(s"recursive Call not lowered or certified well-founded: ${unsafe.mkString(", ")}")
     CallIndex(compiled.toMap, reports.result())
 
   private def execGraphValue(plan: GraphPlan, c: ProgramCase): SpaceValue =
@@ -577,8 +582,31 @@ object TrieBenchmarks:
       ProgramCase("aunt synthetic", "process-sc static family 24 people", scAuntResidual.top, scPeopleCtx, scPeopleTrie, scAuntResidual.env, defs = scAuntResidual.routines.values.toVector, runs = 3, prep = Some(scAuntResidualProfile)),
       ProgramCase("graph two-hop", "reference 90-chain", twoHop.body, graphCtx, graphTrie, runs = 3),
       ProgramCase("graph mutual", "reference 90-chain", mutual.body, graphCtx, graphTrie, runs = 3),
-      ProgramCase("datalog semi-naive", "reference 24-chain", datalogCall, rc = datalogDefs, defs = Vector(semiNaive), runs = 2),
-      ProgramCase("datalog semi-naive", "process-sc 24-chain", datalogResidual.top, rc = datalogResidual.env, defs = datalogResidual.routines.values.toVector, runs = 2, prep = Some(datalogResidualProfile)),
+      ProgramCase(
+        "scc",
+        "paper divide-and-conquer",
+        SccCornerstone.body,
+        rc = SccCornerstone.rc,
+        defs = SccCornerstone.defs,
+        runs = 3,
+      ),
+      ProgramCase(
+        "datalog semi-naive",
+        "reference 24-chain",
+        datalogCall,
+        rc = datalogDefs,
+        defs = Vector(semiNaive),
+        runs = 2,
+      ),
+      ProgramCase(
+        "datalog semi-naive",
+        "process-sc 24-chain",
+        datalogResidual.top,
+        rc = datalogResidual.env,
+        defs = datalogResidual.routines.values.toVector,
+        runs = 2,
+        prep = Some(datalogResidualProfile),
+      ),
       ProgramCase("life", "reference random 24x24", life, rc = mod(LifeExample.neigh, LifeExample.nextStep), defs = Vector(LifeExample.neigh, LifeExample.nextStep), runs = 2),
       ProgramCase("life", "compile-pass random 24x24", lifeCompiled.routine.name(lifeInitialLiteral), rc = mod(LifeExample.neigh, lifeCompiled.routine), defs = Vector(LifeExample.neigh, lifeCompiled.routine), runs = 2, prep = Some(lifeCompiledProfile)),
       ProgramCase("life", "compile-pass random 24x24 initial literal", lifeCompiledIn.routine.body, runs = 2, prep = Some(lifeCompiledInProfile)),
@@ -586,9 +614,25 @@ object TrieBenchmarks:
       ProgramCase("temperature", "synthetic 32x64", noaaSyntheticQuery.body, noaaSyntheticCtx, noaaSyntheticTrie, runs = 3),
       ProgramCase("sliding puzzle", "2x2 pure source full frontier step", slide2, rc = SlidingPuzzleExample.context(2), defs = slide2Defs, runs = 2),
       ProgramCase("sliding puzzle", "2x2 pure compile-pass full frontier step", slide2Compiled.routine.body, rc = SlidingPuzzleExample.context(2), defs = slide2Defs, runs = 2, prep = Some(slide2CompiledProfile)),
-      ProgramCase("sliding puzzle", "3x3 pure source depth-8 step", slide3, rc = SlidingPuzzleExample.context(3), defs = slide3Defs, runs = 1),
+      ProgramCase(
+        "sliding puzzle",
+        "3x3 pure source depth-8 step",
+        slide3,
+        rc = SlidingPuzzleExample.context(3),
+        defs = slide3Defs,
+        runs = 1,
+        zipperNote = Some("direct evalZ source search tree exceeds the benchmark heap; use evalTrie/graph rows")
+      ),
       ProgramCase("sliding puzzle", "3x3 pure compile-pass depth-8 step", slide3Compiled.routine.body, rc = SlidingPuzzleExample.context(3), defs = slide3Defs, runs = 1, prep = Some(slide3CompiledProfile)),
-      ProgramCase("sliding puzzle", "4x4 pure source depth-5 step", slide4, rc = SlidingPuzzleExample.context(4), defs = slide4Defs, runs = 1),
+      ProgramCase(
+        "sliding puzzle",
+        "4x4 pure source depth-5 step",
+        slide4,
+        rc = SlidingPuzzleExample.context(4),
+        defs = slide4Defs,
+        runs = 1,
+        zipperNote = Some("direct evalZ source search tree exceeds the benchmark heap; use evalTrie/graph rows")
+      ),
       ProgramCase("n-queens", "MORKL 8x8 source", queens8.body, tc = emptyTrie, rc = queens8Ctx, defs = queens8Defs, runs = 1, zipperNote = Some("direct evalZ is currently omitted for the high-level source search tree; use compile-pass/graph rows")),
       ProgramCase("n-queens", "MORKL 8x8 compile-pass", queens8Compiled.routine.body, tc = emptyTrie, rc = queens8Ctx, defs = queens8Defs, runs = 1, prep = Some(queens8CompiledProfile))
     )
@@ -617,7 +661,7 @@ object TrieBenchmarks:
     Vector(
       "# Trie Runtime Benchmarks",
       "",
-      "Measured with `TrieBenchmarks` on this worktree. Runtime times are average milliseconds per evaluation after two warmup runs. The first table excludes compilation/supercompilation and graph construction; rows labelled `process-sc` or `compile-pass` time the residual/compiled runtime. Runtime speedup cells and compile/run ratios are deliberately omitted for graphs that have been completely residualized to a one-node literal; use the compile+run column in the second table for those rows. The second table reports setup supercompilation time, graph compilation time, total compile time, compile/run ratio for non-residual graph execution, compile+`ROG execT` time, timed compile-stage totals, constant-folding eval time, and optimization-pass totals under explicit compile budgets. Graph optimization includes loop-invariant subgraph hoisting, push-out, and sharing. `ROG exec` is the legacy `RecursiveOpGraph` executor over `SpaceValue`; `evalZ` is the declarative zipper traversal evaluator that composes logical trie cursors and materializes only at the result boundary; `ROG execT` is the interned trie executor over `TrieSpace` and `List[Int]` path slots. Graph rows use fully optimized graphs: helper functions are inlined/expanded/lowered where possible, any surviving nonrecursive `Call`s dispatch to optimized callee graphs, and graph-note cells list retained calls found in both the top graph and optimized callee graphs. Recursive source `Call` cycles that survive lowering are marked unsupported.",
+      "Measured with `TrieBenchmarks` on this worktree. Runtime times are average milliseconds per evaluation after two warmup runs. The first table excludes compilation/supercompilation and graph construction; rows labelled `process-sc` or `compile-pass` time the residual/compiled runtime. Runtime speedup cells and compile/run ratios are deliberately omitted for graphs that have been completely residualized to a one-node literal; use the compile+run column in the second table for those rows. The second table reports setup supercompilation time, graph compilation time, total compile time, compile/run ratio for non-residual graph execution, compile+`ROG execT` time, timed compile-stage totals, constant-folding eval time, and optimization-pass totals under explicit compile budgets. Graph optimization includes loop-invariant subgraph hoisting, push-out, and sharing. `ROG exec` is the legacy `RecursiveOpGraph` executor over `SpaceValue`; `evalZ` is the declarative zipper traversal evaluator that composes logical trie cursors and materializes only at the result boundary; `ROG execT` is the interned trie executor over `TrieSpace` and `List[Int]` path slots. Graph rows use fully optimized graphs: helper functions are inlined/expanded/lowered where possible, surviving `Call`s dispatch to optimized callee graphs, and graph-note cells list retained calls found in both the top graph and optimized callees. Recursive cycles are unsupported unless structurally certified as the paper SCC routine's strict three-way node partition.",
       "",
       "## Runtime",
       "",
@@ -639,11 +683,11 @@ object TrieBenchmarks:
       "",
       "The trie evaluator remains strongest on native path algebra with shared prefixes, joins, restriction, unwrap, and first-symbol iteration. The direct `execT` backend compounds that advantage when the graph is lowered to native ops and optimized callee graphs because it avoids rebuilding old `PathValue` and `SpaceValue` intermediates.",
       "",
-      "`evalZ` is included as a correctness-backed zipper traversal prototype, not yet as the winning runtime for every source shape. Memoized virtual zippers now keep the sliding-puzzle source rows near `evalTrie`, and top-level union-saturating self recursion is rejected as unsupported rather than falling back to concrete `evalTrie` materialization. The separate `ZIPPER_LARGE_BENCHMARKS.md` report contains larger asymptotic product-selector rows where zipper traversal avoids broad intermediate scans. Direct source n-queens remains omitted for `evalZ` with an explicit note because that high-level search tree still needs a dedicated recursive zipper strategy.",
+      "`evalZ` is included as a correctness-backed zipper traversal runtime. Generic iteration now joins materialized branch tries directly at the final boundary, keeping nonrecursive scaling near `evalTrie`; union-saturating recursion is lowered and measured directly. Structurally positive, productive steps use prefix-demand cells, while state-negative semi-naive Datalog uses lazy exact synchronous rounds executed directly in native trie algebra. The SCC row executes the paper's well-founded pivot/partition recursion with masked reachability lowered to a fixpoint. The separate `ZIPPER_LARGE_BENCHMARKS.md` report contains larger nonrecursive scaling and product-selector rows. Direct source n-queens remains omitted for `evalZ` with an explicit note because that high-level search tree still needs a dedicated recursive zipper strategy.",
       "",
       "The pure Game-of-Life source is now intentionally a lowering benchmark: direct `evalTrie` still interprets the high-level relation program, while the graph backend lowers `Range`, `Unwrap`, joins, and literal coordinate relations into direct operations; use the `ROG execT` and compile+`ROG execT` columns for the lowered result.",
       "",
-      "Graph timings are intentionally conservative about semantics. Raw routine calls are not timed as raw helper graphs; helper routines are inlined/expanded and lowered before graph execution when possible, and surviving nonrecursive calls use optimized callee graphs. The fixpoint lowering handles the `Routines.fixpoint` union-saturating shape, while recursive residual call cycles still need dedicated lowering before `exec`/`execT` can be reported honestly.",
+      "Graph timings are intentionally conservative about semantics. Raw routine calls are not timed as raw helper graphs; helper routines are inlined/expanded and lowered before graph execution when possible, and surviving calls use optimized callee graphs. Fixpoint lowering handles both single-state and invariant-parameter union-saturating shapes. Recursive residual cycles remain unsupported unless the structural checker certifies the paper SCC routine's three strict node partitions; that certified cycle dispatches through optimized callee graphs.",
       "",
       "Compilation is now explicitly bounded by wall-clock budgets as well as structural caps. Source normalization records every pass attempt, graph optimization records `hoist_loop_invariant_subgraphs`, `push_out`, and `optimize_sharing` per round, constant folding records eval/evalTrie/evalZ/execT time and call counts, and the compilation table separates setup SC time, lowering/inlining time, source-pass time, graph-build time, graph-optimization time, compile/run ratio, and compile+run time so runtime speedups are not mistaken for free compilation.",
       "",
@@ -656,10 +700,10 @@ object TrieBenchmarks:
 
 @main def trieBenchmarkReport(): Unit =
   val report = TrieBenchmarks.markdown()
-  Files.writeString(Paths.get("TRIE_BENCHMARKS.md"), report + "\n")
+  Files.writeString(Paths.get("docs/TRIE_BENCHMARKS.md"), report + "\n")
   println(report)
 
 @main def constantFoldExecutorReport(): Unit =
   val report = TrieBenchmarks.constantFoldExecutorMarkdown()
-  Files.writeString(Paths.get("CONSTANT_FOLD_EXECUTOR_BENCHMARKS.md"), report + "\n")
+  Files.writeString(Paths.get("docs/CONSTANT_FOLD_EXECUTOR_BENCHMARKS.md"), report + "\n")
   println(report)

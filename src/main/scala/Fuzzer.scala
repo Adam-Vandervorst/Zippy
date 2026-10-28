@@ -1,3 +1,5 @@
+package morkl
+
 import morkl.Syntax.{*, given}
 import scala.collection.Searching
 
@@ -214,6 +216,10 @@ object SpaceFuzzer:
   val alphabet: Vector[PathItem] = Vector("a", "b", "c", "d").map(PathItem(_))
   val argM: SpaceMention = SpaceMention("x")
   val X: Space = Space.Mention(argM)
+  val callArgM: SpaceMention = SpaceMention("call_x")
+  val callRoutine: Routine = Routine(RoutinePtr("fuzzer_identity"), Vector.empty,
+    Vector(callArgM), Space.Mention(callArgM))
+  val routines: PartialFunction[RoutinePtr, Routine] = Syntax.mod(callRoutine)
 
   case class Example(program: Space, arg: SpaceValue, result: SpaceValue)
 
@@ -244,7 +250,8 @@ object SpaceFuzzer:
   def genProg(arg: SpaceValue,
               maxDepth: Int,
               sargs: Vector[SpaceMention] = Vector(argM),
-              pargs: Vector[PathRef] = Vector.empty): Dist[Space] = new Dist[Space]:
+              pargs: Vector[PathRef] = Vector.empty,
+              extended: Boolean = false): Dist[Space] = new Dist[Space]:
     private val paths = arg.paths.toVector
     private val firstItems = paths.flatMap(_.items.headOption).distinct
     private type Scope = Vector[(PathRef, SpaceMention)]
@@ -268,10 +275,12 @@ object SpaceFuzzer:
     private def leaf(scope: Scope)(using rng: Random): Space =
       val vars = if scope.isEmpty then Seq.empty else Seq("vsing" -> 4, "vment" -> 2, "vcat" -> 2)
       val pins = if pargs.isEmpty then Seq.empty else Seq("psing" -> 3, "pcat" -> 2)
-      Categorical.ratios(Seq("x" -> 4, "lit" -> 1, "csing" -> 1) ++ vars ++ pins).sample match
+      val extendedLeaves = if extended then Seq("empty" -> 1) else Seq.empty
+      Categorical.ratios(Seq("x" -> 4, "lit" -> 1, "csing" -> 1) ++ extendedLeaves ++ vars ++ pins).sample match
         case "x" => Space.Mention(pick(sargs))
         case "lit" => Space.Literal(someArg)
         case "csing" => Space.Singleton(constP(pick(paths)))
+        case "empty" => Space.Empty
         case "vsing" => Space.Singleton(Path.Deref(pick(scope)._1))
         case "vment" => Space.Mention(pick(scope)._2)
         case "vcat" => Space.Singleton(Path.Concat(Path.Deref(pick(scope)._1), constP(pick(paths))))
@@ -300,7 +309,7 @@ object SpaceFuzzer:
     private def rec(d: Int, scope: Scope)(using rng: Random): Space =
       if d <= 0 then leaf(scope)
       else
-        Categorical.ratios(Seq(
+        val original = Seq(
           "leaf" -> 2,
           "union" -> 2,
           "inter" -> 2,
@@ -313,7 +322,20 @@ object SpaceFuzzer:
           "tails" -> 1,
           "range" -> 1,
           "reorder" -> 1
-        )).sample match
+        )
+        val added = if extended then Seq(
+          "raff" -> 1,
+          "tailsInter" -> 1,
+          "prefixClosure" -> 1,
+          "suffixClosure" -> 1,
+          "tailsClosure" -> 1,
+          "fold" -> 1,
+          "fix" -> 1,
+          "groundPS" -> 1,
+          "groundSS" -> 1,
+          "call" -> 1,
+        ) else Seq.empty
+        Categorical.ratios(original ++ added).sample match
           case "leaf" => leaf(scope)
           case "union" => Space.Union(rec(d - 1, scope), rec(d - 1, scope))
           case "inter" => Space.Intersection(rec(d - 1, scope), side(d, scope, Space.Literal(someArg)))
@@ -322,7 +344,34 @@ object SpaceFuzzer:
           case "unwrap" => Space.Unwrap(rec(d - 1, scope), constP(PathValue(List(pick(firstItems)))))
           case "comp" => Space.Composition(rec(d - 1, scope), compRhs(d, scope))
           case "restr" => Space.Restriction(rec(d - 1, scope), side(d, scope, somePrefixLit))
+          case "raff" => Space.Raffination(rec(d - 1, scope), side(d, scope, somePrefixLit))
           case "tails" => Space.TailsUnion(rec(d - 1, scope))
+          case "tailsInter" => Space.TailsIntersection(rec(d - 1, scope))
+          case "prefixClosure" => Space.PrefixClosure(rec(d - 1, scope))
+          case "suffixClosure" => Space.SuffixClosure(rec(d - 1, scope))
+          case "tailsClosure" => Space.TailsClosure(rec(d - 1, scope))
+          case "fold" =>
+            val head = PathRef("fold_h" + rng.nextInt(1000000)).known(1)
+            val acc = PathRef("fold_acc" + rng.nextInt(1000000))
+            val rest = SpaceMention("fold_t" + rng.nextInt(1000000))
+            Space.Fold(
+              rec(d - 1, scope), Path.ZERO, acc, head, rest,
+              Space.Singleton(Path.Deref(acc)), Path.Deref(acc),
+            )
+          case "fix" =>
+            val variable = SpaceMention("fix_v" + rng.nextInt(1000000))
+            val universe = Space.Literal(someArg)
+            val initial = Space.Intersection(rec(d - 1, scope), universe)
+            val grown = Space.Wrap(Space.Mention(variable), constP(freshTag))
+            Space.Fixpoint(initial, variable,
+              Space.Intersection(Space.Union(Space.Mention(variable), grown), universe))
+          case "groundPS" =>
+            Space.GroundedPS(constP(pick(paths)), value =>
+              SpaceValue(Set(value, PathValue(PathItem("g") :: value.items))))
+          case "groundSS" =>
+            Space.GroundedSS(rec(d - 1, scope), value =>
+              SpaceValue(value.paths.map(path => PathValue(PathItem("g") :: path.items))))
+          case "call" => Space.Call(callRoutine.name, Vector.empty, Vector(rec(d - 1, scope)))
           case "range" =>
             val lo = rng.nextInt(3)
             Space.Range(rec(d - 1, scope), lo, lo + 1 + rng.nextInt(3))
@@ -333,10 +382,10 @@ object SpaceFuzzer:
             Space.Iteration(rec(d - 1, scope), hpr, tv, rec(d - 1, scope :+ (hpr -> tv)))
 
   private def evalEx(p: Space, arg: SpaceValue): Example =
-    Example(p, arg, eval(p)(using PathContextMap(Map.empty), SpaceContextMap(Map(argM -> arg)), PartialFunction.empty))
+    Example(p, arg, eval(p)(using PathContextMap(Map.empty), SpaceContextMap(Map(argM -> arg)), routines))
 
-  def example(maxDepth: Int = 3, maxResult: Int = 400): Dist[Example] =
-    Dep(argDist, arg => genProg(arg, maxDepth).map(p => evalEx(p, arg)).filter(e =>
+  def example(maxDepth: Int = 3, maxResult: Int = 400, extended: Boolean = false): Dist[Example] =
+    Dep(argDist, arg => genProg(arg, maxDepth, extended = extended).map(p => evalEx(p, arg)).filter(e =>
       e.result.paths.nonEmpty &&
         e.result != e.arg &&
         e.result.paths.size <= maxResult &&
@@ -406,10 +455,11 @@ object SpaceFuzzerCorpus:
   def generate(count: Int,
                seed: Long,
                maxDepth: Int = 5,
-               maxResult: Int = 400): Vector[Record] =
+               maxResult: Int = 400,
+               extended: Boolean = false): Vector[Record] =
     given Random = Random(seed)
     Vector.tabulate(count) { i =>
-      Record(i, SpaceFuzzer.example(maxDepth, maxResult).sample)
+      Record(i, SpaceFuzzer.example(maxDepth, maxResult, extended).sample)
     }
 
   def write(records: Vector[Record], outDir: NioPath, seed: Long): Unit =

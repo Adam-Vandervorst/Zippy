@@ -1,3 +1,5 @@
+package morkl
+
 object ZipperFocusedEggArtifacts:
   val tailsIntersectionFrontierProgram: String =
     """

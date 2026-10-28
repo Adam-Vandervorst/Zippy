@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 import morkl.Syntax.{*, given}
 
@@ -328,6 +330,11 @@ object ZipperEggTranspiler:
     case SpaceZipper.Range(src, lo, hi) => s"""(RangeZ ${zipper(src)} "$lo" "$hi")"""
     case SpaceZipper.LastRange(src, count) => s"""(RangeZ ${zipper(src)} "-$count" "0")"""
     case SpaceZipper.DropLastRange(src, count) => s"""(RangeZ ${zipper(src)} "0" "-$count")"""
+    // Higher-order fixpoint steps have no first-order egg constructor. Their
+    // denotation was checked against evalTrie in build(), so export the exact
+    // observed trie and keep all unrelated future zipper classes fail-loud.
+    case deferred: SpaceZipper.DeferredFixpointFocus =>
+      s"(TrieZ ${space(deferred.materialize)})"
 
   def structuralSpace(z: SpaceZipper): String = z match
     case SpaceZipper.Trie(t) => space(t)
@@ -352,6 +359,7 @@ object ZipperEggTranspiler:
     case SpaceZipper.Range(src, lo, hi) => s"""(Range ${structuralSpace(src)} "$lo" "$hi")"""
     case SpaceZipper.LastRange(src, count) => s"""(Range ${structuralSpace(src)} "-$count" "0")"""
     case SpaceZipper.DropLastRange(src, count) => s"""(Range ${structuralSpace(src)} "0" "-$count")"""
+    case deferred: SpaceZipper.DeferredFixpointFocus => space(deferred.materialize)
 
   def space(t: TrieSpace): String =
     val paths = t.encodedPaths.sortWith((a, b) => TrieSpace.comparePaths(a, b) < 0)
@@ -496,9 +504,11 @@ object ZipperEggTranspiler:
          |; This checks the final semi-naive complete/delta state, projects
          |; complete.path through UnwrapZ, then accepts every positive transitive
          |; path and rejects the sampled absent paths through
-         |; IterZ(..., ReconstructTemplate).  The arbitrary-data
-         |; full-program backend equivalence, including the zipper tier, is generated
-         |; separately as semi_naive_datalog_full_program_structural_backend_equivalence.p.
+         |; IterZ(..., ReconstructTemplate).  The axiomatized arbitrary-data
+         |; full-program schema check, including the zipper contract, is generated
+         |; separately as semi_naive_datalog_full_program_structural_backend_equivalence.p;
+         |; it assumes backend/source agreement per constructor and is not an
+         |; independent implementation-equivalence proof.
          |(let $stateName
          |  ${space(finalState)})
          |(let $stateRoot
@@ -617,9 +627,18 @@ object ZipperEggTranspiler:
       case SpaceZipper.Range(src, _, _) => 1 + zipperDepth(src)
     case SpaceZipper.LastRange(src, _) => 1 + zipperDepth(src)
     case SpaceZipper.DropLastRange(src, _) => 1 + zipperDepth(src)
+    case _: SpaceZipper.DeferredFixpointFocus => 1
 
 class ZipperEggTranspilerTest extends FunSuite:
   override val munitTimeout: Duration = 2.minutes
+
+  test("deferred exact fixpoints export only after checked materialization") {
+    val example = ZipperEggTranspiler.examples.find(_.name == "datalog-semi-naive").get
+    val program = ZipperEggTranspiler.build(example)
+    assert(program.zipper.isInstanceOf[SpaceZipper.DeferredFixpointFocus])
+    assertEquals(program.structuralSpaceEgg, program.concreteSpaceEgg)
+    assert(ZipperEggTranspiler.zipper(program.zipper).startsWith("(TrieZ "))
+  }
 
   test("Scala zipper examples transpile to independently runnable egg programs") {
     val outputs = ZipperEggTranspiler.writeAll()
@@ -676,7 +695,7 @@ class ZipperEggTranspilerTest extends FunSuite:
     )
     assert(
       datalogEgg.contains("semi_naive_datalog_full_program_structural_backend_equivalence.p"),
-      "datalog egg witness should name the arbitrary-data structural zipper/backend proof artifact"
+      "datalog egg witness should name the arbitrary-data structural zipper/backend schema artifact"
     )
     assert(!datalogEgg.contains("still not the full"), "datalog egg witness should not retain stale weak-proof wording")
     (Paths.get("zipper-descend.egg") +: outputs).foreach { path =>

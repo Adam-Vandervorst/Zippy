@@ -1,3 +1,5 @@
+package morkl
+
 import munit.FunSuite
 
 class ZipperDenotationOracleTest extends FunSuite:
@@ -317,6 +319,31 @@ class ZipperDenotationOracleTest extends FunSuite:
       SpaceZipper.fixpoint(z(TrieSpace.fromEncodedPaths(Vector(alphabet.head :: Nil))), SpaceZipper.IterTemplateTag.PrefixedReconstruct(alphabet.head :: Nil)).materialize
     }
     assert(unsupported.getMessage.startsWith("unsupported potentially length-growing zipper fixpoint template"))
+  }
+
+  test("range fixpoint preserves synchronous transient outputs across sibling demand order") {
+    val a = alphabet(0)
+    val b = alphabet(1)
+    val initial = TrieSpace.fromEncodedPaths(Vector(a :: b :: Nil, b :: a :: Nil))
+    val expected = TrieSpace.fromEncodedPaths(Vector(Nil, a :: Nil, b :: Nil, a :: b :: Nil, b :: a :: Nil))
+
+    def closure: SpaceZipper =
+      SpaceZipper.fixpoint(z(initial), SpaceZipper.IterTemplateTag.RangeTail(0, 1))
+
+    val (leftFirst, construction) = ExecutorCostMeter.measure(closure)
+    assertEquals(construction.rounds, 0L, s"fixpoint construction must not start a Kleene traversal: $construction")
+    val (leftFound, leftCost) = ExecutorCostMeter.measure(leftFirst.child(a).terminal)
+    assert(leftFound, s"the first sibling is a transient output of the initial synchronous round: $leftCost")
+    assert(leftCost.rounds > 0L, s"order-sensitive Range fixpoints must use the synchronous fallback: $leftCost")
+    val (rightFound, rightCost) = ExecutorCostMeter.measure(leftFirst.child(b).terminal)
+    assert(rightFound,
+      s"the second sibling must observe the same prior approximation as the first sibling in each solver round: $rightCost")
+    assertEquals(leftFirst.materialize, expected)
+
+    val rightFirst = closure
+    assert(rightFirst.child(b).terminal)
+    assert(rightFirst.child(a).terminal)
+    assertEquals(rightFirst.materialize, expected)
   }
 
   test("transpileZ lowers prefixed ranged iteration reconstruct templates") {

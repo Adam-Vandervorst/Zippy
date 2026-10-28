@@ -6,6 +6,6 @@
 (set-logic ALL)
 (declare-const X (_ BitVec 15))
 (declare-const Y (_ BitVec 15))
-(assert (let ((__pa_1 (bvor X Y))) (let ((__pa_0 (bvand __pa_1 (bvnot (_ bv1 15))))) (let ((__pa_3 (bvand X (bvnot (_ bv1 15))))) (let ((__pa_4 (bvand Y (bvnot (_ bv1 15))))) (let ((__pa_2 (bvor __pa_3 __pa_4))) (not (= __pa_0 __pa_2))))))))
+(assert (let ((__pa_1 (bvor X Y))) (let ((__pa_0 (bvand __pa_1 (bvnot (bvshl (_ bv1 15) (_ bv0 15)))))) (let ((__pa_3 (bvand X (bvnot (bvshl (_ bv1 15) (_ bv0 15)))))) (let ((__pa_4 (bvand Y (bvnot (bvshl (_ bv1 15) (_ bv0 15)))))) (let ((__pa_2 (bvor __pa_3 __pa_4))) (not (= __pa_0 __pa_2))))))))
 (check-sat)
 (get-model)

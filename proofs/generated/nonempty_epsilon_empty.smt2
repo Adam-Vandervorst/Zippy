@@ -4,6 +4,6 @@
 ; alphabet: a,b max-len: 3 width: 15
 (set-option :produce-models true)
 (set-logic ALL)
-(assert (let ((__pa_0 (bvand (_ bv1 15) (bvnot (_ bv1 15))))) (not (= __pa_0 (_ bv0 15)))))
+(assert (let ((__pa_0 (bvand (_ bv1 15) (bvnot (bvshl (_ bv1 15) (_ bv0 15)))))) (not (= __pa_0 (_ bv0 15)))))
 (check-sat)
 (get-model)

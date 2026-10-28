@@ -1,3 +1,5 @@
+package morkl
+
 object ZipperEggDescentPrelude:
   private val part0: String =
     """; Self-contained zipper implementation witness prelude.

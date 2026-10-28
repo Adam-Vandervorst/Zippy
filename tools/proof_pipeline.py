@@ -7,9 +7,9 @@ Scala is the source of truth for generated artifacts:
    manifest consumed by this runner.
 2. `morkl.generateZipperEggTests` writes the shared-prelude `formal.egg` and
    `zipper.egg` introductions plus the independently runnable example files.
-3. `morkl.generateCornerstoneProofArtifacts` writes end-to-end equivalence
-   certificates for the cornerstone examples.
- 4. `morkl.generateOpenProgramProofArtifacts` writes symbolic open-program
+3. `morkl.generateCornerstoneProofArtifacts` runs executable differential
+   parity checks for the closed cornerstone examples.
+4. `morkl.generateOpenProgramProofArtifacts` writes symbolic open-program
    equivalence obligations over bounded arbitrary input spaces plus structural
    full-program FOL obligations for the cornerstone examples.
 5. This script only orchestrates external tools: Vampire, Z3, and egglog.
@@ -20,17 +20,21 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import dataclasses
+import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
 
 MUNIT_DEP = "org.scalameta::munit:1.2.1"
 COLLECTION_CONTRIB_DEP = "org.scala-lang.modules::scala-collection-contrib:0.3.0"
+VAMPIRE_PLAIN_STRATEGY = "vampire-strategy=plain"
+VAMPIRE_INT_INDUCTION = "vampire-induction=int"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -380,11 +384,345 @@ def validate_symbol_coverage_artifacts(artifacts: list[Artifact], root: Path) ->
     )
 
 
-def display_path(path: Path, root: Path) -> Path | str:
+REQUIRED_FULL_PROGRAM_OBLIGATIONS = (
+    "fixpoint-tail-full-program:structural_backend_equivalence",
+    "aunt-full-program:structural_backend_equivalence",
+    "semi-naive-datalog-full-program:structural_backend_equivalence",
+    "gol-full-program:structural_backend_equivalence",
+    "temperature-full-program:structural_backend_equivalence",
+    "sliding-puzzle-2x2-full-program:structural_backend_equivalence",
+    "sliding-puzzle-2x2-24-state-step-full-program:structural_backend_equivalence",
+    "sliding-puzzle-4x4-full-program:structural_backend_equivalence",
+    "nqueens-4-full-program:structural_backend_equivalence",
+    "scc-full-program:structural_backend_equivalence",
+)
+
+REQUIRED_FULL_OPEN_OBLIGATIONS = tuple(
+    f"{program}:{relation}"
+    for program in ("semi-naive-datalog-full-open", "sliding-puzzle-2x2-full-open")
+    for relation in (
+        "space_optimized_open",
+        "raw_graph_roundtrip_open",
+        "optimized_graph_roundtrip_open",
+    )
+)
+
+REQUIRED_PUZZLE_WITNESS_OBLIGATIONS = {
+    "sliding-puzzle-2x2-full-open:bounded_witness_a_open": (
+        "a=tl.1.2.3",
+        "exact bounded output {tr.1.2.3,bl.2.1.3}",
+        "exercises r,d",
+    ),
+    "sliding-puzzle-2x2-full-open:bounded_witness_b_open": (
+        "b=tr.1.2.3",
+        "exact bounded output {tl.1.2.3}",
+        "exercises l",
+    ),
+    "sliding-puzzle-2x2-full-open:bounded_witness_c_open": (
+        "c=bl.2.1.3",
+        "exact bounded output {tl.1.2.3}",
+        "exercises u",
+    ),
+}
+
+
+def validate_required_full_program_obligations(artifacts: list[Artifact], root: Path) -> Result:
+    """Keep every structural program and the two named full-open programs live."""
+    by_name = {artifact.name: artifact for artifact in artifacts}
+    errors: list[str] = []
+    for name in REQUIRED_FULL_PROGRAM_OBLIGATIONS:
+        artifact = by_name.get(name)
+        if artifact is None:
+            errors.append(f"missing {name}")
+        elif artifact.kind != "vampire" or artifact.expected != "Theorem":
+            errors.append(f"{name}: expected vampire/Theorem, got {artifact.kind}/{artifact.expected}")
+        elif not artifact.artifact.exists():
+            errors.append(f"{name}: artifact missing at {display_path(artifact.artifact, root)}")
+        else:
+            text = artifact.artifact.read_text(encoding="utf-8")
+            if "fof(conj, conjecture" not in text or len(text) < 256:
+                errors.append(f"{name}: artifact is empty or lacks its FOL conjecture")
+    for name in REQUIRED_FULL_OPEN_OBLIGATIONS:
+        artifact = by_name.get(name)
+        if artifact is None:
+            errors.append(f"missing {name}")
+        elif artifact.kind != "z3" or artifact.expected != "unsat":
+            errors.append(f"{name}: expected z3/unsat, got {artifact.kind}/{artifact.expected}")
+        elif not artifact.artifact.exists():
+            errors.append(f"{name}: generated ephemeral artifact missing at {display_path(artifact.artifact, root)}")
+        else:
+            text = artifact.artifact.read_text(encoding="utf-8")
+            if "(assert" not in text or "(not (= " not in text or "(check-sat)" not in text:
+                errors.append(f"{name}: artifact lacks a counterexample query")
+            if name.startswith("sliding-puzzle-2x2-full-open:"):
+                note = artifact.note.lower()
+                if (
+                    "non-vacuity witnesses" not in note
+                    or "tl.1.2.3 -r-> tr.1.2.3" not in note
+                    or "tr.1.2.3 -l-> tl.1.2.3" not in note
+                    or "tl.1.2.3 -d-> bl.2.1.3" not in note
+                    or "bl.2.1.3 -u-> tl.1.2.3" not in note
+                ):
+                    errors.append(f"{name}: manifest note lacks all four executable directed production witnesses")
+                width_match = re.search(r"\bwidth:\s*(\d+)\b", text)
+                if width_match is None:
+                    errors.append(f"{name}: artifact lacks bounded-universe width metadata")
+                elif int(width_match.group(1)) > 128:
+                    errors.append(
+                        f"{name}: bounded universe width {width_match.group(1)} exceeds the solver-feasible cap 128"
+                    )
+    for name, required_note_fragments in REQUIRED_PUZZLE_WITNESS_OBLIGATIONS.items():
+        artifact = by_name.get(name)
+        if artifact is None:
+            errors.append(f"missing {name}")
+            continue
+        if artifact.kind != "z3" or artifact.expected != "unsat":
+            errors.append(f"{name}: expected z3/unsat, got {artifact.kind}/{artifact.expected}")
+            continue
+        if not artifact.artifact.exists():
+            errors.append(f"{name}: generated bounded witness artifact is missing")
+            continue
+        note = artifact.note.lower()
+        for fragment in required_note_fragments:
+            if fragment not in note:
+                errors.append(f"{name}: manifest note lacks `{fragment}` provenance")
+        text = artifact.artifact.read_text(encoding="utf-8")
+        if "(assert" not in text or "(not (= " not in text or "(check-sat)" not in text:
+            errors.append(f"{name}: witness artifact lacks an exact disequality counterexample query")
+        width_match = re.search(r"\bwidth:\s*(\d+)\b", text)
+        if width_match is None:
+            errors.append(f"{name}: witness artifact lacks bounded-universe width metadata")
+        elif int(width_match.group(1)) > 128:
+            errors.append(f"{name}: bounded universe width {width_match.group(1)} exceeds cap 128")
+    if errors:
+        return Result(
+            "required full-program obligations",
+            "all-structural+named-full-open",
+            "invalid",
+            False,
+            "proofs/open/proof_manifest.tsv",
+            "; ".join(errors),
+        )
+    return Result(
+        "required full-program obligations",
+        "all-structural+named-full-open",
+        "ok",
+        True,
+        "proofs/open/proof_manifest.tsv",
+        f"{len(REQUIRED_FULL_PROGRAM_OBLIGATIONS)} structural, "
+        f"{len(REQUIRED_FULL_OPEN_OBLIGATIONS)} named full-open, and "
+        f"{len(REQUIRED_PUZZLE_WITNESS_OBLIGATIONS)} exact puzzle witness obligations are present and non-empty",
+    )
+
+
+def validate_generated_artifact_ownership(
+    artifacts: list[Artifact], root: Path, args: argparse.Namespace
+) -> Result:
+    """Reject stale generator outputs that survived after their manifest row disappeared."""
+    def rooted(raw: str) -> Path:
+        path = Path(raw)
+        return path if path.is_absolute() else root / path
+
+    open_dir = rooted(args.open_out_dir)
+    managed = (
+        (rooted(args.out_dir), "*.smt2"),
+        (rooted(args.vampire_out_dir), "*.p"),
+        (open_dir / "smt2", "*.smt2"),
+        (open_dir / "vampire", "*.p"),
+    )
+    manifest_paths = {artifact.artifact.resolve() for artifact in artifacts}
+    generated_paths = {
+        path.resolve()
+        for directory, pattern in managed
+        if directory.is_dir()
+        for path in directory.rglob(pattern)
+        if path.is_file()
+    }
+    errors: list[str] = []
+    orphans = sorted(generated_paths - manifest_paths)
+    if orphans:
+        errors.append("unowned generated files: " + ", ".join(display_path(path, root) for path in orphans[:20]))
+    missing = sorted(path for path in manifest_paths if any(path.is_relative_to(directory.resolve()) for directory, _ in managed) and not path.exists())
+    if missing:
+        errors.append("manifest-owned files missing: " + ", ".join(display_path(path, root) for path in missing[:20]))
+
+    examples = rooted(args.example_out_dir)
+    allowed_examples = {
+        rooted(args.example_manifest).resolve(),
+        (examples / "CORNERSTONE_PARITY_REPORT.md").resolve(),
+    }
+    unexpected_examples = sorted(
+        path.resolve() for path in examples.rglob("*")
+        if path.is_file() and path.resolve() not in allowed_examples
+    ) if examples.is_dir() else []
+    if unexpected_examples:
+        errors.append("unexpected closed-example outputs: " +
+                      ", ".join(display_path(path, root) for path in unexpected_examples[:20]))
+    return Result(
+        "generated artifact manifest ownership",
+        "no-orphans+no-missing",
+        "invalid" if errors else "ok",
+        not errors,
+        "proofs/*/proof_manifest.tsv",
+        "; ".join(errors) if errors else
+        f"{len(generated_paths)} generated solver files have manifest owners; examples contain parity outputs only",
+    )
+
+
+def validate_documentation_invariants(root: Path) -> Result:
+    """Keep generated status in one place and reject known stale API/artifact names."""
+    readme = (root / "README.md").read_text(encoding="utf-8")
+    algebra = (root / "docs/ALGEBRA.md").read_text(encoding="utf-8")
+    proof_readme = (root / "docs/proofs/README.md").read_text(encoding="utf-8")
+    open_source = (root / "src/test/scala/OpenProgramProofArtifacts.scala").read_text(encoding="utf-8")
+    errors: list[str] = []
+    copied_statuses = sorted(set(re.findall(r"\b(?:PASS_WITH_PROOF_DEBT|PARTIAL PASS|MANIFEST-ONLY)\b", readme)))
+    if copied_statuses:
+        errors.append(f"README duplicates generated proof status: {', '.join(copied_statuses)}")
+    if "docs/proofs/PROOF_REPORT.md" not in readme:
+        errors.append("README does not link the authoritative generated proof report")
+    if "PathItem.Symbol" in algebra:
+        errors.append("docs/ALGEBRA.md still names removed PathItem.Symbol")
+    if "axiomatize" not in proof_readme.lower() or "not independently" not in proof_readme.lower():
+        errors.append("proof README does not disclose the axiomatized structural FOL boundary")
+    if "schema-consistency" not in open_source or "not an independent implementation-equivalence proof" not in open_source:
+        errors.append("open-program generator prose overstates structural FOL evidence")
+    stale_paths = (
+        root / "datalog-morkl.txt",
+        root / "laws.diff",
+        root / "docs/proofs/open/OPEN_PROGRAM_REPORT.md",
+        root / "proofs/vampire/generated/spatial_code_normalize_bridge_fo.p",
+        root / "proofs/vampire/generated/spatial_code_join_bridge_fo.p",
+        root / "proofs/vampire/generated/spatial_code_meet_bridge_fo.p",
+    )
+    for stale in stale_paths:
+        if stale.exists():
+            errors.append(f"stale duplicate artifact remains: {display_path(stale, root)}")
+    for obsolete_dir in (
+        root / "proofs/examples/smt2",
+        root / "proofs/examples/vampire",
+        root / "proofs/examples/egg",
+    ):
+        if obsolete_dir.is_dir() and any(path.is_file() for path in obsolete_dir.rglob("*")):
+            errors.append(f"closed-output solver tautologies remain under {display_path(obsolete_dir, root)}")
+    return Result(
+        "documentation/source-of-truth invariant",
+        "single-status+current-api",
+        "invalid" if errors else "ok",
+        not errors,
+        "README.md; docs/ALGEBRA.md",
+        "; ".join(errors) if errors else "README delegates status to the generated report; removed API/artifact names stay absent",
+    )
+
+
+REQUIRED_OPERATIONAL_OPERATIONS = (
+    "IterOp",
+    "FixpointOp",
+    "RangeOp",
+    "RangeFirstOp",
+    "RangeLastOp",
+    "RangeDropLastOp",
+    "context-path",
+    "down-move",
+    "up-move",
+    "next-sibling-move",
+    "previous-sibling-move",
+)
+
+
+def validate_required_operational_coverage(path: Path) -> Result:
+    """Guard semantic operational families through parsed manifest rows, not source-text snippets."""
+    rows = read_operational_manifest(path)
+    errors: list[str] = []
+    for operation in REQUIRED_OPERATIONAL_OPERATIONS:
+        matches = [row for row in rows if operation in row.operations]
+        if not matches:
+            errors.append(f"no manifest row for {operation}")
+        elif any(row.status == "UNPROVED" for row in matches):
+            errors.append(f"{operation} has UNPROVED manifest rows")
+    return Result(
+        "required operational family coverage",
+        "iter+fixpoint+range+context",
+        "invalid" if errors else "ok",
+        not errors,
+        str(path),
+        "; ".join(errors) if errors else f"{len(REQUIRED_OPERATIONAL_OPERATIONS)} required operation families have proved manifest rows",
+    )
+
+
+def display_path(path: Path, root: Path) -> str:
     try:
-        return path.relative_to(root)
+        return str(path.relative_to(root))
     except ValueError:
         return str(path)
+
+
+def snapshot_generated(root: Path, paths: Sequence[Path | str]) -> dict[str, str]:
+    """Hash committed/generated outputs without treating ephemeral full-open SMT as stale."""
+    files: set[Path] = set()
+    for raw in paths:
+        path = Path(raw)
+        if not path.is_absolute():
+            path = root / path
+        if path.is_file():
+            files.add(path)
+        elif path.is_dir():
+            files.update(candidate for candidate in path.rglob("*") if candidate.is_file())
+    out: dict[str, str] = {}
+    for path in sorted(files):
+        relative = display_path(path, root)
+        if path.suffix == ".smt2" and "_full_open_" in path.name:
+            continue
+        out[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return out
+
+
+def generated_freshness_result(before: dict[str, str], after: dict[str, str]) -> Result:
+    changed = sorted(key for key in before.keys() | after.keys() if before.get(key) != after.get(key))
+    if changed:
+        preview = ", ".join(changed[:20])
+        suffix = "" if len(changed) <= 20 else f", ... (+{len(changed) - 20})"
+        return Result(
+            "generated artifact freshness",
+            "no-content-drift",
+            "stale",
+            False,
+            "Scala generators",
+            f"regeneration changed {len(changed)} committed output(s): {preview}{suffix}; review/commit them, then rerun",
+        )
+    return Result(
+        "generated artifact freshness",
+        "no-content-drift",
+        "fresh",
+        True,
+        "Scala generators",
+        f"{len(after)} committed generated outputs reproduced byte-for-byte",
+    )
+
+
+def command_version(command: str | None, *args: str) -> str:
+    if not command:
+        return "not available"
+    try:
+        proc = subprocess.run([command, *(args or ("--version",))], text=True, capture_output=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return "unavailable"
+    lines = [line.strip() for line in (proc.stdout + "\n" + proc.stderr).splitlines() if line.strip()]
+    return lines[0] if lines else f"exit-{proc.returncode}"
+
+
+def git_provenance(root: Path) -> tuple[str, str]:
+    try:
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True, capture_output=True, check=True, timeout=10
+        ).stdout.strip()
+        dirty = bool(subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=root, text=True, capture_output=True, check=True, timeout=10,
+        ).stdout.strip())
+        return sha, "dirty" if dirty else "clean"
+    except (OSError, subprocess.SubprocessError):
+        return "unknown", "unknown"
 
 
 def run_process(name: str, cmd: list[str], cwd: Path, expected: str = "exit-0") -> Result:
@@ -432,7 +770,8 @@ def run_scala_egg_generator(root: Path) -> Result:
     cmd = [
         scala_cli,
         "run",
-        ".",
+        "src/main/scala",
+        "src/test/scala",
         "--test",
         "--server=false",
         "--scala",
@@ -457,7 +796,8 @@ def run_scala_cornerstone_generator(args: argparse.Namespace, root: Path) -> Res
     cmd = [
         scala_cli,
         "run",
-        ".",
+        "src/main/scala",
+        "src/test/scala",
         "--test",
         "--server=false",
         "--scala",
@@ -475,6 +815,8 @@ def run_scala_cornerstone_generator(args: argparse.Namespace, root: Path) -> Res
         args.example_out_dir,
         "--manifest",
         args.example_manifest,
+        "--spatial-report",
+        args.spatial_report,
     ]
     return run_process("scala cornerstone proof generation", cmd, root)
 
@@ -486,7 +828,8 @@ def run_scala_open_program_generator(args: argparse.Namespace, root: Path) -> Re
     cmd = [
         scala_cli,
         "run",
-        ".",
+        "src/main/scala",
+        "src/test/scala",
         "--test",
         "--server=false",
         "--scala",
@@ -556,11 +899,41 @@ def vampire_status(output: str) -> str:
     return stripped.splitlines()[0].strip() if stripped else "no-status"
 
 
+def vampire_command(vampire: str, artifact: Artifact, time_limit: int) -> tuple[str, list[str]]:
+    """Select the prover strategy declared by the generated artifact.
+
+    Portfolio mode is the general default.  A few deliberately decomposed
+    first-order obligations are faster and more reliable in Vampire's plain
+    saturation loop, so their manifest note opts out of the portfolio wrapper.
+    Curated induction obligations can independently request Vampire's integer
+    induction rules; without that metadata Vampire has no induction rule and
+    the reachable-value theorem times out.
+    """
+    note = artifact.note.lower()
+    plain = VAMPIRE_PLAIN_STRATEGY in note
+    integer_induction = VAMPIRE_INT_INDUCTION in note
+    mode = "plain" if plain else "portfolio"
+    mode_args = [] if plain else ["--mode", "portfolio"]
+    induction_args = ["--induction", "int"] if integer_induction else []
+    return mode, [
+        vampire,
+        *mode_args,
+        *induction_args,
+        "--input_syntax",
+        "tptp",
+        "--proof",
+        "tptp",
+        "--time_limit",
+        str(time_limit),
+        str(artifact.artifact),
+    ]
+
+
 def run_vampire(vampire: str, artifact: Artifact, root: Path, time_limit: int) -> Result:
-    mode = "portfolio"
+    mode, cmd = vampire_command(vampire, artifact, time_limit)
     try:
         proc = subprocess.run(
-            [vampire, "--mode", mode, "--input_syntax", "tptp", "--proof", "tptp", "--time_limit", str(time_limit), str(artifact.artifact)],
+            cmd,
             text=True,
             capture_output=True,
             timeout=time_limit + 30,
@@ -581,6 +954,9 @@ def termination_solver_artifacts(root: Path) -> tuple[list[Artifact], list[Artif
     vampire = [
         Artifact("vampire", "termination:least_fixpoint_unique", "Theorem", base / "least_fixpoint_unique.p", "curated least-fixpoint uniqueness theorem"),
         Artifact("vampire", "termination:bounded_growth_decrease", "Theorem", base / "bounded_growth_decrease.p", "curated finite-growth strict decrease theorem"),
+        Artifact("vampire", "termination:reachable_decrease", "Theorem", base / "reachable_decrease.p", "curated masked-reachability strict decrease theorem"),
+        Artifact("vampire", "termination:reachable_value", "Theorem", base / "reachable_value.p", f"curated masked-reachability value invariant; {VAMPIRE_INT_INDUCTION}"),
+        Artifact("vampire", "termination:scc_decrease", "Theorem", base / "scc_decrease.p", "curated divide-and-conquer SCC three-branch decrease theorem"),
         Artifact("vampire", "termination:transitive_equiv", "Theorem", base / "transitive_equiv.p", "curated transitive-closure equivalence theorem"),
         Artifact("vampire", "termination:datalog_a_terminates", "Theorem", base / "datalog_a_terminates.p", "curated Datalog A termination theorem"),
         Artifact("vampire", "termination:datalog_b_naive_terminates", "Theorem", base / "datalog_b_naive_terminates.p", "curated naive Datalog B termination theorem"),
@@ -2219,599 +2595,6 @@ def validate_frontier_algebra_rules(root: Path) -> Result:
     )
 
 
-def validate_iter_fixpoint_acceptance(artifacts: list[Artifact], root: Path) -> Result:
-    sources = [
-        root / "zipper-descend.egg",
-        root / "zipper-egg-tests" / "iter-fixpoint.egg",
-        root / "zipper-egg-tests" / "datalog-semi-naive.egg",
-    ]
-    missing_sources = [source for source in sources if not source.exists()]
-    errors: list[str] = []
-    if missing_sources:
-        errors.append(
-            "missing egg source(s): "
-            + ", ".join(display_path(source, root) for source in missing_sources)
-        )
-
-    by_name = {artifact.name: artifact for artifact in artifacts}
-    required_artifacts = {
-        "zipper_iteration_materialization_equiv": ("vampire", "Theorem"),
-        "zipper_iter_tail_materialization_equiv": ("vampire", "Theorem"),
-        "zipper_iter_head_materialization_equiv": ("vampire", "Theorem"),
-        "zipper_iter_reconstruct_materialization_equiv": ("vampire", "Theorem"),
-        "zipper_fixpoint_tail_materialization_equiv": ("vampire", "Theorem"),
-        "zipper_fixpoint_head_materialization_equiv": ("vampire", "Theorem"),
-        "zipper_fixpoint_reconstruct_materialization_equiv": ("vampire", "Theorem"),
-        "semi-naive-datalog-full-program:structural_backend_equivalence": ("vampire", "Theorem"),
-    }
-    for name, (kind, expected) in required_artifacts.items():
-        artifact = by_name.get(name)
-        if artifact is None:
-            errors.append(f"missing manifest artifact `{name}`")
-            continue
-        if artifact.kind != kind or artifact.expected != expected:
-            errors.append(f"{name} must be {kind}/{expected}, got {artifact.kind}/{artifact.expected}")
-        if not artifact.artifact.exists():
-            errors.append(f"{name} artifact missing at {display_path(artifact.artifact, root)}")
-    structural = by_name.get("semi-naive-datalog-full-program:structural_backend_equivalence")
-    if structural is not None and "zipper" not in structural.note.lower():
-        errors.append("semi-naive structural backend manifest note must explicitly mention the zipper tier")
-
-    def check_needles(source: Path, label: str, needles: tuple[str, ...]) -> None:
-        if not source.exists():
-            return
-        text = source.read_text(encoding="utf-8")
-        missing = [needle for needle in needles if needle not in text]
-        if missing:
-            errors.append(
-                f"{display_path(source, root)} missing {label}: "
-                + ", ".join(f"`{needle}`" for needle in missing[:5])
-                + ("" if len(missing) <= 5 else f", +{len(missing) - 5} more")
-            )
-
-    binary_needles = (
-        "(IterZ Zipper IterTemplate)",
-        "(FixpointZ Zipper IterTemplate)",
-        "(IterOp Zipper IterTemplate)",
-        "(FixpointOp Zipper IterTemplate)",
-        "(rewrite (IterZ z template) (IterOp z template))",
-        "(rewrite (FixpointZ z template) (FixpointOp z template))",
-    )
-    for source in (root / "zipper-descend.egg", root / "zipper-egg-tests" / "iter-fixpoint.egg"):
-        check_needles(source, "binary IterZ/FixpointZ syntax", binary_needles)
-
-    zipper_descend = root / "zipper-descend.egg"
-    check_needles(
-        zipper_descend,
-        "direct Iter/Fixpoint child movement",
-        (
-            "(Child item (IterOp src (TailTemplate)))",
-            "(FrontierChildUnionOp (FrontierUnionOp src) item)",
-            "(Child item (IterOp src (HeadTemplate)))",
-            "(Child item (HeadOp src))",
-            "(Child item (IterOp src (ReconstructTemplate)))",
-            "(Child item (NonEmptyOp src))",
-            "(Child item (FixpointOp src (TailTemplate)))",
-            "(FrontierStateOp (FrontierTailUnionOp (TailsClosureOp src) item))",
-            "(Child item (FixpointOp src (HeadTemplate)))",
-            "(Child item (UnionOp src (HeadOp src)))",
-            "(Child item (FixpointOp src (ReconstructTemplate)))",
-            "(Child item src)",
-        ),
-    )
-    check_needles(
-        zipper_descend,
-        "Kleene fixpoint unfold witnesses",
-        (
-            "(fixpoint-unfold-result z (UnionOp src (IterOp (FixpointOp src (TailTemplate)) (TailTemplate))))",
-            "(fixpoint-unfold-result z (UnionOp src (IterOp (FixpointOp src (HeadTemplate)) (HeadTemplate))))",
-            "(fixpoint-unfold-result z (UnionOp src (IterOp (FixpointOp src (ReconstructTemplate)) (ReconstructTemplate))))",
-        ),
-    )
-
-    datalog = root / "zipper-egg-tests" / "datalog-semi-naive.egg"
-    check_needles(
-        datalog,
-        "semi-naive datalog IterZ witness",
-        (
-            "$datalog_semi_naive_semi_naive_complete_path_projection",
-            "(IterZ $datalog_semi_naive_semi_naive_complete_path_projection (ReconstructTemplate))",
-            "$datalog_semi_naive_semi_naive_iter_program",
-            "$datalog_semi_naive_semi_naive_iter_whole_path_n0_n5_focus",
-            "$datalog_semi_naive_semi_naive_projected_whole_path_n0_n5_focus",
-            "(check (= $datalog_semi_naive_semi_naive_iter_whole_path_n0_n5_focus $datalog_semi_naive_semi_naive_projected_whole_path_n0_n5_focus))",
-            "__semi_naive_absent_tail",
-            "semi_naive_datalog_full_program_structural_backend_equivalence.p",
-        ),
-    )
-    if datalog.exists():
-        text = datalog.read_text(encoding="utf-8")
-        direct_iter_child_checks = text.count("(check (= $datalog_semi_naive_semi_naive_iter_child_")
-        if direct_iter_child_checks < 5:
-            errors.append(
-                "datalog IterZ witness must include direct operational child checks for at least five heads, "
-                f"found {direct_iter_child_checks}"
-            )
-        if "(IterZ $datalog_semi_naive_scala_result_zipper (ReconstructTemplate))" in text:
-            errors.append("datalog IterZ witness regressed to the already-materialized scala result zipper")
-
-    if errors:
-        return Result(
-            "iter/fixpoint acceptance invariant",
-            "binary-iter-fixpoint+datalog-zipper-tier",
-            "invalid",
-            False,
-            root / "zipper-descend.egg",
-            "; ".join(errors),
-        )
-    return Result(
-        "iter/fixpoint acceptance invariant",
-        "binary-iter-fixpoint+datalog-zipper-tier",
-        "ok",
-        True,
-        root / "zipper-descend.egg",
-        "binary IterZ/FixpointZ, direct child movement, Kleene unfold witnesses, datalog IterZ projection, and zipper-tier FOL artifacts are present",
-    )
-
-
-def validate_context_movement_acceptance(artifacts: list[Artifact], root: Path) -> Result:
-    sources = [
-        root / "zipper-descend.egg",
-        root / "zipper-egg-tests" / "context-movement.egg",
-        root / "src" / "test" / "scala" / "ZipperEggContextMovementProgram.scala",
-    ]
-    missing_sources = [source for source in sources if not source.exists()]
-    errors: list[str] = []
-    if missing_sources:
-        errors.append(
-            "missing context movement source(s): "
-            + ", ".join(display_path(source, root) for source in missing_sources)
-        )
-
-    by_name = {artifact.name: artifact for artifact in artifacts}
-    required_artifacts = {
-        "zipper_context_root_plug_equiv",
-        "zipper_context_down_plug_invariance",
-        "zipper_context_up_after_down_context",
-        "zipper_context_up_after_down_focus",
-        "zipper_context_graft_materialization",
-        "zipper_context_cursor_source_plug",
-        "zipper_context_root_path",
-        "zipper_context_down_path",
-        "zipper_context_up_after_down_path",
-        "zipper_context_sibling_path",
-        "zipper_context_sibling_target_context",
-        "zipper_context_sibling_target_focus",
-        "zipper_context_sibling_target_path",
-        "zipper_context_sibling_target_plug_invariance",
-        "zipper_context_sibling_plug_invariance",
-    }
-    for name in sorted(required_artifacts):
-        artifact = by_name.get(name)
-        if artifact is None:
-            errors.append(f"missing manifest artifact `{name}`")
-            continue
-        if artifact.kind != "vampire" or artifact.expected != "Theorem":
-            errors.append(f"{name} must be vampire/Theorem, got {artifact.kind}/{artifact.expected}")
-        if not artifact.artifact.exists():
-            errors.append(f"{name} artifact missing at {display_path(artifact.artifact, root)}")
-
-    def check_needles(source: Path, label: str, needles: tuple[str, ...]) -> None:
-        if not source.exists():
-            return
-        text = source.read_text(encoding="utf-8")
-        missing = [needle for needle in needles if needle not in text]
-        if missing:
-            errors.append(
-                f"{display_path(source, root)} missing {label}: "
-                + ", ".join(f"`{needle}`" for needle in missing[:6])
-                + ("" if len(missing) <= 6 else f", +{len(missing) - 6} more")
-            )
-
-    zipper_descend = root / "zipper-descend.egg"
-    check_needles(
-        zipper_descend,
-        "full context datatype and relations",
-        (
-            "(datatype ZContext",
-            "(RootCtx)",
-            "(FrameCtx ZContext String Zipper)",
-            "(TerminalFrameCtx ZContext String Zipper)",
-            "(PatchFrameCtx ZContext String Zipper)",
-            "(relation plugged (ZContext Zipper Zipper))",
-            "(relation cursor (ZContext Zipper))",
-            "(relation plug-source (ZContext Zipper))",
-            "(relation down-move (ZContext Zipper String ZContext Zipper))",
-            "(relation up-move (ZContext Zipper ZContext Zipper))",
-            "(relation context-path (ZContext Path))",
-            "(relation cursor-path (ZContext Zipper Path))",
-            "(relation next-sibling-move (ZContext Zipper ZContext Zipper))",
-            "(relation previous-sibling-move (ZContext Zipper ZContext Zipper))",
-            "(relation next-sibling-target (ZContext Zipper ZContext Zipper))",
-            "(relation previous-sibling-target (ZContext Zipper ZContext Zipper))",
-        ),
-    )
-    check_needles(
-        zipper_descend,
-        "plug, move, path, and sibling rules",
-        (
-            "(plugged parent (UnionOp siblings (WrapOp focus (Item item))) whole)",
-            "(plugged parent (UnionOp (TrieZ (Singleton (Eps))) (UnionOp siblings (WrapOp focus (Item item)))) whole)",
-            "(plugged parent (PatchChildOp original item focus) whole)",
-            "(down-move ctx focus item (PatchFrameCtx ctx item focus) (Child item focus))",
-            "(up-move ctx focus parent (PatchChildOp original item focus))",
-            "(plug-source parent (PatchChildOp original item focus))",
-            "(cursor-path ctx focus path)",
-            "(next-sibling-move ctx focus next-ctx next-focus)",
-            "(previous-sibling-move ctx focus previous-ctx previous-focus)",
-            "(adjacent-before item sibling)",
-            "(adjacent-before sibling item)",
-            "(has-key (PatchChildOp original item focus) sibling)",
-            "(PatchFrameCtx parent sibling (PatchChildOp original item focus))",
-            "(Child sibling (PatchChildOp original item focus))",
-        ),
-    )
-    check_needles(
-        zipper_descend,
-        "normative context witnesses and negative probes",
-        (
-            "(let $ctx_a_with_d (FrameCtx (RootCtx) \"a\" (TrieZ $sd)))",
-            "(let $ctx_terminal_a (TerminalFrameCtx (RootCtx) \"a\" (EmptyZ)))",
-            "(check (plugged $ctx_a_with_d (TrieZ $sb) $plug_ab_with_d_impl))",
-            "(check (plugged $ctx_terminal_a (EmptyZ) $plug_terminal_without_child_impl))",
-            "(check (down-move (RootCtx) $virtual_context_parent \"a\" $virtual_context_child_ctx_a $virtual_context_child_a))",
-            "(check (up-move $virtual_context_child_ctx_a $virtual_context_child_a (RootCtx) $virtual_context_up_a))",
-            "(check (cursor-path $virtual_context_child_ctx_a $virtual_context_child_a $pa))",
-            "(fail (check (cursor-path $virtual_context_child_ctx_a $virtual_context_child_a $pb)))",
-            "(check (next-sibling-move $sibling_ctx_a $sibling_child_a $sibling_next_ctx_b $sibling_next_focus_b))",
-            "(check (previous-sibling-move $sibling_next_ctx_b $sibling_next_focus_b $sibling_previous_ctx_a $sibling_previous_focus_a))",
-            "(fail (check (next-sibling-move $sibling_next_ctx_b $sibling_next_focus_b $sibling_ctx_a $sibling_child_a)))",
-        ),
-    )
-
-    context_egg = root / "zipper-egg-tests" / "context-movement.egg"
-    context_source = root / "src" / "test" / "scala" / "ZipperEggContextMovementProgram.scala"
-    generated_needles = (
-        "Focus/context movement witness",
-        "(datatype ZContext",
-        "(PatchFrameCtx ZContext String Zipper)",
-        "(rewrite (PatchChildOp parent item (Child item parent)) parent)",
-        "(check (down-move (RootCtx) $parent \"a\" $ctx_a $child_a))",
-        "(check (down-move (RootCtx) $nested_parent \"a\" $nested_ctx_a $nested_child_a))",
-        "(check (down-move $nested_ctx_a $nested_child_a \"b\" $nested_ctx_ab $nested_child_b))",
-        "(check (up-move $nested_ctx_ab $nested_child_b $nested_ctx_a $nested_up_b))",
-        "(check (plugged $nested_ctx_ab $nested_child_b $nested_parent))",
-        "(check (context-path $nested_ctx_ab $path_ab))",
-        "(check (cursor-path $nested_ctx_ab $nested_child_b $path_ab))",
-        "(check (next-sibling-target $ctx_a $child_a $ctx_b $child_b))",
-        "(check (previous-sibling-target $ctx_b $child_b $ctx_a $child_a))",
-        "(check (next-sibling-move $ctx_a $child_a $ctx_b $child_b))",
-        "(check (previous-sibling-move $ctx_b $child_b $ctx_a $child_a))",
-        "(fail (check (cursor-path $ctx_a $child_a $pb)))",
-        "(fail (check (next-sibling-target $ctx_b $child_b $ctx_a $child_a)))",
-        "(fail (check (next-sibling-move $ctx_b $child_b $ctx_a $child_a)))",
-    )
-    check_needles(context_egg, "generated patch-frame context regression", generated_needles)
-    check_needles(context_source, "Scala-generated patch-frame context regression", generated_needles)
-
-    if errors:
-        return Result(
-            "context movement acceptance invariant",
-            "focus-context+plug-path-sibling",
-            "invalid",
-            False,
-            root / "zipper-descend.egg",
-            "; ".join(errors),
-        )
-    return Result(
-        "context movement acceptance invariant",
-        "focus-context+plug-path-sibling",
-        "ok",
-        True,
-        root / "zipper-descend.egg",
-        "full context datatype/rules, generated patch-frame regression, sibling/path probes, and FOL plug/graft/path artifacts are present",
-    )
-
-
-def validate_executable_zipper_context_acceptance(root: Path) -> Result:
-    sources = [
-        root / "src" / "main" / "scala" / "TrieSpace.scala",
-        root / "src" / "test" / "scala" / "ZipperDenotationOracleTest.scala",
-        root / "src" / "test" / "scala" / "TrieSpaceTest.scala",
-    ]
-    missing_sources = [source for source in sources if not source.exists()]
-    errors: list[str] = []
-    if missing_sources:
-        errors.append(
-            "missing executable zipper context source(s): "
-            + ", ".join(display_path(source, root) for source in missing_sources)
-        )
-
-    def check_needles(source: Path, label: str, needles: tuple[str, ...]) -> None:
-        if not source.exists():
-            return
-        text = source.read_text(encoding="utf-8")
-        missing = [needle for needle in needles if needle not in text]
-        if missing:
-            errors.append(
-                f"{display_path(source, root)} missing {label}: "
-                + ", ".join(f"`{needle}`" for needle in missing[:6])
-                + ("" if len(missing) <= 6 else f", +{len(missing) - 6} more")
-            )
-
-    trie_space = root / "src" / "main" / "scala" / "TrieSpace.scala"
-    check_needles(
-        trie_space,
-        "concrete zipper path/context/edit/sibling API",
-        (
-            "trait ZipperContext:",
-            "def path: Vector[Int]",
-            "def plug(focus: TrieSpace): TrieSpace",
-            "case object Root extends ZipperContext:",
-            "case class Frame(parent: ZipperContext,",
-            "override def path: Vector[Int] = parent.path :+ item",
-            "override def plug(focus: TrieSpace): TrieSpace =",
-            "case class Zipper(focus: TrieSpace, context: ZipperContext = ZipperContext.Root):",
-            "def path: Vector[Int] = context.path",
-            "def pathValue: PathValue = TrieSpace.decode(path)",
-            "def whole: TrieSpace = context.plug(focus)",
-            "def down(item: Int): Option[Zipper] =",
-            "def descendItems(items: Iterable[Int]): Option[Zipper] =",
-            "def up: Option[Zipper] = context match",
-            "def toRoot: Zipper =",
-            "def graft(replacement: TrieSpace): Zipper =",
-            "def removeFocus: Zipper =",
-            "def insertItemsAtFocus(path: List[Int]): Zipper =",
-            "def firstChild: Option[Zipper] =",
-            "def nextSibling: Option[Zipper] =",
-            "def previousSibling: Option[Zipper] =",
-            "private def sibling(delta: Int): Option[Zipper] = context match",
-            ".sortWith((a, b) => TrieSpace.interner.compareItemIds(a._1, b._1) < 0)",
-        ),
-    )
-
-    oracle = root / "src" / "test" / "scala" / "ZipperDenotationOracleTest.scala"
-    check_needles(
-        oracle,
-        "bounded concrete zipper context oracle",
-        (
-            "test(\"concrete trie zipper plug reconstructs the whole at every focus\")",
-            "val spaces = allSpaces(maxLen = 3)",
-            "allFoci(space).foreach { cursor =>",
-            "assertEquals(cursor.whole, space",
-            "assertEquals(space.subtreeItems(cursor.path.toList).getOrElse(TrieSpace.empty), cursor.focus)",
-            "cursor.up.foreach { parent =>",
-            "assertEquals(parent.down(cursor.path.last).map(_.focus), Some(cursor.focus))",
-            "assertEquals(cursor.toRoot.focus, space",
-        ),
-    )
-    check_needles(
-        oracle,
-        "bounded concrete zipper edit and sibling oracle",
-        (
-            "test(\"concrete trie zipper supports focus edits and ordered sibling movement\")",
-            "val grafted = atA.graft(replacement).whole",
-            "val removed = atA.removeFocus.whole",
-            "val inserted = atA.insertItemsAtFocus(x :: Nil).whole",
-            "val next = atB.nextSibling.getOrElse(fail(\"missing next sibling\"))",
-            "assertEquals(next.previousSibling.map(_.path), Some(Vector(b)))",
-            "val nextAfterRemovedA = removedA.nextSibling.getOrElse(fail(\"missing next sibling after removed a\"))",
-            "assertEquals(nextAfterRemovedA.previousSibling, None)",
-            "val previousAfterRemovedC = removedC.previousSibling.getOrElse(fail(\"missing previous sibling after removed c\"))",
-        ),
-    )
-    check_needles(
-        oracle,
-        "virtual zipper context oracle over operation-shaped foci",
-        (
-            "test(\"virtual zipper context movement plugs every operation-shaped focus\")",
-            "\"memo\" -> SpaceZipper.Memo(SpaceZipper.Union(zx, zy))",
-            "\"joinAll\" -> SpaceZipper.JoinAll(Vector(zx, zy, SpaceZipper.wrap(zx, d :: Nil)))",
-            "\"intersection\" -> SpaceZipper.Intersection(zx, zy)",
-            "\"meetAll\" -> SpaceZipper.MeetAll(Vector(zx, zy, SpaceZipper.wrap(zy, d :: Nil)))",
-            "\"subtraction\" -> SpaceZipper.Subtraction(zx, zy)",
-            "\"restriction\" -> SpaceZipper.Restriction(zx, zp)",
-            "\"concat\" -> SpaceZipper.Concat(SpaceZipper.NonEmpty(zx), SpaceZipper.NonEmpty(zy))",
-            "\"suffixClosure\" -> SpaceZipper.SuffixClosure(zx)",
-            "\"tailsClosure\" -> SpaceZipper.TailsClosure(zx)",
-            "\"range\" -> SpaceZipper.Range(zx, 1, x.pathCount.min(4))",
-            "\"patchChild\" -> SpaceZipper.PatchChild(SpaceZipper.Union(zx, zy), a, SpaceZipper.singleton(c :: Nil))",
-            "assertEquals(cursor.whole.materialize, expected",
-            "assertEquals(parent.down(cursor.path.last).map(_.focus.materialize), Some(cursor.focus.materialize)",
-            "assertEquals(cursor.toRoot.whole.materialize, expected",
-        ),
-    )
-    check_needles(
-        oracle,
-        "virtual zipper lazy edit and sibling oracle",
-        (
-            "test(\"virtual zipper context graft edits focus through lazy patch frames\")",
-            "val cursor = SpaceZipper.Cursor(root).down(a).getOrElse(fail(\"missing a focus\"))",
-            "val edited = cursor.graft(replacement).whole",
-            "assertEquals(edited.materialize, expected)",
-            "assert(edited.concrete.isEmpty, \"virtual graft should remain a lazy zipper patch\")",
-            "assertEquals(cursor.nextSibling.map(_.previousSibling.map(_.path)), Some(Some(cursor.path)))",
-            "val removed = cursor.removeFocus",
-            "val next = removed.nextSibling.getOrElse(fail(\"missing virtual next sibling after removed focus\"))",
-            "assertEquals(next.previousSibling, None)",
-            "val previous = removedC.previousSibling.getOrElse(fail(\"missing virtual previous sibling after removed focus\"))",
-        ),
-    )
-
-    trie_test = root / "src" / "test" / "scala" / "TrieSpaceTest.scala"
-    check_needles(
-        trie_test,
-        "public concrete zipper smoke test",
-        (
-            "val atA = root.down(PathItem(\"a\")).get",
-            "val editedA = atA.graft(replacement)",
-            "assertEquals(editedA.pathValue, Syntax.parse(\"a\"))",
-            "val atB = editedA.nextSibling.get",
-            "assertEquals(atB.pathValue, Syntax.parse(\"b\"))",
-            "val backToA = atB.previousSibling.get",
-            "val removedA = atA.removeFocus",
-            "val bAfterRemoval = removedA.nextSibling.get",
-        ),
-    )
-
-    if errors:
-        return Result(
-            "executable zipper context invariant",
-            "path-plug-edit-sibling-oracles",
-            "invalid",
-            False,
-            root / "src" / "test" / "scala" / "ZipperDenotationOracleTest.scala",
-            "; ".join(errors),
-        )
-    return Result(
-        "executable zipper context invariant",
-        "path-plug-edit-sibling-oracles",
-        "ok",
-        True,
-        root / "src" / "test" / "scala" / "ZipperDenotationOracleTest.scala",
-        "concrete and virtual zipper path/plug/up/toRoot/edit/sibling API and bounded oracle coverage are present",
-    )
-
-
-def validate_transform_replacement_acceptance(artifacts: list[Artifact], root: Path) -> Result:
-    sources = [
-        root / "src" / "main" / "scala" / "MORKL.scala",
-        root / "src" / "test" / "scala" / "OpenProgramProofArtifacts.scala",
-        root / "src" / "test" / "scala" / "MORKL.scala",
-        root / "src" / "test" / "scala" / "TrieSpaceTest.scala",
-        root / "proofs" / "open" / "proof_manifest.tsv",
-        root / "proofs" / "open" / "OPEN_PROGRAM_REPORT.md",
-    ]
-    missing_sources = [source for source in sources if not source.exists()]
-    errors: list[str] = []
-    if missing_sources:
-        errors.append(
-            "missing transform replacement source(s): "
-            + ", ".join(display_path(source, root) for source in missing_sources)
-        )
-
-    def check_needles(source: Path, label: str, needles: tuple[str, ...]) -> None:
-        if not source.exists():
-            return
-        text = source.read_text(encoding="utf-8")
-        missing = [needle for needle in needles if needle not in text]
-        if missing:
-            errors.append(
-                f"{display_path(source, root)} missing {label}: "
-                + ", ".join(f"`{needle}`" for needle in missing[:6])
-                + ("" if len(missing) <= 6 else f", +{len(missing) - 6} more")
-            )
-
-    main_morkl = root / "src" / "main" / "scala" / "MORKL.scala"
-    if main_morkl.exists():
-        text = main_morkl.read_text(encoding="utf-8")
-        forbidden = (
-            "case Transform",
-            "Space.Transform",
-            "Path.Transform",
-            "Transform(",
-        )
-        found = [needle for needle in forbidden if needle in text]
-        if found:
-            errors.append(
-                f"{display_path(main_morkl, root)} must not reintroduce Transform constructors/usages: "
-                + ", ".join(f"`{needle}`" for needle in found)
-            )
-
-    open_programs = root / "src" / "test" / "scala" / "OpenProgramProofArtifacts.scala"
-    check_needles(
-        open_programs,
-        "pure transform replacement open-program definition",
-        (
-            "open(\"transform-pair-swap-open\", Vector(SpaceMention(\"x\")),",
-            "Unification.T(S\"x\", \"$left.$right\", \"$right.$left\")",
-            "alphabet = Vector(\"a\", \"b\")",
-            "maxLen = 2",
-            "Space.Transform remains removed",
-            "MORKL Unification.T expansion",
-        ),
-    )
-
-    open_manifest = root / "proofs" / "open" / "proof_manifest.tsv"
-    required_open_artifacts = {
-        "transform-pair-swap-open:space_optimized_open": root / "proofs" / "open" / "smt2" / "transform_pair_swap_open_space_optimized_open.smt2",
-        "transform-pair-swap-open:raw_graph_roundtrip_open": root / "proofs" / "open" / "smt2" / "transform_pair_swap_open_raw_graph_roundtrip_open.smt2",
-        "transform-pair-swap-open:optimized_graph_roundtrip_open": root / "proofs" / "open" / "smt2" / "transform_pair_swap_open_optimized_graph_roundtrip_open.smt2",
-    }
-    if open_manifest.exists():
-        rows = read_manifest(open_manifest, root)
-        by_name = {artifact.name: artifact for artifact in rows}
-        for name, expected_path in sorted(required_open_artifacts.items()):
-            artifact = by_name.get(name)
-            if artifact is None:
-                errors.append(f"missing open manifest artifact `{name}`")
-                continue
-            if artifact.kind != "z3" or artifact.expected != "unsat":
-                errors.append(f"{name} must be z3/unsat, got {artifact.kind}/{artifact.expected}")
-            if artifact.artifact != expected_path:
-                errors.append(
-                    f"{name} points to {display_path(artifact.artifact, root)}, expected {display_path(expected_path, root)}"
-                )
-            if not artifact.artifact.exists():
-                errors.append(f"{name} artifact missing at {display_path(artifact.artifact, root)}")
-
-    open_report = root / "proofs" / "open" / "OPEN_PROGRAM_REPORT.md"
-    check_needles(
-        open_report,
-        "transform replacement open-program report rows",
-        (
-            "| `transform-pair-swap-open` | `space_optimized_open` | `a,b` | `2` | `7` |",
-            "| `transform-pair-swap-open` | `raw_graph_roundtrip_open` | `a,b` | `2` | `7` |",
-            "| `transform-pair-swap-open` | `optimized_graph_roundtrip_open` | `a,b` | `2` | `7` |",
-        ),
-    )
-
-    morkl_tests = root / "src" / "test" / "scala" / "MORKL.scala"
-    check_needles(
-        morkl_tests,
-        "SpaceValue graph backend pure pair-swap regression",
-        (
-            "test(\"operation graph backend executes nested iteration rewrite and closure nodes\")",
-            "val swapPairs = R\"swap_pairs\"(S\"pairs\") :=",
-            "S\"pairs\".iter((P\"x\", P\"y\"), S\"_\", ss\"pair\" x sP\"y\" x sP\"x\")",
-            "assert(swapCompiled.report.backendCompiled)",
-            "assert(swapCompiled.report.backendUnsupported.isEmpty)",
-            "exec(swapCompiled.graph.get, swapStack)",
-            "assertEquals(swapStack.top.last.asInstanceOf[SpaceValue], SpaceValue(\"pair.b.a\", \"pair.d.c\"))",
-        ),
-    )
-
-    trie_tests = root / "src" / "test" / "scala" / "TrieSpaceTest.scala"
-    check_needles(
-        trie_tests,
-        "Trie graph backend pure pair-swap regression",
-        (
-            "test(\"operation graph trie backend covers pure pair swap and closure nodes\")",
-            "val swapPairs = R\"swap_pairs\"(S\"pairs\") :=",
-            "S\"pairs\".iter((P\"x\", P\"y\"), S\"_\", ss\"pair\" x sP\"y\" x sP\"x\")",
-            "execTrie(tg, ts)",
-            "assertEquals(ts.top.last.asInstanceOf[TrieSpace].toSpaceValue, SpaceValue(\"pair.b.a\", \"pair.d.c\"))",
-        ),
-    )
-
-    if errors:
-        return Result(
-            "transform replacement invariant",
-            "Space.Transform-absent+pure-Unification.T",
-            "invalid",
-            False,
-            root / "src" / "test" / "scala" / "OpenProgramProofArtifacts.scala",
-            "; ".join(errors),
-        )
-    return Result(
-        "transform replacement invariant",
-        "Space.Transform-absent+pure-Unification.T",
-        "ok",
-        True,
-        root / "src" / "test" / "scala" / "OpenProgramProofArtifacts.scala",
-        "Space.Transform remains absent and the pure Unification.T pair-swap replacement has open-program and backend regression coverage",
-    )
-
 
 def validate_termination_artifacts(root: Path) -> Result:
     sources = {
@@ -2826,6 +2609,21 @@ def validate_termination_artifacts(root: Path) -> Result:
             "subset(R,S)",
             "setminus(U,S)",
             "card_strict_decrease",
+        ),
+        "reachable_decrease.p": (
+            "reachable_step_decreases",
+            "step_in_mask",
+            "card(setminus(mask, step(R)))",
+        ),
+        "reachable_value.p": (
+            "value_facts",
+            "vampire --induction int",
+            "step_in_mask",
+        ),
+        "scc_decrease.p": (
+            "decrease_all_three_branches",
+            "pred_contains_pivot",
+            "pivot_excluded_remainder",
         ),
         "no_infinite_descent.smt2": (
             "no total function g from naturals to",
@@ -2871,7 +2669,7 @@ def validate_termination_artifacts(root: Path) -> Result:
     if errors:
         return Result(
             "termination proof artifact invariant",
-            "solver-runnable least-fixpoint+finite-growth+descent",
+            "solver-runnable least-fixpoint+finite-growth+recursive-scc-descent",
             "invalid",
             False,
             base,
@@ -2879,367 +2677,16 @@ def validate_termination_artifacts(root: Path) -> Result:
         )
     return Result(
         "termination proof artifact invariant",
-        "solver-runnable least-fixpoint+finite-growth+descent",
+        "solver-runnable least-fixpoint+finite-growth+recursive-scc-descent",
         "ok",
         True,
         base,
-        "terminating/ contains marker-checked, solver-runnable least-fixpoint uniqueness, finite-growth decrease, no-infinite-descent induction, transitive equivalence, and datalog termination obligations",
+        "terminating/ contains marker-checked, solver-runnable least-fixpoint uniqueness, finite-growth decrease, masked-reachability value/decrease, divide-and-conquer SCC branch decrease, no-infinite-descent induction, transitive equivalence, and datalog termination obligations",
     )
 
 
-def validate_range_acceptance(artifacts: list[Artifact], root: Path) -> Result:
-    sources = [
-        root / "zipper-descend.egg",
-        root / "zipper-egg-tests" / "range-observation.egg",
-        root / "zipper-egg-tests" / "range-border-child.egg",
-        root / "zipper-egg-tests" / "range-border-operational.egg",
-        root / "src" / "test" / "scala" / "ZipperEggTranspiler.scala",
-    ]
-    missing_sources = [source for source in sources if not source.exists()]
-    errors: list[str] = []
-    if missing_sources:
-        errors.append(
-            "missing Range source(s): "
-            + ", ".join(display_path(source, root) for source in missing_sources)
-        )
 
-    by_name = {artifact.name: artifact for artifact in artifacts}
-    required_artifacts = {
-        "set_range_full_sentinel",
-        "set_range_empty_one_one",
-        "eager_range_set_equiv",
-        "set_range_subset_fo",
-        "set_range_first_terminal_fo",
-        "zipper_range_materialization_equiv",
-        "zipper_range_first_materialization_equiv",
-        "zipper_range_last_materialization_equiv",
-        "zipper_range_drop_last_materialization_equiv",
-        "zipper_range_full_terminal_equiv",
-        "zipper_range_first_terminal_fo",
-        "set_range_first_child_terminal_empty_fo",
-        "set_range_first_child_selected_sound_fo",
-        "set_range_first_child_pruned_fo",
-        "set_range_last_child_selected_sound_fo",
-        "set_range_last_child_pruned_fo",
-        "set_range_drop_last_child_before_last_fo",
-        "set_range_drop_last_child_after_last_fo",
-    }
-    for name in sorted(required_artifacts):
-        artifact = by_name.get(name)
-        if artifact is None:
-            errors.append(f"missing manifest artifact `{name}`")
-            continue
-        if artifact.kind != "vampire" or artifact.expected != "Theorem":
-            errors.append(f"{name} must be vampire/Theorem, got {artifact.kind}/{artifact.expected}")
-        if not artifact.artifact.exists():
-            errors.append(f"{name} artifact missing at {display_path(artifact.artifact, root)}")
-
-    def check_needles(source: Path, label: str, needles: tuple[str, ...]) -> None:
-        if not source.exists():
-            return
-        text = source.read_text(encoding="utf-8")
-        missing = [needle for needle in needles if needle not in text]
-        if missing:
-            errors.append(
-                f"{display_path(source, root)} missing {label}: "
-                + ", ".join(f"`{needle}`" for needle in missing[:6])
-                + ("" if len(missing) <= 6 else f", +{len(missing) - 6} more")
-            )
-
-    zipper_descend = root / "zipper-descend.egg"
-    check_needles(
-        zipper_descend,
-        "Range datatype, sentinels, and border relations",
-        (
-            "(RangeOp Zipper String String)",
-            "(RangeFirstOp Zipper)",
-            "(RangeLastOp Zipper)",
-            "(RangeDropLastOp Zipper)",
-            "(relation ordered-before (String String))",
-            "(relation needs-first-head (Zipper))",
-            "(relation needs-last-head (Zipper))",
-            "(relation first-head (Zipper String))",
-            "(relation last-head (Zipper String))",
-            "(relation range-first-child-query (Zipper Zipper String))",
-            "(relation range-last-child-query (Zipper Zipper String))",
-            "(relation range-drop-last-child-query (Zipper Zipper String))",
-            "(relation range-child-result (Zipper Zipper))",
-            "(rewrite (RangeOp z \"0\" \"0\") z)",
-            "(rewrite (RangeOp z \"1\" \"1\") (EmptyZ))",
-            "(rewrite (RangeOp z \"0\" \"1\") (RangeFirstOp z))",
-            "(rewrite (RangeOp z \"-1\" \"0\") (RangeLastOp z))",
-            "(rewrite (RangeOp z \"0\" \"-1\") (RangeDropLastOp z))",
-            "(rewrite (RangeOp z \"-2\" \"-1\") (RangeLastOp (RangeDropLastOp z)))",
-        ),
-    )
-    check_needles(
-        zipper_descend,
-        "scheduled Range child and tail-frontier movement",
-        (
-            "(rule ((range-first-child-query z src item) (terminal src))",
-            "((range-child-result z (EmptyZ)))",
-            "(rule ((range-first-child-query z src item) (first-head src item))",
-            "((range-child-result z (RangeFirstOp (Child item src))))",
-            "(rule ((range-last-child-query z src item) (last-head src item))",
-            "((range-child-result z (RangeLastOp (Child item src))))",
-            "(rule ((range-drop-last-child-query z src item) (last-head src item))",
-            "((range-child-result z (RangeDropLastOp (Child item src))))",
-            "(rule ((range-drop-last-child-query z src item) (last-head src last) (ordered-before item last))",
-            "((range-child-result z (Child item src)))",
-            "(rule ((range-drop-last-child-query z src item) (last-head src last) (ordered-before last item))",
-            "(rule ((range-first-child-query z src item) (range-child-result z result))",
-            "((tail-frontier (RangeFirstOp src) item result))",
-            "(rule ((range-last-child-query z src item) (range-child-result z result))",
-            "((tail-frontier (RangeLastOp src) item result))",
-            "(rule ((range-drop-last-child-query z src item) (range-child-result z result))",
-            "((tail-frontier (RangeDropLastOp src) item result))",
-        ),
-    )
-    check_needles(
-        zipper_descend,
-        "normative Range border witnesses and negative probes",
-        (
-            "(range-first-child-query $range_border_first_a $range_virtual_abc \"a\")",
-            "(range-first-child-query $range_border_first_b $range_virtual_abc \"b\")",
-            "(range-last-child-query $range_border_last_c $range_virtual_abc \"c\")",
-            "(range-drop-last-child-query $range_border_drop_c $range_virtual_abc \"c\")",
-            "(check (range-child-result $range_border_first_a (TrieZ $sb)))",
-            "(check (range-child-result $range_border_first_b (EmptyZ)))",
-            "(check (range-child-result $range_border_last_c (TrieZ $sd)))",
-            "(check (range-child-result $range_border_drop_b (TrieZ $sc)))",
-            "(check (range-child-result $range_border_drop_c (EmptyZ)))",
-            "(check (tail-frontier (RangeFirstOp $range_virtual_abc) \"a\" (TrieZ $sb)))",
-            "(check (tail-frontier (RangeLastOp $range_virtual_abc) \"b\" (EmptyZ)))",
-            "(check (tail-frontier (RangeDropLastOp $range_virtual_abc) \"c\" (EmptyZ)))",
-            "(check (empty-focus $miss_range_virtual_abc_first_prunes_middle_head))",
-            "(check (empty-focus $miss_range_virtual_abc_drop_last_prunes_last_head))",
-        ),
-    )
-
-    generic_range_rewrites: list[tuple[Path, int, str]] = []
-    generic_needles = (
-        "(Child item (RangeFirstOp src))",
-        "(Child item (RangeLastOp src))",
-        "(Child item (RangeDropLastOp src))",
-    )
-    for source in sources[:4]:
-        if not source.exists():
-            continue
-        for kind, line, text in collect_egg_rules(source):
-            if kind == "rewrite" and any(needle in text for needle in generic_needles):
-                generic_range_rewrites.append((source, line, " ".join(part.strip() for part in text.splitlines() if part.strip())))
-    if generic_range_rewrites:
-        examples = "; ".join(
-            f"{display_path(source, root)}:{line}:{text}"
-            for source, line, text in generic_range_rewrites[:5]
-        )
-        suffix = "" if len(generic_range_rewrites) <= 5 else f"; +{len(generic_range_rewrites) - 5} more"
-        errors.append(
-            "Range child movement must stay scheduled through range-child-result/tail-frontier, "
-            f"not generic eager Child(Range*) rewrites: {examples}{suffix}"
-        )
-
-    generated_files = {
-        root / "zipper-egg-tests" / "range-border-child.egg": (
-            "(let $first_unsorted_nested (RangeZ $unsorted_nested_src \"0\" \"1\"))",
-            "(let $drop_last_four (RangeZ $four_src \"0\" \"-1\"))",
-            "(check (range-child-result $unsorted_first_c (EmptyZ)))",
-            "(check (range-child-result $four_drop_c $c_tail))",
-            "(check (absent-key $drop_last_four \"e\"))",
-            "(fail (check (range-child-result $four_drop_d $d_tail)))",
-            "(fail (check (absent-key $drop_last_four \"c\")))",
-        ),
-        root / "zipper-egg-tests" / "range-observation.egg": (
-            "(run-schedule (saturate range_border))",
-            "(check (range-child-result $range_first_no_epsilon_a (RangeFirstOp (Child \"a\" $src_no_epsilon))))",
-            "(check (range-child-result $range_last_b (RangeLastOp (Child \"b\" $src))))",
-            "(check (range-child-result $range_drop_b (RangeDropLastOp (Child \"b\" $src))))",
-            "(check (tail-frontier (RangeDropLastOp $src) \"c\" (EmptyZ)))",
-        ),
-        root / "zipper-egg-tests" / "range-border-operational.egg": (
-            "(run-schedule",
-            "(saturate normalize)",
-            "(saturate observe)",
-            "(saturate range_border)",
-            "(check (range-child-result $concrete_first_a (TrieZ $sb)))",
-            "(check (range-child-result $virtual_multi_first_a (RangeFirstOp (Child \"a\" $virtual_multi_ab))))",
-            "(check (range-child-result $prefixed_drop_a (RangeDropLastOp (Child \"a\" $prefixed_src))))",
-            "(fail (check (range-child-result $virtual_multi_first_a (Child \"a\" $virtual_multi_ab))))",
-            "(fail (check (range-child-result $four_drop_d $d_tail)))",
-        ),
-    }
-    for source, needles in generated_files.items():
-        check_needles(source, "generated Range border regression", needles)
-
-    transpiler = root / "src" / "test" / "scala" / "ZipperEggTranspiler.scala"
-    check_needles(
-        transpiler,
-        "Scala generator hooks for Range artifacts",
-        (
-            "private val RangeObservationName = \"range-observation\"",
-            "private val RangeBorderChildName = \"range-border-child\"",
-            "private val RangeBorderOperationalName = \"range-border-operational\"",
-            "val wantsRangeObservation = names.isEmpty || names(RangeObservationName)",
-            "val wantsRangeBorderChild = names.isEmpty || names(RangeBorderChildName)",
-            "val wantsRangeBorderOperational = names.isEmpty || names(RangeBorderOperationalName)",
-            "writeRangeObservation(outDir)",
-            "writeRangeBorderChild(outDir)",
-            "writeRangeBorderOperational(outDir)",
-            "\"range-observation.egg\"",
-            "\"range-border-child.egg\"",
-            "\"range-border-operational.egg\"",
-        ),
-    )
-
-    if errors:
-        return Result(
-            "Range acceptance invariant",
-            "ordered-border-state+generated-artifacts",
-            "invalid",
-            False,
-            root / "zipper-descend.egg",
-            "; ".join(errors),
-        )
-    return Result(
-        "Range acceptance invariant",
-        "ordered-border-state+generated-artifacts",
-        "ok",
-        True,
-        root / "zipper-descend.egg",
-        "Range sentinel semantics, ordered border-state child movement, generated artifacts, and unbounded FOL materialization/subset/child-border soundness artifacts are present",
-    )
-
-
-def validate_negative_key_acceptance(root: Path) -> Result:
-    sources = [
-        root / "zipper-descend.egg",
-        root / "zipper-egg-tests" / "negative-key.egg",
-        root / "src" / "test" / "scala" / "ZipperEggTranspiler.scala",
-    ]
-    missing_sources = [source for source in sources if not source.exists()]
-    errors: list[str] = []
-    if missing_sources:
-        errors.append(
-            "missing negative/key source(s): "
-            + ", ".join(display_path(source, root) for source in missing_sources)
-        )
-
-    def check_needles(source: Path, label: str, needles: tuple[str, ...]) -> None:
-        if not source.exists():
-            return
-        text = source.read_text(encoding="utf-8")
-        missing = [needle for needle in needles if needle not in text]
-        if missing:
-            errors.append(
-                f"{display_path(source, root)} missing {label}: "
-                + ", ".join(f"`{needle}`" for needle in missing[:6])
-                + ("" if len(missing) <= 6 else f", +{len(missing) - 6} more")
-            )
-
-    zipper_descend = root / "zipper-descend.egg"
-    check_needles(
-        zipper_descend,
-        "key-set lattice and negative observation relations",
-        (
-            "(datatype KeySet",
-            "(KEmpty)",
-            "(KOne String)",
-            "(KUnion KeySet KeySet)",
-            "(KIntersection KeySet KeySet)",
-            "(KDiff KeySet KeySet)",
-            "(relation observed-key (String))",
-            "(relation observable-focus (Zipper))",
-            "(relation child-focus (Zipper String Zipper))",
-            "(relation absent-key (Zipper String))",
-            "(relation keyset (Zipper KeySet))",
-            "(observed-key \"a\")",
-            "(observed-key \"b\")",
-            "(observed-key \"c\")",
-            "(observed-key \"d\")",
-            "(observed-key \"q\")",
-            "(observed-key \"z\")",
-            "(rule ((observed-key item) (observable-focus z))",
-            "((child-focus z item (Child item z))))",
-            "(rule ((child-focus z item child) (empty-focus child))",
-            "((absent-key z item)))",
-            "(rule ((has-key z item))",
-            "((child-focus z item (Child item z))",
-            "(observed-key item)))",
-            "(rule ((has-key z item))",
-            "((keyset z (KOne item))))",
-        ),
-    )
-    check_needles(
-        zipper_descend,
-        "key-set non-collapse and precise has-key probes",
-        (
-            "(check (has-key $keys_union \"a\"))",
-            "(check (has-key $keys_union \"b\"))",
-            "(check (has-key $keys_intersection \"a\"))",
-            "(fail (check (has-key $keys_intersection \"b\")))",
-            "(check (has-key $keys_subtraction \"a\"))",
-            "(fail (check (has-key $keys_subtraction \"b\")))",
-            "(fail (check (has-key $exact_keys_subtraction_removed \"a\")))",
-            "(fail (check (= (KEmpty) (KOne \"a\"))))",
-            "(fail (check (= (KOne \"a\") (KOne \"b\"))))",
-        ),
-    )
-
-    negative_key = root / "zipper-egg-tests" / "negative-key.egg"
-    check_needles(
-        negative_key,
-        "generated negative-key regression",
-        (
-            "; Focused negative child-key observation witness.",
-            "(relation observed-key (String))",
-            "(relation absent-key (Zipper String))",
-            "(rule ((observed-key item) (observable-focus z))",
-            "((child-focus z item (Child item z))))",
-            "(rule ((child-focus z item child) (empty-focus child))",
-            "((absent-key z item)))",
-            "(observed-key \"a\")",
-            "(observed-key \"b\")",
-            "(check (absent-key $diff_same \"a\"))",
-            "(check (absent-key $intersection_disjoint \"a\"))",
-            "(check (absent-key $restriction_prefix_miss \"a\"))",
-            "(check (absent-key $concat_nonterminal_rhs \"b\"))",
-            "(fail (check (absent-key $positive_union \"a\")))",
-            "(fail (check (absent-key $positive_union \"b\")))",
-        ),
-    )
-
-    transpiler = root / "src" / "test" / "scala" / "ZipperEggTranspiler.scala"
-    check_needles(
-        transpiler,
-        "Scala generator hook for negative-key artifact",
-        (
-            "private val NegativeKeyName = \"negative-key\"",
-            "val wantsNegativeKey = names.isEmpty || names(NegativeKeyName)",
-            "writeNegativeKey(outDir)",
-            "\"negative-key.egg\"",
-        ),
-    )
-
-    if errors:
-        return Result(
-            "negative/key acceptance invariant",
-            "relational-absence+keyset-noncollapse",
-            "invalid",
-            False,
-            root / "zipper-descend.egg",
-            "; ".join(errors),
-        )
-    return Result(
-        "negative/key acceptance invariant",
-        "relational-absence+keyset-noncollapse",
-        "ok",
-        True,
-        root / "zipper-descend.egg",
-        "negative key observation, keyset non-collapse probes, and generated negative-key regression are present",
-    )
-
-
-def operational_manifest_summary(path: Path) -> list[str]:
+def operational_manifest_summary(path: Path, root: Path) -> list[str]:
     rows = read_operational_manifest(path)
     if not rows:
         return [
@@ -3330,7 +2777,7 @@ def operational_manifest_summary(path: Path) -> list[str]:
         "",
         "## Operational Rule Manifest",
         "",
-        f"- `{path}` contains `{stats.total}` operational rows: `{stats.proved_unbounded}` proved-unbounded, `{stats.proved_bounded}` proved-bounded, `{stats.axiom_elsewhere}` axiom-elsewhere, `{stats.unproved}` UNPROVED.",
+        f"- `{display_path(path, root)}` contains `{stats.total}` operational rows: `{stats.proved_unbounded}` proved-unbounded, `{stats.proved_bounded}` proved-bounded, `{stats.axiom_elsewhere}` axiom-elsewhere, `{stats.unproved}` UNPROVED.",
         f"- Proof debt total: `{stats.proof_debt}` rows. `proved-bounded` rows are accepted by this gate but remain proof-strengthening work. {axiom_note} Of the proved-bounded rows, `{len(mixed)}` are mixed FOL+bounded and `{len(pure_bounded)}` are bounded-only.",
         "",
         "| Status | Tier | Rows |",
@@ -3390,6 +2837,31 @@ def run_parallel(artifacts: list[Artifact],
     return [r for r in results if r is not None]
 
 
+def skipped_generator_names(args: argparse.Namespace) -> list[str]:
+    stages = (
+        (args.no_generate, "core SMT/TPTP"),
+        (args.no_example_generation, "cornerstone parity/spatial report"),
+        (args.no_open_generation, "open-program SMT/TPTP"),
+        (args.no_egg_generation, "operational Egglog"),
+    )
+    return [name for skipped, name in stages if skipped]
+
+
+def report_status(ok: bool,
+                  skipped_solver_count: int,
+                  skipped_generator_count: int,
+                  proof_debt: int) -> str:
+    if not ok:
+        return "FAIL"
+    if skipped_solver_count:
+        return "MANIFEST-ONLY" if skipped_solver_count == 3 else "PARTIAL PASS"
+    if skipped_generator_count:
+        return "PARTIAL PASS"
+    if proof_debt:
+        return "PASS_WITH_PROOF_DEBT"
+    return "PASS"
+
+
 def markdown_report(
     args: argparse.Namespace,
     generation_results: list[Result],
@@ -3408,49 +2880,59 @@ def markdown_report(
         skipped_gates.append("Z3")
     if args.no_egg:
         skipped_gates.append("Egglog")
-    if not ok:
-        status = "FAIL"
-    elif skipped_gates:
-        status = "MANIFEST-ONLY" if len(skipped_gates) == 3 else "PARTIAL PASS"
-    elif manifest_stats.proof_debt:
-        status = "PASS_WITH_PROOF_DEBT"
-    else:
-        status = "PASS"
+    skipped_generators = skipped_generator_names(args)
+    status = report_status(ok, len(skipped_gates), len(skipped_generators), manifest_stats.proof_debt)
     alphabet = tuple(part for part in args.alphabet.split(",") if part)
     width = path_count(alphabet, args.max_len)
+    git_sha, git_state = git_provenance(root)
+    generated_utc = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    vampire_name = Path(vampire).name if vampire else None
     lines = [
         "# Proof Pipeline Report",
         "",
         f"Status: {status}",
+        "",
+        "## Provenance",
+        "",
+        f"- Generated: `{generated_utc}`",
+        f"- Git: `{git_sha}` (`{git_state}` working tree)",
+        f"- Python: `{sys.version.split()[0]}`",
+        f"- Scala CLI: `{command_version(shutil.which('scala-cli'))}`",
+        f"- Z3: `{command_version(shutil.which('z3'), '-version')}`",
+        f"- Vampire: `{command_version(vampire, '--version') if vampire else 'not available'}`",
+        f"- Egglog: `{command_version(shutil.which('egglog'))}`",
         "",
         "## Scope",
         "",
         "- Scala is the source of truth for generated proof and example egg artifacts.",
         "- `morkl.ProofArtifactGeneratorMain` generates SMT2 and TPTP files plus `proofs/proof_manifest.tsv`.",
         "- `morkl.generateZipperEggTests` generates the shared-prelude `formal.egg` and `zipper.egg` introductions plus the independent `zipper-egg-tests/*.egg` examples.",
-        "- `morkl.generateCornerstoneProofArtifacts` generates exact-output SMT2/TPTP/egg certificates for aunt, semi-naive datalog, GOL, 15-puzzle, temperature, and n-queens.",
+        "- `morkl.generateCornerstoneProofArtifacts` executes closed-program differential checks for aunt, semi-naive datalog, GOL, 15-puzzle, temperature, n-queens, and SCC. It emits a parity report, not closed-output solver certificates; the old SMT2/TPTP/egg encodings defined both sides as one precomputed answer and were removed.",
         "- `morkl.generateOpenProgramProofArtifacts` generates open-program SMT2 equivalence obligations over symbolic bounded input spaces plus structural full-program TPTP obligations.",
         f"- The runner emits `{args.operational_manifest}` by scanning every operational `(rewrite ...)` and `(rule ...)` in `zipper-descend.egg`, mapping semantic rows to proof artifacts where known, mapping path normalizers, memo/cache wrappers, and scheduler-observability helpers to explicit FOL contracts where available, keeping any remaining relational frontier/key scheduling helpers as `axiom-elsewhere`, and marking missing semantic coverage as `UNPROVED`.",
         "- This Python script runs external solvers/checkers against the Scala-generated artifacts and curated termination artifacts.",
         f"- Operational proof debt in this report: `{manifest_stats.proved_bounded}` proved-bounded rows, `{manifest_stats.axiom_elsewhere}` axiom-elsewhere rows, and `{manifest_stats.unproved}` UNPROVED rows. A zero-UNPROVED report is not the same as a fully unbounded proof.",
-        "- Vampire runs in portfolio mode and proves first-order equivalence obligations connecting zipper membership, eager trie membership, and path-set membership. Iteration is represented as a general head/rest binder with arbitrary template-expression DAGs; body-union distribution, guarded invariant motion, and wrap/product/intersection/diff/restriction hoists have unbounded FOL obligations in addition to bounded counterexample checks.",
+        "- Vampire runs first-order obligations in portfolio mode by default. Artifact metadata may opt a deliberately decomposed obligation into the plain saturation loop with `vampire-strategy=plain`, or enable integer induction with `vampire-induction=int`; the latter is required by the curated reachable-value invariant. The plain strategy avoids a Vampire 5.0.1 portfolio-child proof-handoff crash without weakening or skipping the theorem. These obligations connect zipper membership, eager trie membership, and path-set membership. Iteration is represented as a general head/rest binder with arbitrary template-expression DAGs; body-union distribution, guarded invariant motion, and wrap/product/intersection/diff/restriction hoists have unbounded FOL obligations in addition to bounded counterexample checks.",
         "- TailsIntersection has an arbitrary-cardinality closed-frontier refinement theorem. The generated `tails-intersection-frontier.egg` artifact executes the corresponding demand-built key-list fold over a nested virtual union with a repeated head, demonstrating that same-head children merge before the all-head meet.",
         "- Core unit path-set algebra now has unbounded FOL obligations for union/intersection idempotence and associativity, diff self/union-right, child intersection/diff, restriction/raffination partition/disjointness, path concat epsilon normalization, memo/cache identity, and ordered Range child-border soundness/pruning facts. Operational rows that still cite bounded fixture-specific laws remain `proved-bounded` by weakest-tier accounting.",
         f"- Bounded universe: alphabet `{','.join(alphabet)}`, max path length `{args.max_len}`, `{width}` paths.",
         "- Valid laws are checked by asking Z3 for a counterexample to equality; `unsat` means no bounded counterexample was found.  The bounded law table includes MORKL-style Iteration with head/rest bindings.",
         "- Product/concatenation derivative laws are guarded by the principle `no concatenation escapes the bounded universe`: `child_product_*` uses a generated `ProductClosed(X,Y)` assumption that forbids exactly those X/Y path pairs whose concatenation would fall outside the bounded universe. Both `a` and `b` child representatives are checked, and the unguarded mutation must be `sat`.",
-        "- Cornerstone example certificates are exact closed-program output equivalence checks generated from Scala after Scala has checked the compared evaluators/executors agree.",
+        "- Closed cornerstone parity is an executable Scala gate. Counterexample-sensitive solver evidence comes from symbolic open-program SMT and structural full-program FOL obligations, rather than duplicating a precomputed closed output on both sides.",
         "- Open-program SMT certificates compare expanded source, source optimization, raw graph round-trip, and optimized graph round-trip for all symbolic inputs in each generated bounded universe.",
-        "- Structural full-program FOL certificates emit generated MORKL program DAGs for Aunt, semi-naive Datalog, GOL, temperature, 2x2 sliding puzzle, the complete 24-state 2x2 sliding-puzzle step, and 4-queens, then prove source, optimized-source, trie, zipper, and graph backends equivalent using constructor-specific implementation lemmas over arbitrary input-space interpretations. `Iter` is modeled with an explicit path/space binding environment; `Range` is modeled as source membership plus ordered rank/bounds selection.",
-        "- `terminating/` carries hand-staged termination and least-fixpoint artifacts: Vampire-checkable least-fixpoint uniqueness and finite-growth decrease lemmas, Z3-checkable no-infinite-descent induction steps, egglog sketches, and Datalog/transitive termination/equivalence obligations. These artifacts are executed by the corresponding gate unless that gate is skipped.",
-        "- Arbitrary-data backend obligations use symbolic input spaces/templates to prove source, trie, zipper, and graph constructors agree independently of the concrete example data.",
+        "- Structural full-program FOL files emit generated MORKL program DAGs for Aunt, semi-naive Datalog, GOL, temperature, 2x2 and 4x4 sliding puzzle, the complete 24-state 2x2 step, 4-queens, and the paper's seedless divide-and-conquer SCC routine. The SCC DAG retains pivot `Range`, representative emission, and all three shrinking recursive partitions, while masked reachability lowers to `Fixpoint`; its separate curated theorems prove reachability invariants and branch decrease. Structural files check DAG well-formedness and contract consistency under per-constructor axioms equating each backend's membership predicate with source membership; they are not independent implementation-equivalence proofs. `Iter` is modeled with an explicit path/space binding environment and `Range` with source membership plus ordered rank/bounds selection.",
+        "- `terminating/` carries hand-staged termination and least-fixpoint artifacts: Vampire-checkable least-fixpoint uniqueness, finite-growth decrease, masked-reachability value/decrease, and divide-and-conquer SCC three-branch decrease theorems; Z3-checkable no-infinite-descent induction steps; egglog sketches; and Datalog/transitive termination/equivalence obligations. These artifacts are executed by the corresponding gate unless that gate is skipped.",
+        "- Bounded open-program SMT obligations use symbolic input spaces/templates to search independently for backend counterexamples. Full-program structural FOL obligations instead compose explicitly axiomatized backend/source contracts.",
         "- Negative controls are intentionally false laws; they must return `sat`.",
-        f"- Vampire: {'available at `' + vampire + '`' if vampire else 'not installed; first-order proof phase skipped'}",
+        f"- Vampire: {'available as `' + vampire_name + '`' if vampire_name else 'not installed; first-order proof phase skipped'}",
         f"- Per-obligation solver budgets: Z3 `{args.z3_time_limit}s`, Vampire `{args.vampire_time_limit}s`; solver obligations run with up to `{args.solver_workers}` workers.",
     ]
     if skipped_gates:
         lines.append(f"- Skipped gates in this run: {', '.join(skipped_gates)}.")
         lines.append("- Empty gate tables below mean the gate was skipped, not proved.")
+    if skipped_generators:
+        lines.append(f"- Skipped generators in this run: {', '.join(skipped_generators)}.")
+        lines.append("- Their existing artifacts were reused; same-run freshness was not established for those generator outputs, so this run is not eligible for a full proof status.")
     lines.extend([
         "",
         "## Scala Generation Gate",
@@ -3460,6 +2942,8 @@ def markdown_report(
     ])
     for r in generation_results:
         lines.append(f"| `{r.name}` | `{r.expected}` | `{r.actual}` | {'PASS' if r.ok else 'FAIL'} |")
+    for name in skipped_generators:
+        lines.append(f"| `{name} generator` | `fresh same-run output` | `skipped/reused` | SKIP |")
     lines.extend([
         "",
         "## Vampire Equivalence Gate",
@@ -3493,7 +2977,7 @@ def markdown_report(
         lines.append(f"| `{r.name}` | `{r.expected}` | `{r.actual}` | {'PASS' if r.ok else 'FAIL'} |")
     if not egg_results:
         lines.append("| _skipped_ | `-` | `-` | SKIP |")
-    lines.extend(operational_manifest_summary(root / args.operational_manifest))
+    lines.extend(operational_manifest_summary(root / args.operational_manifest, root))
     failures = [r for r in generation_results + vampire_results + z3_results + egg_results if not r.ok]
     if failures:
         lines.extend(["", "## Failures", ""])
@@ -3503,16 +2987,16 @@ def markdown_report(
         "",
         "## Limits",
         "",
-        "- Vampire proves the abstraction and local constructor equivalence obligations listed above; it does not yet prove every optimizer rewrite directly from one generated semantic table.",
+        "- Vampire proves the non-full-program abstraction and local constructor laws listed above; it does not prove every optimizer rewrite directly from one generated semantic table. Full-program structural FOL results are only consistency theorems under explicit backend/source agreement axioms.",
         "- The Z3 algebraic law phase is still a bounded finite-language check.",
         "- Iteration is now in the first-order and bounded proof layers, but arbitrary higher-order template equivalence is represented by schemas plus bounded examples rather than a generated semantic table.",
-        "- Cornerstone example proofs are closed instantiated examples over their generated inputs/contexts; the open-program SMT tier covers proof-sized operator programs, benchmark skeletons, the full Aunt query over arbitrary bounded inputs, and a proof-sized full GOL helper expansion.",
+        "- Closed cornerstone checks are differential executions, not theorem-prover certificates. The open-program SMT tier covers proof-sized operator programs, benchmark skeletons, and the full Aunt, semi-naive Datalog, proof-sized GOL, and 2x2-puzzle programs over bounded symbolic inputs.",
         "- DAG-shared SMT emission is used for open-program obligations; whole programs with very large literal domains are better handled by the structural FOL tier.",
-        "- The structural full-program FOL tier covers the six cornerstone examples plus a dedicated complete 24-state 2x2 sliding-puzzle step certificate. It uses constructor-specific backend equivalence lemmas and concrete literal/path definitions instead of one generic backend-denotation axiom. `Iter` now has an explicit environment-stack semantics for bound path refs and rest spaces, including nested iteration capture; `Range` now exposes membership, rank, count, normalized bounds, and half-open interval selection. `Fixpoint` now exposes the union-saturating base-or-step equation in the same structural environment, and `terminating/` adds staged least-fixpoint uniqueness plus finite-growth/descent termination evidence for representative recursion families. Full positivity/leastness obligations for arbitrary source `Fixpoint` and mutual recursion are still not discharged from one unified semantic table. `Fold` and grounded functions remain represented by shared operator semantic predicates; the next tightening step is to unfold those remaining predicates into stronger op-specific FOL lemmas.",
+        "- The axiomatized structural full-program FOL tier covers all seven cornerstone examples plus a dedicated complete 24-state 2x2 sliding-puzzle step schema. It uses per-constructor backend/source agreement axioms and concrete literal/path definitions, so it validates contract composition and DAG well-formedness rather than the Scala implementations. `Iter` has an explicit environment-stack schema for bound path refs and rest spaces; `Range` exposes membership, rank, count, normalized bounds, and half-open interval selection; `Fixpoint` exposes the union-saturating base-or-step equation. `terminating/` separately adds staged least-fixpoint uniqueness plus finite-growth/descent obligations. Independent implementation proofs for these full programs, arbitrary-source Fixpoint positivity/leastness, mutual recursion, Fold, and grounded functions remain open.",
         "- Operational egg `Range` no longer has the four-path fixture-shaped answer rewrites for negative-window, `RangeLast`, or `RangeDropLast`. Negative-window now decomposes to `RangeLast(RangeDropLast(src))`; `RangeLast` and `RangeDropLast` over the concrete border fixture are handled by local terminal/child movement rules instead of whole-result materialization. Broad ordered-union rewrites and generic eager `Child(Range*)` rewrites crossed the OOM-safety threshold and are intentionally not used. The focused `range-border-child.egg` artifact validates the safer ordered border-state relation (`range-child-result`) with hit, miss, absent-key, and negative probes; `range-observation.egg` now covers both the concrete four-path epsilon/a.a/a.b/b.a border fixture and a no-epsilon first-border fixture through that scheduled relation; and `range-border-operational.egg` extends the relation to concrete trie unions, virtual unions, nested drop-last, and shared-prefix/prefixed Range sources under explicit normalize/observe/range-border phases. The proof layer now adds unbounded ordered-key FOL child-border obligations for first terminal/pruning, first/last selected soundness, last pruning, and drop-last before/after pruning. The remaining tightening step is to prove full selected-branch equality for drop-last and derive the egg scheduling relations directly from the unified semantic table instead of combining those FOL obligations with bounded generated witnesses.",
         "- The Antimirov closure-state operators now have bounded SMT artifacts for frontier union, keyed frontier tails, nested frontier child movement, and suffix/tails closure child states, plus named unbounded FOL child/nested-child bridge obligations for suffix/tails closure frontiers. Laws involving mutual recursion, leastness/positivity obligations for general Fixpoint lowering, and an unbounded bisimulation proof of the complete demand-driven frontier scheduler are not complete in this gate.",
         "- The main proof and runtime track is intentionally path-set-only. The value-payload experiment lives under `valued/` so the unit track can fully exploit stronger set laws and remain buildable with that directory removed.",
-        "- `formal.egg` and `zipper.egg` share one Scala-generated core prelude and remain checked illustrative targets; `zipper-descend.egg` is the comprehensive operational target. Generated example egg files also come from Scala.",
+        "- `formal.egg` and `zipper.egg` share one Scala-generated core prelude and remain checked illustrative targets; `zipper-descend.egg` is the comprehensive operational target. Focused operational egg examples come from Scala; closed-output cornerstone egg tautologies are not generated.",
         "",
     ])
     return "\n".join(lines)
@@ -3520,21 +3004,22 @@ def markdown_report(
 
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--alphabet", default="a,b", help="comma-separated finite alphabet")
-    parser.add_argument("--max-len", type=int, default=3, help="maximum bounded path length")
+    parser.add_argument("--alphabet", default=None, help="comma-separated finite alphabet")
+    parser.add_argument("--max-len", type=int, default=None, help="maximum bounded path length")
     parser.add_argument("--out-dir", default="proofs/generated", help="where Scala writes generated SMT-LIB files")
     parser.add_argument("--vampire-out-dir", default="proofs/vampire/generated", help="where Scala writes generated TPTP files")
     parser.add_argument("--manifest", default="proofs/proof_manifest.tsv", help="Scala-generated artifact manifest")
     parser.add_argument("--example-out-dir", default="proofs/examples", help="where Scala writes cornerstone example proof artifacts")
     parser.add_argument("--example-manifest", default="proofs/examples/proof_manifest.tsv", help="Scala-generated cornerstone example manifest")
+    parser.add_argument("--spatial-report", default="docs/CORNERSTONE_ABSTRACT_INTERPRETATIONS_GENERATED.md", help="generated cornerstone spatial-analysis summary")
     parser.add_argument("--open-out-dir", default="proofs/open", help="where Scala writes open-program proof artifacts")
     parser.add_argument("--open-manifest", default="proofs/open/proof_manifest.tsv", help="Scala-generated open-program proof manifest")
     parser.add_argument("--operational-manifest", default="proofs/operational_rule_manifest.tsv", help="generated zipper-descend operational rule proof-coverage manifest")
-    parser.add_argument("--report", default="proofs/PROOF_REPORT.md", help="markdown report path")
-    parser.add_argument("--vampire", default="/Applications/Vampire", help="path to the Vampire executable")
+    parser.add_argument("--report", default="docs/proofs/PROOF_REPORT.md", help="markdown report path")
+    parser.add_argument("--vampire", default=None, help="path or command name for Vampire (default: VAMPIRE, then PATH)")
     parser.add_argument("--vampire-time-limit", type=int, default=300, help="per-obligation Vampire time limit in seconds")
     parser.add_argument("--z3-time-limit", type=int, default=300, help="per-obligation Z3 time limit in seconds")
-    parser.add_argument("--solver-workers", type=int, default=min(4, os.cpu_count() or 1), help="maximum parallel solver workers per solver family")
+    parser.add_argument("--solver-workers", type=int, default=None, help="maximum parallel solver workers per solver family")
     parser.add_argument("--no-generate", action="store_true", help="do not regenerate SMT/TPTP artifacts from Scala")
     parser.add_argument("--no-example-generation", action="store_true", help="do not regenerate cornerstone example proof artifacts from Scala")
     parser.add_argument("--no-open-generation", action="store_true", help="do not regenerate open-program proof artifacts from Scala")
@@ -3543,10 +3028,29 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--no-z3", action="store_true", help="skip Z3 bounded proof obligations")
     parser.add_argument("--no-egg", action="store_true", help="skip egglog artifact checks")
     parser.add_argument("--require-vampire", action="store_true", help="fail if vampire is unavailable")
+    parser.add_argument("--long", action="store_true", help="use the larger standard bounded universe (a,b,c through length 4)")
+    parser.add_argument("--no-freshness-check", action="store_true", help="do not compare same-run generated outputs with their pre-run contents")
     args = parser.parse_args(argv)
+    if args.alphabet is None:
+        args.alphabet = "a,b,c" if args.long else "a,b"
+    if args.max_len is None:
+        args.max_len = 4 if args.long else 3
+    if args.solver_workers is None:
+        default_workers = 8 if args.long else 4
+        args.solver_workers = min(default_workers, os.cpu_count() or 1)
 
     root = Path(__file__).resolve().parents[1]
     generation_results: list[Result] = []
+    freshness_paths: list[Path | str] = [args.operational_manifest]
+    if not args.no_generate:
+        freshness_paths.extend([args.out_dir, args.vampire_out_dir, args.manifest])
+    if not args.no_example_generation:
+        freshness_paths.extend([args.example_out_dir, args.example_manifest, args.spatial_report])
+    if not args.no_open_generation:
+        freshness_paths.extend([args.open_out_dir, args.open_manifest])
+    if not args.no_egg_generation:
+        freshness_paths.extend(["formal.egg", "zipper.egg", "zipper-egg-tests"])
+    freshness_before = {} if args.no_freshness_check else snapshot_generated(root, freshness_paths)
 
     if not args.no_generate:
         generation_results.append(run_scala_proof_generator(args, root))
@@ -3576,6 +3080,16 @@ def main(argv: Sequence[str]) -> int:
             report_path.parent.mkdir(parents=True, exist_ok=True)
             report_path.write_text(report, encoding="utf-8")
             print(f"FAIL scala open-program proof generation: {generation_results[-1].note}", file=sys.stderr)
+            return 1
+
+    if not args.no_egg_generation:
+        generation_results.append(run_scala_egg_generator(root))
+        if not generation_results[-1].ok:
+            report = markdown_report(args, generation_results, [], [], [], None, root)
+            report_path = root / args.report
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(report, encoding="utf-8")
+            print(f"FAIL scala egg artifact generation: {generation_results[-1].note}", file=sys.stderr)
             return 1
 
     manifest_path = root / args.manifest
@@ -3613,14 +3127,32 @@ def main(argv: Sequence[str]) -> int:
         report_path.write_text(report, encoding="utf-8")
         print(f"FAIL symbol-coverage invariant: {symbol_coverage_result.note}", file=sys.stderr)
         return 1
-    negative_key_result = validate_negative_key_acceptance(root)
-    generation_results.append(negative_key_result)
-    if not negative_key_result.ok:
+    documentation_result = validate_documentation_invariants(root)
+    generation_results.append(documentation_result)
+    if not documentation_result.ok:
         report = markdown_report(args, generation_results, [], [], [], None, root)
         report_path = root / args.report
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(report, encoding="utf-8")
-        print(f"FAIL negative/key acceptance invariant: {negative_key_result.note}", file=sys.stderr)
+        print(f"FAIL documentation/source-of-truth invariant: {documentation_result.note}", file=sys.stderr)
+        return 1
+    required_full_program_result = validate_required_full_program_obligations(artifacts, root)
+    generation_results.append(required_full_program_result)
+    if not required_full_program_result.ok:
+        report = markdown_report(args, generation_results, [], [], [], None, root)
+        report_path = root / args.report
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report, encoding="utf-8")
+        print(f"FAIL required full-program obligations: {required_full_program_result.note}", file=sys.stderr)
+        return 1
+    ownership_result = validate_generated_artifact_ownership(artifacts, root, args)
+    generation_results.append(ownership_result)
+    if not ownership_result.ok:
+        report = markdown_report(args, generation_results, [], [], [], None, root)
+        report_path = root / args.report
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report, encoding="utf-8")
+        print(f"FAIL generated artifact manifest ownership: {ownership_result.note}", file=sys.stderr)
         return 1
     closure_rewrite_result = validate_no_concrete_closure_rewrites(root)
     generation_results.append(closure_rewrite_result)
@@ -3640,42 +3172,6 @@ def main(argv: Sequence[str]) -> int:
         report_path.write_text(report, encoding="utf-8")
         print(f"FAIL frontier algebra rule invariant: {frontier_algebra_result.note}", file=sys.stderr)
         return 1
-    iter_fixpoint_result = validate_iter_fixpoint_acceptance(artifacts, root)
-    generation_results.append(iter_fixpoint_result)
-    if not iter_fixpoint_result.ok:
-        report = markdown_report(args, generation_results, [], [], [], None, root)
-        report_path = root / args.report
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(report, encoding="utf-8")
-        print(f"FAIL iter/fixpoint acceptance invariant: {iter_fixpoint_result.note}", file=sys.stderr)
-        return 1
-    context_movement_result = validate_context_movement_acceptance(artifacts, root)
-    generation_results.append(context_movement_result)
-    if not context_movement_result.ok:
-        report = markdown_report(args, generation_results, [], [], [], None, root)
-        report_path = root / args.report
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(report, encoding="utf-8")
-        print(f"FAIL context movement acceptance invariant: {context_movement_result.note}", file=sys.stderr)
-        return 1
-    executable_context_result = validate_executable_zipper_context_acceptance(root)
-    generation_results.append(executable_context_result)
-    if not executable_context_result.ok:
-        report = markdown_report(args, generation_results, [], [], [], None, root)
-        report_path = root / args.report
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(report, encoding="utf-8")
-        print(f"FAIL executable zipper context invariant: {executable_context_result.note}", file=sys.stderr)
-        return 1
-    transform_replacement_result = validate_transform_replacement_acceptance(artifacts, root)
-    generation_results.append(transform_replacement_result)
-    if not transform_replacement_result.ok:
-        report = markdown_report(args, generation_results, [], [], [], None, root)
-        report_path = root / args.report
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(report, encoding="utf-8")
-        print(f"FAIL transform replacement invariant: {transform_replacement_result.note}", file=sys.stderr)
-        return 1
     termination_result = validate_termination_artifacts(root)
     generation_results.append(termination_result)
     if not termination_result.ok:
@@ -3684,15 +3180,6 @@ def main(argv: Sequence[str]) -> int:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(report, encoding="utf-8")
         print(f"FAIL termination proof artifact invariant: {termination_result.note}", file=sys.stderr)
-        return 1
-    range_acceptance_result = validate_range_acceptance(artifacts, root)
-    generation_results.append(range_acceptance_result)
-    if not range_acceptance_result.ok:
-        report = markdown_report(args, generation_results, [], [], [], None, root)
-        report_path = root / args.report
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(report, encoding="utf-8")
-        print(f"FAIL Range acceptance invariant: {range_acceptance_result.note}", file=sys.stderr)
         return 1
     op_manifest_result = generate_operational_rule_manifest(root, artifacts, root / args.operational_manifest)
     generation_results.append(op_manifest_result)
@@ -3712,6 +3199,26 @@ def main(argv: Sequence[str]) -> int:
         report_path.write_text(report, encoding="utf-8")
         print(f"FAIL operational manifest closure invariant: {op_manifest_closed_result.note}", file=sys.stderr)
         return 1
+    required_operational_result = validate_required_operational_coverage(root / args.operational_manifest)
+    generation_results.append(required_operational_result)
+    if not required_operational_result.ok:
+        report = markdown_report(args, generation_results, [], [], [], None, root)
+        report_path = root / args.report
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        report_path.write_text(report, encoding="utf-8")
+        print(f"FAIL required operational family coverage: {required_operational_result.note}", file=sys.stderr)
+        return 1
+    if not args.no_freshness_check:
+        freshness_after = snapshot_generated(root, freshness_paths)
+        freshness_result = generated_freshness_result(freshness_before, freshness_after)
+        generation_results.append(freshness_result)
+        if not freshness_result.ok:
+            report = markdown_report(args, generation_results, [], [], [], None, root)
+            report_path = root / args.report
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(report, encoding="utf-8")
+            print(f"FAIL generated artifact freshness: {freshness_result.note}", file=sys.stderr)
+            return 1
     vampire_artifacts = [a for a in artifacts if a.kind == "vampire"]
     z3_artifacts = [a for a in artifacts if a.kind == "z3"]
     egg_artifacts = [a for a in artifacts if a.kind == "egg"]
@@ -3723,10 +3230,14 @@ def main(argv: Sequence[str]) -> int:
     if not args.no_z3 and not z3:
         print("z3 not found on PATH", file=sys.stderr)
         return 2
-    vampire_candidate = Path(args.vampire)
-    vampire = str(vampire_candidate) if vampire_candidate.exists() else shutil.which("vampire")
+    configured_vampire = args.vampire or os.environ.get("VAMPIRE")
+    if configured_vampire:
+        vampire_candidate = Path(configured_vampire)
+        vampire = str(vampire_candidate) if vampire_candidate.exists() else shutil.which(configured_vampire)
+    else:
+        vampire = shutil.which("vampire")
     if not args.no_vampire and not vampire:
-        print("vampire not found on PATH and --vampire does not exist", file=sys.stderr)
+        print("vampire not found via --vampire, VAMPIRE, or PATH", file=sys.stderr)
         return 2
     if args.require_vampire and not vampire:
         print("vampire not found on PATH", file=sys.stderr)
@@ -3753,8 +3264,6 @@ def main(argv: Sequence[str]) -> int:
 
     egg_results: list[Result] = []
     if not args.no_egg:
-        if not args.no_egg_generation:
-            generation_results.append(run_scala_egg_generator(root))
         egglog = shutil.which("egglog")
         if not egglog:
             egg_results.append(Result("egglog", "available", "missing", False, "egglog", "egglog not found on PATH"))

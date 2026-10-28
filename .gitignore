@@ -12,3 +12,6 @@ fuzzer_full_backend_verify_zipper_20x20_after/
 .scala-build
 
 .DS_Store
+
+# Ephemeral full-open SMT obligations regenerated and checked by every full proof run.
+proofs/open/smt2/*_full_open_*.smt2

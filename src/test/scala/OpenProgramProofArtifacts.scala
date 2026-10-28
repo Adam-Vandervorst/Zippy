@@ -1,8 +1,11 @@
+package morkl
+
 import morkl.ProofArtifacts as PA
 import morkl.Syntax.{*, given}
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path as JPath, Paths}
+import java.security.MessageDigest
 import scala.collection.mutable
 
 case class OpenProgramCase(name: String,
@@ -34,6 +37,8 @@ case class OpenProgramSkip(caseName: String, relation: String, reason: String)
 object OpenProgramProofArtifacts:
   private val OutDir: JPath = Paths.get("proofs/open")
   private val Manifest: JPath = OutDir.resolve("proof_manifest.tsv")
+  private val SlidingPuzzleWitnessNote =
+    "Non-vacuity witnesses: bounded translated source/optimizer/graph relations retain TL.1.2.3 -R-> TR.1.2.3, TR.1.2.3 -L-> TL.1.2.3, TL.1.2.3 -D-> BL.2.1.3, and BL.2.1.3 -U-> TL.1.2.3."
 
   case class Artifact(kind: String, name: String, expected: String, artifact: JPath, note: String = "")
 
@@ -146,7 +151,6 @@ object OpenProgramProofArtifacts:
       alphabet = Vector("complete", "delta", "edge", "path") ++ datalogFullNodes,
       maxLen = 4,
       explicitUniverse = Some(datalogUniverse(datalogFullNodes)),
-      relations = Set.empty,
       note = "Full semi-naive transitive-closure routine over arbitrary bounded edge data on a shape-aware node universe.",
     )
 
@@ -217,8 +221,7 @@ object OpenProgramProofArtifacts:
       alphabet = Vector("TL", "TR", "BL", "BR", "U", "D", "L", "R", "_", "0", "1", "2", "3"),
       maxLen = 4,
       explicitUniverse = Some(slidingPuzzle2x2Universe),
-      relations = Set.empty,
-      note = "Full pure 2x2 sliding-puzzle transition routine over arbitrary bounded state-frontier data.",
+      note = s"Full pure 2x2 sliding-puzzle step syntax over arbitrary inputs inside a focused path universe; this is not the complete 24-state transition relation, and move-table constants outside the bound encode as zero. $SlidingPuzzleWitnessNote",
     )
 
     val nqueens = OpenProgramCase(
@@ -248,12 +251,13 @@ object OpenProgramProofArtifacts:
     val out = mutable.LinkedHashSet.empty[PA.PathTuple]
     out += Vector.empty
     for path <- paths do
-      var i = 0
-      while i <= path.length do
-        out += path.take(i)
-        out += path.drop(i)
-        i += 1
-      out += path
+      // Every emitter-side child/tail operation must remain inside the explicit
+      // universe, including a tail of a prefix introduced by this closure.
+      // All contiguous slices are exactly the prefix-and-suffix fixed point.
+      for
+        start <- 0 to path.length
+        end <- start to path.length
+      do out += path.slice(start, end)
     out.toVector.sortWith(comparePathTuples(_, _) < 0)
 
   private def datalogUniverse(nodes: Vector[String]): Vector[PA.PathTuple] =
@@ -312,26 +316,11 @@ object OpenProgramProofArtifacts:
   private def slidingPuzzle2x2Universe: Vector[PA.PathTuple] =
     val locations = Vector("TL", "TR", "BL", "BR")
     val locIndex = locations.zipWithIndex.toMap
-    val legalMoves = Vector(
-      ("TL", "R", "TR"),
-      ("TL", "D", "BL"),
-      ("TR", "L", "TL"),
-      ("TR", "D", "BR"),
-      ("BL", "R", "BR"),
-      ("BL", "U", "TL"),
-      ("BR", "L", "BL"),
-      ("BR", "U", "TR"),
-    )
-    val tiles = Vector("1", "2", "3")
     val paths = Vector.newBuilder[PA.PathTuple]
-    def move(state: Vector[Int], dst: String): Vector[Int] =
-      val blank = state.indexOf(0)
-      val dstIndex = locIndex(dst)
-      state.updated(blank, state(dstIndex)).updated(dstIndex, 0)
     val seed = Vector(0, 1, 2, 3)
-    val proofStates =
-      (seed +: legalMoves.filter(_._1 == "TL").map((_, _, dst) => move(seed, dst))).distinct
-    for state <- proofStates do
+    val movedRight = Vector(1, 0, 2, 3)
+    val movedDown = Vector(2, 1, 0, 3)
+    for state <- Vector(seed, movedRight, movedDown) do
       val statePath = SlidingPuzzleExample.pathState(2, state).items.map(_.show).toVector
       paths += statePath
       paths += statePath.tail
@@ -339,25 +328,89 @@ object OpenProgramProofArtifacts:
       for loc <- locations do
         val tile = if loc == blankLoc then "_" else state(locIndex(loc)).toString
         paths += tuple(loc, tile)
-      for (_, action, dst) <- legalMoves.filter(_._1 == blankLoc) do
-        for loc <- locations do
-          val tile = if loc == blankLoc then "_" else state(locIndex(loc)).toString
-          paths += tuple(action, dst, loc, tile)
-    for
-      loc <- locations
-      tile <- "_" +: tiles
-    do paths += tuple(loc, tile)
-    for
-      (_, action, dst) <- legalMoves
-      loc <- locations
-      tile <- "_" +: tiles
-    do paths += tuple(action, dst, loc, tile)
-    for (loc, action, dst) <- legalMoves do
-      paths += tuple(loc, dst)
-      paths += tuple(loc, action)
-      paths += tuple(loc, action, loc, dst)
-      paths += tuple(loc, action, dst, loc)
+
+    // Keep a complete transition and its inverse on each board axis instead of
+    // the former Cartesian product of every move, location, and tile. Both the
+    // move-map relation and the actual action.destination.tile assignment stage
+    // are retained for every cell.
+    val boardA = Vector("TL" -> "_", "TR" -> "1", "BL" -> "2", "BR" -> "3")
+    val boardB = Vector("TL" -> "1", "TR" -> "_", "BL" -> "2", "BR" -> "3")
+    val boardC = Vector("TL" -> "2", "TR" -> "1", "BL" -> "_", "BR" -> "3")
+    val witnessMoves = Vector(
+      ("TL", "R", boardA, Vector("TL" -> "TR", "TR" -> "TL", "BL" -> "BL", "BR" -> "BR")),
+      ("TR", "L", boardB, Vector("TL" -> "TR", "TR" -> "TL", "BL" -> "BL", "BR" -> "BR")),
+      ("TL", "D", boardA, Vector("TL" -> "BL", "BL" -> "TL", "TR" -> "TR", "BR" -> "BR")),
+      ("BL", "U", boardC, Vector("TL" -> "BL", "BL" -> "TL", "TR" -> "TR", "BR" -> "BR")),
+    )
+    for (oldBlank, action, board, moveMap) <- witnessMoves do
+      val moveByLocation = moveMap.toMap
+      for (loc, tile) <- board do
+        paths += tuple(action, moveByLocation(loc), tile)
+      for (loc, dst) <- moveMap do
+        paths += tuple(oldBlank, action, loc, dst)
+        paths += tuple(loc, dst)
+      paths += tuple(oldBlank, action)
+    for loc <- locations do paths += tuple(loc, loc)
     closeUniverse(paths.result())
+
+  private def validateSlidingPuzzleWitness(): Unit =
+    val states = Vector(
+      SlidingPuzzleExample.pathState(2, Vector(0, 1, 2, 3)),
+      SlidingPuzzleExample.pathState(2, Vector(1, 0, 2, 3)),
+      SlidingPuzzleExample.pathState(2, Vector(2, 1, 0, 3)),
+    )
+    val directedEdges = Vector(
+      states(0) -> states(1),
+      states(1) -> states(0),
+      states(0) -> states(2),
+      states(2) -> states(0),
+    )
+    for (source, target) <- directedEdges do
+      val output = eval(SlidingPuzzleExample.step(2, Space.Literal(SpaceValue(source))))(using
+        pc = PathContext.emptyMap,
+        sc = SpaceContextMap(Map.empty),
+        rc = SlidingPuzzleExample.context(2),
+      )
+      require(output.paths.contains(target),
+        s"sliding-puzzle production witness ${source.show} -> ${target.show} disappeared: got ${output.pretty}")
+    val universe = slidingPuzzle2x2Universe.toSet
+    require(states.forall(path => universe.contains(pathTuple(path))),
+      "sliding-puzzle full-open universe must retain all three production witness states")
+
+  private def validateBoundedSlidingPuzzleRelations(relations: Vector[OpenProgramRelation]): Unit =
+    val states = Vector(
+      tuple("TL", "1", "2", "3"),
+      tuple("TR", "1", "2", "3"),
+      tuple("BL", "2", "1", "3"),
+    )
+    val directedEdges = Vector(states(0) -> states(1), states(1) -> states(0), states(0) -> states(2), states(2) -> states(0))
+    val symbolic = relations.filter(relation => OpenProgramCase.AllRelations(relation.relation))
+    require(symbolic.length == OpenProgramCase.AllRelations.size,
+      s"sliding-puzzle full-open must emit all three symbolic relations, got ${relations.map(_.relation).mkString(", ")}")
+    for
+      relation <- symbolic
+      (source, target) <- directedEdges
+    do
+      val variables = Map("S_states" -> Set(source))
+      val left = PA.evaluate(relation.lhs, relation.ctx, variables)
+      val right = PA.evaluate(relation.rhs, relation.ctx, variables)
+      require(left == right,
+        s"${relation.caseName}:${relation.relation} bounded witness mismatch for ${source.mkString(".")}: lhs=$left rhs=$right")
+      require(left.contains(target),
+        s"${relation.caseName}:${relation.relation} bounded witness ${source.mkString(".")} -> ${target.mkString(".")} was truncated: output=$left")
+
+    val expectedWitnesses = Map(
+      "bounded_witness_a_open" -> Set(states(1), states(2)),
+      "bounded_witness_b_open" -> Set(states(0)),
+      "bounded_witness_c_open" -> Set(states(0)),
+    )
+    for (name, expected) <- expectedWitnesses do
+      val relation = relations.find(_.relation == name).getOrElse(
+        throw IllegalArgumentException(s"sliding-puzzle full-open missing $name"))
+      val left = PA.evaluate(relation.lhs, relation.ctx)
+      val right = PA.evaluate(relation.rhs, relation.ctx)
+      require(left == expected && right == expected,
+        s"${relation.caseName}:$name must preserve its exact bounded output $expected, got lhs=$left rhs=$right")
 
   private def permutations[A](xs: Vector[A]): Vector[Vector[A]] =
     if xs.isEmpty then Vector(Vector.empty)
@@ -374,6 +427,7 @@ object OpenProgramProofArtifacts:
     Files.createDirectories(smtDir)
     Files.createDirectories(vampireDir)
     Files.createDirectories(manifest.getParent)
+    validateSlidingPuzzleWitness()
 
     val artifacts = Vector.newBuilder[Artifact]
     val skips = Vector.newBuilder[OpenProgramSkip]
@@ -382,6 +436,8 @@ object OpenProgramProofArtifacts:
     for c <- cases do
       println(s"generating open-program proof artifacts for ${c.name}")
       val built = build(c)
+      if c.name == "sliding-puzzle-2x2-full-open" then
+        validateBoundedSlidingPuzzleRelations(built._1)
       skips ++= built._2
       for relation <- built._1 do
         relations += relation
@@ -391,12 +447,12 @@ object OpenProgramProofArtifacts:
         artifacts += Artifact("z3", s"${c.name}:${relation.relation}", "unsat", smtPath, relation.note)
 
     for c <- fullProgramFolCases do
-      println(s"generating structural full-program FOL proof artifact for ${c.name}")
+      println(s"generating axiomatized structural full-program schema check for ${c.name}")
       val expanded = expandedRoutine(c)
       val tptpPath = vampireDir.resolve(s"${safe(c.name)}_structural_backend_equivalence.p")
       Files.writeString(tptpPath, renderStructuralFol(c, expanded.body), StandardCharsets.UTF_8)
       artifacts += Artifact("vampire", s"${c.name}:structural_backend_equivalence", "Theorem", tptpPath,
-        "Structural arbitrary-data FOL certificate: source, optimized source, trie, zipper, and graph backends agree for the generated full program term via constructor-specific lemmas.")
+        "Axiomatized structural FOL schema check: the generated program DAG is well formed and backend membership contracts are mutually consistent. Backend/source agreement is assumed per constructor, so this is not an independent implementation-equivalence proof.")
 
     val all = artifacts.result()
     val manifestText =
@@ -439,7 +495,7 @@ object OpenProgramProofArtifacts:
         "fixpoint-tail-full-program",
         Routine(RoutinePtr("fixpoint_tail_full_program"), Vector.empty, Vector(SpaceMention("seed")),
           tailFixpointBody),
-        note = "Small structural FOL witness for proved tail-template fixpoint lowering.",
+        note = "Small axiomatized structural FOL schema for tail-template fixpoint lowering.",
       ),
       OpenProgramCase(
         "aunt-full-program",
@@ -481,10 +537,23 @@ object OpenProgramProofArtifacts:
         note = "Full pure 2x2 sliding-puzzle transition with the complete 24-state permutation space as input.",
       ),
       OpenProgramCase(
+        "sliding-puzzle-4x4-full-program",
+        Routine(RoutinePtr("sliding_puzzle_4x4_full_program"), Vector.empty, Vector(SpaceMention("states")),
+          SlidingPuzzleExample.step(4, S"states")),
+        defs = SlidingPuzzleExample.routines(4).take(2),
+        note = "Full pure 15-puzzle (4x4) transition over arbitrary state-frontier data.",
+      ),
+      OpenProgramCase(
         "nqueens-4-full-program",
         queens4.copy(name = RoutinePtr("nqueens_4_full_program")),
         defs = queensDefs,
         note = "Full pure 4-queens program.",
+      ),
+      OpenProgramCase(
+        "scc-full-program",
+        SccCornerstone.sccRoutine,
+        defs = SccCornerstone.defs,
+        note = "Paper seedless divide-and-conquer SCC routine over arbitrary forward/backward edge relations and node sets; masked reachability is lowered to Fixpoint while the three shrinking recursive partitions remain explicit.",
       ),
     )
 
@@ -601,13 +670,14 @@ object OpenProgramProofArtifacts:
     val root = emitter.emitSpace(body)
     val constantAxioms = emitter.constantAxioms
     s"""% Generated by morkl.generateOpenProgramProofArtifacts
-       |% ${c.name}: structural arbitrary-data full-program backend equivalence
+       |% ${c.name}: axiomatized structural full-program schema consistency
        |% ${c.note}
        |%
-       |% This is the structural ATP tier: the generated full MORKL program is
-       |% emitted as a DAG of first-order terms. Backend equivalence is discharged
-       |% through constructor-specific implementation lemmas over arbitrary
-       |% interpretations of input spaces and path references. Iter is modeled with
+       |% This structural ATP tier emits the generated full MORKL program as a DAG
+       |% of first-order terms and checks that it is well formed under the declared
+       |% backend membership contracts. Source/backend agreement is axiomatized per
+       |% constructor below; consequently the final theorem is a schema-consistency
+       |% check, not an independent proof about the Scala implementations. Iter is modeled with
        |% an explicit binding environment; Range is modeled as source membership plus
        |% ordered-rank selection. The remaining hard operators are named explicitly
        |% as shared semantic predicates rather than hidden behind bounded enumeration.
@@ -700,9 +770,9 @@ object OpenProgramProofArtifacts:
        |
        |$backendAxioms
        |
-       |% Per-constructor implementation equivalence lemmas. These are the ATP
-       |% bias for large open programs: each backend proves one constructor
-       |% against source semantics, then full program DAGs compose those lemmas.
+       |% Per-constructor backend/source agreement axioms. They make the generated
+       |% whole-program theorem a contract-composition consistency check; they are
+       |% not independently derived implementation-equivalence lemmas.
        |$equivalenceAxioms
        |""".stripMargin
 
@@ -863,7 +933,7 @@ object OpenProgramProofArtifacts:
           translate(lhsSpace),
           translate(rhsSpace),
           ctx,
-          note,
+          Vector(note, c.note).filter(_.nonEmpty).mkString(" "),
         )
       catch
         case e: Throwable =>
@@ -899,10 +969,176 @@ object OpenProgramProofArtifacts:
         graphRoundTrip(expanded, optimizeGraph = true)
       }
 
+    if c.name == "sliding-puzzle-2x2-full-open" then
+      val stateA = SlidingPuzzleExample.pathState(2, Vector(0, 1, 2, 3))
+      val stateB = SlidingPuzzleExample.pathState(2, Vector(1, 0, 2, 3))
+      val stateC = SlidingPuzzleExample.pathState(2, Vector(2, 1, 0, 3))
+      val witnesses = Vector(
+        ("bounded_witness_a_open", stateA, SpaceValue(stateB, stateC), "A=TL.1.2.3 has exact bounded output {TR.1.2.3,BL.2.1.3}; exercises R,D."),
+        ("bounded_witness_b_open", stateB, SpaceValue(stateA), "B=TR.1.2.3 has exact bounded output {TL.1.2.3}; exercises L."),
+        ("bounded_witness_c_open", stateC, SpaceValue(stateA), "C=BL.2.1.3 has exact bounded output {TL.1.2.3}; exercises U."),
+      )
+      for (name, input, expected, note) <- witnesses do
+        val concrete = subs(expanded.body)(spost = {
+          case Space.Mention(sm) if sm.s == "states" => Space.Literal(SpaceValue(input))
+        })
+        attempt(name, s"expanded_source(${input.show})", s"exact_expected(${expected.pretty})",
+          s"Bounded translated non-vacuity certificate. $note")(concrete)(Space.Literal(expected))
+
     relations.result() -> skips.result()
 
   private case class TranslateEnv(pathVars: Map[PathRef, PA.SpaceExpr] = Map.empty,
                                   spaceVars: Map[SpaceMention, PA.SpaceExpr] = Map.empty)
+
+  private def translationCacheTag(kind: String, syntax: Space, env: TranslateEnv): String =
+    val md = MessageDigest.getInstance("SHA-256")
+    val charBuffer = Array.ofDim[Byte](8192)
+    def add(value: String): Unit =
+      // Length-framed UTF-16 code units avoid allocating a second full byte
+      // array for a potentially large Raw SMT term.
+      md.update((value.length >>> 24).toByte)
+      md.update((value.length >>> 16).toByte)
+      md.update((value.length >>> 8).toByte)
+      md.update(value.length.toByte)
+      var offset = 0
+      while offset < value.length do
+        val chars = math.min(value.length - offset, charBuffer.length / 2)
+        var i = 0
+        while i < chars do
+          val ch = value.charAt(offset + i)
+          charBuffer(2 * i) = (ch.toInt >>> 8).toByte
+          charBuffer(2 * i + 1) = ch.toByte
+          i += 1
+        md.update(charBuffer, 0, chars * 2)
+        offset += chars
+
+    def addBinding(expr: PA.SpaceExpr): Unit = expr match
+      case PA.Var(name) =>
+        add("binding-var")
+        add(name)
+      case PA.Raw(term, names) =>
+        add("binding-raw")
+        add(term)
+        val orderedNames = names.toVector.sorted
+        add(orderedNames.length.toString)
+        orderedNames.foreach(add)
+      case PA.Const(paths) =>
+        add("binding-const")
+        val ordered = paths.sortWith(comparePathTuples(_, _) < 0)
+        add(ordered.length.toString)
+        ordered.foreach { path =>
+          add(path.length.toString)
+          path.foreach(add)
+        }
+      case other =>
+        throw IllegalArgumentException(
+          s"open-proof binder environment contains unsupported ${other.getClass.getSimpleName}; expected a symbolic variable, raw binding, or singleton constant")
+
+    def addPath(path: morkl.Path): Unit = path match
+      case morkl.Path.Deref(ref) =>
+        add("path-deref")
+        add(ref.s)
+      case morkl.Path.Constant(value) =>
+        add("path-constant")
+        add(value.items.length.toString)
+        value.items.foreach(item => add(item.show))
+      case morkl.Path.Concat(left, right) =>
+        add("path-concat")
+        addPath(left)
+        addPath(right)
+      case morkl.Path.GroundedPP(_, _) | morkl.Path.GroundedSP(_, _) =>
+        throw UnsupportedOperationException("grounded path expression is not open-proof digestible")
+
+    // Feed the syntax tree directly into the digest. Calling `Space.show` here
+    // materialized the complete expanded puzzle program as one giant String;
+    // that transient copy alone exhausted the documented 1.5 GiB generator
+    // heap. The length-framed traversal is equally deterministic and keeps
+    // peak memory proportional to recursion depth rather than output size.
+    def addSpace(space: Space): Unit = space match
+      case Space.Empty => add("space-empty")
+      case Space.Call(routine, refs, mentions) =>
+        add("space-call")
+        add(routine.s)
+        add(refs.length.toString)
+        refs.foreach(addPath)
+        add(mentions.length.toString)
+        mentions.foreach(addSpace)
+      case Space.Mention(mention) =>
+        add("space-mention")
+        add(mention.s)
+      case Space.Singleton(path) =>
+        add("space-singleton")
+        addPath(path)
+      case Space.Literal(value) =>
+        add("space-literal")
+        val paths = value.paths.toVector.map(pathTuple).sortWith(comparePathTuples(_, _) < 0)
+        add(paths.length.toString)
+        paths.foreach { path =>
+          add(path.length.toString)
+          path.foreach(add)
+        }
+      case Space.Union(left, right) =>
+        add("space-union"); addSpace(left); addSpace(right)
+      case Space.Intersection(left, right) =>
+        add("space-intersection"); addSpace(left); addSpace(right)
+      case Space.Subtraction(left, right) =>
+        add("space-subtraction"); addSpace(left); addSpace(right)
+      case Space.Restriction(left, right) =>
+        add("space-restriction"); addSpace(left); addSpace(right)
+      case Space.Raffination(left, right) =>
+        add("space-raffination"); addSpace(left); addSpace(right)
+      case Space.Composition(left, right) =>
+        add("space-composition"); addSpace(left); addSpace(right)
+      case Space.Iteration(source, symbol, rest, templates) =>
+        add("space-iteration")
+        addSpace(source)
+        add(symbol.s)
+        add(rest.s)
+        addSpace(templates)
+      case Space.Fold(_, _, _, _, _, _, _) =>
+        throw UnsupportedOperationException("Fold is not open-proof digestible because it is not translatable")
+      case Space.Fixpoint(initial, variable, step) =>
+        add("space-fixpoint")
+        addSpace(initial)
+        add(variable.s)
+        addSpace(step)
+      case Space.Wrap(source, prefix) =>
+        add("space-wrap"); addSpace(source); addPath(prefix)
+      case Space.Unwrap(source, prefix) =>
+        add("space-unwrap"); addSpace(source); addPath(prefix)
+      case Space.TailsUnion(source) =>
+        add("space-tails-union"); addSpace(source)
+      case Space.TailsIntersection(source) =>
+        add("space-tails-intersection"); addSpace(source)
+      case Space.PrefixClosure(source) =>
+        add("space-prefix-closure"); addSpace(source)
+      case Space.SuffixClosure(source) =>
+        add("space-suffix-closure"); addSpace(source)
+      case Space.TailsClosure(source) =>
+        add("space-tails-closure"); addSpace(source)
+      case Space.Range(source, start, end) =>
+        add("space-range"); add(start.toString); add(end.toString); addSpace(source)
+      case Space.GroundedPS(_, _) | Space.GroundedSS(_, _) =>
+        throw UnsupportedOperationException("grounded space expression is not open-proof digestible")
+
+    add("open-space-digest-v1")
+    add(kind)
+    addSpace(syntax)
+    val pathBindings = env.pathVars.toVector.sortBy(_._1.s)
+    add(pathBindings.length.toString)
+    pathBindings.foreach { (name, value) =>
+      add("path")
+      add(name.s)
+      addBinding(value)
+    }
+    val spaceBindings = env.spaceVars.toVector.sortBy(_._1.s)
+    add(spaceBindings.length.toString)
+    spaceBindings.foreach { (name, value) =>
+      add("space")
+      add(name.s)
+      addBinding(value)
+    }
+    java.util.HexFormat.of().formatHex(md.digest())
 
   private def translate(s: Space): PA.SpaceExpr =
     translateSpace(s, TranslateEnv())
@@ -948,6 +1184,7 @@ object OpenProgramProofArtifacts:
           spaceVars = env.spaceVars + (rest -> tail),
         )),
         label = safe(symbol.s),
+        cacheTag = Some(translationCacheTag("iter", templates, env)),
       )
     case Space.Fold(_, _, _, _, _, _, _) =>
       throw UnsupportedOperationException("Fold is not yet in the open-program bounded proof translator")
@@ -956,6 +1193,7 @@ object OpenProgramProofArtifacts:
         translateSpace(initial, env),
         state => translateSpace(step, env.copy(spaceVars = env.spaceVars + (variable -> state))),
         label = safe(variable.s),
+        cacheTag = Some(translationCacheTag("fix", step, env)),
       )
     case Space.Wrap(src, p) =>
       PA.Product(translatePath(p, env), translateSpace(src, env))
@@ -1014,8 +1252,11 @@ object OpenProgramProofArtifacts:
     c.defs.map(r => r.name -> r).toMap.lift.unlift
 
   private def contextFor(c: OpenProgramCase, lhs: Space, rhs: Space): PA.Ctx =
-    val constants = constantPaths(lhs) ++ constantPaths(rhs)
-    val explicit = c.explicitUniverse.map(paths => closeUniverse(paths ++ constants.map(pathTuple)))
+    // An explicit universe is an intentional proof bound. Pulling every literal
+    // from the full expanded syntax back into it defeated focusing (notably for
+    // the puzzle move table) and recreated the enormous Cartesian encoding.
+    // Constants outside the bound correctly encode as the empty bit-vector.
+    val explicit = c.explicitUniverse.map(closeUniverse)
     val explicitAlphabet = explicit.toVector.flatten.flatten.distinct
     val alphabet = (c.alphabet ++ explicitAlphabet ++ constantItems(lhs).toVector.sorted ++ constantItems(rhs).toVector.sorted)
       .filter(_.nonEmpty)
@@ -1320,6 +1561,7 @@ object OpenProgramProofArtifacts:
     lines += s"Generated Z3 obligations: ${relations.length}"
     lines += s"Generated structural FOL obligations: ${fullProgramFolCases.length}"
     lines += s"Skipped relations: ${skips.length}"
+    lines += "Structural FOL obligations are axiomatized program-DAG/schema consistency checks; per-constructor backend/source agreement is assumed, not independently proved. Executable Scala parity and bounded symbolic SMT provide the independent backend evidence."
     lines += ""
     lines += "## Generated"
     lines += ""

@@ -1,3 +1,5 @@
+package morkl
+
 import scala.collection.mutable
 import scala.util.Try
 
@@ -230,7 +232,7 @@ object Matching:
         val ppBody0 = pp - sym
         val renameS = activeFreeMentions(ssBody0, ppBody0)(rest.s)
         val renameP = activeFreeRefs(ssBody0, ppBody0)(sym.s)
-        val rest2 = if renameS then SpaceMention(freshS()) else rest
+        val rest2 = if renameS then SpaceMention(freshS()).known(rest.sizeHint) else rest
         val sym2 = if renameP then PathRef(freshP()).known(sym.lengthHint) else sym
         val body2 = if renameS || renameP then renameBound(body,
           if renameS then Map(rest.s -> rest2) else Map.empty,
@@ -243,7 +245,7 @@ object Matching:
         val ppBody0 = pp - acc - sym
         val freeS = activeFreeMentions(ssBody0, ppBody0)
         val freeP = activeFreeRefs(ssBody0, ppBody0)
-        val rest2 = if freeS(rest.s) then SpaceMention(freshS()) else rest
+        val rest2 = if freeS(rest.s) then SpaceMention(freshS()).known(rest.sizeHint) else rest
         val acc2 = if freeP(acc.s) then PathRef(freshP()).known(acc.lengthHint) else acc
         val sym2 = if freeP(sym.s) then PathRef(freshP()).known(sym.lengthHint) else sym
         val smap = List(rest.s -> rest2).filter((old, neu) => old != neu.s).toMap
@@ -259,7 +261,7 @@ object Matching:
         val initial2 = recs(initial, ss, pp)
         val ssStep0 = ss - variable
         val renameS = activeFreeMentions(ssStep0, pp)(variable.s)
-        val variable2 = if renameS then SpaceMention(freshS()) else variable
+        val variable2 = if renameS then SpaceMention(freshS()).known(variable.sizeHint) else variable
         val step2 = if renameS then renameBound(step, Map(variable.s -> variable2), Map.empty) else step
         Space.Fixpoint(initial2, variable2, recs(step2, ssStep0, pp))
       case Space.Wrap(src, p) => Space.Wrap(recs(src, ss, pp), recp(p, ss, pp))
@@ -273,7 +275,7 @@ object Matching:
       case Space.GroundedSS(src, f) => Space.GroundedSS(recs(src, ss, pp), f)
       case Space.Range(src, start, end) => Space.Range(recs(src, ss, pp), start, end)
 
-    recs(s, sm, pm)
+    ReferenceHints.tag(recs(s, sm, pm))
 
   def canon(s: Space): Space =
     val (pnames, snames) = spaceNames(s)
@@ -298,17 +300,17 @@ object Matching:
       case Space.Composition(a, b) => Space.Composition(recs(a, smap, pmap), recs(b, smap, pmap))
       case Space.Iteration(src, sym, rest, body) =>
         val sym2 = PathRef(freshP()).known(sym.lengthHint)
-        val rest2 = SpaceMention(freshS())
+        val rest2 = SpaceMention(freshS()).known(rest.sizeHint)
         Space.Iteration(recs(src, smap, pmap), sym2, rest2, recs(body, smap + (rest.s -> rest2), pmap + (sym.s -> sym2)))
       case Space.Fold(src, initial, acc, sym, rest, body, update) =>
         val acc2 = PathRef(freshP()).known(acc.lengthHint)
         val sym2 = PathRef(freshP()).known(sym.lengthHint)
-        val rest2 = SpaceMention(freshS())
+        val rest2 = SpaceMention(freshS()).known(rest.sizeHint)
         val smap2 = smap + (rest.s -> rest2)
         val pmap2 = pmap + (acc.s -> acc2) + (sym.s -> sym2)
         Space.Fold(recs(src, smap, pmap), recp(initial, smap, pmap), acc2, sym2, rest2, recs(body, smap2, pmap2), recp(update, smap2, pmap2))
       case Space.Fixpoint(initial, variable, step) =>
-        val variable2 = SpaceMention(freshS())
+        val variable2 = SpaceMention(freshS()).known(variable.sizeHint)
         Space.Fixpoint(recs(initial, smap, pmap), variable2, recs(step, smap + (variable.s -> variable2), pmap))
       case Space.Wrap(src, p) => Space.Wrap(recs(src, smap, pmap), recp(p, smap, pmap))
       case Space.Unwrap(src, p) => Space.Unwrap(recs(src, smap, pmap), recp(p, smap, pmap))
@@ -320,7 +322,7 @@ object Matching:
       case Space.GroundedPS(p, f) => Space.GroundedPS(recp(p, smap, pmap), f)
       case Space.GroundedSS(src, f) => Space.GroundedSS(recs(src, smap, pmap), f)
       case Space.Range(src, start, end) => Space.Range(recs(src, smap, pmap), start, end)
-    recs(s, Map.empty, Map.empty)
+    ReferenceHints.tag(recs(s, Map.empty, Map.empty))
 
   def alphaEqual(a: Space, b: Space): Boolean = canon(a) == canon(b)
 
@@ -609,9 +611,17 @@ object Matching:
     val sholes = mutable.LinkedHashMap.empty[(Space, Space), SpaceMention]
     val pholes = mutable.LinkedHashMap.empty[(Path, Path), PathRef]
     def holeS(x: Space, y: Space): Space =
-      Space.Mention(sholes.getOrElseUpdate((x, y), SpaceMention(freshS())))
+      val commonSize = ReferenceHints.spaceSize(x).filter(size => ReferenceHints.spaceSize(y).contains(size))
+      Space.Mention(sholes.getOrElseUpdate((x, y), {
+        val fresh = SpaceMention(freshS())
+        commonSize.fold(fresh)(fresh.known)
+      }))
     def holeP(x: Path, y: Path): Path =
-      Path.Deref(pholes.getOrElseUpdate((x, y), PathRef(freshP())))
+      val commonLength = ReferenceHints.pathLength(x).filter(length => ReferenceHints.pathLength(y).contains(length))
+      Path.Deref(pholes.getOrElseUpdate((x, y), {
+        val fresh = PathRef(freshP())
+        commonLength.fold(fresh)(fresh.known)
+      }))
     def gp(x: Path, y: Path): Path =
       if x == y then x
       else (x, y) match
@@ -681,6 +691,21 @@ case class SupercompiledProgram(top: Space,
                                 graph: Option[RecursiveOpGraph],
                                 graphOptimization: Option[GraphOptimizeResult] = None):
   def env: PartialFunction[RoutinePtr, Routine] = routines
+  def resultSize(
+    assumptions: Map[SpaceMention, ResultSizeEstimate] = Map.empty
+  ): ResultSizeEstimate = ResultSpaceSize.estimate(top, assumptions)
+
+  def resultPathLength(
+    assumptions: Map[SpaceMention, PathLengthEstimate] = Map.empty,
+    pathAssumptions: Map[PathRef, PathLengthEstimate] = Map.empty,
+    sizeAssumptions: Map[SpaceMention, ResultSizeEstimate] = Map.empty
+  ): PathLengthEstimate =
+    ResultPathLength.estimate(top, assumptions, pathAssumptions, sizeAssumptions)
+
+  def spatialType(
+    assumptions: SpatialAssumptions = SpatialAssumptions(),
+    routineInputs: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
+  ): SpatialType = SpatialTypeAnalysis.output(top, assumptions, routineInputs)
 
 object SC:
   import Space.*

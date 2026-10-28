@@ -1,3 +1,5 @@
+package morkl
+
 object ZipperEggOperatorWitness:
 
   private def part0(id: String): String =

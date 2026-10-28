@@ -1,9 +1,12 @@
+package morkl
+
 import scala.util.{Random, Try}
 import scala.collection.mutable.{ArrayBuffer, LongMap, Stack}
 import scala.collection.Searching
 import java.util.Base64
 import java.util.Locale
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import scala.language.implicitConversions
 
 
@@ -26,7 +29,8 @@ object PathItem:
 
 case class PathRef(s: String):
   val lengthHint = -1
-  def known(length: Int): PathRef = new PathRef(s) { override val lengthHint = length }
+  def known(length: Int): PathRef =
+    if lengthHint == length then this else new PathRef(s) { override val lengthHint = length }
 
 enum Path:
   case Deref(pr: PathRef)
@@ -173,7 +177,10 @@ object SpaceContext:
     val pm = m
     override def resolve(pr: SpaceMention): SpaceValue = pm(pr)
 
-case class SpaceMention(s: String)
+case class SpaceMention(s: String):
+  val sizeHint = -1
+  def known(size: Int): SpaceMention =
+    if sizeHint == size then this else new SpaceMention(s) { override val sizeHint = size }
 
 enum Space:
   case Empty
@@ -230,6 +237,23 @@ enum Space:
     case Space.Range(z, start, end) => s"Range(${z.show}, $start, $end)"
 
 object RangeBounds:
+  /** A source-cardinality-independent upper bound for a normalized range,
+    * when one exists.  Open prefixes such as `(1, 0)` and drop-last ranges
+    * such as `(0, -1)` can grow with the source and therefore return `None`.
+    * The arithmetic is performed as `BigInt` so even `Int.MinValue` bounds
+    * cannot overflow while computing a suffix/window width.
+    */
+  def cardinalityUpperBound(start: Int, end: Int): Option[BigInt] =
+    val startValue = BigInt(start)
+    val endValue = BigInt(end)
+    if start == 0 && end > 0 then Some(endValue)
+    else if start > 0 && end > 0 then Some((endValue - startValue).max(BigInt(0)))
+    else if start < 0 && end == 0 then Some(-startValue)
+    else if start < 0 && end < 0 then Some((endValue - startValue).max(BigInt(0)))
+    else if start < 0 && end > 0 then
+      Some((-startValue).min(endValue - 1).max(BigInt(0)))
+    else None
+
   def normalize(size: Int, start: Int, end: Int): (Int, Int) =
     def lower(bound: Int): Int =
       if bound == 0 then 0
@@ -244,6 +268,222 @@ object RangeBounds:
     val lo = lower(start).max(0).min(size)
     val hi = upper(end).max(0).min(size)
     if hi <= lo then 0 -> 0 else lo -> hi
+
+/** Exact, optional metadata for references bound inside a space expression.
+  * Hints never participate in reference identity: equality remains name-based,
+  * and `-1` means unknown.  This pass makes binder knowledge visible on every
+  * corresponding dereference/mention, including after alpha-renaming and graph
+  * reconstruction.
+  */
+object ReferenceHints:
+  def pathLength(path: Path): Option[Int] = path match
+    case Path.Deref(ref) => Option.when(ref.lengthHint >= 0)(ref.lengthHint)
+    case Path.Constant(PathValue(items)) => Some(items.length)
+    case Path.Concat(left, right) =>
+      for
+        l <- pathLength(left)
+        r <- pathLength(right)
+      yield l + r
+    case Path.GroundedPP(_, _) | Path.GroundedSP(_, _) => None
+
+  def spaceSize(space: Space): Option[Int] = space match
+    case Space.Empty => Some(0)
+    case Space.Mention(mention) => Option.when(mention.sizeHint >= 0)(mention.sizeHint)
+    case Space.Singleton(_) => Some(1)
+    case Space.Literal(value) => Some(value.paths.size)
+    case Space.Union(left, right) if left == right => spaceSize(left)
+    case Space.Union(left, right) => (spaceSize(left), spaceSize(right)) match
+      case (Some(0), size) => size
+      case (size, Some(0)) => size
+      case _ => None
+    case Space.Intersection(left, right) if left == right => spaceSize(left)
+    case Space.Intersection(left, right) => (spaceSize(left), spaceSize(right)) match
+      case (Some(0), _) | (_, Some(0)) => Some(0)
+      case _ => None
+    case Space.Subtraction(left, right) if left == right => Some(0)
+    case Space.Subtraction(left, right) => (spaceSize(left), spaceSize(right)) match
+      case (Some(0), _) => Some(0)
+      case (size, Some(0)) => size
+      case _ => None
+    case Space.Restriction(left, prefixes) => (spaceSize(left), spaceSize(prefixes)) match
+      case (Some(0), _) | (_, Some(0)) => Some(0)
+      case _ => None
+    case Space.Raffination(left, prefixes) => (spaceSize(left), spaceSize(prefixes)) match
+      case (Some(0), _) => Some(0)
+      case (size, Some(0)) => size
+      case _ => None
+    case Space.Composition(left, right) => (spaceSize(left), spaceSize(right)) match
+      case (Some(0), _) | (_, Some(0)) => Some(0)
+      case (Some(1), size) => size
+      case (size, Some(1)) => size
+      case _ => None
+    case Space.Wrap(src, _) => spaceSize(src)
+    case Space.Range(src, start, end) => spaceSize(src).map { size =>
+      val (lo, hi) = RangeBounds.normalize(size, start, end)
+      hi - lo
+    }
+    case _ => None
+
+  private def headed(path: Path): Boolean = path match
+    case Path.Constant(PathValue(items)) => items.nonEmpty
+    case Path.Deref(ref) => ref.lengthHint > 0
+    case Path.Concat(left, right) => headed(left) || headed(right)
+    case _ => false
+
+  /** Exact size of every tail group, when it is uniform.  Epsilon contributes
+    * no group and therefore does not invalidate a uniform headed-group size.
+    */
+  private def uniformTailGroupSize(source: Space): Option[Int] = source match
+    case Space.Literal(SpaceValue(paths)) =>
+      val groupSizes = paths.iterator.collect { case PathValue(head :: tail) => head -> PathValue(tail) }
+        .toVector.groupMap(_._1)(_._2).valuesIterator.map(_.distinct.size).toSet
+      if groupSizes.size == 1 then groupSizes.headOption else None
+    case Space.Singleton(path) if headed(path) => Some(1)
+    case Space.Mention(mention) if mention.sizeHint == 1 => Some(1)
+    case _ => None
+
+  private def hinted(ref: PathRef, length: Option[Int]): PathRef =
+    length.filter(_ >= 0).fold(ref)(ref.known)
+
+  private def hinted(mention: SpaceMention, size: Option[Int]): SpaceMention =
+    size.filter(_ >= 0).fold(mention)(mention.known)
+
+  def tag(
+    space: Space,
+    initialPathHints: Map[PathRef, Int] = Map.empty,
+    initialSpaceHints: Map[SpaceMention, Int] = Map.empty
+  ): Space =
+    final class HintEnvironment(
+      val pathHints: Map[PathRef, Int],
+      val spaceHints: Map[SpaceMention, Int]
+    )
+    val pathMemo = java.util.IdentityHashMap[Path, java.util.IdentityHashMap[HintEnvironment, Path]]()
+    val spaceMemo = java.util.IdentityHashMap[Space, java.util.IdentityHashMap[HintEnvironment, Space]]()
+
+    def recp(path: Path, environment: HintEnvironment): Path =
+      var byEnvironment = pathMemo.get(path)
+      if byEnvironment == null then
+        byEnvironment = java.util.IdentityHashMap()
+        pathMemo.put(path, byEnvironment)
+      val cached = byEnvironment.get(environment)
+      if cached != null then cached
+      else
+        val tagged = recpUncached(path, environment)
+        byEnvironment.put(environment, tagged)
+        tagged
+
+    def recs(value: Space, environment: HintEnvironment): Space =
+      var byEnvironment = spaceMemo.get(value)
+      if byEnvironment == null then
+        byEnvironment = java.util.IdentityHashMap()
+        spaceMemo.put(value, byEnvironment)
+      val cached = byEnvironment.get(environment)
+      if cached != null then cached
+      else
+        val tagged = recsUncached(value, environment)
+        byEnvironment.put(environment, tagged)
+        tagged
+
+    def recpUncached(path: Path, environment: HintEnvironment): Path = path match
+      case Path.Deref(ref) => Path.Deref(hinted(ref, environment.pathHints.get(ref)))
+      case Path.Constant(_) => path
+      case Path.Concat(left, right) => Path.Concat(recp(left, environment), recp(right, environment))
+      case Path.GroundedPP(value, f) => Path.GroundedPP(recp(value, environment), f)
+      case Path.GroundedSP(value, f) => Path.GroundedSP(recs(value, environment), f)
+
+    def recsUncached(value: Space, environment: HintEnvironment): Space = value match
+      case Space.Empty | Space.Literal(_) => value
+      case Space.Mention(mention) => Space.Mention(hinted(mention, environment.spaceHints.get(mention)))
+      case Space.Call(routine, refs, mentions) =>
+        Space.Call(routine, refs.map(recp(_, environment)), mentions.map(recs(_, environment)))
+      case Space.Singleton(path) => Space.Singleton(recp(path, environment))
+      case Space.Union(left, right) => Space.Union(recs(left, environment), recs(right, environment))
+      case Space.Intersection(left, right) => Space.Intersection(recs(left, environment), recs(right, environment))
+      case Space.Subtraction(left, right) => Space.Subtraction(recs(left, environment), recs(right, environment))
+      case Space.Restriction(left, right) => Space.Restriction(recs(left, environment), recs(right, environment))
+      case Space.Raffination(left, right) => Space.Raffination(recs(left, environment), recs(right, environment))
+      case Space.Composition(left, right) => Space.Composition(recs(left, environment), recs(right, environment))
+      case Space.Iteration(src, symbol, rest, body) =>
+        val taggedSource = recs(src, environment)
+        val taggedSymbol = symbol.known(1)
+        val restSize = Option.when(rest.sizeHint >= 0)(rest.sizeHint).orElse(uniformTailGroupSize(taggedSource))
+        val taggedRest = hinted(rest, restSize)
+        val bodyEnvironment = HintEnvironment(
+          environment.pathHints.updated(symbol, 1),
+          restSize.fold(environment.spaceHints)(environment.spaceHints.updated(rest, _))
+        )
+        Space.Iteration(
+          taggedSource,
+          taggedSymbol,
+          taggedRest,
+          recs(body, bodyEnvironment)
+        )
+      case Space.Fold(src, initial, acc, symbol, rest, body, update) =>
+        val taggedSource = recs(src, environment)
+        val taggedInitial = recp(initial, environment)
+        val initialLength = pathLength(taggedInitial)
+        val updateProbeEnvironment = HintEnvironment(
+          environment.pathHints.updated(symbol, 1) ++ initialLength.map(acc -> _),
+          environment.spaceHints
+        )
+        val taggedUpdate0 = recp(update, updateProbeEnvironment)
+        val accumulatorLength =
+          val updateLength = pathLength(taggedUpdate0)
+          Option.when(initialLength.nonEmpty && initialLength == updateLength)(initialLength.get)
+            .orElse(Option.when(acc.lengthHint >= 0)(acc.lengthHint))
+        val taggedAcc = hinted(acc, accumulatorLength)
+        val taggedSymbol = symbol.known(1)
+        val restSize = Option.when(rest.sizeHint >= 0)(rest.sizeHint).orElse(uniformTailGroupSize(taggedSource))
+        val taggedRest = hinted(rest, restSize)
+        val bodyEnvironment = HintEnvironment(
+          environment.pathHints.updated(symbol, 1) ++ accumulatorLength.map(acc -> _),
+          restSize.fold(environment.spaceHints)(environment.spaceHints.updated(rest, _))
+        )
+        Space.Fold(
+          taggedSource,
+          taggedInitial,
+          taggedAcc,
+          taggedSymbol,
+          taggedRest,
+          recs(body, bodyEnvironment),
+          recp(update, bodyEnvironment)
+        )
+      case Space.Fixpoint(initial, variable, step) =>
+        val taggedInitial = recs(initial, environment)
+        val variableSize = Option.when(variable.sizeHint >= 0)(variable.sizeHint).orElse(step match
+          case Space.Mention(mention) if mention == variable => spaceSize(taggedInitial)
+          case _ => None
+        )
+        val taggedVariable = hinted(variable, variableSize)
+        Space.Fixpoint(
+          taggedInitial,
+          taggedVariable,
+          recs(step, HintEnvironment(
+            environment.pathHints,
+            variableSize.fold(environment.spaceHints)(environment.spaceHints.updated(variable, _))
+          ))
+        )
+      case Space.Wrap(src, prefix) => Space.Wrap(recs(src, environment), recp(prefix, environment))
+      case Space.Unwrap(src, prefix) => Space.Unwrap(recs(src, environment), recp(prefix, environment))
+      case Space.TailsUnion(src) => Space.TailsUnion(recs(src, environment))
+      case Space.TailsIntersection(src) => Space.TailsIntersection(recs(src, environment))
+      case Space.PrefixClosure(src) => Space.PrefixClosure(recs(src, environment))
+      case Space.SuffixClosure(src) => Space.SuffixClosure(recs(src, environment))
+      case Space.TailsClosure(src) => Space.TailsClosure(recs(src, environment))
+      case Space.GroundedPS(path, f) => Space.GroundedPS(recp(path, environment), f)
+      case Space.GroundedSS(src, f) => Space.GroundedSS(recs(src, environment), f)
+      case Space.Range(src, start, end) => Space.Range(recs(src, environment), start, end)
+
+    recs(space, HintEnvironment(initialPathHints, initialSpaceHints))
+
+  def tag(routine: Routine): Routine =
+    val pathHints = routine.refs.iterator.collect {
+      case ref if ref.lengthHint >= 0 => ref -> ref.lengthHint
+    }.toMap
+    val spaceHints = routine.mentions.iterator.collect {
+      case mention if mention.sizeHint >= 0 => mention -> mention.sizeHint
+    }.toMap
+    routine.copy(body = tag(routine.body, pathHints, spaceHints))
 
 
 case class SpaceValue(paths: Set[PathValue]):
@@ -393,7 +633,12 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
     case Space.Union(x, y) => recs(x) union recs(y)
     case Space.Intersection(x, y) => recs(x) intersect recs(y)
     case Space.Subtraction(x, y) => recs(x) removedAll recs(y)
-    case Space.Restriction(x_e, prefixes_e) => val prefixes = recs(prefixes_e); recs(x_e).filter(x => prefixes.exists(p => x.items.startsWith(p.items)))
+    case Space.Restriction(x_e, prefixes_e) =>
+      val prefixes = recs(prefixes_e)
+      recs(x_e).filter(x => prefixes.exists { p =>
+        ExecutorCostMeter.comparePath()
+        x.items.startsWith(p.items)
+      })
     case Space.Composition(x, y) =>
       val xs = recs(x)
       if xs.isEmpty then Set.empty
@@ -402,7 +647,10 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
         if ys.isEmpty then Set.empty
         else
           val out = Set.newBuilder[PathValue]
-          xs.foreach(e1 => ys.foreach(e2 => out += PathValue(e1.items ++ e2.items)))
+          xs.foreach(e1 => ys.foreach { e2 =>
+            ExecutorCostMeter.allocate()
+            out += PathValue(e1.items ++ e2.items)
+          })
           out.result()
 //    case Space.Wrap(src_e, p_e) => val p = recp(p_e); recs(src_e).map( sp => PathValue(p ++ sp.items))
 //    case Space.Unwrap(src_e, p_e) => val p = recp(p_e); recs(src_e).collect { case e if e.items.startsWith(p) => PathValue(e.items.drop(p.length)) }
@@ -446,6 +694,7 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
       }
       val out = Set.newBuilder[PathValue]
       groups.foreach { (h, r) =>
+        ExecutorCostMeter.round()
         out ++= eval(templates)(using pc.bind(symbol, h), sc.bind(rest, SpaceValue(r.toSet)), rc).paths
       }
       out.result()
@@ -460,6 +709,7 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
       }
       val out = Set.newBuilder[PathValue]
       for (h, r) <- groups.toSeq.sortBy(_._1) do
+        ExecutorCostMeter.round()
         val pctx = pc.bind(acc, accValue).bind(symbol, h)
         val sctx = sc.bind(rest, SpaceValue(r.toSet))
         out ++= eval(templates)(using pctx, sctx, rc).paths
@@ -469,6 +719,7 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
       var current = SpaceValue(recs(initial))
       var changed = true
       while changed do
+        ExecutorCostMeter.round()
         val stepped = eval(step)(using pc, sc.bind(variable, current), rc)
         val next = SpaceValue(current.paths union stepped.paths)
         changed = next != current
@@ -483,11 +734,27 @@ def eval(s: Space)(using pc: PathContext = PathContextMap(Map.empty), sc: SpaceC
       if hi <= lo then Set.empty
       else if lo == 0 && hi == values.size then values
       else values.toVector.sorted.slice(lo, hi).toSet
-  SpaceValue(recs(s))
+  val result = SpaceValue(recs(s))
+  ResultSpaceSizeAudit.observe(s, result)(using pc, sc, rc)
+  result
+
+enum GraphNodeConstantRole:
+  case Semantic, BinderName
+
+object GraphNodeConstantRole:
+  def forOperation(operation: String): GraphNodeConstantRole = operation match
+    case "Iteration" | "Fold" | "Fixpoint" | "ExtractPathRef" | "ExtractSpaceMention" => BinderName
+    case _ => Semantic
 
 case class Node[R](operation: String, constant: String, kind: "path" | "space", inputs: Vector[R]):
   def show: String = s"$operation[${constant}](${inputs.mkString(", ")}): $kind"
   def map[S](f: R => S): Node[S] = copy(inputs=inputs.map(f))
+  /** Binder uses have already been resolved to graph positions, which are the
+    * graph's de Bruijn coordinates. Only the display name is erased from an
+    * alpha signature; semantic payloads remain byte-for-byte significant. */
+  def alphaNormalized: Node[R] = GraphNodeConstantRole.forOperation(operation) match
+    case GraphNodeConstantRole.BinderName => copy(constant = "<binder>")
+    case GraphNodeConstantRole.Semantic => this
 class RecursiveOpGraph(var root: Node[(Int, Int)],
                        val parent: Option[RecursiveOpGraph],
                        val nodes: ArrayBuffer[Either[Node[(Int, Int)], RecursiveOpGraph]],
@@ -495,6 +762,11 @@ class RecursiveOpGraph(var root: Node[(Int, Int)],
   val literalPool: ArrayBuffer[SpaceValue] =
     if sharedLiteralPool != null then sharedLiteralPool
     else parent.map(_.literalPool).getOrElse(ArrayBuffer.empty[SpaceValue])
+  val pathReferenceHints = collection.mutable.HashMap.empty[String, Int]
+  val spaceReferenceHints = collection.mutable.HashMap.empty[String, Int]
+  def copyReferenceHintsFrom(source: RecursiveOpGraph): Unit =
+    pathReferenceHints ++= source.pathReferenceHints
+    spaceReferenceHints ++= source.spaceReferenceHints
   private val pathValueCache = collection.mutable.HashMap.empty[String, PathValue]
   private val intPathValueCache = collection.mutable.HashMap.empty[String, List[Int]]
   private val literalValueCache = collection.mutable.HashMap.empty[String, SpaceValue]
@@ -550,10 +822,13 @@ class RecursiveOpGraph(var root: Node[(Int, Int)],
     None
 
 def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpGraph =
-  val g = RecursiveOpGraph(Node("Routine", r.name.s, "space", Vector()), caller, ArrayBuffer.empty)
-  for (pr, i) <- r.refs.zipWithIndex do
+  val routine = ReferenceHints.tag(r)
+  val g = RecursiveOpGraph(Node("Routine", routine.name.s, "space", Vector()), caller, ArrayBuffer.empty)
+  for (pr, i) <- routine.refs.zipWithIndex do
+    if pr.lengthHint >= 0 then g.pathReferenceHints(pr.s) = pr.lengthHint
     g.store(Node("ExtractPathRef", pr.s, "path", Vector()))
-  for (sm, i) <- r.mentions.zipWithIndex do
+  for (sm, i) <- routine.mentions.zipWithIndex do
+    if sm.sizeHint >= 0 then g.spaceReferenceHints(sm.s) = sm.sizeHint
     g.store(Node("ExtractSpaceMention", sm.s, "space", Vector()))
 
   def ensureSpaceOutput(pos: (Int, Int)): Unit =
@@ -620,7 +895,7 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
       case Space.Iteration(src, symbol, rest, templates) =>
         val s = recs(src)
         val rog = transpile(Routine(
-          RoutinePtr(r.name.s + "_" + symbol.s),
+          RoutinePtr(routine.name.s + "_" + symbol.s),
           Vector(symbol),
           Vector(rest),
           templates
@@ -636,7 +911,7 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
             Space.Wrap(Space.Singleton(update), Path.Constant(GraphFoldTags.Update))
           )
         val rog = transpile(Routine(
-          RoutinePtr(r.name.s + "_fold_" + symbol.s),
+          RoutinePtr(routine.name.s + "_fold_" + symbol.s),
           Vector(acc, symbol),
           Vector(rest),
           packed
@@ -646,7 +921,7 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
       case Space.Fixpoint(initial, variable, step) =>
         val init = recs(initial)
         val rog = transpile(Routine(
-          RoutinePtr(r.name.s + "_fix_" + variable.s),
+          RoutinePtr(routine.name.s + "_fix_" + variable.s),
           Vector.empty,
           Vector(variable),
           step
@@ -660,7 +935,7 @@ def transpile(r: Routine, caller: Option[RecursiveOpGraph] = None): RecursiveOpG
       case Space.Range(x, start, end) =>
         g.store(Node("Range", s"$start:$end", "space", Vector(recs(x))))
 
-  r.body match
+  routine.body match
 //    case Space.Union(x, Space.Call(name, refs, mentions)) if name.s == r.name.s =>
       // r(a) = x(a) \/ r(g(a))  =  r(a) = x(a) \/ x(g(a)) \/ r(g(g(a)))
       // r(a) = x(a) \/ x(g(a)) \/ x(g(g(a))) \/ x(g(g(g((a)))) \/ ...
@@ -824,18 +1099,24 @@ def untranspile(rog: RecursiveOpGraph,
     case _ => None
   def taggedSingletonPath(packed: Space, tag: PathValue): Option[Path] =
     taggedSpace(packed, tag).collect { case Space.Singleton(path) => path }
+  def pathReference(name: String): PathRef =
+    val ref = PathRef(name)
+    rog.pathReferenceHints.get(name).fold(ref)(ref.known)
+  def spaceReference(name: String): SpaceMention =
+    val mention = SpaceMention(name)
+    rog.spaceReferenceHints.get(name).fold(mention)(mention.known)
   while c < rog.nodes.length do
     rog.nodes(c) match
       case Left(Node(op, constant, kind, inputs)) => kind match
         case "path" => s(c) = (op match
-          case "ExtractPathRef" => Path.Deref(PathRef(constant)) // stack should already prepared
+          case "ExtractPathRef" => Path.Deref(pathReference(constant)) // stack should already prepared
           case "Constant" => Path.Constant(rog.pathValue(constant))
           case "Concat" => Path.Concat(inputs(0).pget, inputs(1).pget))
         case "space" => s(c) = (op match
           case "Empty" => Space.Empty
           case "Call" =>
             throw RuntimeException(s"untranspile cannot reconstruct Call[$constant] without routine signature metadata")
-          case "ExtractSpaceMention" => Space.Mention(SpaceMention(constant)) // stack should already prepared
+          case "ExtractSpaceMention" => Space.Mention(spaceReference(constant)) // stack should already prepared
           case "Alias" => inputs(0).sget
           case "Singleton" => Space.Singleton(inputs(0).pget)
           case "Literal" => Space.Literal(rog.literalValue(constant))
@@ -867,7 +1148,12 @@ def untranspile(rog: RecursiveOpGraph,
             stack.push(new Array(sg.nodes.length))
             untranspile(sg, stack, index)
             val popped = stack.pop()
-            s(c) = Space.Iteration(inputs(0).sget, popped(0).asInstanceOf[Path.Deref].pr, popped(1).asInstanceOf[Space.Mention].variable, popped.last.asInstanceOf[Space])
+            s(c) = ReferenceHints.tag(Space.Iteration(
+              inputs(0).sget,
+              popped(0).asInstanceOf[Path.Deref].pr,
+              popped(1).asInstanceOf[Space.Mention].variable,
+              popped.last.asInstanceOf[Space]
+            ))
           case "Fold" =>
             stack.push(new Array(sg.nodes.length))
             untranspile(sg, stack, index)
@@ -879,7 +1165,7 @@ def untranspile(rog: RecursiveOpGraph,
             val update = taggedSingletonPath(packed, GraphFoldTags.Update).getOrElse {
               throw IllegalStateException(s"Fold subgraph did not contain ${GraphFoldTags.Update.show} singleton update tag")
             }
-            s(c) = Space.Fold(
+            s(c) = ReferenceHints.tag(Space.Fold(
               inputs(0).sget,
               inputs(1).pget,
               popped(0).asInstanceOf[Path.Deref].pr,
@@ -887,12 +1173,16 @@ def untranspile(rog: RecursiveOpGraph,
               popped(2).asInstanceOf[Space.Mention].variable,
               body,
               update
-            )
+            ))
           case "Fixpoint" =>
             stack.push(new Array(sg.nodes.length))
             untranspile(sg, stack, index)
             val popped = stack.pop()
-            s(c) = Space.Fixpoint(inputs(0).sget, SpaceMention(constant), popped.last.asInstanceOf[Space])
+            s(c) = ReferenceHints.tag(Space.Fixpoint(
+              inputs(0).sget,
+              popped(0).asInstanceOf[Space.Mention].variable,
+              popped.last.asInstanceOf[Space]
+            ))
     c += 1
   end while
 
@@ -1003,6 +1293,7 @@ def optimize_sharing(g: RecursiveOpGraph,
                      parent: Option[RecursiveOpGraph] = None): RecursiveOpGraph =
   val parent0 = parent.orElse(g.parent)
   val r = RecursiveOpGraph(g.root, parent0, ArrayBuffer.empty, parent0.map(_.literalPool).getOrElse(g.literalPool))
+  r.copyReferenceHintsFrom(g)
   val l = g.level
   stack.addOne(LongMap.withDefault[(Int, Int)](x => l -> x.toInt) -> LongMap.withDefault[(Int, Int)](x => l -> x.toInt))
   def forward(pos: (Int, Int)): Option[(Int, Int)] =
@@ -1014,6 +1305,7 @@ def optimize_sharing(g: RecursiveOpGraph,
   def toOutputNode(n: Node[(Int, Int)]): Node[(Int, Int)] =
     n.map((lm, xm) => stack(lm)._2(xm))
   var c = 0
+  val canonicalSubgraphs = collection.mutable.HashMap.empty[Int, ArrayBuffer[(Int, RecursiveOpGraph)]]
   for (n, j) <- g.nodes.zipWithIndex do n match
     case Left(n) =>
       val canonical = forwardNode(n).getOrElse(throw RuntimeException(s"cannot remap node ${n.show} at level $l"))
@@ -1025,10 +1317,19 @@ def optimize_sharing(g: RecursiveOpGraph,
       else
         stack.last._1.update(j, l2 -> i)
     case Right(sg) =>
-      // Subgraph sharing needs meaning-aware hashing; keep this pass to local node sharing.
-      r.store(optimize_sharing(sg, stack, Some(r)))
-      stack(l)._2.update(j, l -> c)
-      c += 1
+      val canonical = optimize_sharing(sg, stack, Some(r))
+      val hash = graphStructuralHash(canonical)
+      val bucket = canonicalSubgraphs.getOrElseUpdate(hash, ArrayBuffer.empty)
+      bucket.find((_, previous) => graphStructurallyEqual(previous, canonical)) match
+        case Some((originalIndex, _)) =>
+          // Identical recursive subgraphs have the same captures after input
+          // forwarding, so later uses can share the earlier result position.
+          stack.last._1.update(j, l -> originalIndex)
+        case None =>
+          r.store(canonical)
+          bucket += j -> canonical
+          stack(l)._2.update(j, l -> c)
+          c += 1
   r.root = toOutputNode(forwardNode(r.root).getOrElse(throw RuntimeException(s"cannot remap root ${r.root.show} at level $l")))
   stack.remove(stack.length - 1)
   r
@@ -1036,6 +1337,7 @@ def optimize_sharing(g: RecursiveOpGraph,
 
 def push_out(g: RecursiveOpGraph, stack: ArrayBuffer[LongMap[(Int, Int)]] = ArrayBuffer.empty, parent: Option[RecursiveOpGraph] = None): RecursiveOpGraph =
   val r = RecursiveOpGraph(g.root, parent, ArrayBuffer.empty, parent.map(_.literalPool).getOrElse(g.literalPool))
+  r.copyReferenceHintsFrom(g)
   val lb = g.level
   var jb = 0
   var added = 0
@@ -1105,6 +1407,7 @@ def hoist_loop_invariant_subgraphs(g: RecursiveOpGraph): RecursiveOpGraph =
     require(src.level == remaps.length,
       s"cannot rebuild graph at level ${src.level} with ${remaps.length} active remap frames")
     val out = RecursiveOpGraph(src.root, parent, ArrayBuffer.empty, parent.map(_.literalPool).getOrElse(src.literalPool))
+    out.copyReferenceHintsFrom(src)
     val frame = collection.mutable.Map.empty[Int, (Int, Int)]
     remaps += frame
 
@@ -1154,14 +1457,27 @@ def graphReferenceErrors(g: RecursiveOpGraph, path: Vector[Int] = Vector.empty):
   }
   (rootBad ++ nodeBad).toVector
 
+private def alphaNormalizedGraphNode(node: Node[(Int, Int)]): Node[(Int, Int)] =
+  node.alphaNormalized
+
 def graphStructurallyEqual(a: RecursiveOpGraph, b: RecursiveOpGraph): Boolean =
-  a.root == b.root &&
+  alphaNormalizedGraphNode(a.root) == alphaNormalizedGraphNode(b.root) &&
     a.nodes.length == b.nodes.length &&
     a.nodes.iterator.zip(b.nodes.iterator).forall {
-      case (Left(x), Left(y)) => x == y
+      case (Left(x), Left(y)) => alphaNormalizedGraphNode(x) == alphaNormalizedGraphNode(y)
       case (Right(x), Right(y)) => graphStructurallyEqual(x, y)
       case _ => false
     }
+
+def graphStructuralHash(g: RecursiveOpGraph): Int =
+  import scala.util.hashing.MurmurHash3
+  var hash = MurmurHash3.productHash(alphaNormalizedGraphNode(g.root))
+  for entry <- g.nodes do
+    val next = entry match
+      case Left(node) => MurmurHash3.productHash(alphaNormalizedGraphNode(node))
+      case Right(subgraph) => graphStructuralHash(subgraph)
+    hash = MurmurHash3.mix(hash, next)
+  MurmurHash3.finalizeHash(hash, g.nodes.size + 1)
 
 def optimize(g: RecursiveOpGraph): RecursiveOpGraph =
   optimizeTimed(g).graph
@@ -1390,6 +1706,32 @@ object Lower:
   private def usesRef(s: Space, pr: PathRef): Boolean =
     collect(s)(ppre = { case Path.Deref(`pr`) => () })._2.nonEmpty
 
+  private def independentOf(s: Space, symbol: PathRef, rest: SpaceMention): Boolean =
+    !usesRef(s, symbol) && !usesMention(s, rest)
+
+  private val epsilonSpace: Space = Space.Singleton(Path.ZERO)
+
+  /** Iteration skips epsilon, so this is the epsilon-valued indicator that its
+    * source has at least one headed path.  Subtracting epsilon is a root-only
+    * Trie operation and `Syntax.nonEmpty` observes only the first survivor.
+    */
+  private def hasIterationIndicator(src: Space): Space =
+    Syntax.nonEmpty(Space.Subtraction(src, epsilonSpace))
+
+  private def epsilonOnly(s: Space): Boolean = s match
+    case Space.Empty => true
+    case Space.Singleton(Path.Constant(PathValue(Nil))) => true
+    case Space.Literal(SpaceValue(paths)) => paths.forall(_.items.isEmpty)
+    case Space.Union(a, b) => epsilonOnly(a) && epsilonOnly(b)
+    case Space.Intersection(a, b) => epsilonOnly(a) || epsilonOnly(b)
+    case Space.Subtraction(a, _) => epsilonOnly(a)
+    case Space.Restriction(a, _) => epsilonOnly(a)
+    case Space.Raffination(a, _) => epsilonOnly(a)
+    case Space.Composition(a, b) => epsilonOnly(a) && epsilonOnly(b)
+    case Space.Iteration(_, _, _, body) => epsilonOnly(body)
+    case Space.Range(src, _, _) => epsilonOnly(src)
+    case _ => false
+
   private def emptyPath(p: Path): Boolean = p match
     case Path.Constant(PathValue(Nil)) => true
     case _ => false
@@ -1566,6 +1908,14 @@ object Lower:
   private def normalizeUnion(s: Space): Space =
     val flat = unionTerms(s).filterNot(_ == Space.Empty)
     replaceFirstPair(flat) {
+      case (Space.Wrap(left, prefix), Space.Wrap(right, prefix2)) if prefix == prefix2 =>
+        Some(Space.Wrap(Space.Union(left, right), prefix))
+      case (Space.Composition(prefix, left), Space.Composition(prefix2, right)) if prefix == prefix2 =>
+        Some(Space.Composition(prefix, Space.Union(left, right)))
+      case (Space.Composition(left, suffix), Space.Composition(right, suffix2)) if suffix == suffix2 =>
+        Some(Space.Composition(Space.Union(left, right), suffix))
+      case (Space.Unwrap(left, prefix), Space.Unwrap(right, prefix2)) if prefix == prefix2 =>
+        Some(Space.Unwrap(Space.Union(left, right), prefix))
       case (Space.Restriction(src, leftPrefixes), Space.Restriction(src2, rightPrefixes)) if src == src2 =>
         Some(Space.Restriction(src, Space.Union(leftPrefixes, rightPrefixes)))
       case (Space.Subtraction(src, leftRemoved), Space.Subtraction(src2, rightRemoved)) if src == src2 =>
@@ -1710,10 +2060,12 @@ object Lower:
             case Some(upper2) if upper2 <= lo2 => Space.Empty
             case _ =>
               val lo = lo1 + lo2
-              val hi =
-                hi2 match
-                  case Some(upper2) => Some(lo1 + upper2)
-                  case None => hi1
+              val shiftedHi2 = hi2.map(lo1 + _)
+              val hi = (hi1, shiftedHi2) match
+                case (Some(upper1), Some(upper2)) => Some(math.min(upper1, upper2))
+                case (Some(upper1), None) => Some(upper1)
+                case (None, Some(upper2)) => Some(upper2)
+                case (None, None) => None
               encodeRange(lo, hi)(src)
     }
     else if start1 > 0 && end1 == 0 && start2 >= 0 && end2 >= 0 then Some {
@@ -1807,7 +2159,7 @@ object Lower:
   val TailsUnion_Iteration = subs(_: Space)(PartialFunction.empty, {
     case Space.TailsUnion(src) =>
       val name = SpaceMention("s" + src.hashCode().toHexString)
-      Space.Iteration(src, PathRef("_"), name, Space.Mention(name))
+      ReferenceHints.tag(Space.Iteration(src, PathRef("_").known(1), name, Space.Mention(name)))
   })
 
   val Literal_ConstantsUnion = subs(_: Space)(PartialFunction.empty, {
@@ -1878,6 +2230,39 @@ object Lower:
       val (soc, poc) = collect(rhs)({ case Space.Mention(`rest`) => () }, { case Path.Deref(`symbol`) => () })
       soc.isEmpty && poc.isEmpty
     } => Space.Union(Space.Iteration(src, symbol, rest, lhs), rhs)
+  })
+
+  /** Split a two-dimensional union reduction into two independent reductions.
+    * Each arm keeps the other iterator's headed-nonempty guard, so lifting the
+    * arm is sound even when either dynamic source is empty or epsilon-only.
+    */
+  val IndependentProductUnion = subs(_: Space)(PartialFunction.empty, {
+    case original @ Space.Iteration(left, leftSymbol, leftRest,
+      Space.Iteration(right, rightSymbol, rightRest, Space.Union(a, b))) =>
+      def split(leftArm: Space, rightArm: Space): Option[Space] =
+        Option.when(
+          leftSymbol != rightSymbol &&
+            leftRest != rightRest &&
+            independentOf(right, leftSymbol, leftRest) &&
+            independentOf(leftArm, rightSymbol, rightRest) &&
+            independentOf(rightArm, leftSymbol, leftRest)
+        ) {
+          val leftReduction = Space.Iteration(left, leftSymbol, leftRest, leftArm)
+          val rightReduction = Space.Iteration(right, rightSymbol, rightRest, rightArm)
+          Space.Union(
+            Space.Composition(hasIterationIndicator(right), leftReduction),
+            Space.Composition(hasIterationIndicator(left), rightReduction)
+          )
+        }
+      split(a, b).orElse(split(b, a)).getOrElse(original)
+  })
+
+  /** An epsilon-valued guard commutes with a fixed path prefix.  This exposes
+    * equal `Wrap` prefixes to union factoring after guarded loop push-out.
+    */
+  val EpsilonGuard_Wrap = subs(_: Space)(PartialFunction.empty, {
+    case Space.Composition(guard, Space.Wrap(src, prefix)) if epsilonOnly(guard) =>
+      Space.Wrap(Space.Composition(guard, src), prefix)
   })
 
   val UnwrapConcat_Unwraps = subs(_: Space)(PartialFunction.empty, {
@@ -2250,9 +2635,10 @@ case class SupercompileReport(
   constantFoldExecTCalls: Int = 0,
   compileMs: Double = 0.0,
   maxCompileMillis: Long = CompileBudget.Default.maxMillis,
-  graphError: Option[String] = None
+  graphError: Option[String] = None,
+  spatialRewriteFacts: Vector[SpatialRewriteFact] = Vector.empty,
 ):
-  def changed: Boolean = steps.nonEmpty
+  def changed: Boolean = steps.nonEmpty || spatialRewriteFacts.nonEmpty
   def backendCompiled: Boolean = graphAfter.nonEmpty
   def sourceOptimizeMs: Double = sourceTimings.map(_.elapsedMs).sum
   def summary: String =
@@ -2268,15 +2654,125 @@ case class SupercompileReport(
       val total = constantFoldEvalMs + constantFoldEvalTrieMs + constantFoldEvalZMs + constantFoldExecTMs
       if calls == 0 then ""
       else f", const-fold eval $total%.3f ms (${constantFoldEvalCalls} eval, ${constantFoldEvalTrieCalls} evalTrie, ${constantFoldEvalZCalls} evalZ, ${constantFoldExecTCalls} execT)"
-    f"${name.s}: ${before.totalNodes} -> ${after.totalNodes} AST nodes, ${steps.size} pass changes, $convergence$graph$fold, compile $compileMs%.3f ms / budget ${maxCompileMillis} ms"
+    val spatial =
+      if spatialRewriteFacts.isEmpty then ""
+      else s", ${spatialRewriteFacts.size} guarded spatial rewrites"
+    f"${name.s}: ${before.totalNodes} -> ${after.totalNodes} AST nodes, ${steps.size} pass changes, $convergence$graph$fold$spatial, compile $compileMs%.3f ms / budget ${maxCompileMillis} ms"
 
 case class SupercompiledRoutine(routine: Routine, report: SupercompileReport, graph: Option[RecursiveOpGraph]):
+  def resultSize(
+    assumptions: Map[SpaceMention, ResultSizeEstimate] = Map.empty
+  ): ResultSizeEstimate = ResultSpaceSize.estimate(routine.body, assumptions)
+
+  def resultPathLength(
+    assumptions: Map[SpaceMention, PathLengthEstimate] = Map.empty,
+    pathAssumptions: Map[PathRef, PathLengthEstimate] = Map.empty,
+    sizeAssumptions: Map[SpaceMention, ResultSizeEstimate] = Map.empty
+  ): PathLengthEstimate =
+    ResultPathLength.estimate(routine.body, assumptions, pathAssumptions, sizeAssumptions)
+
+  def spatialType(
+    pathInputs: Map[PathRef, SpatialPathType] = Map.empty,
+    spaceInputs: Map[SpaceMention, SpatialType] = Map.empty,
+    routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
+    prefixCoverage: Set[SpatialPrefixCoverage] = Set.empty
+  ): SpatialType =
+    SpatialTypeAnalysis.outputRoutine(routine, pathInputs, spaceInputs, routines, prefixCoverage)
+
   def semanticEquals(original: Routine)(using pc: PathContext = PathContext.emptyMap,
                                         sc: SpaceContext = SpaceContextMap(Map.empty),
                                         rc: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty): Boolean =
     eval(original.body)(using pc, sc, rc) == eval(routine.body)(using pc, sc, rc)
 
 object Supercompiler:
+  /** A conservative structural certificate for the paper's seedless SCC
+    * recursion. The outer Range chooses one pivot from `nodes`; masked
+    * reachability keeps both discovered sets inside `nodes`; the three calls
+    * then receive `pred \\ desc`, `desc \\ pred`, and
+    * `(nodes \\ pred) \\ desc`. Every non-empty recursive argument is
+    * therefore a strict subset of the caller's node set. */
+  def wellFoundedPartitionRecursion(
+    routine: Routine,
+    ctx: PartialFunction[RoutinePtr, Routine],
+  ): Boolean =
+    def unionLeaves(x: Space): Vector[Space] = x match
+      case Space.Union(a, b) => unionLeaves(a) ++ unionLeaves(b)
+      case other => Vector(other)
+
+    def maskedReachability(rp: RoutinePtr): Boolean =
+      if !ctx.isDefinedAt(rp) then false
+      else ctx(rp) match
+        case Routine(`rp`, Vector(), Vector(edges, mask, state), body) =>
+          val leaves = unionLeaves(body)
+          leaves.length == 2 && leaves.contains(Space.Mention(state)) && leaves.exists {
+            case Space.Call(`rp`, Vector(), Vector(
+                  Space.Mention(callEdges),
+                  Space.Mention(callMask),
+                  next,
+                )) if callEdges == edges && callMask == mask =>
+              next match
+                case Space.Union(Space.Mention(current), Space.Intersection(_, Space.Mention(limit))) =>
+                  current == state && limit == mask
+                case Space.Union(Space.Mention(current), Space.Intersection(Space.Mention(limit), _)) =>
+                  current == state && limit == mask
+                case Space.Intersection(Space.Union(Space.Mention(current), _), Space.Mention(limit)) =>
+                  current == state && limit == mask
+                case Space.Intersection(Space.Mention(limit), Space.Union(Space.Mention(current), _)) =>
+                  current == state && limit == mask
+                case _ => false
+            case _ => false
+          }
+        case _ => false
+
+    routine match
+      case Routine(name, Vector(), params,
+            Space.Iteration(Space.Range(Space.Mention(nodes), 0, 1), pivot, _, templates)) =>
+        val nodeIndex = params.indexOf(nodes)
+        if nodeIndex < 0 then false
+        else
+          val leaves = unionLeaves(templates)
+          val selfCalls = leaves.collect {
+            case Space.Call(`name`, Vector(), args) if args.length == params.length => args
+          }
+          if selfCalls.length != 3 || leaves.length != 4 then false
+          else
+            val invariants = selfCalls.forall { args =>
+              params.indices.forall(i => i == nodeIndex || args(i) == Space.Mention(params(i)))
+            }
+            val partitions = selfCalls.map(_(nodeIndex))
+            val candidate = partitions.collectFirst {
+              case first @ Space.Subtraction(pred, desc)
+                  if partitions.contains(Space.Subtraction(desc, pred)) &&
+                    partitions.contains(Space.Subtraction(Space.Subtraction(Space.Mention(nodes), pred), desc)) =>
+                pred -> desc
+            }
+            val reachability = candidate.exists { (pred, desc) =>
+              def reachShape(x: Space): Option[RoutinePtr] = x match
+                case Space.Call(reach, Vector(), Vector(
+                      Space.Mention(edgeParam),
+                      Space.Mention(nodeParam),
+                      Space.Singleton(Path.Deref(selected)),
+                    )) if params.contains(edgeParam) && edgeParam != nodes &&
+                        nodeParam == nodes && selected == pivot => Some(reach)
+                case _ => None
+              (reachShape(pred), reachShape(desc)) match
+                case (Some(a), Some(b)) => a == b && maskedReachability(a)
+                case _ => false
+            }
+            val emitted = candidate.exists { (pred, desc) =>
+              leaves.exists {
+                case Space.Wrap(
+                      Space.Subtraction(Space.Intersection(a, b), Space.Singleton(Path.Deref(member))),
+                      Path.Deref(representative),
+                    ) =>
+                  member == pivot && representative == pivot &&
+                    ((a == pred && b == desc) || (a == desc && b == pred))
+                case _ => false
+              }
+            }
+            invariants && reachability && emitted
+      case _ => false
+
   val defaultSourcePasses: Vector[(String, Space => Space)] = Vector(
     "algebraic-identities" -> Lower.AlgebraicIdentities,
     "constant-paths" -> Lower.Concat_Path,
@@ -2292,10 +2788,92 @@ object Supercompiler:
     "concat-singleton-iteration" -> Lower.ConcatSingleton_Iter,
     "wrap-iteration" -> Lower.Wrap_Iter,
     "iteration-union-invariant" -> Lower.IterUnion_Indep,
+    "independent-product-push-out" -> Lower.IndependentProductUnion,
+    "epsilon-guard-wrap" -> Lower.EpsilonGuard_Wrap,
     "iteration-identity" -> Lower.Iter_Ident,
     "algebraic-cleanup" -> Lower.AlgebraicIdentities,
     "literal-cleanup" -> Lower.LiteralSpaceOps
   )
+
+  def resultSize(
+    s: Space,
+    assumptions: Map[SpaceMention, ResultSizeEstimate] = Map.empty
+  ): ResultSizeEstimate = ResultSpaceSize.estimate(s, assumptions)
+
+  /** Normalize the source graph before constructing its result-cardinality graph. */
+  def optimizedResultSize(
+    s: Space,
+    assumptions: Map[SpaceMention, ResultSizeEstimate] = Map.empty
+  ): ResultSizeEstimate = ResultSpaceSize.estimate(normalize(s).space, assumptions)
+
+  def resultPathLength(
+    s: Space,
+    assumptions: Map[SpaceMention, PathLengthEstimate] = Map.empty,
+    pathAssumptions: Map[PathRef, PathLengthEstimate] = Map.empty,
+    sizeAssumptions: Map[SpaceMention, ResultSizeEstimate] = Map.empty
+  ): PathLengthEstimate =
+    ResultPathLength.estimate(s, assumptions, pathAssumptions, sizeAssumptions)
+
+  /** Normalize the source graph before constructing its path-length graph. */
+  def optimizedResultPathLength(
+    s: Space,
+    assumptions: Map[SpaceMention, PathLengthEstimate] = Map.empty,
+    pathAssumptions: Map[PathRef, PathLengthEstimate] = Map.empty,
+    sizeAssumptions: Map[SpaceMention, ResultSizeEstimate] = Map.empty
+  ): PathLengthEstimate =
+    ResultPathLength.estimate(normalize(s).space, assumptions, pathAssumptions, sizeAssumptions)
+
+  def spatialType(
+    s: Space,
+    assumptions: SpatialAssumptions = SpatialAssumptions(),
+    routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
+  ): SpatialType = SpatialTypeAnalysis.output(s, assumptions, routines)
+
+  def spatialType(
+    routine: Routine,
+    pathInputs: Map[PathRef, SpatialPathType],
+    spaceInputs: Map[SpaceMention, SpatialType],
+    routines: PartialFunction[RoutinePtr, Routine],
+    prefixCoverage: Set[SpatialPrefixCoverage]
+  ): SpatialType =
+    SpatialTypeAnalysis.outputRoutine(routine, pathInputs, spaceInputs, routines, prefixCoverage)
+
+  /** Analyze an open routine from annotations only. */
+  def abstractSpatialType(
+    routine: Routine,
+    pathInputs: Map[PathRef, SpatialPathType],
+    spaceInputs: Map[SpaceMention, SpatialType],
+    routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
+    prefixCoverage: Set[SpatialPrefixCoverage] = Set.empty,
+    boundLaws: Vector[SpatialBoundLaw] = Vector.empty
+  ): SpatialType =
+    SpatialTypeAnalysis.outputRoutineAbstract(
+      routine, pathInputs, spaceInputs, routines, prefixCoverage, boundLaws)
+
+  /** Analyze an open routine from one explicit spatial input annotation. */
+  def abstractSpatialType(
+    routine: Routine,
+    annotations: SpatialRoutineAnnotations,
+    routines: PartialFunction[RoutinePtr, Routine]
+  ): SpatialType =
+    SpatialTypeAnalysis.outputRoutineAbstract(routine, annotations, routines)
+
+  /** Normalize source operations before spatial abstract interpretation. */
+  def optimizedSpatialType(
+    s: Space,
+    assumptions: SpatialAssumptions = SpatialAssumptions(),
+    routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
+  ): SpatialType = SpatialTypeAnalysis.output(normalize(s).space, assumptions, routines)
+
+  /** Primary open-program cost/type surface: retain abstract arguments, but
+    * analyze the normalized residual that an optimized executor will run. */
+  def optimizedSpatialType(
+    routine: Routine,
+    annotations: SpatialRoutineAnnotations,
+    routines: PartialFunction[RoutinePtr, Routine]
+  ): SpatialType =
+    val optimized = routine.copy(body = normalize(routine.body).space)
+    SpatialTypeAnalysis.outputRoutineAbstract(optimized, annotations, routines)
 
   def stats(s: Space): SpaceStats =
     def bumpSpace(x: SpaceStats, depth: Int): SpaceStats = x.copy(spaceNodes = x.spaceNodes + 1, depth = x.depth.max(depth))
@@ -2365,7 +2943,7 @@ object Supercompiler:
                 passes: Vector[(String, Space => Space)] = defaultSourcePasses,
                 maxRounds: Int = 128,
                 deadline: CompileDeadline = CompileBudget.Default.start()): NormalizeResult =
-    var current = s
+    var current = ReferenceHints.tag(s)
     var currentStats = stats(current)
     val steps = Vector.newBuilder[SupercompileStep]
     val timings = Vector.newBuilder[OptimizationTiming]
@@ -2378,9 +2956,10 @@ object Supercompiler:
         val before = current
         val beforeStats = currentStats
         val start = System.nanoTime()
-        val after = pass(current)
+        val transformed = pass(current)
+        val changedPass = before != transformed
+        val after = if changedPass then ReferenceHints.tag(transformed) else before
         val elapsed = (System.nanoTime() - start).toDouble / 1_000_000.0
-        val changedPass = before != after
         val afterStats =
           if changedPass then stats(after)
           else beforeStats
@@ -2392,7 +2971,7 @@ object Supercompiler:
           changed = true
         deadline.check(s"source pass $name")
       round += 1
-    NormalizeResult(current, steps.result(), timings.result(), round, !changed)
+    NormalizeResult(ReferenceHints.tag(current), steps.result(), timings.result(), round, !changed)
 
   def lowerFixpointCalls(s: Space, ctx: PartialFunction[RoutinePtr, Routine]): Space =
     case class RecursiveArc(target: RoutinePtr, arg: Space)
@@ -2552,6 +3131,44 @@ object Supercompiler:
         case Space.Range(src, start, end) => Space.Range(recs(src, shadowed), start, end)
       recs(s, shadowed = false)
 
+    def replaceMentions(s: Space, replacements: Map[SpaceMention, Space]): Space =
+      def recp(p: Path, shadowed: Set[SpaceMention]): Path = p match
+        case Path.Deref(_) | Path.Constant(_) => p
+        case Path.Concat(l, r) => Path.Concat(recp(l, shadowed), recp(r, shadowed))
+        case Path.GroundedPP(p, f) => Path.GroundedPP(recp(p, shadowed), f)
+        case Path.GroundedSP(s, f) => Path.GroundedSP(recs(s, shadowed), f)
+      def recs(x: Space, shadowed: Set[SpaceMention]): Space = x match
+        case Space.Mention(sm) if !shadowed(sm) => replacements.getOrElse(sm, x)
+        case Space.Empty | Space.Mention(_) | Space.Literal(_) => x
+        case Space.Call(rp, refs, mentions) =>
+          Space.Call(rp, refs.map(recp(_, shadowed)), mentions.map(recs(_, shadowed)))
+        case Space.Singleton(p) => Space.Singleton(recp(p, shadowed))
+        case Space.Union(a, b) => Space.Union(recs(a, shadowed), recs(b, shadowed))
+        case Space.Intersection(a, b) => Space.Intersection(recs(a, shadowed), recs(b, shadowed))
+        case Space.Subtraction(a, b) => Space.Subtraction(recs(a, shadowed), recs(b, shadowed))
+        case Space.Restriction(a, b) => Space.Restriction(recs(a, shadowed), recs(b, shadowed))
+        case Space.Raffination(a, b) => Space.Raffination(recs(a, shadowed), recs(b, shadowed))
+        case Space.Composition(a, b) => Space.Composition(recs(a, shadowed), recs(b, shadowed))
+        case Space.Iteration(src, symbol, rest, templates) =>
+          Space.Iteration(recs(src, shadowed), symbol, rest, recs(templates, shadowed + rest))
+        case Space.Fold(src, initial, acc, symbol, rest, templates, update) =>
+          val nested = shadowed + rest
+          Space.Fold(recs(src, shadowed), recp(initial, shadowed), acc, symbol, rest,
+            recs(templates, nested), recp(update, nested))
+        case Space.Fixpoint(initial, bound, step) =>
+          Space.Fixpoint(recs(initial, shadowed), bound, recs(step, shadowed + bound))
+        case Space.Wrap(src, p) => Space.Wrap(recs(src, shadowed), recp(p, shadowed))
+        case Space.Unwrap(src, p) => Space.Unwrap(recs(src, shadowed), recp(p, shadowed))
+        case Space.TailsUnion(src) => Space.TailsUnion(recs(src, shadowed))
+        case Space.TailsIntersection(src) => Space.TailsIntersection(recs(src, shadowed))
+        case Space.PrefixClosure(src) => Space.PrefixClosure(recs(src, shadowed))
+        case Space.SuffixClosure(src) => Space.SuffixClosure(recs(src, shadowed))
+        case Space.TailsClosure(src) => Space.TailsClosure(recs(src, shadowed))
+        case Space.GroundedPS(p, f) => Space.GroundedPS(recp(p, shadowed), f)
+        case Space.GroundedSS(src, f) => Space.GroundedSS(recs(src, shadowed), f)
+        case Space.Range(src, start, end) => Space.Range(recs(src, shadowed), start, end)
+      recs(s, Set.empty)
+
     def mentionsIn(component: Iterable[Routine]): Set[String] =
       val out = Set.newBuilder[String]
       def recp(p: Path): Unit = p match
@@ -2643,6 +3260,48 @@ object Supercompiler:
         case Routine(`rp`, Vector(), Vector(variable), Space.Union(Space.Mention(lhs), Space.Call(`rp`, Vector(), Vector(step)))) if lhs == variable =>
           Space.Fixpoint(recs(arg), variable, recs(step))
       }
+
+    /** Lower a recursive routine with invariant parameters and one
+      * union-growing state parameter. For example:
+      *
+      *   reachable(edges, mask, reach) =
+      *     reach \/ reachable(edges, mask, next(reach))
+      *
+      * becomes a native Fixpoint over only `reach`; the other actual
+      * arguments are substituted into the step once. */
+    def parameterizedFixpointFor(rp: RoutinePtr,
+                                 refs: Vector[Path],
+                                 args: Vector[Space]): Option[Space] =
+      Option.when(refs.isEmpty && ctx.isDefinedAt(rp))(ctx(rp)).flatMap {
+        case Routine(`rp`, Vector(), variables, body) if variables.length == args.length =>
+          val leaves = unionLeaves(body)
+          val bases = leaves.collect { case Space.Mention(sm) if variables.contains(sm) => sm }
+          val calls = leaves.collect { case call @ Space.Call(`rp`, Vector(), callArgs) => call -> callArgs }
+          if leaves.length != 2 || bases.length != 1 || calls.length != 1 then None
+          else
+            val state = bases.head
+            val stateIndex = variables.indexOf(state)
+            val nextArgs = calls.head._2
+            val invariant = variables.indices.forall { i =>
+              i == stateIndex || nextArgs.lift(i).contains(Space.Mention(variables(i)))
+            }
+            val nextState = nextArgs.lift(stateIndex)
+            val recursiveInStep = nextState.exists(calledRoutines(_)(rp))
+            if nextArgs.length != variables.length || !invariant || nextState.isEmpty || recursiveInStep then None
+            else
+              val mentioned = args.iterator.flatMap { arg =>
+                collect[String, Unit](arg)(spre = {
+                  case Space.Mention(sm) => sm.s
+                })._1.iterator.map(_._2)
+              }.toSet ++ variables.iterator.map(_.s)
+              val bound = freshMention(s"__${rp.s}_state", mentioned)
+              val replacements = variables.indices.iterator.map { i =>
+                variables(i) -> (if i == stateIndex then Space.Mention(bound) else recs(args(i)))
+              }.toMap
+              val step = recs(replaceMentions(nextState.get, replacements))
+              Some(Space.Fixpoint(recs(args(stateIndex)), bound, step))
+        case _ => None
+      }
     def mutualFixpointFor(rp: RoutinePtr, arg: Space): Option[Space] =
       componentFor(rp).flatMap { (defs, component) =>
         if component.size <= 1 then None
@@ -2669,7 +3328,9 @@ object Supercompiler:
       case Space.Empty | Space.Mention(_) | Space.Literal(_) => x
       case Space.Call(rp, refs, Vector(arg)) if refs.isEmpty =>
         fixpointFor(rp, arg).getOrElse(Space.Call(rp, refs.map(recp), Vector(recs(arg))))
-      case Space.Call(rp, refs, mentions) => Space.Call(rp, refs.map(recp), mentions.map(recs))
+      case Space.Call(rp, refs, mentions) =>
+        parameterizedFixpointFor(rp, refs, mentions)
+          .getOrElse(Space.Call(rp, refs.map(recp), mentions.map(recs)))
       case Space.Singleton(p) => Space.Singleton(recp(p))
       case Space.Union(x, y) => Space.Union(recs(x), recs(y))
       case Space.Intersection(x, y) => Space.Intersection(recs(x), recs(y))
@@ -2772,7 +3433,8 @@ object Supercompiler:
               ctx: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty,
               maxRounds: Int = 128,
               buildGraph: Boolean = true,
-              maxCompileMillis: Long = CompileBudget.Default.maxMillis): SupercompiledRoutine =
+              maxCompileMillis: Long = CompileBudget.Default.maxMillis,
+              spatialRewriteFacts: Vector[SpatialRewriteFact] = Vector.empty): SupercompiledRoutine =
     val deadline = CompileBudget(maxCompileMillis).start()
     def timed[A](phase: String)(f: => A): (A, Double) =
       deadline.check(phase)
@@ -2844,7 +3506,8 @@ object Supercompiler:
       constantFoldEval.execTCalls,
       deadline.elapsedMs,
       maxCompileMillis,
-      graphError
+      graphError,
+      spatialRewriteFacts,
     )
     SupercompiledRoutine(out, report, graph)
 
@@ -2855,11 +3518,25 @@ object Supercompiler:
                  maxRounds: Int = 128,
                  buildGraph: Boolean = true,
                  maxCompileMillis: Long = CompileBudget.Default.maxMillis): SupercompiledRoutine =
-    val specializedBody = subs(r.body)(
+    val (spatialAnnotations, concreteSpaces, concretePaths) =
+      SpatialCompilation.exactArguments(spaceArgs, pathArgs)
+    val spatialSelection =
+      if concreteSpaces.nonEmpty || concretePaths.nonEmpty then
+        SpatialCompilation.selectApplicable(r, spatialAnnotations, concreteSpaces, concretePaths, ctx)
+      else SpatialCompilationSelection(r, None)
+    val spatiallySelected = spatialSelection.routine
+    val specializedBody = subs(spatiallySelected.body)(
       spost = { case Space.Mention(sm) if spaceArgs.contains(sm) => spaceArgs(sm) },
       ppost = { case Path.Deref(pr) if pathArgs.contains(pr) => pathArgs(pr) }
     )
-    compile(r.copy(body = specializedBody), ctx, maxRounds, buildGraph, maxCompileMillis)
+    compile(
+      spatiallySelected.copy(body = specializedBody),
+      ctx,
+      maxRounds,
+      buildGraph,
+      maxCompileMillis,
+      spatialSelection.specialization.toVector.flatMap(_.facts),
+    )
 
   def equivalent(original: Space,
                  compiled: Space)
@@ -2963,52 +3640,22 @@ def itypes(s: Space): SpaceValue =
     case Space.Range(x, _, _) => recs(x)
   SpaceValue(recs(s))
 
-def otypes(s: Space): SpaceValue =
-  def recp(x: Path): PathValue = x match
-    case Path.Deref(pr) => PathValue(PathItem.variable(pr.s)::Nil)
-    case Path.Constant(pi) => pi
-    case Path.Concat(l, r) => PathValue(recp(l).items ++ recp(r).items)
-    case Path.GroundedPP(p, f) => recp(p)
-    case Path.GroundedSP(s, f) => PathValue(PathItem.variable("grounded")::Nil)
-
-  import Syntax.x
-  def recs(x: Space): Set[PathValue] = x match
-    case Space.Empty =>  Set.empty
-    case Space.Call(r, refs, mentions) =>
-      val refts = refs.foldLeft(Set.empty[PathValue])((a, p) => a.incl(recp(p)))
-      mentions.foldLeft(refts)((a, s) => a.union(recs(s)))
-    case Space.Mention(sm) => Set(PathValue(PathItem.variable(sm.s)::Nil))
-    case Space.Singleton(p) => Set(recp(p))
-    case Space.Literal(sv) => Set.empty
-    case Space.Union(x, y) => recs(x) union recs(y)
-//    case Space.Intersection(x, y) => recs(x) union recs(y)
-    case Space.Intersection(x, y) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue(PathItem.variable("_")::Nil))),
-                                                      Space.Literal(SpaceValue(recs(y))) x Space.Singleton(Path.Constant(PathValue(PathItem.variable("_")::Nil))))).paths
-    case Space.Subtraction(x, y) => recs(x) union recs(y)
-//    case Space.Restriction(x, prefixes) => recs(x) union recs(prefixes)
-    case Space.Restriction(x, prefixes) => eval(Space.Union(Space.Literal(SpaceValue(recs(x))) x Space.Singleton(Path.Constant(PathValue(PathItem.variable("_")::Nil))),
-      Space.Literal(SpaceValue(recs(prefixes))))).paths
-    case Space.Composition(x, y) => recs(x) union recs(y)
-    case Space.Raffination(x, y) => recs(x) union recs(y)
-    case Space.Wrap(src, p) => eval(Space.Composition(Space.Singleton(Path.Constant(recp(p))), Space.Literal(SpaceValue(recs(src))))).paths
-    case Space.Unwrap(src, p) => recs(src) // .incl(recp(p))
-    case Space.TailsUnion(src) => recs(src)
-    case Space.TailsIntersection(src) => recs(src)
-    case Space.PrefixClosure(src) => recs(src)
-    case Space.SuffixClosure(src) => recs(src)
-    case Space.TailsClosure(src) => recs(src)
-    case Space.Iteration(src, symbol, rest, templates) =>
-      recs(templates)
-    case Space.Fold(src, initial, acc, symbol, rest, templates, update) =>
-      recs(templates).incl(recp(update))
-    case Space.Fixpoint(initial, variable, step) => recs(step)
-    case Space.GroundedPS(p, f) => Set(recp(p))
-    case Space.GroundedSS(s, f) => recs(s)
-    case Space.Range(x, _, _) => recs(x)
-  SpaceValue(recs(s))
+/** Spatial output type. This replaces the former shape-only `otypes` WIP. */
+def otypes(
+  s: Space,
+  assumptions: SpatialAssumptions = SpatialAssumptions(),
+  routines: PartialFunction[RoutinePtr, Routine] = PartialFunction.empty
+): SpatialType = SpatialTypeAnalysis.output(s, assumptions, routines)
 
 object Syntax:
   import Path.*
+  private def stableBinderDigest(value: String): String =
+    MessageDigest.getInstance("SHA-256")
+      .digest(value.getBytes(StandardCharsets.UTF_8))
+      .take(12)
+      .map("%02x".format(_))
+      .mkString
+
   given parse: Conversion[String, PathValue] = s => PathValue(s.split('.').map(PathItem.apply).toList)
   given constant: Conversion[String, Path] = (parse andThen Path.Constant.apply)(_)
   given parse2: Conversion[(String, String), (PathValue, PathValue)] = (x, y) => (parse(x), parse(y))
@@ -3025,44 +3672,61 @@ object Syntax:
     def \|(y: Space) = Space.Raffination(x, y)
     infix def x(y: Space) = Space.Composition(x, y)
     def apply(p: Path) = Space.Unwrap(x, p)
-    infix def iter(h: Path.Deref, t: Space.Mention, rhs: Space): Space = Space.Iteration(x, h.pr.known(1), t.variable, subs(rhs)(ppre = { case `h` => Path.Deref(h.pr.known(1)) }))
+    infix def iter(h: Path.Deref, t: Space.Mention, rhs: Space): Space = ReferenceHints.tag(
+      Space.Iteration(x, h.pr.known(1), t.variable, subs(rhs)(ppre = { case `h` => Path.Deref(h.pr.known(1)) }))
+    )
     infix def iter(h2: (Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
       val sm = SpaceMention(s"r${h2._2.pr.s}${rhs.hashCode().toHexString}")
-      Space.Iteration(x, h2._1.pr.known(1), sm, Space.Iteration(Space.Mention(sm), h2._2.pr.known(1), t.variable,
-        subs(rhs)(ppre = { case Path.Deref(pr) if pr == h2._1.pr || pr == h2._2.pr => Path.Deref(pr.known(1)) })))
+      ReferenceHints.tag(Space.Iteration(x, h2._1.pr.known(1), sm, Space.Iteration(Space.Mention(sm), h2._2.pr.known(1), t.variable,
+        subs(rhs)(ppre = { case Path.Deref(pr) if pr == h2._1.pr || pr == h2._2.pr => Path.Deref(pr.known(1)) }))))
     infix def iter(h3: (Path.Deref, Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
       val sm2 = SpaceMention(s"r${h3._2.pr.s}${rhs.hashCode().toHexString}")
       val sm3 = SpaceMention(s"r${h3._3.pr.s}${rhs.hashCode().toHexString}")
-      Space.Iteration(x, h3._1.pr.known(1), sm2,
+      ReferenceHints.tag(Space.Iteration(x, h3._1.pr.known(1), sm2,
         Space.Iteration(Space.Mention(sm2), h3._2.pr.known(1), sm3,
           Space.Iteration(Space.Mention(sm3), h3._3.pr.known(1), t.variable,
-            subs(rhs)(ppre = { case Path.Deref(pr) if pr == h3._1.pr || pr == h3._2.pr || pr == h3._3.pr => Path.Deref(pr.known(1)) }))))
+            subs(rhs)(ppre = { case Path.Deref(pr) if pr == h3._1.pr || pr == h3._2.pr || pr == h3._3.pr => Path.Deref(pr.known(1)) })))))
     infix def iter(h4: (Path.Deref, Path.Deref, Path.Deref, Path.Deref), t: Space.Mention, rhs: Space): Space =
       val sm2 = SpaceMention(s"r${h4._2.pr.s}${rhs.hashCode().toHexString}")
       val sm3 = SpaceMention(s"r${h4._3.pr.s}${rhs.hashCode().toHexString}")
       val sm4 = SpaceMention(s"r${h4._4.pr.s}${rhs.hashCode().toHexString}")
-      Space.Iteration(x, h4._1.pr.known(1), sm2,
+      ReferenceHints.tag(Space.Iteration(x, h4._1.pr.known(1), sm2,
         Space.Iteration(Space.Mention(sm2), h4._2.pr.known(1), sm3,
           Space.Iteration(Space.Mention(sm3), h4._3.pr.known(1), sm4,
             Space.Iteration(Space.Mention(sm4), h4._4.pr.known(1), t.variable,
-              subs(rhs)(ppre = { case Path.Deref(pr) if pr == h4._1.pr || pr == h4._2.pr || pr == h4._3.pr || pr == h4._4.pr => Path.Deref(pr.known(1)) })))))
+              subs(rhs)(ppre = { case Path.Deref(pr) if pr == h4._1.pr || pr == h4._2.pr || pr == h4._3.pr || pr == h4._4.pr => Path.Deref(pr.known(1)) }))))))
     infix def iterk(k: Int, t: Space.Mention, rhs: Path => Space): Space =
-      val rhsh = rhs.hashCode().toHexString
+      require(k >= 0, s"iteration arity must be non-negative, got $k")
+      // Function values inherit identity-based hashCode, so deriving binder
+      // names from `rhs.hashCode` made generated proof artifacts differ on
+      // every JVM run. Build the body once with canonical probe refs and hash
+      // only its stable printed syntax plus the surrounding source.
+      val probeRefs = Vector.tabulate(k)(i => PathRef(s"__iterk_probe_$i").known(1))
+      val probePath = Path.fromFactors(probeRefs.map(Path.Deref(_): Path.Deref))
+      val probeBody = rhs(probePath)
+      val rhsh = stableBinderDigest(s"k=$k;t=${t.variable.s};source=${x.show};body=${probeBody.show}")
       val prs = Vector.tabulate(k)(i => PathRef(s"${i}h$rhsh").known(1))
       val sms = Vector.tabulate(k)(i => if i != k - 1 then SpaceMention(s"r${i}h$rhsh") else t.variable)
       val ss = Vector.tabulate(k)(i => if i == 0 then x else Space.Mention(sms(i-1)))
-      def rec(i: Int): Space =
-        if i == k then
-          subs(rhs(Path.fromFactors(prs.map(Path.Deref(_): Path.Deref))))(spost = {
-            case Space.Mention(sm) if sm.s == t.variable.s && k == 0 => x
+      // Preserve the original DSL construction/capture behavior by invoking
+      // the body builder with its final references. The probe above is only a
+      // stable hash input; rewriting it afterward with generic substitution
+      // can cross binders introduced inside `rhs`.
+      val body =
+        if k == 0 then
+          subs(probeBody)(spost = {
+            case Space.Mention(sm) if sm.s == t.variable.s => x
           })
+        else rhs(Path.fromFactors(prs.map(Path.Deref(_): Path.Deref)))
+      def rec(i: Int): Space =
+        if i == k then body
         else
           Space.Iteration(ss(i), prs(i), sms(i), rec(i + 1))
-      val res = rec(0)
+      val res = ReferenceHints.tag(rec(0))
 //      if rhs(Path.ZERO) != Space.Empty then println(s"iter${k} wrapper=${Space.Empty.iterk(k, t, {case _ => Space.Empty}).show}")
       res
     infix def fold(initial: Path, acc: String, symbol: String, rest: String, rhs: Space, update: Path): Space =
-      Space.Fold(x, initial, PathRef(acc), PathRef(symbol), SpaceMention(rest), rhs, update)
+      ReferenceHints.tag(Space.Fold(x, initial, PathRef(acc), PathRef(symbol).known(1), SpaceMention(rest), rhs, update))
     def iterh(h: Path.Deref, run: Space): Space = x.iter(h, S"_", run)
     def itert(t: Space.Mention, run: Space): Space = x.iter(P"_", t, run)
     def tee(run: Space): Space = x.iter(P"_", S"_", run)
@@ -3077,7 +3741,7 @@ object Syntax:
           case Space.Mention(sm) => sm
           case other => throw IllegalArgumentException(s"routine space parameters must be mentions, got ${other.show}")
         }
-        Routine(rp, refPtrs, mentionPtrs, s)
+        ReferenceHints.tag(Routine(rp, refPtrs, mentionPtrs, s))
       case other => throw IllegalArgumentException(s"routine definition must start from a call, got ${other.show}")
 
   extension (st: SpaceValue.type)
@@ -3131,6 +3795,18 @@ object Syntax:
 
   def s(args: PathValue*): Space = Space.Literal(SpaceValue(Set.from(args)))
   def head(s: Space): Space = s.iterh(P"h", sP"h")
+  def nonEmpty(x: Space): Space =
+    val epsilon = Space.Singleton(Path.ZERO)
+    val symbol = PathRef(s"__nonempty_${x.hashCode().toHexString}").known(1)
+    ReferenceHints.tag(Space.Union(
+      Space.Intersection(x, epsilon),
+      Space.Iteration(
+        Space.Range(x, 0, 1),
+        symbol,
+        SpaceMention("_"),
+        epsilon
+      )
+    ))
   def \/(s: Space): Space = Space.TailsUnion(s)
   def /\(s: Space): Space = Space.TailsIntersection(s)
   def mod(rs: Routine*): PartialFunction[RoutinePtr, Routine] = ((rp: RoutinePtr) => rs.find(_.name == rp)).unlift
